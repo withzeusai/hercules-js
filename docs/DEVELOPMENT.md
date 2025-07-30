@@ -116,7 +116,14 @@ pnpm build
 Build a specific package:
 
 ```bash
+# Build individual packages
 pnpm --filter @usehercules/auth build
+pnpm --filter @usehercules/database build
+pnpm --filter @usehercules/vite build
+pnpm --filter @usehercules/hercules-js build
+
+# Or build all packages
+pnpm build
 ```
 
 ### Linting and Formatting

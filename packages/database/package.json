@@ -1,7 +1,7 @@
 {
-  "name": "@usehercules/vite",
+  "name": "@usehercules/database",
   "version": "0.2.0",
-  "description": "Vite plugin for Hercules applications",
+  "description": "Database utilities for Hercules applications",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,17 +10,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/withzeusai/hercules-js.git",
-    "directory": "packages/vite"
+    "directory": "packages/database"
   },
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "files": [
-    "dist"
-  ],
   "publishConfig": {
     "access": "public"
   },
@@ -29,14 +20,8 @@
     "dev": "tsup --watch",
     "test": "exit 0"
   },
-  "peerDependencies": {
-    "vite": "^6.0.0 || ^7.0.0"
-  },
   "devDependencies": {
-    "vite": "^6.0.0",
-    "typescript": "^5.0.0",
-    "@types/node": "^20.0.0",
-    "tsup": "^8.5.0"
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
   }
-
 }

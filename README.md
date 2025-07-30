@@ -5,12 +5,18 @@ Client JavaScript libraries for the Hercules project.
 ## Packages
 
 - **[@usehercules/auth](./packages/auth)** - Authentication utilities using OIDC
+- **[@usehercules/database](./packages/database)** - Database utilities for Hercules applications
 - **[@usehercules/vite](./packages/vite)** - Vite plugin for Hercules applications
+- **[@usehercules/hercules-js](./packages/hercules)** - Main entry point re-exporting all Hercules utilities
 
 ## Installation
 
 ```bash
-npm install @usehercules/auth @usehercules/vite
+# Install individual packages
+npm install @usehercules/auth @usehercules/database @usehercules/vite
+
+# Or install the main package that includes everything
+npm install @usehercules/hercules-js
 ```
 
 ## Usage
@@ -18,7 +24,11 @@ npm install @usehercules/auth @usehercules/vite
 ### Authentication
 
 ```javascript
+// Import from individual package
 import { oidc, reactOidc } from '@usehercules/auth';
+
+// Or import from the main package
+import { auth, oidc, reactOidc } from '@usehercules/hercules-js';
 
 // Use OIDC client directly
 const client = new oidc.UserManager(settings);

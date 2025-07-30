@@ -95,7 +95,9 @@ jobs:
             
             Published packages:
             - `@usehercules/auth@${{ steps.changeset.outputs.version }}`
+            - `@usehercules/database@${{ steps.changeset.outputs.version }}`
             - `@usehercules/vite@${{ steps.changeset.outputs.version }}`
+            - `@usehercules/hercules-js@${{ steps.changeset.outputs.version }}`
             
             See the [changelog](./CHANGELOG.md) for detailed changes.
           draft: false
