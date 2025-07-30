@@ -19,7 +19,12 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "README.md",
+    "tsconfig.json",
+    "tsup.config.ts",
+    "examples"
   ],
   "publishConfig": {
     "access": "public"

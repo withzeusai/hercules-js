@@ -12,6 +12,12 @@
     "url": "git+https://github.com/withzeusai/hercules-js.git",
     "directory": "packages/auth"
   },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsup.config.ts"
+  ],
   "publishConfig": {
     "access": "public"
   },
