@@ -1,0 +1,19 @@
+{
+  "name": "root",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@10.13.1",
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo build",
+    "test": "turbo test",
+    "dev": "turbo dev",
+    "release": "./scripts/release.sh"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.5"
+  }
+}

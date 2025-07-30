@@ -1,0 +1,34 @@
+{
+  "name": "@usehercules/auth",
+  "version": "0.1.0",
+  "description": "Authentication utilities for Hercules applications using OIDC",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/auth"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "exit 0"
+  },
+  "dependencies": {
+    "oidc-client-ts": "^3.3.0",
+    "react-oidc-context": "^3.3.0",
+    "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "react": ">=16.14.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0"
+  }
+}

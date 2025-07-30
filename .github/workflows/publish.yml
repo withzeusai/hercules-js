@@ -1,0 +1,102 @@
+name: Publish to NPM
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for npm provenance
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.13.1'
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run tests (if any)
+        run: pnpm test --if-present
+
+      - name: Check if packages have changed
+        id: changeset
+        run: |
+          # Check if this is a tag push
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update package versions
+        if: steps.changeset.outputs.is_release == 'true'
+        run: |
+          VERSION=${{ steps.changeset.outputs.version }}
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
+          
+          # Update package.json versions in workspaces
+          pnpm --recursive exec -- npm version $VERSION --no-git-tag-version
+
+      - name: Publish to NPM
+        if: steps.changeset.outputs.is_release == 'true'
+        run: pnpm --recursive publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
+
+      - name: Create GitHub Release
+        if: steps.changeset.outputs.is_release == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.changeset.outputs.version }}
+          release_name: Release ${{ steps.changeset.outputs.version }}
+          body: |
+            ## Changes in ${{ steps.changeset.outputs.version }}
+            
+            Published packages:
+            - `@usehercules/auth@${{ steps.changeset.outputs.version }}`
+            - `@usehercules/vite@${{ steps.changeset.outputs.version }}`
+            
+            See the [changelog](./CHANGELOG.md) for detailed changes.
+          draft: false
+          prerelease: ${{ contains(steps.changeset.outputs.version, '-') }} 
