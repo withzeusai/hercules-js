@@ -79,7 +79,7 @@ pnpm build
 
 # Run tests if they exist
 print_status "Running tests..."
-pnpm test --if-present || print_warning "No tests found or tests failed"
+pnpm test
 
 # Create git commit and tag
 print_status "Creating git commit and tag..."

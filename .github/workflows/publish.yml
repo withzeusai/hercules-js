@@ -51,8 +51,8 @@ jobs:
       - name: Build packages
         run: pnpm build
 
-      - name: Run tests (if any)
-        run: pnpm test --if-present
+      - name: Run tests
+        run: pnpm test
 
       - name: Check if packages have changed
         id: changeset
