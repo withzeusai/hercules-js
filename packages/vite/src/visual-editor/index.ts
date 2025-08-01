@@ -284,6 +284,29 @@ function getVisualEditorScript(dataAttribute: string): string {
         word-break: break-all;
       }
       
+      #hercules-visual-editor .auto-apply-indicator {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        font-size: 12px;
+        color: #10b981;
+        font-weight: 500;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        pointer-events: none;
+      }
+      
+      #hercules-visual-editor .auto-apply-indicator.active {
+        opacity: 1;
+      }
+      
+      #hercules-visual-editor .auto-apply-note {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 4px;
+        font-style: italic;
+      }
+      
       #hercules-visual-editor .warning {
         background: #fef3c7;
         border: 1px solid #f59e0b;
@@ -426,6 +449,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     editorPanel.id = 'hercules-visual-editor';
     editorPanel.innerHTML = \`
       <h3>Visual Editor</h3>
+      <div class="auto-apply-indicator" id="auto-apply-indicator">Auto-saving...</div>
       <div class="editor-content" id="editor-content">
         <div>
           <label>Component ID:</label>
@@ -577,6 +601,7 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
+            <div class="auto-apply-note">Changes are saved instantly as you type</div>
           </div>
           <div class="button-group">
             <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Replace Content</button>
@@ -595,6 +620,7 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
+            <div class="auto-apply-note">Changes are saved instantly as you type</div>
           </div>
           <div class="button-group">
             <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Replace Expression</button>
@@ -608,6 +634,7 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" placeholder="Enter text content" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;"></textarea>
+            <div class="auto-apply-note">Changes are saved instantly as you type</div>
           </div>
           <div class="button-group">
             <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Add Text</button>
@@ -621,6 +648,7 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${analysis.value || ''}</textarea>
+            <div class="auto-apply-note">Changes are saved instantly as you type</div>
           </div>
           <div class="button-group">
             <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Apply</button>
@@ -629,7 +657,8 @@ function getVisualEditorScript(dataAttribute: string): string {
         \`;
     }
     
-    document.getElementById('text-input')?.focus();
+                  document.getElementById('text-input')?.focus();
+              window.herculesSetupAutoApply();
   }
   
   function renderClassEditor(analysis, element) {
@@ -683,13 +712,15 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>className:</label>
             <input type="text" id="class-input" value="\${element.className.replace('hercules-highlight', '').trim()}" placeholder="Enter CSS classes" />
+            <div class="auto-apply-note">Changes are saved instantly as you type</div>
           </div>
           <div class="button-group">
             <button class="btn-primary" onclick="window.herculesApplyChanges()">Replace Expression</button>
             <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
           </div>
         \`;
-        document.getElementById('class-input').focus();
+                      document.getElementById('class-input').focus();
+              window.herculesSetupAutoApply();
         break;
         
       default: // static
@@ -703,13 +734,15 @@ function getVisualEditorScript(dataAttribute: string): string {
       <div>
         <label>className:</label>
         <input type="text" id="class-input" value="\${currentValue}" placeholder="Enter CSS classes" />
+        <div class="auto-apply-note">Changes are automatically saved as you type</div>
       </div>
       <div class="button-group">
         <button class="btn-primary" onclick="window.herculesApplyChanges()">Apply</button>
         <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
       </div>
     \`;
-    document.getElementById('class-input').focus();
+                  document.getElementById('class-input').focus();
+              window.herculesSetupAutoApply();
   }
   
   function closeEditor() {
@@ -747,7 +780,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     updateEditorContent();
   };
   
-  window.herculesApplyChanges = async function() {
+  window.herculesApplyChanges = async function(isAutoApply = false) {
     if (!selectedElement) return;
     
     const componentId = selectedElement.getAttribute('${dataAttribute}');
@@ -773,14 +806,21 @@ function getVisualEditorScript(dataAttribute: string): string {
         console.log('[Hercules] className updated successfully');
       } else {
         console.error('[Hercules] Failed to update className:', result.error);
-        alert('Failed to update className: ' + result.error);
+        if (!isAutoApply) {
+          alert('Failed to update className: ' + result.error);
+        }
       }
     } catch (error) {
       console.error('[Hercules] Error updating className:', error);
-      alert('Error updating className: ' + error.message);
+      if (!isAutoApply) {
+        alert('Error updating className: ' + error.message);
+      }
     }
     
-    closeEditor();
+    // Only close editor if not auto-applying
+    if (!isAutoApply) {
+      closeEditor();
+    }
   };
   
   window.herculesApplyTernaryChanges = async function() {
@@ -862,7 +902,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     closeEditor();
   };
   
-  window.herculesApplyTextChanges = async function() {
+  window.herculesApplyTextChanges = async function(isAutoApply = false) {
     if (!selectedElement) return;
     
     const componentId = selectedElement.getAttribute('${dataAttribute}');
@@ -887,14 +927,70 @@ function getVisualEditorScript(dataAttribute: string): string {
         console.log('[Hercules] Text content updated successfully');
       } else {
         console.error('[Hercules] Failed to update text content:', result.error);
-        alert('Failed to update text content: ' + result.error);
+        if (!isAutoApply) {
+          alert('Failed to update text content: ' + result.error);
+        }
       }
     } catch (error) {
       console.error('[Hercules] Error updating text content:', error);
-      alert('Error updating text content: ' + error.message);
+      if (!isAutoApply) {
+        alert('Error updating text content: ' + error.message);
+      }
     }
     
-    closeEditor();
+    // Only close editor if not auto-applying
+    if (!isAutoApply) {
+      closeEditor();
+    }
+  };
+  
+  // Auto-apply functionality
+  let isAutoApplying = false;
+  
+  window.herculesAutoApply = async function(type) {
+    // Prevent concurrent auto-apply operations
+    if (isAutoApplying) return;
+    
+    isAutoApplying = true;
+    
+    // Show auto-apply indicator
+    const indicator = document.getElementById('auto-apply-indicator');
+    if (indicator) {
+      indicator.classList.add('active');
+    }
+    
+    try {
+      // Apply changes instantly
+      if (type === 'class') {
+        await window.herculesApplyChanges(true); // Pass true for isAutoApply
+      } else if (type === 'text') {
+        await window.herculesApplyTextChanges(true); // Pass true for isAutoApply
+      }
+    } finally {
+      isAutoApplying = false;
+      
+      // Hide auto-apply indicator after saving
+      if (indicator) {
+        // Use a small delay to ensure the indicator is visible
+        setTimeout(() => {
+          indicator.classList.remove('active');
+        }, 100);
+      }
+    }
+  };
+  
+  // Add input listeners for auto-apply
+  window.herculesSetupAutoApply = function() {
+    const classInput = document.getElementById('class-input');
+    const textInput = document.getElementById('text-input');
+    
+    if (classInput) {
+      classInput.addEventListener('input', () => window.herculesAutoApply('class'));
+    }
+    
+    if (textInput) {
+      textInput.addEventListener('input', () => window.herculesAutoApply('text'));
+    }
   };
   
   // Initialize on DOM ready
