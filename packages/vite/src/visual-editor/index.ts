@@ -182,6 +182,8 @@ function getVisualEditorScript(dataAttribute: string): string {
   let editorPanel = null;
   let isEditorActive = false;
   let currentEditorMode = 'class';
+  let highlighterElement = null;
+  let selectedHighlighterElement = null;
   
   // Create the visual editor UI
   function createEditorUI() {
@@ -386,25 +388,44 @@ function getVisualEditorScript(dataAttribute: string): string {
         color: #92400e;
       }
       
-      .hercules-highlight {
-        outline: 2px solid #3b82f6 !important;
-        outline-offset: 2px !important;
-        position: relative !important;
+      .hercules-highlighter {
+        position: fixed;
+        pointer-events: none;
+        z-index: 99997;
       }
       
-      .hercules-tag-label {
+      .hercules-highlighter-outline {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        outline: 2px solid #93bbf9;
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
+      
+      .hercules-highlighter-label {
         position: absolute;
         top: -24px;
         left: 0;
-        background: #3b82f6;
+        background: #93bbf9;
         color: white;
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 11px;
         font-family: 'Consolas', 'Monaco', monospace;
-        pointer-events: none;
         white-space: nowrap;
-        z-index: 99998;
+      }
+      
+      /* Selected state - darker blue */
+      .hercules-highlighter.selected .hercules-highlighter-outline {
+        outline-color: #3b82f6;
+        outline-width: 2px;
+      }
+      
+      .hercules-highlighter.selected .hercules-highlighter-label {
+        background: #3b82f6;
       }
       
       #hercules-toggle-btn {
@@ -479,12 +500,16 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.addEventListener('click', handleElementClick, true); // Use capture phase
       document.addEventListener('mouseover', handleElementHover);
       document.addEventListener('mouseout', handleElementHover);
+      window.addEventListener('scroll', handleScroll, true);
+      window.addEventListener('resize', handleResize);
     } else {
       toggleBtn.classList.remove('active');
       toggleBtn.textContent = 'Visual Editor';
       document.removeEventListener('click', handleElementClick, true); // Use capture phase
       document.removeEventListener('mouseover', handleElementHover);
       document.removeEventListener('mouseout', handleElementHover);
+      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('resize', handleResize);
       closeEditor();
     }
   }
@@ -536,21 +561,53 @@ function getVisualEditorScript(dataAttribute: string): string {
     return tagName;
   }
 
-  function createTagLabel(element, tagName) {
-    // Remove any existing label
-    removeTagLabel(element);
-    
-    // Create new label
-    const label = document.createElement('div');
-    label.className = 'hercules-tag-label';
-    label.textContent = tagName;
-    element.appendChild(label);
+  function createHighlighter() {
+    const highlighter = document.createElement('div');
+    highlighter.className = 'hercules-highlighter';
+    highlighter.innerHTML = \`
+      <div class="hercules-highlighter-outline"></div>
+      <div class="hercules-highlighter-label"></div>
+    \`;
+    highlighter.style.display = 'none';
+    document.body.appendChild(highlighter);
+    return highlighter;
   }
 
-  function removeTagLabel(element) {
-    const existingLabel = element.querySelector('.hercules-tag-label');
-    if (existingLabel) {
-      existingLabel.remove();
+  function updateHighlighter(highlighter, element, tagName) {
+    const rect = element.getBoundingClientRect();
+    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+    
+    highlighter.style.left = (rect.left + scrollX) + 'px';
+    highlighter.style.top = (rect.top + scrollY) + 'px';
+    highlighter.style.width = rect.width + 'px';
+    highlighter.style.height = rect.height + 'px';
+    highlighter.style.display = 'block';
+    
+    const label = highlighter.querySelector('.hercules-highlighter-label');
+    label.textContent = tagName;
+  }
+
+  function hideHighlighter(highlighter) {
+    if (highlighter) {
+      highlighter.style.display = 'none';
+    }
+  }
+
+  function handleScroll() {
+    // Deselect element when scrolling
+    if (selectedElement) {
+      hideHighlighter(selectedHighlighterElement);
+      selectedElement = null;
+      editorPanel.classList.remove('active');
+    }
+  }
+
+  function handleResize() {
+    // Update highlighter positions on resize
+    if (selectedElement && selectedHighlighterElement) {
+      const tagName = getElementTagName(selectedElement);
+      updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
     }
   }
 
@@ -561,12 +618,25 @@ function getVisualEditorScript(dataAttribute: string): string {
     const componentId = element.getAttribute('${dataAttribute}');
     
     if (componentId && e.type === 'mouseover') {
-      element.classList.add('hercules-highlight');
-      const tagName = getElementTagName(element);
-      createTagLabel(element, tagName);
+      // Don't add another highlight if this is the selected element
+      if (element !== selectedElement) {
+        if (!highlighterElement) {
+          highlighterElement = createHighlighter();
+        }
+        const tagName = getElementTagName(element);
+        updateHighlighter(highlighterElement, element, tagName);
+      }
     } else if (e.type === 'mouseout') {
-      element.classList.remove('hercules-highlight');
-      removeTagLabel(element);
+      // Check if we're moving to a child element
+      const relatedTarget = e.relatedTarget;
+      if (relatedTarget && element.contains(relatedTarget)) {
+        return; // Don't remove highlight when moving to child elements
+      }
+      
+      // Don't remove highlight from the selected element
+      if (element !== selectedElement) {
+        hideHighlighter(highlighterElement);
+      }
     }
   }
   
@@ -584,16 +654,24 @@ function getVisualEditorScript(dataAttribute: string): string {
   }
   
   async function selectElement(element, componentId) {
+    // Hide hover highlighter when selecting
+    hideHighlighter(highlighterElement);
+    
     // Remove previous selection
-    if (selectedElement) {
-      selectedElement.classList.remove('hercules-highlight');
-      removeTagLabel(selectedElement);
+    if (selectedHighlighterElement) {
+      hideHighlighter(selectedHighlighterElement);
     }
     
     selectedElement = element;
-    element.classList.add('hercules-highlight');
+    
+    // Create a separate highlighter for the selected element
+    if (!selectedHighlighterElement) {
+      selectedHighlighterElement = createHighlighter();
+      selectedHighlighterElement.classList.add('selected');
+    }
+    
     const tagName = getElementTagName(element);
-    createTagLabel(element, tagName);
+    updateHighlighter(selectedHighlighterElement, element, tagName);
     
     // Show editor panel
     editorPanel.classList.add('active');
@@ -816,11 +894,10 @@ function getVisualEditorScript(dataAttribute: string): string {
   }
   
   function closeEditor() {
-    if (selectedElement) {
-      selectedElement.classList.remove('hercules-highlight');
-      removeTagLabel(selectedElement);
-      selectedElement = null;
-    }
+    // Hide both highlighters
+    hideHighlighter(highlighterElement);
+    hideHighlighter(selectedHighlighterElement);
+    selectedElement = null;
     editorPanel.classList.remove('active');
   }
   
