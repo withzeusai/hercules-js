@@ -190,9 +190,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     const style = document.createElement('style');
     style.textContent = \`
       #hercules-visual-editor {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
+        position: absolute;
         background: white;
         border: 2px solid #3b82f6;
         border-radius: 8px;
@@ -201,7 +199,10 @@ function getVisualEditorScript(dataAttribute: string): string {
         z-index: 99999;
         font-family: system-ui, -apple-system, sans-serif;
         width: 320px;
+        max-height: 400px;
+        overflow-y: auto;
         display: none;
+        margin-top: 10px;
       }
       
       #hercules-visual-editor.active {
@@ -471,10 +472,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       <h3>Visual Editor</h3>
       <div class="auto-apply-indicator" id="auto-apply-indicator">Auto-saving...</div>
       <div class="editor-content" id="editor-content">
-        <div>
-          <label>Component ID:</label>
-          <div class="component-id" id="component-id">Select an element</div>
-        </div>
+				<div class="component-id" id="component-id">Select an element</div>
         <div class="editor-mode-toggle">
           <button class="mode-btn active" data-mode="class" onclick="window.herculesSetEditorMode('class')">Class</button>
           <button class="mode-btn" data-mode="text" onclick="window.herculesSetEditorMode('text')">Text</button>
@@ -594,6 +592,51 @@ function getVisualEditorScript(dataAttribute: string): string {
     }
   }
 
+  function positionEditorBelowElement(element) {
+    if (!editorPanel || !element) return;
+    
+    const rect = element.getBoundingClientRect();
+    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+    
+    // Calculate position - centered below the element
+    const elementCenterX = rect.left + rect.width / 2;
+    const editorWidth = 320; // Width set in CSS
+    let leftPosition = elementCenterX - editorWidth / 2 + scrollX;
+    
+    // Keep the editor within viewport bounds
+    const viewportWidth = window.innerWidth;
+    const rightEdge = leftPosition + editorWidth;
+    
+    if (leftPosition < 10) {
+      leftPosition = 10; // 10px margin from left edge
+    } else if (rightEdge > viewportWidth - 10) {
+      leftPosition = viewportWidth - editorWidth - 10; // 10px margin from right edge
+    }
+    
+    // Get approximate editor height (you may need to adjust this)
+    const editorHeight = 400; // Approximate height
+    const viewportHeight = window.innerHeight;
+    const gap = 10; // Gap between element and editor
+    
+    let topPosition;
+    
+    // Check if there's enough space below the element
+    if (rect.bottom + gap + editorHeight <= viewportHeight) {
+      // Position below the element
+      topPosition = rect.bottom + scrollY + gap;
+    } else if (rect.top - gap - editorHeight >= 0) {
+      // Position above the element if not enough space below
+      topPosition = rect.top + scrollY - editorHeight - gap;
+    } else {
+      // If not enough space above or below, position at the top of viewport with some margin
+      topPosition = scrollY + 20;
+    }
+    
+    editorPanel.style.left = leftPosition + 'px';
+    editorPanel.style.top = topPosition + 'px';
+  }
+
   function handleScroll() {
     // Deselect element when scrolling
     if (selectedElement) {
@@ -604,10 +647,11 @@ function getVisualEditorScript(dataAttribute: string): string {
   }
 
   function handleResize() {
-    // Update highlighter positions on resize
+    // Update highlighter and editor positions on resize
     if (selectedElement && selectedHighlighterElement) {
       const tagName = getElementTagName(selectedElement);
       updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
+      positionEditorBelowElement(selectedElement);
     }
   }
 
@@ -673,7 +717,8 @@ function getVisualEditorScript(dataAttribute: string): string {
     const tagName = getElementTagName(element);
     updateHighlighter(selectedHighlighterElement, element, tagName);
     
-    // Show editor panel
+    // Position and show editor panel
+    positionEditorBelowElement(element);
     editorPanel.classList.add('active');
     
     // Update component ID
