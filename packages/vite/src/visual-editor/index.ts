@@ -1,8 +1,8 @@
 import type { Plugin, ViteDevServer } from "vite";
 
 // Import from extracted modules
-import { analyzeComponentClassName } from "./ast-analyzer";
-import { updateComponentClassName } from "./ast-transformer";
+import { analyzeComponentClassName, analyzeComponentTextContent } from "./ast-analyzer";
+import { updateComponentClassName, updateComponentTextContent } from "./ast-transformer";
 
 export interface VisualEditorOptions {
   /**
@@ -97,6 +97,64 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
           next();
         }
       });
+
+      // Handle text content analysis requests
+      server.middlewares.use("/__hercules_analyze_text", async (req, res, next) => {
+        if (req.method === "POST") {
+          let body = "";
+          req.on("data", (chunk) => (body += chunk));
+          req.on("end", async () => {
+            try {
+              const { componentId } = JSON.parse(body);
+
+              const result = await analyzeComponentTextContent(componentId, server.config.root);
+
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(result));
+            } catch (error) {
+              if (debug) {
+                console.error("[Visual Editor] Error analyzing text content:", error);
+              }
+              res.statusCode = 500;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: false, error: String(error) }));
+            }
+          });
+        } else {
+          next();
+        }
+      });
+
+      // Handle text content update requests
+      server.middlewares.use("/__hercules_update_text", async (req, res, next) => {
+        if (req.method === "POST") {
+          let body = "";
+          req.on("data", (chunk) => (body += chunk));
+          req.on("end", async () => {
+            try {
+              const data = JSON.parse(body);
+              const { componentId, newTextContent } = data;
+
+              const result = await updateComponentTextContent(
+                componentId,
+                newTextContent,
+                server.config.root
+              );
+
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(result));
+            } catch (error) {
+              if (debug) {
+                console.error("[Visual Editor] Error updating text content:", error);
+              }
+              res.statusCode = 500;
+              res.end(JSON.stringify({ success: false, error: String(error) }));
+            }
+          });
+        } else {
+          next();
+        }
+      });
     },
 
     transformIndexHtml(html) {
@@ -123,6 +181,7 @@ function getVisualEditorScript(dataAttribute: string): string {
   let selectedElement = null;
   let editorPanel = null;
   let isEditorActive = false;
+  let currentEditorMode = 'class';
   
   // Create the visual editor UI
   function createEditorUI() {
@@ -262,6 +321,48 @@ function getVisualEditorScript(dataAttribute: string): string {
         color: #374151;
       }
       
+      #hercules-visual-editor .editor-mode-toggle {
+        display: flex;
+        gap: 4px;
+        margin: 12px 0;
+        background: #f3f4f6;
+        padding: 4px;
+        border-radius: 6px;
+      }
+      
+      #hercules-visual-editor .mode-btn {
+        flex: 1;
+        padding: 6px 12px;
+        border: none;
+        background: transparent;
+        color: #6b7280;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        border-radius: 4px;
+        transition: all 0.2s;
+      }
+      
+      #hercules-visual-editor .mode-btn.active {
+        background: white;
+        color: #3b82f6;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      }
+      
+      #hercules-visual-editor .mode-btn:hover:not(.active) {
+        color: #4b5563;
+      }
+      
+      #hercules-visual-editor .text-warning {
+        background: #fef3c7;
+        border: 1px solid #f59e0b;
+        border-radius: 6px;
+        padding: 10px;
+        margin: 10px 0;
+        font-size: 13px;
+        color: #92400e;
+      }
+      
       .hercules-highlight {
         outline: 2px solid #3b82f6 !important;
         outline-offset: 2px !important;
@@ -324,14 +425,21 @@ function getVisualEditorScript(dataAttribute: string): string {
     editorPanel = document.createElement('div');
     editorPanel.id = 'hercules-visual-editor';
     editorPanel.innerHTML = \`
-      <h3>Visual Class Editor</h3>
+      <h3>Visual Editor</h3>
       <div class="editor-content" id="editor-content">
         <div>
           <label>Component ID:</label>
           <div class="component-id" id="component-id">Select an element</div>
         </div>
+        <div class="editor-mode-toggle">
+          <button class="mode-btn active" data-mode="class" onclick="window.herculesSetEditorMode('class')">Class</button>
+          <button class="mode-btn" data-mode="text" onclick="window.herculesSetEditorMode('text')">Text</button>
+        </div>
         <div id="class-editor-container">
           <!-- Dynamic content will be inserted here -->
+        </div>
+        <div id="text-editor-container" style="display: none;">
+          <!-- Dynamic text content will be inserted here -->
         </div>
       </div>
     \`;
@@ -399,29 +507,129 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Update component ID
     document.getElementById('component-id').textContent = componentId;
     
-    // Analyze the className
-    try {
-      const response = await fetch('/__hercules_analyze_class', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ componentId })
-      });
-      
-      const result = await response.json();
-      
-      if (result.success && result.analysis) {
-        renderClassEditor(result.analysis, element);
-      } else {
+    // Analyze both className and text content
+    await updateEditorContent();
+  }
+  
+  async function updateEditorContent() {
+    if (!selectedElement) return;
+    
+    const componentId = selectedElement.getAttribute('${dataAttribute}');
+    
+    if (currentEditorMode === 'class') {
+      // Analyze the className
+      try {
+        const response = await fetch('/__hercules_analyze_class', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ componentId })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success && result.analysis) {
+          renderClassEditor(result.analysis, selectedElement);
+        } else {
+          // Fallback to simple editor
+          renderSimpleEditor(selectedElement.className.replace('hercules-highlight', '').trim());
+        }
+      } catch (error) {
+        console.error('[Hercules] Error analyzing className:', error);
         // Fallback to simple editor
-        renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
+        renderSimpleEditor(selectedElement.className.replace('hercules-highlight', '').trim());
       }
-    } catch (error) {
-      console.error('[Hercules] Error analyzing className:', error);
-      // Fallback to simple editor
-      renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
+    } else {
+      // Analyze text content
+      try {
+        const response = await fetch('/__hercules_analyze_text', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ componentId })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success && result.analysis) {
+          renderTextEditor(result.analysis, selectedElement);
+        } else {
+          renderTextEditor({ type: 'static', value: selectedElement.textContent || '', hasChildren: false }, selectedElement);
+        }
+      } catch (error) {
+        console.error('[Hercules] Error analyzing text content:', error);
+        renderTextEditor({ type: 'static', value: selectedElement.textContent || '', hasChildren: false }, selectedElement);
+      }
     }
+  }
+  
+  function renderTextEditor(analysis, element) {
+    const container = document.getElementById('text-editor-container');
+    
+    switch (analysis.type) {
+      case 'mixed':
+        container.innerHTML = \`
+          <div class="text-warning">
+            ⚠️ This element contains child elements. Editing will replace all children with plain text.
+          </div>
+          <div>
+            <label>Text Content:</label>
+            <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
+          </div>
+          <div class="button-group">
+            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Replace Content</button>
+            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
+          </div>
+        \`;
+        break;
+        
+      case 'expression':
+        container.innerHTML = \`
+          <div class="text-warning">
+            ⚠️ This element uses a dynamic expression: <code>\${analysis.expression}</code>
+            <br><br>
+            Editing will replace this expression with static text.
+          </div>
+          <div>
+            <label>Text Content:</label>
+            <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
+          </div>
+          <div class="button-group">
+            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Replace Expression</button>
+            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
+          </div>
+        \`;
+        break;
+        
+      case 'empty':
+        container.innerHTML = \`
+          <div>
+            <label>Text Content:</label>
+            <textarea id="text-input" rows="4" placeholder="Enter text content" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;"></textarea>
+          </div>
+          <div class="button-group">
+            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Add Text</button>
+            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
+          </div>
+        \`;
+        break;
+        
+      default: // static
+        container.innerHTML = \`
+          <div>
+            <label>Text Content:</label>
+            <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${analysis.value || ''}</textarea>
+          </div>
+          <div class="button-group">
+            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Apply</button>
+            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
+          </div>
+        \`;
+    }
+    
+    document.getElementById('text-input')?.focus();
   }
   
   function renderClassEditor(analysis, element) {
@@ -513,6 +721,31 @@ function getVisualEditorScript(dataAttribute: string): string {
   }
   
   window.herculesCloseEditor = closeEditor;
+  
+  window.herculesSetEditorMode = function(mode) {
+    currentEditorMode = mode;
+    
+    // Update button states
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    document.querySelector(\`.mode-btn[data-mode="\${mode}"]\`).classList.add('active');
+    
+    // Show/hide containers
+    const classContainer = document.getElementById('class-editor-container');
+    const textContainer = document.getElementById('text-editor-container');
+    
+    if (mode === 'class') {
+      classContainer.style.display = 'block';
+      textContainer.style.display = 'none';
+    } else {
+      classContainer.style.display = 'none';
+      textContainer.style.display = 'block';
+    }
+    
+    // Update content
+    updateEditorContent();
+  };
   
   window.herculesApplyChanges = async function() {
     if (!selectedElement) return;
@@ -624,6 +857,41 @@ function getVisualEditorScript(dataAttribute: string): string {
         console.error('[Hercules] Error updating ternary:', error);
         alert('Error updating ternary: ' + error.message);
       }
+    }
+    
+    closeEditor();
+  };
+  
+  window.herculesApplyTextChanges = async function() {
+    if (!selectedElement) return;
+    
+    const componentId = selectedElement.getAttribute('${dataAttribute}');
+    const newTextContent = document.getElementById('text-input')?.value || '';
+    
+    try {
+      const response = await fetch('/__hercules_update_text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          componentId,
+          newTextContent
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        // Update will trigger HMR reload
+        console.log('[Hercules] Text content updated successfully');
+      } else {
+        console.error('[Hercules] Failed to update text content:', result.error);
+        alert('Failed to update text content: ' + result.error);
+      }
+    } catch (error) {
+      console.error('[Hercules] Error updating text content:', error);
+      alert('Error updating text content: ' + error.message);
     }
     
     closeEditor();
