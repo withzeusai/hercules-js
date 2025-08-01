@@ -287,27 +287,27 @@ function getVisualEditorScript(dataAttribute: string): string {
         word-break: break-all;
       }
       
-      #hercules-visual-editor .auto-apply-indicator {
+      #hercules-visual-editor .close-btn {
         position: absolute;
-        top: 8px;
-        right: 8px;
-        font-size: 12px;
-        color: #10b981;
-        font-weight: 500;
-        opacity: 0;
-        transition: opacity 0.2s ease;
-        pointer-events: none;
-      }
-      
-      #hercules-visual-editor .auto-apply-indicator.active {
-        opacity: 1;
-      }
-      
-      #hercules-visual-editor .auto-apply-note {
-        font-size: 11px;
+        top: 12px;
+        right: 12px;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
         color: #6b7280;
-        margin-top: 4px;
-        font-style: italic;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+        padding: 0;
+        transition: color 0.2s;
+      }
+      
+      #hercules-visual-editor .close-btn:hover {
+        color: #1f2937;
       }
       
       #hercules-visual-editor .warning {
@@ -469,8 +469,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     editorPanel = document.createElement('div');
     editorPanel.id = 'hercules-visual-editor';
     editorPanel.innerHTML = \`
-      <h3>Visual Editor</h3>
-      <div class="auto-apply-indicator" id="auto-apply-indicator">Auto-saving...</div>
+      <button class="close-btn" onclick="window.herculesCloseEditor()" aria-label="Close">&times;</button>
       <div class="editor-content" id="editor-content">
 				<div class="component-id" id="component-id">Select an element</div>
         <div class="editor-mode-toggle">
@@ -573,11 +572,11 @@ function getVisualEditorScript(dataAttribute: string): string {
 
   function updateHighlighter(highlighter, element, tagName) {
     const rect = element.getBoundingClientRect();
-    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
     
-    highlighter.style.left = (rect.left + scrollX) + 'px';
-    highlighter.style.top = (rect.top + scrollY) + 'px';
+    // Since the highlighter uses position: fixed, we don't need to add scroll offsets
+    // getBoundingClientRect() already returns viewport-relative coordinates
+    highlighter.style.left = rect.left + 'px';
+    highlighter.style.top = rect.top + 'px';
     highlighter.style.width = rect.width + 'px';
     highlighter.style.height = rect.height + 'px';
     highlighter.style.display = 'block';
@@ -794,11 +793,6 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
-            <div class="auto-apply-note">Changes are saved instantly as you type</div>
-          </div>
-          <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Replace Content</button>
-            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
           </div>
         \`;
         break;
@@ -813,11 +807,6 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
-            <div class="auto-apply-note">Changes are saved instantly as you type</div>
-          </div>
-          <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Replace Expression</button>
-            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
           </div>
         \`;
         break;
@@ -827,11 +816,6 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" placeholder="Enter text content" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;"></textarea>
-            <div class="auto-apply-note">Changes are saved instantly as you type</div>
-          </div>
-          <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Add Text</button>
-            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
           </div>
         \`;
         break;
@@ -841,11 +825,6 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>Text Content:</label>
             <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${analysis.value || ''}</textarea>
-            <div class="auto-apply-note">Changes are saved instantly as you type</div>
-          </div>
-          <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyTextChanges()">Apply</button>
-            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
           </div>
         \`;
     }
@@ -881,8 +860,7 @@ function getVisualEditorScript(dataAttribute: string): string {
             <input type="text" id="static-replace-input" placeholder="Leave empty to preserve ternary" />
           </div>
           <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyTernaryChanges()">Apply</button>
-            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
+            <button class="btn-primary" onclick="window.herculesApplyTernaryChanges()">Apply Changes</button>
           </div>
         \`;
         // Focus on the appropriate input based on current state
@@ -905,11 +883,6 @@ function getVisualEditorScript(dataAttribute: string): string {
           <div>
             <label>className:</label>
             <input type="text" id="class-input" value="\${element.className.replace('hercules-highlight', '').trim()}" placeholder="Enter CSS classes" />
-            <div class="auto-apply-note">Changes are saved instantly as you type</div>
-          </div>
-          <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyChanges()">Replace Expression</button>
-            <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
           </div>
         \`;
                       document.getElementById('class-input').focus();
@@ -927,11 +900,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       <div>
         <label>className:</label>
         <input type="text" id="class-input" value="\${currentValue}" placeholder="Enter CSS classes" />
-        <div class="auto-apply-note">Changes are automatically saved as you type</div>
-      </div>
-      <div class="button-group">
-        <button class="btn-primary" onclick="window.herculesApplyChanges()">Apply</button>
-        <button class="btn-secondary" onclick="window.herculesCloseEditor()">Cancel</button>
       </div>
     \`;
                   document.getElementById('class-input').focus();
@@ -1146,12 +1114,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     isAutoApplying = true;
     
-    // Show auto-apply indicator
-    const indicator = document.getElementById('auto-apply-indicator');
-    if (indicator) {
-      indicator.classList.add('active');
-    }
-    
     try {
       // Apply changes instantly
       if (type === 'class') {
@@ -1161,14 +1123,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       }
     } finally {
       isAutoApplying = false;
-      
-      // Hide auto-apply indicator after saving
-      if (indicator) {
-        // Use a small delay to ensure the indicator is visible
-        setTimeout(() => {
-          indicator.classList.remove('active');
-        }, 100);
-      }
     }
   };
   
