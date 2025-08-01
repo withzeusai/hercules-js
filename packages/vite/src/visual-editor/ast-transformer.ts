@@ -20,8 +20,7 @@ export interface UpdateResult {
 export async function updateComponentClassName(
   componentId: string,
   newClassName: string,
-  rootDir: string,
-  updateType?: "static" | "ternary-true" | "ternary-false" | "replace"
+  rootDir: string
 ): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
@@ -88,32 +87,7 @@ export async function updateComponentClassName(
               attr.name.name === "className"
           );
 
-          if (updateType === "ternary-true" || updateType === "ternary-false") {
-            // Handle ternary updates
-            if (classNameAttrIndex !== -1) {
-              const existingAttr = attributes[classNameAttrIndex];
-              if (
-                t.isJSXAttribute(existingAttr) &&
-                existingAttr.value &&
-                t.isJSXExpressionContainer(existingAttr.value) &&
-                t.isConditionalExpression(existingAttr.value.expression)
-              ) {
-                const ternary = existingAttr.value.expression;
-
-                if (updateType === "ternary-true") {
-                  ternary.consequent = t.stringLiteral(newClassName);
-                } else {
-                  ternary.alternate = t.stringLiteral(newClassName);
-                }
-
-                modified = true;
-                path.stop();
-                return;
-              }
-            }
-          }
-
-          // For static updates or replacements
+          // Create new className attribute with static string value
           const newClassNameAttr = t.jsxAttribute(
             t.jsxIdentifier("className"),
             t.stringLiteral(newClassName)

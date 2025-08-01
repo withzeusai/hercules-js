@@ -47,13 +47,12 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
           req.on("end", async () => {
             try {
               const data = JSON.parse(body);
-              const { componentId, newClassName, updateType } = data;
+              const { componentId, newClassName } = data;
 
               const result = await updateComponentClassName(
                 componentId,
                 newClassName,
-                server.config.root,
-                updateType
+                server.config.root
               );
 
               res.setHeader("Content-Type", "application/json");
@@ -784,113 +783,46 @@ function getVisualEditorScript(dataAttribute: string): string {
   function renderTextEditor(analysis, element) {
     const container = document.getElementById('text-editor-container');
     
-    switch (analysis.type) {
-      case 'mixed':
-        container.innerHTML = \`
-          <div class="text-warning">
-            ⚠️ This element contains child elements. Editing will replace all children with plain text.
-          </div>
-          <div>
-            <label>Text Content:</label>
-            <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
-          </div>
-        \`;
-        break;
-        
-      case 'expression':
-        container.innerHTML = \`
-          <div class="text-warning">
-            ⚠️ This element uses a dynamic expression: <code>\${analysis.expression}</code>
-            <br><br>
-            Editing will replace this expression with static text.
-          </div>
-          <div>
-            <label>Text Content:</label>
-            <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${element.textContent || ''}</textarea>
-          </div>
-        \`;
-        break;
-        
-      case 'empty':
-        container.innerHTML = \`
-          <div>
-            <label>Text Content:</label>
-            <textarea id="text-input" rows="4" placeholder="Enter text content" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;"></textarea>
-          </div>
-        \`;
-        break;
-        
-      default: // static
-        container.innerHTML = \`
-          <div>
-            <label>Text Content:</label>
-            <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${analysis.value || ''}</textarea>
-          </div>
-        \`;
-    }
+    // Check if we cannot edit the value
+    const cannotEditValue = analysis.type !== 'static' && analysis.type !== 'empty';
     
-                  document.getElementById('text-input')?.focus();
-              window.herculesSetupAutoApply();
+    if (cannotEditValue) {
+      // Show unified warning for non-editable content
+      container.innerHTML = \`
+        <div class="warning">
+          ⚠️ Cannot edit the value, ask the engineer to assist.
+        </div>
+      \`;
+    } else {
+      // Show normal editor for static or empty content
+      container.innerHTML = \`
+        <div>
+          <label>Text Content:</label>
+          <textarea id="text-input" rows="4" style="width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif; resize: vertical;">\${analysis.type === 'static' ? (analysis.value || '') : ''}</textarea>
+        </div>
+      \`;
+      
+      document.getElementById('text-input')?.focus();
+      window.herculesSetupAutoApply();
+    }
   }
   
   function renderClassEditor(analysis, element) {
     const container = document.getElementById('class-editor-container');
     
-    switch (analysis.type) {
-      case 'ternary':
-        container.innerHTML = \`
-          <div class="ternary-editor">
-            <div class="ternary-condition">
-              Condition: <code>\${analysis.condition}</code>
-            </div>
-            <div class="ternary-branch">
-              <label>When TRUE:</label>
-              <input type="text" id="ternary-true-input" value="\${analysis.trueValue || ''}" placeholder="Enter classes for true condition" />
-            </div>
-            <div class="ternary-branch">
-              <label>When FALSE:</label>
-              <input type="text" id="ternary-false-input" value="\${analysis.falseValue || ''}" placeholder="Enter classes for false condition" />
-            </div>
-          </div>
-          <div class="warning">
-            ⚠️ This element uses a conditional expression. You can edit each branch separately, or replace the entire expression with a static value.
-          </div>
-          <div>
-            <label>Replace with static value (optional):</label>
-            <input type="text" id="static-replace-input" placeholder="Leave empty to preserve ternary" />
-          </div>
-          <div class="button-group">
-            <button class="btn-primary" onclick="window.herculesApplyTernaryChanges()">Apply Changes</button>
-          </div>
-        \`;
-        // Focus on the appropriate input based on current state
-        const currentClasses = element.className.replace('hercules-highlight', '').trim();
-        if (currentClasses === analysis.trueValue) {
-          document.getElementById('ternary-true-input').focus();
-        } else {
-          document.getElementById('ternary-false-input').focus();
-        }
-        break;
-        
-      case 'template':
-      case 'complex':
-        container.innerHTML = \`
-          <div class="warning">
-            ⚠️ This element uses a dynamic expression: <code>\${analysis.expression}</code>
-            <br><br>
-            Editing will replace this expression with a static value.
-          </div>
-          <div>
-            <label>className:</label>
-            <input type="text" id="class-input" value="\${element.className.replace('hercules-highlight', '').trim()}" placeholder="Enter CSS classes" />
-          </div>
-        \`;
-                      document.getElementById('class-input').focus();
-              window.herculesSetupAutoApply();
-        break;
-        
-      default: // static
-        renderSimpleEditor(analysis.value || '');
+    // Check if we cannot edit the value
+    const cannotEditValue = analysis.type !== 'static';
+    
+    if (cannotEditValue) {
+      // Show unified warning for non-editable classNames
+      container.innerHTML = \`
+        <div class="warning">
+          ⚠️ Cannot edit the value, ask the engineer to assist.
+        </div>
+      \`;
+    } else {
+      // Show normal editor for static classNames
+      renderSimpleEditor(analysis.value || '');
     }
   }
   
@@ -955,8 +887,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         },
         body: JSON.stringify({
           componentId,
-          newClassName,
-          updateType: 'static'
+          newClassName
         })
       });
       
@@ -982,85 +913,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     if (!isAutoApply) {
       closeEditor();
     }
-  };
-  
-  window.herculesApplyTernaryChanges = async function() {
-    if (!selectedElement) return;
-    
-    const componentId = selectedElement.getAttribute('${dataAttribute}');
-    const staticReplace = document.getElementById('static-replace-input')?.value.trim();
-    
-    // If user wants to replace with static value
-    if (staticReplace) {
-      try {
-        const response = await fetch('/__hercules_update_class', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            componentId,
-            newClassName: staticReplace,
-            updateType: 'replace'
-          })
-        });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-          console.log('[Hercules] Replaced ternary with static className');
-        } else {
-          console.error('[Hercules] Failed to update className:', result.error);
-          alert('Failed to update className: ' + result.error);
-        }
-      } catch (error) {
-        console.error('[Hercules] Error updating className:', error);
-        alert('Error updating className: ' + error.message);
-      }
-    } else {
-      // Update individual branches
-      const trueValue = document.getElementById('ternary-true-input')?.value.trim();
-      const falseValue = document.getElementById('ternary-false-input')?.value.trim();
-      
-      try {
-        // Update true branch
-        if (trueValue !== undefined) {
-          await fetch('/__hercules_update_class', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              componentId,
-              newClassName: trueValue,
-              updateType: 'ternary-true'
-            })
-          });
-        }
-        
-        // Update false branch
-        if (falseValue !== undefined) {
-          await fetch('/__hercules_update_class', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              componentId,
-              newClassName: falseValue,
-              updateType: 'ternary-false'
-            })
-          });
-        }
-        
-        console.log('[Hercules] Updated ternary branches');
-      } catch (error) {
-        console.error('[Hercules] Error updating ternary:', error);
-        alert('Error updating ternary: ' + error.message);
-      }
-    }
-    
-    closeEditor();
   };
   
   window.herculesApplyTextChanges = async function(isAutoApply = false) {
