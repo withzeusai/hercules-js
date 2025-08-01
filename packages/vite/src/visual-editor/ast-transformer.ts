@@ -1,0 +1,175 @@
+import { parse } from "@babel/parser";
+import * as t from "@babel/types";
+import traverseModule from "@babel/traverse";
+import generateModule from "@babel/generator";
+import { readFile, writeFile } from "fs/promises";
+import path from "path";
+import { type ClassNameAnalysis } from "./ast-analyzer";
+
+// Extract the actual functions
+const traverse = (traverseModule as any).default || traverseModule;
+const generate = (generateModule as any).default || generateModule;
+
+export interface UpdateResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+  analysis?: ClassNameAnalysis;
+}
+
+export async function updateComponentClassName(
+  componentId: string,
+  newClassName: string,
+  rootDir: string,
+  updateType?: "static" | "ternary-true" | "ternary-false" | "replace"
+): Promise<UpdateResult> {
+  try {
+    // Parse component ID format: "path/to/file.tsx:line:col"
+    const match = componentId.match(/^(.+):(\d+):(\d+)$/);
+    if (!match) {
+      return { success: false, error: `Invalid component ID format: ${componentId}` };
+    }
+
+    const [, relativePath, lineStr, colStr] = match;
+    const line = parseInt(lineStr!, 10);
+    const col = parseInt(colStr!, 10);
+    const filePath = path.join(rootDir, relativePath!);
+
+    let code: string;
+    try {
+      code = await readFile(filePath, "utf-8");
+    } catch (err) {
+      return { success: false, error: `Failed to read file ${filePath}: ${err}` };
+    }
+
+    // Parse the file with Babel
+    let ast: any;
+    try {
+      ast = parse(code, {
+        sourceType: "module",
+        plugins: ["jsx", "typescript"],
+        sourceFilename: filePath
+      });
+    } catch (parseError: any) {
+      return { success: false, error: `Failed to parse ${filePath}: ${parseError.message}` };
+    }
+
+    let modified = false;
+    let foundElements = 0;
+    const nearbyElements: Array<{ line: number; col: number; tag: string }> = [];
+
+    // Traverse the AST to find and update the JSX element
+    traverse(ast, {
+      JSXOpeningElement(path: any) {
+        const loc = path.node.loc;
+        if (!loc) return;
+
+        foundElements++;
+
+        // Collect nearby elements for debugging
+        if (Math.abs(loc.start.line - line) <= 5) {
+          const tagName = path.node.name.name || "unknown";
+          nearbyElements.push({
+            line: loc.start.line,
+            col: loc.start.column,
+            tag: tagName
+          });
+        }
+
+        // Check if this is the element we're looking for
+        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
+          const attributes = path.node.attributes;
+
+          // Find existing className attribute
+          const classNameAttrIndex = attributes.findIndex(
+            (attr: any) =>
+              t.isJSXAttribute(attr) &&
+              t.isJSXIdentifier(attr.name) &&
+              attr.name.name === "className"
+          );
+
+          if (updateType === "ternary-true" || updateType === "ternary-false") {
+            // Handle ternary updates
+            if (classNameAttrIndex !== -1) {
+              const existingAttr = attributes[classNameAttrIndex];
+              if (
+                t.isJSXAttribute(existingAttr) &&
+                existingAttr.value &&
+                t.isJSXExpressionContainer(existingAttr.value) &&
+                t.isConditionalExpression(existingAttr.value.expression)
+              ) {
+                const ternary = existingAttr.value.expression;
+
+                if (updateType === "ternary-true") {
+                  ternary.consequent = t.stringLiteral(newClassName);
+                } else {
+                  ternary.alternate = t.stringLiteral(newClassName);
+                }
+
+                modified = true;
+                path.stop();
+                return;
+              }
+            }
+          }
+
+          // For static updates or replacements
+          const newClassNameAttr = t.jsxAttribute(
+            t.jsxIdentifier("className"),
+            t.stringLiteral(newClassName)
+          );
+
+          if (classNameAttrIndex !== -1) {
+            // Update existing className
+            attributes[classNameAttrIndex] = newClassNameAttr;
+          } else {
+            // Add new className
+            attributes.push(newClassNameAttr);
+          }
+
+          modified = true;
+          path.stop();
+        }
+      }
+    });
+
+    if (!modified) {
+      const debugInfo =
+        nearbyElements.length > 0
+          ? ` Found ${nearbyElements.length} nearby elements: ${JSON.stringify(nearbyElements)}`
+          : ` Total JSX elements found: ${foundElements}`;
+      return {
+        success: false,
+        error: `Component not found at ${line}:${col}.${debugInfo}`
+      };
+    }
+
+    // Generate the updated code
+    let output: any;
+    try {
+      output = generate(
+        ast,
+        {
+          retainLines: true,
+          compact: false,
+          concise: false,
+          comments: true
+        },
+        code
+      );
+    } catch (genError) {
+      return { success: false, error: `Failed to generate code: ${genError}` };
+    }
+
+    // Write the updated code back to the file
+    try {
+      await writeFile(filePath, output.code, "utf-8");
+    } catch (writeError) {
+      return { success: false, error: `Failed to write file: ${writeError}` };
+    }
+
+    return { success: true, filePath };
+  } catch (error) {
+    return { success: false, error: `Unexpected error: ${error}` };
+  }
+}

@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { herculesPlugin } from '../src/index';
+import herculesPlugin from '../src/index';
 
 export default defineConfig({
   plugins: [
