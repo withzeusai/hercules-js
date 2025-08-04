@@ -445,10 +445,18 @@ function getVisualEditorScript(dataAttribute: string): string {
       [contenteditable="true"] {
         cursor: text !important;
         min-height: 1em;
+        /* Prevent formatting UI/hints */
+        -webkit-user-modify: read-write-plaintext-only;
+        user-modify: read-write-plaintext-only;
       }
       
       [contenteditable="true"]:focus {
         outline: none !important;
+      }
+      
+      /* Disable browser formatting suggestions */
+      [contenteditable="true"]::selection {
+        background-color: rgba(59, 130, 246, 0.3);
       }
     \`;
     document.head.appendChild(style);
@@ -883,6 +891,18 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Text editing indicator removed
     
     // Add event listeners
+    const handleBeforeInput = (e) => {
+      // Prevent formatting-related input types
+      const formattingTypes = ['formatBold', 'formatItalic', 'formatUnderline', 'formatStrikethrough', 
+                               'formatSuperscript', 'formatSubscript', 'formatJustifyFull', 
+                               'formatJustifyCenter', 'formatJustifyRight', 'formatJustifyLeft',
+                               'formatIndent', 'formatOutdent', 'formatFontName', 'formatFontSize'];
+      
+      if (formattingTypes.includes(e.inputType)) {
+        e.preventDefault();
+      }
+    };
+    
     const handleInput = () => {
       inlineEditingState.hasChanges = true;
       
@@ -903,6 +923,9 @@ function getVisualEditorScript(dataAttribute: string): string {
       } else if (e.key === 'Escape') {
         e.preventDefault();
         cancelInlineTextEditing();
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'B' || e.key === 'i' || e.key === 'I' || e.key === 'u' || e.key === 'U')) {
+        // Prevent bold, italic, and underline formatting
+        e.preventDefault();
       }
     };
     
@@ -924,17 +947,42 @@ function getVisualEditorScript(dataAttribute: string): string {
       }
     };
     
+    // Prevent pasting formatted content
+    const handlePaste = (e) => {
+      e.preventDefault();
+      
+      // Get plain text from clipboard
+      const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+      
+      // Insert plain text at cursor position
+      const selection = window.getSelection();
+      if (!selection.rangeCount) return;
+      
+      selection.deleteFromDocument();
+      selection.getRangeAt(0).insertNode(document.createTextNode(text));
+      
+      // Move cursor to end of inserted text
+      selection.collapseToEnd();
+      
+      // Trigger input event manually
+      handleInput();
+    };
+    
+    element.addEventListener('beforeinput', handleBeforeInput);
     element.addEventListener('input', handleInput);
     element.addEventListener('keydown', handleKeyDown);
     element.addEventListener('blur', handleBlur);
+    element.addEventListener('paste', handlePaste);
     window.addEventListener('resize', handleResize);
     window.addEventListener('scroll', handleResize, true);
     
     // Store event listeners for cleanup
     inlineEditingState.eventListeners = {
+      beforeinput: handleBeforeInput,
       input: handleInput,
       keydown: handleKeyDown,
       blur: handleBlur,
+      paste: handlePaste,
       resize: handleResize
     };
   }
@@ -946,9 +994,11 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     // Remove event listeners
     if (eventListeners) {
+      element.removeEventListener('beforeinput', eventListeners.beforeinput);
       element.removeEventListener('input', eventListeners.input);
       element.removeEventListener('keydown', eventListeners.keydown);
       element.removeEventListener('blur', eventListeners.blur);
+      element.removeEventListener('paste', eventListeners.paste);
       window.removeEventListener('resize', eventListeners.resize);
       window.removeEventListener('scroll', eventListeners.resize, true);
     }
