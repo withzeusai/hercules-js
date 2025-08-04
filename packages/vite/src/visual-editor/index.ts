@@ -626,7 +626,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Get actual editor height or use a reasonable default
     const editorHeight = editorPanel.offsetHeight || 400;
     const viewportHeight = window.innerHeight;
-    const gap = 10; // Gap between element and editor
+    const gap = 5; // Gap between element and editor
     
     let topPosition;
     
@@ -668,8 +668,14 @@ function getVisualEditorScript(dataAttribute: string): string {
     if (!isEditorActive) return;
     
     // Check if Escape key is pressed
-    if (e.key === 'Escape' && selectedElement) {
-      closeEditor();
+    if (e.key === 'Escape') {
+      if (selectedElement) {
+        // If an element is selected, just close the editor (unselect element)
+        closeEditor();
+      } else {
+        // If no element is selected, turn off editor mode
+        toggleEditor();
+      }
     }
   }
 
