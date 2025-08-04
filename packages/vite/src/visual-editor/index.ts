@@ -1,8 +1,12 @@
 import type { Plugin, ViteDevServer } from "vite";
 
 // Import from extracted modules
-import { analyzeComponentClassName, analyzeComponentTextContent } from "./ast-analyzer";
-import { updateComponentClassName, updateComponentTextContent, deleteComponent } from "./ast-transformer";
+import { analyzeElement } from "./ast-analyzer";
+import {
+  updateComponentClassName,
+  updateComponentTextContent,
+  deleteComponent
+} from "./ast-transformer";
 
 export interface VisualEditorOptions {
   /**
@@ -70,8 +74,8 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
         }
       });
 
-      // Handle className analysis requests
-      server.middlewares.use("/__hercules_analyze_class", async (req, res, next) => {
+      // Handle unified element analysis requests
+      server.middlewares.use("/__hercules_analyze_element", async (req, res, next) => {
         if (req.method === "POST") {
           let body = "";
           req.on("data", (chunk) => (body += chunk));
@@ -79,40 +83,13 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
             try {
               const { componentId } = JSON.parse(body);
 
-              const result = await analyzeComponentClassName(componentId, server.config.root);
+              const result = await analyzeElement(componentId, server.config.root);
 
               res.setHeader("Content-Type", "application/json");
               res.end(JSON.stringify(result));
             } catch (error) {
               if (debug) {
-                console.error("[Visual Editor] Error analyzing className:", error);
-              }
-              res.statusCode = 500;
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
-
-      // Handle text content analysis requests
-      server.middlewares.use("/__hercules_analyze_text", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const { componentId } = JSON.parse(body);
-
-              const result = await analyzeComponentTextContent(componentId, server.config.root);
-
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error analyzing text content:", error);
+                console.error("[Visual Editor] Error analyzing element:", error);
               }
               res.statusCode = 500;
               res.setHeader("Content-Type", "application/json");
@@ -165,10 +142,7 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
               const data = JSON.parse(body);
               const { componentId } = data;
 
-              const result = await deleteComponent(
-                componentId,
-                server.config.root
-              );
+              const result = await deleteComponent(componentId, server.config.root);
 
               res.setHeader("Content-Type", "application/json");
               res.end(JSON.stringify(result));
@@ -761,12 +735,9 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Update component ID
     document.getElementById('component-id').textContent = componentId;
     
-    // Analyze className
-    await updateEditorContent();
-    
-    // Analyze text content and enable inline editing if possible
+    // Analyze element (both className and textContent in one call)
     try {
-      const response = await fetch('/__hercules_analyze_text', {
+      const response = await fetch('/__hercules_analyze_element', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -776,16 +747,29 @@ function getVisualEditorScript(dataAttribute: string): string {
       
       const result = await response.json();
       
-      if (result.success && result.analysis) {
-        const analysis = result.analysis;
-        // Enable inline editing if text is editable
-        if (analysis.type === 'editable') {
-          enableInlineTextEditing(element, analysis.value || '', clickEvent);
+      if (result.success) {
+        // Handle className analysis
+        if (result.className) {
+          renderClassEditor(result.className, element);
+        } else {
+          // Fallback to simple editor
+          renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
         }
+        
+        // Handle text content analysis
+        if (result.textContent && result.textContent.type === 'editable') {
+          enableInlineTextEditing(element, result.textContent.value || '', clickEvent);
+        }
+      } else {
+        // Fallback behavior
+        console.error('[Hercules] Error analyzing element:', result.error);
+        renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
+        enableInlineTextEditing(element, element.textContent || '', clickEvent);
       }
     } catch (error) {
-      console.error('[Hercules] Error analyzing text content:', error);
-      // Try to enable inline editing with current text content as fallback
+      console.error('[Hercules] Error analyzing element:', error);
+      // Fallback to simple editors
+      renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
       enableInlineTextEditing(element, element.textContent || '', clickEvent);
     }
   }
@@ -795,9 +779,9 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     const componentId = selectedElement.getAttribute('${dataAttribute}');
     
-    // Analyze the className
+    // Use unified analysis endpoint
     try {
-      const response = await fetch('/__hercules_analyze_class', {
+      const response = await fetch('/__hercules_analyze_element', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -807,14 +791,14 @@ function getVisualEditorScript(dataAttribute: string): string {
       
       const result = await response.json();
       
-      if (result.success && result.analysis) {
-        renderClassEditor(result.analysis, selectedElement);
+      if (result.success && result.className) {
+        renderClassEditor(result.className, selectedElement);
       } else {
         // Fallback to simple editor
         renderSimpleEditor(selectedElement.className.replace('hercules-highlight', '').trim());
       }
     } catch (error) {
-      console.error('[Hercules] Error analyzing className:', error);
+      console.error('[Hercules] Error analyzing element:', error);
       // Fallback to simple editor
       renderSimpleEditor(selectedElement.className.replace('hercules-highlight', '').trim());
     }

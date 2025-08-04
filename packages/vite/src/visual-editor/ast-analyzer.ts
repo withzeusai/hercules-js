@@ -18,8 +18,6 @@ export interface AnalysisResult {
   error?: string;
 }
 
-
-
 // Helper function to analyze className expressions
 export function analyzeClassNameExpression(node: any): ClassNameAnalysis {
   if (!node) {
@@ -48,83 +46,6 @@ export function analyzeClassNameExpression(node: any): ClassNameAnalysis {
   return { type: "dynamic" };
 }
 
-export async function analyzeComponentClassName(
-  componentId: string,
-  rootDir: string
-): Promise<AnalysisResult> {
-  try {
-    // Parse component ID format: "path/to/file.tsx:line:col"
-    const match = componentId.match(/^(.+):(\d+):(\d+)$/);
-    if (!match) {
-      return { success: false, error: `Invalid component ID format: ${componentId}` };
-    }
-
-    const [, relativePath, lineStr, colStr] = match;
-    const line = parseInt(lineStr!, 10);
-    const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
-
-    let code: string;
-    try {
-      code = await readFile(filePath, "utf-8");
-    } catch (err) {
-      return { success: false, error: `Failed to read file ${filePath}: ${err}` };
-    }
-
-    // Parse the file with Babel
-    let ast: any;
-    try {
-      ast = parse(code, {
-        sourceType: "module",
-        plugins: ["jsx", "typescript"],
-        sourceFilename: filePath
-      });
-    } catch (parseError: any) {
-      return { success: false, error: `Failed to parse ${filePath}: ${parseError.message}` };
-    }
-
-    let foundAnalysis: ClassNameAnalysis | undefined;
-
-    // Traverse the AST to find the JSX element at the specified location
-    traverse(ast, {
-      JSXOpeningElement(path: any) {
-        const loc = path.node.loc;
-        if (!loc) return;
-
-        // Check if this is the element we're looking for
-        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
-          const attributes = path.node.attributes;
-
-          // Find existing className attribute
-          const classNameAttr = attributes.find(
-            (attr: any) =>
-              t.isJSXAttribute(attr) &&
-              t.isJSXIdentifier(attr.name) &&
-              attr.name.name === "className"
-          ) as t.JSXAttribute | undefined;
-
-          if (classNameAttr) {
-            foundAnalysis = analyzeClassNameExpression(classNameAttr.value);
-          } else {
-            foundAnalysis = { type: "static", value: "" };
-          }
-
-          path.stop();
-        }
-      }
-    });
-
-    if (foundAnalysis) {
-      return { success: true, analysis: foundAnalysis };
-    } else {
-      return { success: false, error: `Component not found at ${line}:${col}` };
-    }
-  } catch (error: any) {
-    console.error("[Visual Editor] Error analyzing className:", error);
-    return { success: false, error: error.message || String(error) };
-  }
-}
-
 export interface TextContentAnalysis {
   type: "editable" | "not-editable";
   value?: string;
@@ -137,6 +58,15 @@ export interface TextAnalysisResult {
   error?: string;
 }
 
+// Unified analysis interfaces
+export interface UnifiedElementAnalysis {
+  success: boolean;
+  componentId: string;
+  className?: ClassNameAnalysis;
+  textContent?: TextContentAnalysis;
+  error?: string;
+}
+
 // Helper to extract text content from JSX children
 function extractTextContent(children: any[]): TextContentAnalysis {
   if (!children || children.length === 0) {
@@ -144,8 +74,8 @@ function extractTextContent(children: any[]): TextContentAnalysis {
   }
 
   // Check if has nested JSX elements or fragments
-  const hasNonTextChildren = children.some(child => 
-    t.isJSXElement(child) || t.isJSXFragment(child)
+  const hasNonTextChildren = children.some(
+    (child) => t.isJSXElement(child) || t.isJSXFragment(child)
   );
 
   if (hasNonTextChildren) {
@@ -153,20 +83,24 @@ function extractTextContent(children: any[]): TextContentAnalysis {
   }
 
   // Check if all children are static text
-  const allStatic = children.every(child => 
-    t.isJSXText(child) || 
-    (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression))
+  const allStatic = children.every(
+    (child) =>
+      t.isJSXText(child) ||
+      (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression))
   );
 
   if (allStatic) {
-    const textContent = children.map(child => {
-      if (t.isJSXText(child)) {
-        return child.value;
-      } else if (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression)) {
-        return child.expression.value;
-      }
-      return "";
-    }).join("").trim();
+    const textContent = children
+      .map((child) => {
+        if (t.isJSXText(child)) {
+          return child.value;
+        } else if (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression)) {
+          return child.expression.value;
+        }
+        return "";
+      })
+      .join("")
+      .trim();
 
     return { type: "editable", value: textContent };
   }
@@ -175,15 +109,20 @@ function extractTextContent(children: any[]): TextContentAnalysis {
   return { type: "not-editable", reason: "dynamic-content" };
 }
 
-export async function analyzeComponentTextContent(
+// Unified analyze function that combines className and textContent analysis
+export async function analyzeElement(
   componentId: string,
   rootDir: string
-): Promise<TextAnalysisResult> {
+): Promise<UnifiedElementAnalysis> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
     const match = componentId.match(/^(.+):(\d+):(\d+)$/);
     if (!match) {
-      return { success: false, error: `Invalid component ID format: ${componentId}` };
+      return {
+        success: false,
+        componentId,
+        error: `Invalid component ID format: ${componentId}`
+      };
     }
 
     const [, relativePath, lineStr, colStr] = match;
@@ -191,14 +130,19 @@ export async function analyzeComponentTextContent(
     const col = parseInt(colStr!, 10);
     const filePath = path.join(rootDir, relativePath!);
 
+    // Read file once
     let code: string;
     try {
       code = await readFile(filePath, "utf-8");
     } catch (err) {
-      return { success: false, error: `Failed to read file ${filePath}: ${err}` };
+      return {
+        success: false,
+        componentId,
+        error: `Failed to read file ${filePath}: ${err}`
+      };
     }
 
-    // Parse the file with Babel
+    // Parse the file once with Babel
     let ast: any;
     try {
       ast = parse(code, {
@@ -207,12 +151,18 @@ export async function analyzeComponentTextContent(
         sourceFilename: filePath
       });
     } catch (parseError: any) {
-      return { success: false, error: `Failed to parse ${filePath}: ${parseError.message}` };
+      return {
+        success: false,
+        componentId,
+        error: `Failed to parse ${filePath}: ${parseError.message}`
+      };
     }
 
-    let foundAnalysis: TextContentAnalysis | undefined;
+    let classNameAnalysis: ClassNameAnalysis | undefined;
+    let textContentAnalysis: TextContentAnalysis | undefined;
+    let elementFound = false;
 
-    // Traverse the AST to find the JSX element at the specified location
+    // Single traversal to find and analyze the element
     traverse(ast, {
       JSXElement(path: any) {
         const openingElement = path.node.openingElement;
@@ -221,20 +171,60 @@ export async function analyzeComponentTextContent(
 
         // Check if this is the element we're looking for
         if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
+          elementFound = true;
+
+          // Analyze className from opening element
+          const attributes = openingElement.attributes;
+          const classNameAttr = attributes.find(
+            (attr: any) =>
+              t.isJSXAttribute(attr) &&
+              t.isJSXIdentifier(attr.name) &&
+              attr.name.name === "className"
+          ) as t.JSXAttribute | undefined;
+
+          if (classNameAttr) {
+            classNameAnalysis = analyzeClassNameExpression(classNameAttr.value);
+          } else {
+            classNameAnalysis = { type: "static", value: "" };
+          }
+
+          // Analyze text content from children
           const children = path.node.children;
-          foundAnalysis = extractTextContent(children);
+          textContentAnalysis = extractTextContent(children);
+
           path.stop();
         }
       }
     });
 
-    if (foundAnalysis) {
-      return { success: true, analysis: foundAnalysis };
+    if (elementFound) {
+      const result: UnifiedElementAnalysis = {
+        success: true,
+        componentId
+      };
+
+      if (classNameAnalysis) {
+        result.className = classNameAnalysis;
+      }
+
+      if (textContentAnalysis) {
+        result.textContent = textContentAnalysis;
+      }
+
+      return result;
     } else {
-      return { success: false, error: `Component not found at ${line}:${col}` };
+      return {
+        success: false,
+        componentId,
+        error: `Component not found at ${line}:${col}`
+      };
     }
   } catch (error: any) {
-    console.error("[Visual Editor] Error analyzing text content:", error);
-    return { success: false, error: error.message || String(error) };
+    console.error("[Visual Editor] Error analyzing element:", error);
+    return {
+      success: false,
+      componentId,
+      error: error.message || String(error)
+    };
   }
 }
