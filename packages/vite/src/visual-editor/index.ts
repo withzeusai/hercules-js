@@ -528,42 +528,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Fallback: Get the raw tag name
     let tagName = element.tagName.toLowerCase();
     
-    // If no React component found, check className patterns as secondary fallback
-    const className = element.className;
-    
-    if (className && typeof className === 'string') {
-      // Check for common component patterns
-      if (className.includes('card-title')) return 'card title';
-      if (className.includes('card-header')) return 'card header';
-      if (className.includes('card-content')) return 'card content';
-      if (className.includes('card-footer')) return 'card footer';
-      if (className.includes('card')) return 'card';
-      if (className.includes('button')) return 'button';
-      if (className.includes('input')) return 'input';
-      if (className.includes('select')) return 'select';
-      if (className.includes('dialog')) return 'dialog';
-      if (className.includes('modal')) return 'modal';
-      if (className.includes('dropdown')) return 'dropdown';
-      if (className.includes('tooltip')) return 'tooltip';
-      if (className.includes('badge')) return 'badge';
-      if (className.includes('alert')) return 'alert';
-      if (className.includes('avatar')) return 'avatar';
-      if (className.includes('checkbox')) return 'checkbox';
-      if (className.includes('radio')) return 'radio';
-      if (className.includes('switch')) return 'switch';
-      if (className.includes('slider')) return 'slider';
-      if (className.includes('progress')) return 'progress';
-      if (className.includes('spinner')) return 'spinner';
-      if (className.includes('tab')) return 'tab';
-      if (className.includes('accordion')) return 'accordion';
-      if (className.includes('breadcrumb')) return 'breadcrumb';
-      if (className.includes('pagination')) return 'pagination';
-      if (className.includes('nav')) return 'nav';
-      if (className.includes('sidebar')) return 'sidebar';
-      if (className.includes('header')) return 'header';
-      if (className.includes('footer')) return 'footer';
-    }
-    
     // Return the HTML tag name as final fallback
     return tagName;
   }
