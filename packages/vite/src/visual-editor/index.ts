@@ -322,33 +322,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       .hercules-highlighter.selected .hercules-highlighter-label {
         background: #3b82f6;
       }
-      
-      #hercules-toggle-btn {
-        position: fixed;
-        bottom: 20px;
-        left: 20px;
-        background: #3b82f6;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 12px 20px;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        z-index: 99998;
-        transition: all 0.2s;
-      }
-      
-      #hercules-toggle-btn:hover {
-        background: #2563eb;
-        transform: translateY(-1px);
-        box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
-      }
-      
-      #hercules-toggle-btn.active {
-        background: #dc2626;
-      }
+
       
       /* Inline editing styles */
       [contenteditable="true"] {
@@ -369,13 +343,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       }
     \`;
     document.head.appendChild(style);
-    
-    // Create toggle button
-    const toggleBtn = document.createElement('button');
-    toggleBtn.id = 'hercules-toggle-btn';
-    toggleBtn.textContent = 'Visual Editor';
-    toggleBtn.onclick = toggleEditor;
-    document.body.appendChild(toggleBtn);
+
     
     // Create editor panel
     editorPanel = document.createElement('div');
@@ -397,11 +365,8 @@ function getVisualEditorScript(dataAttribute: string): string {
   
   function toggleEditor() {
     isEditorActive = !isEditorActive;
-    const toggleBtn = document.getElementById('hercules-toggle-btn');
     
     if (isEditorActive) {
-      toggleBtn.classList.add('active');
-      toggleBtn.textContent = 'Exit Editor';
       document.addEventListener('click', handleElementClick, true); // Use capture phase
       document.addEventListener('mouseover', handleElementHover);
       document.addEventListener('mouseout', handleElementHover);
@@ -409,8 +374,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       window.addEventListener('scroll', handleScroll, true);
       window.addEventListener('resize', handleResize);
     } else {
-      toggleBtn.classList.remove('active');
-      toggleBtn.textContent = 'Visual Editor!!';
       document.removeEventListener('click', handleElementClick, true); // Use capture phase
       document.removeEventListener('mouseover', handleElementHover);
       document.removeEventListener('mouseout', handleElementHover);
@@ -513,8 +476,8 @@ function getVisualEditorScript(dataAttribute: string): string {
     }
   }
 
-  function positionEditorBelowElement(element) {
-    if (!editorPanel || !element) return;
+  function calculateEditorPosition(element) {
+    if (!element) return null;
     
     const rect = element.getBoundingClientRect();
     const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
@@ -536,7 +499,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     }
     
     // Get actual editor height or use a reasonable default
-    const editorHeight = editorPanel.offsetHeight || 400;
+    const editorHeight = editorPanel?.offsetHeight || 400;
     const viewportHeight = window.innerHeight;
     const gap = 5; // Gap between element and editor
     
@@ -554,16 +517,46 @@ function getVisualEditorScript(dataAttribute: string): string {
       topPosition = scrollY + 20;
     }
     
-    editorPanel.style.left = leftPosition + 'px';
-    editorPanel.style.top = topPosition + 'px';
+    return {
+      x: leftPosition,
+      y: topPosition,
+      elementRect: {
+        top: rect.top + scrollY,
+        left: rect.left + scrollX,
+        width: rect.width,
+        height: rect.height,
+        bottom: rect.bottom + scrollY,
+        right: rect.right + scrollX
+      }
+    };
+  }
+
+  function positionEditorBelowElement(element) {
+    if (!editorPanel || !element) return;
+    
+    const position = calculateEditorPosition(element);
+    if (position) {
+      editorPanel.style.left = position.x + 'px';
+      editorPanel.style.top = position.y + 'px';
+    }
+  }
+
+  function emitPositionUpdate() {
+    if (selectedElement) {
+      const position = calculateEditorPosition(selectedElement);
+      emitToParent('selected-element-position', {
+        position: position
+      });
+    }
   }
 
   function handleScroll() {
-    // Deselect element when scrolling
-    if (selectedElement) {
-      hideHighlighter(selectedHighlighterElement);
-      selectedElement = null;
-      editorPanel.classList.remove('active');
+    // Update position when scrolling instead of deselecting
+    if (selectedElement && selectedHighlighterElement) {
+      const tagName = getElementTagName(selectedElement);
+      updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
+      positionEditorBelowElement(selectedElement);
+      emitPositionUpdate();
     }
   }
 
@@ -573,6 +566,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       const tagName = getElementTagName(selectedElement);
       updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
       positionEditorBelowElement(selectedElement);
+      emitPositionUpdate();
     }
   }
 
@@ -683,7 +677,10 @@ function getVisualEditorScript(dataAttribute: string): string {
       const result = await response.json();
       
       if (result.success) {
-        // Emit selected element event with analysis data
+        // Calculate position for the element
+        const position = calculateEditorPosition(element);
+        
+        // Emit selected element event with analysis data and position
         emitToParent('selected-element', {
           data: {
             componentId: componentId,
@@ -693,7 +690,8 @@ function getVisualEditorScript(dataAttribute: string): string {
               tagName: element.tagName.toLowerCase(),
               className: element.className,
               textContent: element.textContent
-            }
+            },
+            position: position
           }
         });
         
@@ -715,7 +713,10 @@ function getVisualEditorScript(dataAttribute: string): string {
         renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
         enableInlineTextEditing(element, element.textContent || '', clickEvent);
         
-        // Still emit selected element event with basic data
+        // Calculate position for the element
+        const position = calculateEditorPosition(element);
+        
+        // Still emit selected element event with basic data and position
         emitToParent('selected-element', {
           data: {
             componentId: componentId,
@@ -723,7 +724,8 @@ function getVisualEditorScript(dataAttribute: string): string {
               tagName: element.tagName.toLowerCase(),
               className: element.className,
               textContent: element.textContent
-            }
+            },
+            position: position
           }
         });
       }
@@ -835,6 +837,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       
       // Also update the editor panel position if needed
       positionEditorBelowElement(element);
+      emitPositionUpdate();
     };
     
     const handleKeyDown = (e) => {
@@ -865,6 +868,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         const tagName = getElementTagName(element);
         updateHighlighter(selectedHighlighterElement, element, tagName);
         positionEditorBelowElement(element);
+        emitPositionUpdate();
       }
     };
     
