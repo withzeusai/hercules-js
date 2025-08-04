@@ -1,13 +1,11 @@
 import { parse } from "@babel/parser";
 import * as t from "@babel/types";
 import traverseModule from "@babel/traverse";
-import generateModule from "@babel/generator";
 import { readFile } from "fs/promises";
 import path from "path";
 
 // Extract the actual functions
 const traverse = (traverseModule as any).default || traverseModule;
-const generate = (generateModule as any).default || generateModule;
 
 export interface ClassNameAnalysis {
   type: "static" | "dynamic";
@@ -128,10 +126,9 @@ export async function analyzeComponentClassName(
 }
 
 export interface TextContentAnalysis {
-  type: "static" | "expression" | "mixed" | "empty";
+  type: "editable" | "not-editable";
   value?: string;
-  hasChildren: boolean;
-  expression?: string;
+  reason?: "has-children" | "dynamic-content";
 }
 
 export interface TextAnalysisResult {
@@ -143,15 +140,16 @@ export interface TextAnalysisResult {
 // Helper to extract text content from JSX children
 function extractTextContent(children: any[]): TextContentAnalysis {
   if (!children || children.length === 0) {
-    return { type: "empty", hasChildren: false };
+    return { type: "editable", value: "" };
   }
 
+  // Check if has nested JSX elements or fragments
   const hasNonTextChildren = children.some(child => 
     t.isJSXElement(child) || t.isJSXFragment(child)
   );
 
   if (hasNonTextChildren) {
-    return { type: "mixed", hasChildren: true };
+    return { type: "not-editable", reason: "has-children" };
   }
 
   // Check if all children are static text
@@ -170,20 +168,11 @@ function extractTextContent(children: any[]): TextContentAnalysis {
       return "";
     }).join("").trim();
 
-    return { type: "static", value: textContent, hasChildren: false };
+    return { type: "editable", value: textContent };
   }
 
-  // Handle expression content
-  const expressions = children.filter(child => 
-    t.isJSXExpressionContainer(child) && !t.isStringLiteral(child.expression)
-  );
-
-  if (expressions.length > 0) {
-    const expression = generate(expressions[0]).code;
-    return { type: "expression", expression, hasChildren: false };
-  }
-
-  return { type: "mixed", hasChildren: true };
+  // Has dynamic expressions
+  return { type: "not-editable", reason: "dynamic-content" };
 }
 
 export async function analyzeComponentTextContent(

@@ -779,8 +779,8 @@ function getVisualEditorScript(dataAttribute: string): string {
       if (result.success && result.analysis) {
         const analysis = result.analysis;
         // Enable inline editing if text is editable
-        if (analysis.type === 'static' || analysis.type === 'empty') {
-          enableInlineTextEditing(element, analysis.type === 'static' ? (analysis.value || '') : '', clickEvent);
+        if (analysis.type === 'editable') {
+          enableInlineTextEditing(element, analysis.value || '', clickEvent);
         }
       }
     } catch (error) {
