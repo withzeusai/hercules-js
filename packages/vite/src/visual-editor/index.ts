@@ -142,8 +142,6 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
 }
 
 function getVisualEditorScript(dataAttribute: string): string {
-  // For now, return the old inline script
-  // TODO: Replace with buildClientScript(dataAttribute) once the bundling is set up
   return `
 (function() {
   let selectedElement = null;
@@ -579,8 +577,8 @@ function getVisualEditorScript(dataAttribute: string): string {
       leftPosition = viewportWidth - editorWidth - 10; // 10px margin from right edge
     }
     
-    // Get approximate editor height (you may need to adjust this)
-    const editorHeight = 400; // Approximate height
+    // Get actual editor height or use a reasonable default
+    const editorHeight = editorPanel.offsetHeight || 400;
     const viewportHeight = window.innerHeight;
     const gap = 10; // Gap between element and editor
     
