@@ -17,140 +17,12 @@ export interface UpdateResult {
   analysis?: ClassNameAnalysis | TextContentAnalysis;
 }
 
-export async function updateComponentClassName(
+export async function updateComponentElement(
   componentId: string,
-  newClassName: string,
-  rootDir: string
-): Promise<UpdateResult> {
-  try {
-    // Parse component ID format: "path/to/file.tsx:line:col"
-    const match = componentId.match(/^(.+):(\d+):(\d+)$/);
-    if (!match) {
-      return { success: false, error: `Invalid component ID format: ${componentId}` };
-    }
-
-    const [, relativePath, lineStr, colStr] = match;
-    const line = parseInt(lineStr!, 10);
-    const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
-
-    let code: string;
-    try {
-      code = await readFile(filePath, "utf-8");
-    } catch (err) {
-      return { success: false, error: `Failed to read file ${filePath}: ${err}` };
-    }
-
-    // Parse the file with Babel
-    let ast: any;
-    try {
-      ast = parse(code, {
-        sourceType: "module",
-        plugins: ["jsx", "typescript"],
-        sourceFilename: filePath
-      });
-    } catch (parseError: any) {
-      return { success: false, error: `Failed to parse ${filePath}: ${parseError.message}` };
-    }
-
-    let modified = false;
-    let foundElements = 0;
-    const nearbyElements: Array<{ line: number; col: number; tag: string }> = [];
-
-    // Traverse the AST to find and update the JSX element
-    traverse(ast, {
-      JSXOpeningElement(path: any) {
-        const loc = path.node.loc;
-        if (!loc) return;
-
-        foundElements++;
-
-        // Collect nearby elements for debugging
-        if (Math.abs(loc.start.line - line) <= 5) {
-          const tagName = path.node.name.name || "unknown";
-          nearbyElements.push({
-            line: loc.start.line,
-            col: loc.start.column,
-            tag: tagName
-          });
-        }
-
-        // Check if this is the element we're looking for
-        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
-          const attributes = path.node.attributes;
-
-          // Find existing className attribute
-          const classNameAttrIndex = attributes.findIndex(
-            (attr: any) =>
-              t.isJSXAttribute(attr) &&
-              t.isJSXIdentifier(attr.name) &&
-              attr.name.name === "className"
-          );
-
-          // Create new className attribute with static string value
-          const newClassNameAttr = t.jsxAttribute(
-            t.jsxIdentifier("className"),
-            t.stringLiteral(newClassName)
-          );
-
-          if (classNameAttrIndex !== -1) {
-            // Update existing className
-            attributes[classNameAttrIndex] = newClassNameAttr;
-          } else {
-            // Add new className
-            attributes.push(newClassNameAttr);
-          }
-
-          modified = true;
-          path.stop();
-        }
-      }
-    });
-
-    if (!modified) {
-      const debugInfo =
-        nearbyElements.length > 0
-          ? ` Found ${nearbyElements.length} nearby elements: ${JSON.stringify(nearbyElements)}`
-          : ` Total JSX elements found: ${foundElements}`;
-      return {
-        success: false,
-        error: `Component not found at ${line}:${col}.${debugInfo}`
-      };
-    }
-
-    // Generate the updated code
-    let output: any;
-    try {
-      output = generate(
-        ast,
-        {
-          retainLines: true,
-          compact: false,
-          concise: false,
-          comments: true
-        },
-        code
-      );
-    } catch (genError) {
-      return { success: false, error: `Failed to generate code: ${genError}` };
-    }
-
-    // Write the updated code back to the file
-    try {
-      await writeFile(filePath, output.code, "utf-8");
-    } catch (writeError) {
-      return { success: false, error: `Failed to write file: ${writeError}` };
-    }
-
-    return { success: true, filePath };
-  } catch (error) {
-    return { success: false, error: `Unexpected error: ${error}` };
-  }
-}
-
-export async function updateComponentTextContent(
-  componentId: string,
-  newTextContent: string,
+  updates: {
+    className?: string;
+    textContent?: string;
+  },
   rootDir: string
 ): Promise<UpdateResult> {
   try {
@@ -209,9 +81,41 @@ export async function updateComponentTextContent(
 
         // Check if this is the element we're looking for
         if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
-          // Clear existing children and add new text content
-          path.node.children = [t.jsxText(newTextContent)];
-          
+          // Update className if provided
+          if (updates.className !== undefined) {
+            const classNameAttr = openingElement.attributes.find(
+              (attr: any) => attr.name && attr.name.name === "className"
+            );
+
+            if (updates.className === "") {
+              // Remove className attribute if new value is empty
+              openingElement.attributes = openingElement.attributes.filter(
+                (attr: any) => !(attr.name && attr.name.name === "className")
+              );
+            } else {
+              if (classNameAttr) {
+                // Update existing className
+                classNameAttr.value = t.stringLiteral(updates.className);
+              } else {
+                // Add new className attribute
+                openingElement.attributes.push(
+                  t.jsxAttribute(t.jsxIdentifier("className"), t.stringLiteral(updates.className))
+                );
+              }
+            }
+          }
+
+          // Update text content if provided
+          if (updates.textContent !== undefined) {
+            // Clear existing children
+            path.node.children = [];
+
+            // Add new text content as a JSXText node
+            if (updates.textContent.trim() !== "") {
+              path.node.children.push(t.jsxText(updates.textContent));
+            }
+          }
+
           modified = true;
           path.stop();
         }
@@ -259,10 +163,7 @@ export async function updateComponentTextContent(
   }
 }
 
-export async function deleteComponent(
-  componentId: string,
-  rootDir: string
-): Promise<UpdateResult> {
+export async function deleteComponent(componentId: string, rootDir: string): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
     const match = componentId.match(/^(.+):(\d+):(\d+)$/);
@@ -321,7 +222,7 @@ export async function deleteComponent(
         if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
           // Remove the element from its parent
           path.remove();
-          
+
           modified = true;
           path.stop();
         }
@@ -336,7 +237,7 @@ export async function deleteComponent(
         if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
           // Remove the fragment from its parent
           path.remove();
-          
+
           modified = true;
           path.stop();
         }

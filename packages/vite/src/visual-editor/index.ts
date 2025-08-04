@@ -2,11 +2,7 @@ import type { Plugin, ViteDevServer } from "vite";
 
 // Import from extracted modules
 import { analyzeElement } from "./ast-analyzer";
-import {
-  updateComponentClassName,
-  updateComponentTextContent,
-  deleteComponent
-} from "./ast-transformer";
+import { updateComponentElement, deleteComponent } from "./ast-transformer";
 
 export interface VisualEditorOptions {
   /**
@@ -43,37 +39,6 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
         }
       });
 
-      // Handle className update requests
-      server.middlewares.use("/__hercules_update_class", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const data = JSON.parse(body);
-              const { componentId, newClassName } = data;
-
-              const result = await updateComponentClassName(
-                componentId,
-                newClassName,
-                server.config.root
-              );
-
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error updating className:", error);
-              }
-              res.statusCode = 500;
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
-
       // Handle unified element analysis requests
       server.middlewares.use("/__hercules_analyze_element", async (req, res, next) => {
         if (req.method === "POST") {
@@ -101,27 +66,27 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
         }
       });
 
-      // Handle text content update requests
-      server.middlewares.use("/__hercules_update_text", async (req, res, next) => {
+      // Handle unified element update requests
+      server.middlewares.use("/__hercules_update_element", async (req, res, next) => {
         if (req.method === "POST") {
           let body = "";
           req.on("data", (chunk) => (body += chunk));
           req.on("end", async () => {
             try {
               const data = JSON.parse(body);
-              const { componentId, newTextContent } = data;
+              const { componentId, className, textContent } = data;
 
-              const result = await updateComponentTextContent(
-                componentId,
-                newTextContent,
-                server.config.root
-              );
+              const updates: { className?: string; textContent?: string } = {};
+              if (className !== undefined) updates.className = className;
+              if (textContent !== undefined) updates.textContent = textContent;
+
+              const result = await updateComponentElement(componentId, updates, server.config.root);
 
               res.setHeader("Content-Type", "application/json");
               res.end(JSON.stringify(result));
             } catch (error) {
               if (debug) {
-                console.error("[Visual Editor] Error updating text content:", error);
+                console.error("[Visual Editor] Error updating element:", error);
               }
               res.statusCode = 500;
               res.end(JSON.stringify({ success: false, error: String(error) }));
@@ -1033,14 +998,14 @@ function getVisualEditorScript(dataAttribute: string): string {
     const componentId = inlineEditingState.element.getAttribute('${dataAttribute}');
     
     try {
-      const response = await fetch('/__hercules_update_text', {
+      const response = await fetch('/__hercules_update_element', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           componentId,
-          newTextContent: newText
+          textContent: newText
         })
       });
       
@@ -1151,14 +1116,14 @@ function getVisualEditorScript(dataAttribute: string): string {
     const newClassName = document.getElementById('class-input').value.trim();
     
     try {
-      const response = await fetch('/__hercules_update_class', {
+      const response = await fetch('/__hercules_update_element', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           componentId,
-          newClassName
+          className: newClassName
         })
       });
       
