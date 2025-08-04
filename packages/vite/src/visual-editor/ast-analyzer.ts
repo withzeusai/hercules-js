@@ -10,12 +10,8 @@ const traverse = (traverseModule as any).default || traverseModule;
 const generate = (generateModule as any).default || generateModule;
 
 export interface ClassNameAnalysis {
-  type: "static" | "ternary" | "template" | "complex";
+  type: "static" | "dynamic";
   value?: string;
-  condition?: string;
-  trueValue?: string;
-  falseValue?: string;
-  expression?: string;
 }
 
 export interface AnalysisResult {
@@ -24,16 +20,7 @@ export interface AnalysisResult {
   error?: string;
 }
 
-// Helper to extract string value from various node types
-function extractStringValue(node: any): string {
-  if (t.isStringLiteral(node)) {
-    return node.value;
-  }
-  if (t.isTemplateLiteral(node) && node.expressions.length === 0) {
-    return node.quasis.map((q: any) => q.value.raw).join("");
-  }
-  return generate(node).code;
-}
+
 
 // Helper function to analyze className expressions
 export function analyzeClassNameExpression(node: any): ClassNameAnalysis {
@@ -46,41 +33,21 @@ export function analyzeClassNameExpression(node: any): ClassNameAnalysis {
     return { type: "static", value: node.value };
   }
 
-  // Expression container
+  // Expression container - check what's inside
   if (t.isJSXExpressionContainer(node)) {
-    const expr = node.expression;
+    return analyzeClassNameExpression(node.expression);
+  }
 
-    // Ternary expression
-    if (t.isConditionalExpression(expr)) {
-      const condition = generate(expr.test).code;
-      const trueValue = extractStringValue(expr.consequent);
-      const falseValue = extractStringValue(expr.alternate);
-
-      return {
-        type: "ternary",
-        condition,
-        trueValue,
-        falseValue,
-        expression: generate(expr).code
-      };
-    }
-
-    // Template literal
-    if (t.isTemplateLiteral(expr)) {
-      return {
-        type: "template",
-        expression: generate(expr).code
-      };
-    }
-
-    // Other complex expressions
+  // Template literal with no expressions (treat as static string)
+  if (t.isTemplateLiteral(node) && node.expressions.length === 0) {
     return {
-      type: "complex",
-      expression: generate(expr).code
+      type: "static",
+      value: node.quasis.map((q: any) => q.value.raw).join("")
     };
   }
 
-  return { type: "complex", expression: node ? generate(node).code : "" };
+  // Everything else is dynamic (not editable)
+  return { type: "dynamic" };
 }
 
 export async function analyzeComponentClassName(
