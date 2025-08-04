@@ -352,6 +352,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         outline: 2px solid #93bbf9;
         outline-offset: 2px;
         border-radius: 4px;
+        background-color: rgba(59, 130, 246, 0.05);
       }
       
       .hercules-highlighter-label {
