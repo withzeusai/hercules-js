@@ -175,13 +175,6 @@ function getVisualEditorScript(dataAttribute: string): string {
         display: block;
       }
       
-      #hercules-visual-editor h3 {
-        margin: 0 0 12px 0;
-        font-size: 16px;
-        font-weight: 600;
-        color: #1f2937;
-      }
-      
       #hercules-visual-editor .editor-content {
         display: flex;
         flex-direction: column;
@@ -210,14 +203,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
       }
       
-      #hercules-visual-editor .button-group {
-        display: flex;
-        gap: 8px;
-        margin-top: 8px;
-      }
-      
       #hercules-visual-editor button {
-        flex: 1;
         padding: 8px 16px;
         border: none;
         border-radius: 6px;
@@ -225,24 +211,6 @@ function getVisualEditorScript(dataAttribute: string): string {
         font-weight: 500;
         cursor: pointer;
         transition: all 0.2s;
-      }
-      
-      #hercules-visual-editor .btn-primary {
-        background: #3b82f6;
-        color: white;
-      }
-      
-      #hercules-visual-editor .btn-primary:hover {
-        background: #2563eb;
-      }
-      
-      #hercules-visual-editor .btn-secondary {
-        background: #e5e7eb;
-        color: #4b5563;
-      }
-      
-      #hercules-visual-editor .btn-secondary:hover {
-        background: #d1d5db;
       }
       
       #hercules-visual-editor .btn-danger {
@@ -291,43 +259,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       }
       
       #hercules-visual-editor .warning {
-        background: #fef3c7;
-        border: 1px solid #f59e0b;
-        border-radius: 6px;
-        padding: 10px;
-        margin: 10px 0;
-        font-size: 13px;
-        color: #92400e;
-      }
-      
-      #hercules-visual-editor .ternary-editor {
-        background: #f3f4f6;
-        border-radius: 6px;
-        padding: 12px;
-        margin: 10px 0;
-      }
-      
-      #hercules-visual-editor .ternary-condition {
-        font-family: 'Consolas', 'Monaco', monospace;
-        font-size: 12px;
-        color: #4b5563;
-        margin-bottom: 8px;
-        padding: 6px;
-        background: white;
-        border-radius: 4px;
-      }
-      
-      #hercules-visual-editor .ternary-branch {
-        margin: 8px 0;
-      }
-      
-      #hercules-visual-editor .ternary-branch label {
-        font-size: 12px;
-        font-weight: 600;
-        color: #374151;
-      }
-      
-      #hercules-visual-editor .text-warning {
         background: #fef3c7;
         border: 1px solid #f59e0b;
         border-radius: 6px;
