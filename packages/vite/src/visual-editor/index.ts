@@ -1056,8 +1056,8 @@ function getVisualEditorScript(dataAttribute: string): string {
         <input type="text" id="class-input" value="\${currentValue}" placeholder="Enter CSS classes" />
       </div>
     \`;
-                  document.getElementById('class-input').focus();
-              window.herculesSetupAutoApply();
+    document.getElementById('class-input').focus();
+    window.herculesSetupAutoApply();
   }
   
   function closeEditor() {
@@ -1108,14 +1108,18 @@ function getVisualEditorScript(dataAttribute: string): string {
   };
   
 
+  // Auto-apply functionality
+  let isApplying = false;
   
-  window.herculesApplyChanges = async function(isAutoApply = false) {
-    if (!selectedElement) return;
+  window.herculesApplyChanges = async function() {
+    if (!selectedElement || isApplying) return;
     
-    const componentId = selectedElement.getAttribute('${dataAttribute}');
-    const newClassName = document.getElementById('class-input').value.trim();
+    isApplying = true;
     
     try {
+      const componentId = selectedElement.getAttribute('${dataAttribute}');
+      const newClassName = document.getElementById('class-input').value.trim();
+      
       const response = await fetch('/__hercules_update_element', {
         method: 'POST',
         headers: {
@@ -1130,52 +1134,23 @@ function getVisualEditorScript(dataAttribute: string): string {
       const result = await response.json();
       
       if (result.success) {
-        // Update will trigger HMR reload
         console.log('[Hercules] className updated successfully');
       } else {
         console.error('[Hercules] Failed to update className:', result.error);
-        if (!isAutoApply) {
-          alert('Failed to update className: ' + result.error);
-        }
       }
     } catch (error) {
       console.error('[Hercules] Error updating className:', error);
-      if (!isAutoApply) {
-        alert('Error updating className: ' + error.message);
-      }
-    }
-    
-    // Only close editor if not auto-applying
-    if (!isAutoApply) {
-      closeEditor();
-    }
-  };
-  
-
-  
-  // Auto-apply functionality
-  let isAutoApplying = false;
-  
-  window.herculesAutoApply = async function() {
-    // Prevent concurrent auto-apply operations
-    if (isAutoApplying) return;
-    
-    isAutoApplying = true;
-    
-    try {
-      // Apply changes instantly
-      await window.herculesApplyChanges(true); // Pass true for isAutoApply
     } finally {
-      isAutoApplying = false;
+      isApplying = false;
     }
   };
   
-  // Add input listeners for auto-apply
+  // Setup auto-apply on input changes
   window.herculesSetupAutoApply = function() {
     const classInput = document.getElementById('class-input');
     
     if (classInput) {
-      classInput.addEventListener('input', () => window.herculesAutoApply());
+      classInput.addEventListener('input', window.herculesApplyChanges);
     }
   };
   
