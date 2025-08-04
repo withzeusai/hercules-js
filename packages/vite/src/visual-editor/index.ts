@@ -514,6 +514,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.addEventListener('click', handleElementClick, true); // Use capture phase
       document.addEventListener('mouseover', handleElementHover);
       document.addEventListener('mouseout', handleElementHover);
+      document.addEventListener('keydown', handleKeyDown);
       window.addEventListener('scroll', handleScroll, true);
       window.addEventListener('resize', handleResize);
     } else {
@@ -522,6 +523,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.removeEventListener('click', handleElementClick, true); // Use capture phase
       document.removeEventListener('mouseover', handleElementHover);
       document.removeEventListener('mouseout', handleElementHover);
+      document.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('scroll', handleScroll, true);
       window.removeEventListener('resize', handleResize);
       closeEditor();
@@ -668,6 +670,15 @@ function getVisualEditorScript(dataAttribute: string): string {
       const tagName = getElementTagName(selectedElement);
       updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
       positionEditorBelowElement(selectedElement);
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (!isEditorActive) return;
+    
+    // Check if Escape key is pressed
+    if (e.key === 'Escape' && selectedElement) {
+      closeEditor();
     }
   }
 
