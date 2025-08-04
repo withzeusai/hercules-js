@@ -144,12 +144,26 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
 function getVisualEditorScript(dataAttribute: string): string {
   return `
 (function() {
+  const EDITOR_VERSION = '1.0.0';
   let selectedElement = null;
   let editorPanel = null;
   let isEditorActive = false;
   let highlighterElement = null;
   let selectedHighlighterElement = null;
   let inlineEditingState = null;
+  
+  // PostMessage helper function
+  function emitToParent(eventType, data) {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({
+        source: 'hercules-visual-editor',
+        type: eventType,
+        data: data
+      }, '*');
+    } else {
+		 console.log("NOT EMITTING SHIT")
+		}
+  }
   
   // Create the visual editor UI
   function createEditorUI() {
@@ -396,7 +410,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       window.addEventListener('resize', handleResize);
     } else {
       toggleBtn.classList.remove('active');
-      toggleBtn.textContent = 'Visual Editor';
+      toggleBtn.textContent = 'Visual Editor!!';
       document.removeEventListener('click', handleElementClick, true); // Use capture phase
       document.removeEventListener('mouseover', handleElementHover);
       document.removeEventListener('mouseout', handleElementHover);
@@ -405,6 +419,9 @@ function getVisualEditorScript(dataAttribute: string): string {
       window.removeEventListener('resize', handleResize);
       closeEditor();
     }
+    
+    // Emit editor state change
+    emitToParent('editor-state', { active: isEditorActive });
   }
   
   // Helper function to get a friendly tag name from an element
@@ -666,6 +683,20 @@ function getVisualEditorScript(dataAttribute: string): string {
       const result = await response.json();
       
       if (result.success) {
+        // Emit selected element event with analysis data
+        emitToParent('selected-element', {
+          data: {
+            componentId: componentId,
+            className: result.className,
+            textContent: result.textContent,
+            element: {
+              tagName: element.tagName.toLowerCase(),
+              className: element.className,
+              textContent: element.textContent
+            }
+          }
+        });
+        
         // Handle className analysis
         if (result.className) {
           renderClassEditor(result.className, element);
@@ -683,6 +714,18 @@ function getVisualEditorScript(dataAttribute: string): string {
         console.error('[Hercules] Error analyzing element:', result.error);
         renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
         enableInlineTextEditing(element, element.textContent || '', clickEvent);
+        
+        // Still emit selected element event with basic data
+        emitToParent('selected-element', {
+          data: {
+            componentId: componentId,
+            element: {
+              tagName: element.tagName.toLowerCase(),
+              className: element.className,
+              textContent: element.textContent
+            }
+          }
+        });
       }
     } catch (error) {
       console.error('[Hercules] Error analyzing element:', error);
@@ -691,38 +734,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       enableInlineTextEditing(element, element.textContent || '', clickEvent);
     }
   }
-  
-  async function updateEditorContent() {
-    if (!selectedElement) return;
-    
-    const componentId = selectedElement.getAttribute('${dataAttribute}');
-    
-    // Use unified analysis endpoint
-    try {
-      const response = await fetch('/__hercules_analyze_element', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ componentId })
-      });
-      
-      const result = await response.json();
-      
-      if (result.success && result.className) {
-        renderClassEditor(result.className, selectedElement);
-      } else {
-        // Fallback to simple editor
-        renderSimpleEditor(selectedElement.className.replace('hercules-highlight', '').trim());
-      }
-    } catch (error) {
-      console.error('[Hercules] Error analyzing element:', error);
-      // Fallback to simple editor
-      renderSimpleEditor(selectedElement.className.replace('hercules-highlight', '').trim());
-    }
-  }
-  
-
   
   function enableInlineTextEditing(element, originalText, clickEvent) {
     // Clean up any previous inline editing state
@@ -1016,6 +1027,9 @@ function getVisualEditorScript(dataAttribute: string): string {
     hideHighlighter(selectedHighlighterElement);
     selectedElement = null;
     editorPanel.classList.remove('active');
+    
+    // Emit selected element event with null to indicate deselection
+    emitToParent('selected-element', { data: null });
   }
   
   window.herculesCloseEditor = closeEditor;
@@ -1039,16 +1053,34 @@ function getVisualEditorScript(dataAttribute: string): string {
       const result = await response.json();
       
       if (result.success) {
+        // Emit element removed event
+        emitToParent('element-removed', {
+          success: true,
+          reason: null
+        });
+        
         // Close the editor after successful deletion
         closeEditor();
         console.log('[Hercules] Element deleted successfully');
       } else {
         console.error('[Hercules] Failed to delete element:', result.error);
         alert('Failed to delete element: ' + result.error);
+        
+        // Emit element removed event with failure
+        emitToParent('element-removed', {
+          success: false,
+          reason: result.error
+        });
       }
     } catch (error) {
       console.error('[Hercules] Error deleting element:', error);
       alert('Error deleting element: ' + error.message);
+      
+      // Emit element removed event with failure
+      emitToParent('element-removed', {
+        success: false,
+        reason: error.message
+      });
     }
   };
   
@@ -1098,12 +1130,120 @@ function getVisualEditorScript(dataAttribute: string): string {
       classInput.addEventListener('input', window.herculesApplyChanges);
     }
   };
+
+	function listenForMessages() {
+  // Listen for messages from parent
+  window.addEventListener("message", function (event) {
+    // Only process messages with our source identifier
+    if (!event.data || event.data.source !== "hercules-visual-editor-parent") {
+      return;
+    }
+
+    const { type, data } = event.data;
+
+    switch (type) {
+      case "change-editor-state":
+        if (data && typeof data.active === "boolean") {
+          setEditorActive(data.active);
+        }
+        break;
+
+      case "update-element":
+        if (data && selectedElement) {
+          updateSelectedElement(data);
+        }
+        break;
+
+      case "delete-element":
+        if (selectedElement) {
+          window.herculesDeleteElement();
+        }
+        break;
+    }
+  });
+
+  // Function to set editor active state
+  function setEditorActive(active) {
+    isEditorActive = active;
+
+    // Update UI based on active state
+    if (!active) {
+      closeEditor();
+      // Remove all event listeners
+      document.removeEventListener("click", handleElementClick);
+      document.removeEventListener("mouseover", handleElementHover);
+    } else {
+      // Add event listeners
+      document.addEventListener("click", handleElementClick);
+      document.addEventListener("mouseover", handleElementHover);
+    }
+
+    // Emit state change
+    emitToParent("editor-state", { active: isEditorActive });
+  }
+
+  // Helper function to update selected element
+  async function updateSelectedElement(data) {
+    if (!selectedElement) return;
+
+    const componentId = selectedElement.getAttribute("${dataAttribute}");
+
+    try {
+      const response = await fetch("/__hercules_update_element", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          componentId,
+          ...data
+        })
+      });
+
+      const result = await response.json();
+
+      emitToParent("element-updated", {
+        success: result.success,
+        data: data,
+        reason: result.success ? null : result.error
+      });
+
+      if (result.success) {
+        console.log("[Hercules] Element updated successfully");
+        // Re-analyze the element to update the UI
+        const componentId = selectedElement.getAttribute("${dataAttribute}");
+        await selectElement(selectedElement, componentId, null);
+      }
+    } catch (error) {
+      emitToParent("element-updated", {
+        success: false,
+        data: data,
+        reason: error.message
+      });
+    }
+  }
+}
+
   
   // Initialize on DOM ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createEditorUI);
+    document.addEventListener('DOMContentLoaded', function() {
+      createEditorUI();
+			listenForMessages();
+      // Emit ready event
+      emitToParent('ready', {
+        active: isEditorActive,
+        version: EDITOR_VERSION
+      });
+    });
   } else {
     createEditorUI();
+		listenForMessages();
+    // Emit ready event
+    emitToParent('ready', {
+      active: isEditorActive,
+      version: EDITOR_VERSION
+    });
   }
 })();
   `;
