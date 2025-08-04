@@ -477,14 +477,59 @@ function getVisualEditorScript(dataAttribute: string): string {
   
   // Helper function to get a friendly tag name from an element
   function getElementTagName(element) {
-    // Get the raw tag name
+    // First, try to get the React component name from fiber nodes
+    // React stores fiber information on DOM elements with various property names
+    const fiberKey = Object.keys(element).find(key => 
+      key.startsWith('__reactFiber') || 
+      key.startsWith('__reactInternalInstance') ||
+      key.startsWith('_reactInternal')
+    );
+    
+    if (fiberKey) {
+      const fiber = element[fiberKey];
+      
+      // Check if the immediate parent is a React component
+      if (fiber && fiber.return) {
+        const parentFiber = fiber.return;
+        const parentElementType = parentFiber.elementType;
+        
+        // Check if parent is a React function/class component
+        if (parentElementType && typeof parentElementType === 'function') {
+          const componentName = parentElementType.displayName || parentElementType.name;
+          
+          // Make sure it's a meaningful component name
+          if (componentName && 
+              componentName !== 'Component' && 
+              componentName !== 'Unknown' &&
+              !componentName.startsWith('_')) {
+            // Convert PascalCase to space-separated lowercase
+            const result = componentName
+              .replace(/([A-Z])/g, ' $1')
+              .trim()
+            return result;
+          }
+        }
+        
+        // Check for forwardRef components
+        if (parentElementType && 
+            parentElementType.$$typeof && 
+            parentElementType.displayName) {
+          const componentName = parentElementType.displayName;
+          if (componentName) {
+            return componentName
+              .replace(/([A-Z])/g, ' $1')
+              .trim()
+          }
+        }
+      }
+    }
+    
+    // Fallback: Get the raw tag name
     let tagName = element.tagName.toLowerCase();
     
-    // Check if this is a React component by looking at data attributes or class names
-    // Many React component libraries add specific classes or data attributes
+    // If no React component found, check className patterns as secondary fallback
     const className = element.className;
     
-    // Common patterns for React components
     if (className && typeof className === 'string') {
       // Check for common component patterns
       if (className.includes('card-title')) return 'card title';
@@ -518,7 +563,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       if (className.includes('footer')) return 'footer';
     }
     
-    // Return the HTML tag name as fallback
+    // Return the HTML tag name as final fallback
     return tagName;
   }
 
