@@ -189,8 +189,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         width: 100%;
         height: 100%;
         outline: 2px solid #93bbf9;
-        outline-offset: 2px;
-        border-radius: 4px;
+        outline-offset: 1px;
         background-color: rgba(59, 130, 246, 0.05);
       }
       
