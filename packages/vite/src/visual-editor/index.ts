@@ -339,14 +339,11 @@ function getVisualEditorScript(dataAttribute: string): string {
     if (!element) return null;
     
     const rect = element.getBoundingClientRect();
-    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-    // const scrollY = window.pageYOffset || document.documentElement.scrollTop;
-		const scrollY = 0;
     
     // Calculate position - centered below the element
     const elementCenterX = rect.left + rect.width / 2;
-    const editorWidth = 320; // Width set in CSS
-    let leftPosition = elementCenterX - editorWidth / 2 + scrollX;
+    const editorWidth = 1; // Width set in CSS
+    let leftPosition = elementCenterX - editorWidth / 2;
     
     // Keep the editor within viewport bounds
     const viewportWidth = window.innerWidth;
@@ -368,25 +365,25 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Check if there's enough space below the element
     if (rect.bottom + gap + editorHeight <= viewportHeight) {
       // Position below the element
-      topPosition = rect.bottom + scrollY + gap;
+      topPosition = rect.bottom  + gap;
     } else if (rect.top - gap - editorHeight >= 0) {
       // Position above the element if not enough space below
-      topPosition = rect.top + scrollY - editorHeight - gap;
+      topPosition = rect.top - editorHeight - gap;
     } else {
       // If not enough space above or below, position at the top of viewport with some margin
-      topPosition = scrollY + 20;
+      topPosition =  20;
     }
     
     return {
       x: leftPosition,
       y: topPosition,
       elementRect: {
-        top: rect.top + scrollY,
-        left: rect.left + scrollX,
+        top: rect.top,
+        left: rect.left,
         width: rect.width,
         height: rect.height,
-        bottom: rect.bottom + scrollY,
-        right: rect.right + scrollX
+        bottom: rect.bottom,
+        right: rect.right
       }
     };
   }
@@ -485,10 +482,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       selectElement(element, componentId, e);
     }
   }
-
-
-	let scrollHandler;
-	let resizeHandler;
   
   async function selectElement(element, componentId, clickEvent) {
     // Clean up any active inline editing
@@ -504,12 +497,8 @@ function getVisualEditorScript(dataAttribute: string): string {
       hideHighlighter(selectedHighlighterElement);
     }
 
-		if (scrollHandler) {
-			window.removeEventListener("scroll", handleScroll, true);
-		}
-		if (resizeHandler) {
-			window.removeEventListener("resize", handleResize);
-		}
+    window.removeEventListener("scroll", handleScroll, true);
+    window.removeEventListener("resize", handleResize);
     
     selectedElement = element;
     
@@ -564,7 +553,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       } else {
         // Fallback behavior
         console.error('[Hercules] Error analyzing element:', result.error);
-        renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
         enableInlineTextEditing(element, element.textContent || '', clickEvent);
         
         // Calculate position for the element
@@ -584,10 +572,8 @@ function getVisualEditorScript(dataAttribute: string): string {
         });
       }
 
-			setTimeout(() => {
-				scrollHandler = window.addEventListener("scroll", handleScroll, true);
-				resizeHandler = window.addEventListener("resize", handleResize);
-			}, 1000)
+			window.addEventListener("scroll", handleScroll, true);
+			window.addEventListener("resize", handleResize);
     } catch (error) {
       console.error('[Hercules] Error analyzing element:', error);
       // Fallback to simple editors
@@ -862,6 +848,9 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     // Emit selected element event with null to indicate deselection
     emitToParent('selected-element', { data: null });
+
+		window.removeEventListener("scroll", handleScroll, true);
+		window.removeEventListener("resize", handleResize);
   }
     
   async function deleteElement() {
@@ -968,8 +957,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Emit state change
     emitToParent("editor-state", { active: isEditorActive });
   }
-
-	window.setEditorActive = setEditorActive;
 
   // Helper function to update selected element
   async function updateSelectedElement(data) {
