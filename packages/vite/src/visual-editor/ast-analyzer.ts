@@ -47,7 +47,7 @@ export function analyzeClassNameExpression(node: any): ClassNameAnalysis {
 }
 
 export interface TextContentAnalysis {
-  type: "editable" | "not-editable";
+  type: "static" | "dynamic";
   value?: string;
   reason?: "has-children" | "dynamic-content";
 }
@@ -70,7 +70,7 @@ export interface UnifiedElementAnalysis {
 // Helper to extract text content from JSX children
 function extractTextContent(children: any[]): TextContentAnalysis {
   if (!children || children.length === 0) {
-    return { type: "editable", value: "" };
+    return { type: "static", value: "" };
   }
 
   // Check if has nested JSX elements or fragments
@@ -79,7 +79,7 @@ function extractTextContent(children: any[]): TextContentAnalysis {
   );
 
   if (hasNonTextChildren) {
-    return { type: "not-editable", reason: "has-children" };
+    return { type: "dynamic", reason: "has-children" };
   }
 
   // Check if all children are static text
@@ -102,11 +102,11 @@ function extractTextContent(children: any[]): TextContentAnalysis {
       .join("")
       .trim();
 
-    return { type: "editable", value: textContent };
+    return { type: "static", value: textContent };
   }
 
   // Has dynamic expressions
-  return { type: "not-editable", reason: "dynamic-content" };
+  return { type: "dynamic", reason: "dynamic-content" };
 }
 
 // Unified analyze function that combines className and textContent analysis

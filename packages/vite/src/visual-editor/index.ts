@@ -210,7 +210,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       /* Selected state - darker blue */
       .hercules-highlighter.selected .hercules-highlighter-outline {
         outline-color: #3b82f6;
-        outline-width: 2px;
+        outline-width: 1px;
       }
       
       .hercules-highlighter.selected .hercules-highlighter-label {
