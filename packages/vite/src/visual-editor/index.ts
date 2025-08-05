@@ -408,7 +408,20 @@ function getVisualEditorScript(dataAttribute: string): string {
   }
 
   function handleScroll() {
-    closeEditor();
+    // Update hover highlighter position if it's visible
+    if (highlighterElement && highlighterElement.style.display !== 'none') {
+      // Find the element being hovered by checking which element has the data attribute
+      // and the mouse is over it
+      const hoveredElement = document.querySelector(':hover[' + '${dataAttribute}' + ']');
+      if (hoveredElement && hoveredElement !== selectedElement) {
+        const tagName = getElementTagName(hoveredElement);
+        updateHighlighter(highlighterElement, hoveredElement, tagName);
+      }
+    }
+    
+		if (selectedElement) {
+			closeEditor();
+		}
   }
 
   function handleResize() {
@@ -496,9 +509,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     if (selectedHighlighterElement) {
       hideHighlighter(selectedHighlighterElement);
     }
-
-    window.removeEventListener("scroll", handleScroll, true);
-    window.removeEventListener("resize", handleResize);
     
     selectedElement = element;
     
@@ -572,8 +582,6 @@ function getVisualEditorScript(dataAttribute: string): string {
         });
       }
 
-			window.addEventListener("scroll", handleScroll, true);
-			window.addEventListener("resize", handleResize);
     } catch (error) {
       console.error('[Hercules] Error analyzing element:', error);
       // Fallback to simple editors
@@ -848,9 +856,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     // Emit selected element event with null to indicate deselection
     emitToParent('selected-element', { data: null });
-
-		window.removeEventListener("scroll", handleScroll, true);
-		window.removeEventListener("resize", handleResize);
   }
     
   async function deleteElement() {
@@ -945,6 +950,8 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.removeEventListener("mouseover", handleElementHover);
       document.removeEventListener("mouseout", handleElementHover);
       document.removeEventListener("keydown", handleKeyDown);
+			window.removeEventListener("scroll", handleScroll, true);
+			window.removeEventListener("resize", handleResize);
       closeEditor();
     } else {
 			// Add event listeners
@@ -952,6 +959,8 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.addEventListener("mouseover", handleElementHover);
 			document.addEventListener("mouseout", handleElementHover);
       document.addEventListener("keydown", handleKeyDown);
+			window.addEventListener("scroll", handleScroll, true);
+			window.addEventListener("resize", handleResize);
     }
 
     // Emit state change
