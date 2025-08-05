@@ -434,21 +434,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     }
   }
 
-  function handleKeyDown(e) {
-    if (!isEditorActive) return;
-    
-    // Check if Escape key is pressed
-    if (e.key === 'Escape') {
-      if (selectedElement) {
-        // If an element is selected, just close the editor (unselect element)
-        closeEditor();
-      } else {
-        // If no element is selected, turn off editor mode
-        setEditorActive(false);
-      }
-    }
-  }
-
   function handleElementHover(e) {
     if (!isEditorActive) return;
     
@@ -693,13 +678,10 @@ function getVisualEditorScript(dataAttribute: string): string {
       emitPositionUpdate();
     };
     
-    const handleKeyDown = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+    const handleKeyDownInlineEditing = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey || e.key === 'Escape') {
         e.preventDefault();
         saveInlineTextChanges();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelInlineTextEditing();
       } else if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'B' || e.key === 'i' || e.key === 'I' || e.key === 'u' || e.key === 'U')) {
         // Prevent bold, italic, and underline formatting
         e.preventDefault();
@@ -748,7 +730,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     element.addEventListener('beforeinput', handleBeforeInput);
     element.addEventListener('input', handleInput);
-    element.addEventListener('keydown', handleKeyDown);
+    element.addEventListener('keydown', handleKeyDownInlineEditing);
     element.addEventListener('blur', handleBlur);
     element.addEventListener('paste', handlePaste);
     window.addEventListener('resize', handleResize);
@@ -758,7 +740,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     inlineEditingState.eventListeners = {
       beforeinput: handleBeforeInput,
       input: handleInput,
-      keydown: handleKeyDown,
+      keydown: handleKeyDownInlineEditing,
       blur: handleBlur,
       paste: handlePaste,
       resize: handleResize
@@ -788,17 +770,7 @@ function getVisualEditorScript(dataAttribute: string): string {
     window.getSelection().removeAllRanges();
     
     // Text editing indicator removal no longer needed
-    
     inlineEditingState = null;
-  }
-  
-  function cancelInlineTextEditing() {
-    if (!inlineEditingState) return;
-    
-    // Restore original text
-    inlineEditingState.element.textContent = inlineEditingState.originalText;
-    
-    cleanupInlineEditing();
   }
   
   async function saveInlineTextChanges() {
@@ -936,6 +908,12 @@ function getVisualEditorScript(dataAttribute: string): string {
           deleteElement();
         }
         break;
+
+      case "unselect-element":
+        if (selectedElement) {
+          closeEditor();
+        }
+        break;
     }
   });
 
@@ -949,7 +927,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.removeEventListener("click", handleElementClick);
       document.removeEventListener("mouseover", handleElementHover);
       document.removeEventListener("mouseout", handleElementHover);
-      document.removeEventListener("keydown", handleKeyDown);
 			window.removeEventListener("scroll", handleScroll, true);
 			window.removeEventListener("resize", handleResize);
       closeEditor();
@@ -958,7 +935,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       document.addEventListener("click", handleElementClick, true);
       document.addEventListener("mouseover", handleElementHover);
 			document.addEventListener("mouseout", handleElementHover);
-      document.addEventListener("keydown", handleKeyDown);
 			window.addEventListener("scroll", handleScroll, true);
 			window.addEventListener("resize", handleResize);
     }
