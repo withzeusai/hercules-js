@@ -557,7 +557,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         });
         
         // Handle text content analysis
-        if (result.textContent && result.textContent.type === 'editable') {
+        if (result.textContent && result.textContent.type === 'static') {
           enableInlineTextEditing(element, result.textContent.value || '', clickEvent);
         }
       } else {
