@@ -863,10 +863,8 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Emit selected element event with null to indicate deselection
     emitToParent('selected-element', { data: null });
   }
-  
-  window.herculesCloseEditor = closeEditor;
-  
-  window.herculesDeleteElement = async function() {
+    
+  async function deleteElement() {
     if (!selectedElement) return;
     
     const componentId = selectedElement.getAttribute('${dataAttribute}');
@@ -915,54 +913,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       });
     }
   };
-  
-
-  // Auto-apply functionality
-  let isApplying = false;
-  
-  window.herculesApplyChanges = async function() {
-    if (!selectedElement || isApplying) return;
     
-    isApplying = true;
-    
-    try {
-      const componentId = selectedElement.getAttribute('${dataAttribute}');
-      const newClassName = document.getElementById('class-input').value.trim();
-      
-      const response = await fetch('/__hercules_update_element', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          componentId,
-          className: newClassName
-        })
-      });
-      
-      const result = await response.json();
-      
-      if (result.success) {
-        console.log('[Hercules] className updated successfully');
-      } else {
-        console.error('[Hercules] Failed to update className:', result.error);
-      }
-    } catch (error) {
-      console.error('[Hercules] Error updating className:', error);
-    } finally {
-      isApplying = false;
-    }
-  };
-  
-  // Setup auto-apply on input changes
-  window.herculesSetupAutoApply = function() {
-    const classInput = document.getElementById('class-input');
-    
-    if (classInput) {
-      classInput.addEventListener('input', window.herculesApplyChanges);
-    }
-  };
-
 	function listenForMessages() {
   // Listen for messages from parent
   window.addEventListener("message", function (event) {
@@ -988,7 +939,7 @@ function getVisualEditorScript(dataAttribute: string): string {
 
       case "delete-element":
         if (selectedElement) {
-          window.herculesDeleteElement();
+          deleteElement();
         }
         break;
     }
