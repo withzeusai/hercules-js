@@ -160,9 +160,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         type: eventType,
         data: data
       }, '*');
-    } else {
-		 console.log("NOT EMITTING SHIT")
-		}
+    } 
   }
   
   // Create the visual editor UI
@@ -171,115 +169,11 @@ function getVisualEditorScript(dataAttribute: string): string {
     style.textContent = \`
       #hercules-visual-editor {
         position: absolute;
-        background: white;
-        border: 2px solid #3b82f6;
-        border-radius: 8px;
-        padding: 16px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
         z-index: 99999;
-        font-family: system-ui, -apple-system, sans-serif;
-        width: 320px;
-        max-height: 400px;
-        overflow-y: auto;
-        display: none;
-        margin-top: 10px;
-      }
-      
-      #hercules-visual-editor.active {
-        display: block;
-      }
-      
-      #hercules-visual-editor .editor-content {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-      
-      #hercules-visual-editor label {
-        font-size: 14px;
-        font-weight: 500;
-        color: #4b5563;
-        display: block;
-        margin-bottom: 4px;
-      }
-      
-      #hercules-visual-editor input {
-        width: 100%;
-        padding: 8px 12px;
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        font-size: 14px;
-        font-family: 'Consolas', 'Monaco', monospace;
-      }
-      
-      #hercules-visual-editor input:focus {
-        outline: none;
-        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-      }
-      
-      #hercules-visual-editor button {
-        padding: 8px 16px;
-        border: none;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.2s;
-      }
-      
-      #hercules-visual-editor .btn-danger {
-        background: #ef4444;
-        color: white;
-      }
-      
-      #hercules-visual-editor .btn-danger:hover {
-        background: #dc2626;
-      }
-      
-      #hercules-visual-editor .delete-section {
-        border-top: 1px solid #e5e7eb;
-        padding-top: 16px;
-        margin-top: 16px;
-      }
-      
-      #hercules-visual-editor .component-id {
-        font-size: 12px;
-        color: #6b7280;
-        font-family: 'Consolas', 'Monaco', monospace;
-        word-break: break-all;
-      }
-      
-      #hercules-visual-editor .close-btn {
-        position: absolute;
-        top: 12px;
-        right: 12px;
-        width: 24px;
-        height: 24px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: transparent;
-        border: none;
-        color: #6b7280;
-        cursor: pointer;
-        font-size: 18px;
-        line-height: 1;
-        padding: 0;
-        transition: color 0.2s;
-      }
-      
-      #hercules-visual-editor .close-btn:hover {
-        color: #1f2937;
-      }
-      
-      #hercules-visual-editor .warning {
-        background: #fef3c7;
-        border: 1px solid #f59e0b;
-        border-radius: 6px;
-        padding: 10px;
-        margin: 10px 0;
-        font-size: 13px;
-        color: #92400e;
       }
       
       .hercules-highlighter {
@@ -345,46 +239,11 @@ function getVisualEditorScript(dataAttribute: string): string {
     document.head.appendChild(style);
 
     
-    // Create editor panel
+    // Create editor panel - just a 1x1 invisible div for position handling
     editorPanel = document.createElement('div');
     editorPanel.id = 'hercules-visual-editor';
-    editorPanel.innerHTML = \`
-      <button class="close-btn" onclick="window.herculesCloseEditor()" aria-label="Close">&times;</button>
-      <div class="editor-content" id="editor-content">
-				<div class="component-id" id="component-id">Select an element</div>
-        <div id="class-editor-container">
-          <!-- Dynamic content will be inserted here -->
-        </div>
-        <div class="delete-section">
-          <button class="btn-danger" onclick="window.herculesDeleteElement()">Delete Element</button>
-        </div>
-      </div>
-    \`;
+    // No innerHTML needed - just an empty div
     document.body.appendChild(editorPanel);
-  }
-  
-  function toggleEditor() {
-    isEditorActive = !isEditorActive;
-    
-    if (isEditorActive) {
-      document.addEventListener('click', handleElementClick, true); // Use capture phase
-      document.addEventListener('mouseover', handleElementHover);
-      document.addEventListener('mouseout', handleElementHover);
-      document.addEventListener('keydown', handleKeyDown);
-      window.addEventListener('scroll', handleScroll, true);
-      window.addEventListener('resize', handleResize);
-    } else {
-      document.removeEventListener('click', handleElementClick, true); // Use capture phase
-      document.removeEventListener('mouseover', handleElementHover);
-      document.removeEventListener('mouseout', handleElementHover);
-      document.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('scroll', handleScroll, true);
-      window.removeEventListener('resize', handleResize);
-      closeEditor();
-    }
-    
-    // Emit editor state change
-    emitToParent('editor-state', { active: isEditorActive });
   }
   
   // Helper function to get a friendly tag name from an element
@@ -481,7 +340,8 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     const rect = element.getBoundingClientRect();
     const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+    // const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+		const scrollY = 0;
     
     // Calculate position - centered below the element
     const elementCenterX = rect.left + rect.width / 2;
@@ -551,13 +411,7 @@ function getVisualEditorScript(dataAttribute: string): string {
   }
 
   function handleScroll() {
-    // Update position when scrolling instead of deselecting
-    if (selectedElement && selectedHighlighterElement) {
-      const tagName = getElementTagName(selectedElement);
-      updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
-      positionEditorBelowElement(selectedElement);
-      emitPositionUpdate();
-    }
+    closeEditor();
   }
 
   function handleResize() {
@@ -580,7 +434,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         closeEditor();
       } else {
         // If no element is selected, turn off editor mode
-        toggleEditor();
+        setEditorActive(false);
       }
     }
   }
@@ -631,6 +485,10 @@ function getVisualEditorScript(dataAttribute: string): string {
       selectElement(element, componentId, e);
     }
   }
+
+
+	let scrollHandler;
+	let resizeHandler;
   
   async function selectElement(element, componentId, clickEvent) {
     // Clean up any active inline editing
@@ -645,6 +503,13 @@ function getVisualEditorScript(dataAttribute: string): string {
     if (selectedHighlighterElement) {
       hideHighlighter(selectedHighlighterElement);
     }
+
+		if (scrollHandler) {
+			window.removeEventListener("scroll", handleScroll, true);
+		}
+		if (resizeHandler) {
+			window.removeEventListener("resize", handleResize);
+		}
     
     selectedElement = element;
     
@@ -660,9 +525,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     // Position and show editor panel
     positionEditorBelowElement(element);
     editorPanel.classList.add('active');
-    
-    // Update component ID
-    document.getElementById('component-id').textContent = componentId;
     
     // Analyze element (both className and textContent in one call)
     try {
@@ -695,14 +557,6 @@ function getVisualEditorScript(dataAttribute: string): string {
           }
         });
         
-        // Handle className analysis
-        if (result.className) {
-          renderClassEditor(result.className, element);
-        } else {
-          // Fallback to simple editor
-          renderSimpleEditor(element.className.replace('hercules-highlight', '').trim());
-        }
-        
         // Handle text content analysis
         if (result.textContent && result.textContent.type === 'editable') {
           enableInlineTextEditing(element, result.textContent.value || '', clickEvent);
@@ -729,6 +583,11 @@ function getVisualEditorScript(dataAttribute: string): string {
           }
         });
       }
+
+			setTimeout(() => {
+				scrollHandler = window.addEventListener("scroll", handleScroll, true);
+				resizeHandler = window.addEventListener("resize", handleResize);
+			}, 1000)
     } catch (error) {
       console.error('[Hercules] Error analyzing element:', error);
       // Fallback to simple editors
@@ -989,37 +848,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     }
   }
   
-  function renderClassEditor(analysis, element) {
-    const container = document.getElementById('class-editor-container');
-    
-    // Check if we cannot edit the value
-    const cannotEditValue = analysis.type !== 'static';
-    
-    if (cannotEditValue) {
-      // Show unified warning for non-editable classNames
-      container.innerHTML = \`
-        <div class="warning">
-          ⚠️ Cannot edit the value, ask the engineer to assist.
-        </div>
-      \`;
-    } else {
-      // Show normal editor for static classNames
-      renderSimpleEditor(analysis.value || '');
-    }
-  }
-  
-  function renderSimpleEditor(currentValue) {
-    const container = document.getElementById('class-editor-container');
-    container.innerHTML = \`
-      <div>
-        <label>className:</label>
-        <input type="text" id="class-input" value="\${currentValue}" placeholder="Enter CSS classes" />
-      </div>
-    \`;
-    document.getElementById('class-input').focus();
-    window.herculesSetupAutoApply();
-  }
-  
   function closeEditor() {
     // Clean up inline editing if active
     if (inlineEditingState) {
@@ -1172,19 +1000,25 @@ function getVisualEditorScript(dataAttribute: string): string {
 
     // Update UI based on active state
     if (!active) {
-      closeEditor();
       // Remove all event listeners
       document.removeEventListener("click", handleElementClick);
       document.removeEventListener("mouseover", handleElementHover);
+      document.removeEventListener("mouseout", handleElementHover);
+      document.removeEventListener("keydown", handleKeyDown);
+      closeEditor();
     } else {
-      // Add event listeners
-      document.addEventListener("click", handleElementClick);
+			// Add event listeners
+      document.addEventListener("click", handleElementClick, true);
       document.addEventListener("mouseover", handleElementHover);
+			document.addEventListener("mouseout", handleElementHover);
+      document.addEventListener("keydown", handleKeyDown);
     }
 
     // Emit state change
     emitToParent("editor-state", { active: isEditorActive });
   }
+
+	window.setEditorActive = setEditorActive;
 
   // Helper function to update selected element
   async function updateSelectedElement(data) {
