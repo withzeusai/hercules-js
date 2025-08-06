@@ -983,29 +983,31 @@ function getVisualEditorScript(dataAttribute: string): string {
       });
     }
   }
+  }
 }
 
-  
-  // Initialize on DOM ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-      createEditorUI();
-			listenForMessages();
-      // Emit ready event
-      emitToParent('ready', {
-        active: isEditorActive,
-        version: EDITOR_VERSION
-      });
-    });
-  } else {
-    createEditorUI();
-		listenForMessages();
-    // Emit ready event
-    emitToParent('ready', {
-      active: isEditorActive,
-      version: EDITOR_VERSION
-    });
+// Initialize the visual editor when running inside an iframe
+function init() {
+  // Only initialize if running inside an iframe
+  if (window.self === window.top) {
+    return;
   }
-})();
-  `;
+
+  createEditorUI();
+  listenForMessages();
+  emitToParent("ready", {
+    active: isEditorActive,
+    version: EDITOR_VERSION,
+  });
+}
+
+// Wait for DOM to be ready before initializing
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    init();
+  });
+} else {
+  init();
+}
+})()`;
 }
