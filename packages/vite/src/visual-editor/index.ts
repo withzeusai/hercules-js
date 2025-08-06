@@ -533,7 +533,7 @@ function getVisualEditorScript(dataAttribute: string): string {
             textContent: result.textContent,
             elementType: result.elementType,
             element: {
-              tagName: element.tagName.toLowerCase(),
+              tagName: getElementTagName(element),
               className: element.className,
               textContent: element.textContent
             },
@@ -558,7 +558,7 @@ function getVisualEditorScript(dataAttribute: string): string {
           data: {
             componentId: componentId,
             element: {
-              tagName: element.tagName.toLowerCase(),
+              tagName: getElementTagName(element),
               className: element.className,
               textContent: element.textContent
             },
@@ -983,31 +983,31 @@ function getVisualEditorScript(dataAttribute: string): string {
       });
     }
   }
-  }
 }
 
-// Initialize the visual editor when running inside an iframe
-function init() {
-  // Only initialize if running inside an iframe
-  if (window.self === window.top) {
-    return;
+  
+  // Initialize editor
+  function init() {
+    // Return early if we're not in an iframe
+    if (window.self === window.top) {
+      return;
+    }
+
+    createEditorUI();
+    listenForMessages();
+    // Emit ready event
+    emitToParent('ready', {
+      active: isEditorActive,
+      version: EDITOR_VERSION
+    });
   }
 
-  createEditorUI();
-  listenForMessages();
-  emitToParent("ready", {
-    active: isEditorActive,
-    version: EDITOR_VERSION,
-  });
-}
-
-// Wait for DOM to be ready before initializing
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => {
+  // Initialize on DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
     init();
-  });
-} else {
-  init();
-}
-})()`;
+  }
+})();
+  `;
 }
