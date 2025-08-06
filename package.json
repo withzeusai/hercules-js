@@ -14,6 +14,9 @@
     "release": "./scripts/release.sh"
   },
   "devDependencies": {
+    "@types/babel__core": "^7.20.5",
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
     "turbo": "^2.5.5"
   }
 }

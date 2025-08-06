@@ -1,10 +1,12 @@
 import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
+import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
+import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
 
 export interface HerculesPluginOptions {
   /**
    * Enable debug logging
-   * @default false
+   * @default true
    */
   debug?: boolean;
 
@@ -19,22 +21,56 @@ export interface HerculesPluginOptions {
    * @default true
    */
   handleViteErrors?: boolean;
+
+  /**
+   * Component tagger options
+   * @default { enabled: true }
+   */
+  componentTagger?: ComponentTaggerOptions & { enabled?: boolean };
+
+  /**
+   * Visual editor options
+   * @default { enabled: true }
+   */
+  visualEditor?: VisualEditorOptions & { enabled?: boolean };
 }
 
 /**
  * Hercules Vite plugin for development workspace integration
  * Handles error reporting and console forwarding for the Hercules platform
  */
-export function herculesPlugin(options: HerculesPluginOptions = {}): Plugin {
+export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   const {
     debug = false,
     message = "Hercules plugin is running!",
-    handleViteErrors = true
+    handleViteErrors = true,
+    componentTagger = { enabled: true },
+    visualEditor = { enabled: true }
   } = options;
 
-  return {
-    name: "vite-plugin-hercules",
+  const plugins: Plugin[] = [];
 
+  // Add component tagger plugin if enabled
+  if (componentTagger.enabled) {
+    plugins.push(componentTaggerPlugin({
+      debug,
+      dataAttribute: visualEditor.enabled ? "data-hercules-id" : "data-component-id",
+      ...componentTagger
+    }));
+  }
+
+  // Add visual editor plugin if enabled (dev mode only)
+  if (visualEditor.enabled && process.env.NODE_ENV !== "production") {
+    plugins.push(visualEditorPlugin({
+      debug,
+      dataAttribute: "data-hercules-id",
+      ...visualEditor
+    }));
+  }
+
+  // Main Hercules plugin
+  plugins.push({
+    name: "vite-plugin-hercules",
     // Plugin hooks for Vite 6
     configResolved(config) {
       if (debug) {
@@ -42,13 +78,13 @@ export function herculesPlugin(options: HerculesPluginOptions = {}): Plugin {
       }
     },
 
-    buildStart() {
+    async buildStart() {
       if (debug) {
         console.log(`[Hercules Plugin] ${message}`);
       }
     },
 
-    configureServer(server) {
+    async configureServer(server) {
       if (debug) {
         console.log("[Hercules Plugin] Development server configured");
       }
@@ -74,105 +110,107 @@ export function herculesPlugin(options: HerculesPluginOptions = {}): Plugin {
       });
     },
 
-    transformIndexHtml(html) {
-      if (handleViteErrors) {
-        // Inject our error handling script before any other scripts
-        const errorHandlerScript =
-          '<script type="module" src="/__hercules_error_handler.js"></script>';
-
-        // Insert before closing head tag, or before first script tag if no head
-        if (html.includes("</head>")) {
-          return html.replace("</head>", `${errorHandlerScript}\n</head>`);
-        } else if (html.includes("<script")) {
-          return html.replace("<script", `${errorHandlerScript}\n<script`);
-        } else {
-          // Fallback: append to end of html
-          return html.replace("</html>", `${errorHandlerScript}\n</html>`);
-        }
-      }
-      return html;
-    },
-
-    load(id) {
-      try {
-        // Let Vite handle loading normally
-        return null;
-      } catch (error: any) {
+      transformIndexHtml(html) {
         if (handleViteErrors) {
-          console.error("[Vite Load Error]", {
-            message: error.message,
-            stack: error.stack,
-            id: id,
-            timestamp: new Date().toISOString()
-          });
-        }
-        throw error;
-      }
-    },
+          // Inject our error handling script before any other scripts
+          const errorHandlerScript =
+            '<script type="module" src="/__hercules_error_handler.js"></script>';
 
-    transform(_code, id) {
-      try {
-        // Currently does nothing, but this is where you would transform code
-        if (debug && (id.includes(".ts") || id.includes(".js"))) {
-          // Just pass through the code unchanged for now
+          // Insert before closing head tag, or before first script tag if no head
+          if (html.includes("</head>")) {
+            return html.replace("</head>", `${errorHandlerScript}\n</head>`);
+          } else if (html.includes("<script")) {
+            return html.replace("<script", `${errorHandlerScript}\n<script`);
+          } else {
+            // Fallback: append to end of html
+            return html.replace("</html>", `${errorHandlerScript}\n</html>`);
+          }
+        }
+        return html;
+      },
+
+      load(id) {
+        try {
+          // Let Vite handle loading normally
           return null;
+        } catch (error: any) {
+          if (handleViteErrors) {
+            console.error("[Vite Load Error]", {
+              message: error.message,
+              stack: error.stack,
+              id: id,
+              timestamp: new Date().toISOString()
+            });
+          }
+          throw error;
         }
-        return null; // Explicitly return null to indicate no transformation
-      } catch (error: any) {
-        if (handleViteErrors) {
-          console.error("[Vite Transform Error]", {
-            message: error.message,
-            stack: error.stack,
-            id: id,
-            timestamp: new Date().toISOString()
-          });
-        }
-        throw error;
-      }
-    },
+      },
 
-    handleHotUpdate(ctx) {
-      try {
-        // Let Vite handle the update normally
-        return undefined;
-      } catch (error: any) {
-        if (handleViteErrors) {
-          console.error("[Vite HMR Update Error]", {
-            message: error.message,
-            stack: error.stack,
-            file: ctx.file,
-            timestamp: new Date().toISOString()
-          });
+      async transform(_code, id) {
+        try {
+          // Pass through unchanged - component tagging is handled by separate plugin
+          return null;
+        } catch (error: any) {
+          if (handleViteErrors) {
+            console.error("[Vite Transform Error]", {
+              message: error.message,
+              stack: error.stack,
+              id: id,
+              timestamp: new Date().toISOString()
+            });
+          }
+          throw error;
         }
-        throw error;
-      }
-    },
+      },
 
-    generateBundle(_options, bundle) {
-      if (debug) {
-        console.log("[Hercules Plugin] Bundle generated with", Object.keys(bundle).length, "files");
-      }
-    },
-
-    resolveId(id, importer) {
-      // Wrap in try-catch to capture resolution errors
-      try {
-        return null; // Let Vite handle resolution
-      } catch (error: any) {
-        if (handleViteErrors) {
-          console.error("[Vite Resolution Error]", {
-            message: error.message,
-            stack: error.stack,
-            id: id,
-            importer: importer,
-            timestamp: new Date().toISOString()
-          });
+      handleHotUpdate(ctx) {
+        try {
+          // Let Vite handle the update normally
+          return undefined;
+        } catch (error: any) {
+          if (handleViteErrors) {
+            console.error("[Vite HMR Update Error]", {
+              message: error.message,
+              stack: error.stack,
+              file: ctx.file,
+              timestamp: new Date().toISOString()
+            });
+          }
+          throw error;
         }
-        throw error;
+      },
+
+      generateBundle(_options, bundle) {
+        if (debug) {
+          console.log(
+            "[Hercules Plugin] Bundle generated with",
+            Object.keys(bundle).length,
+            "files"
+          );
+        }
+      },
+
+      resolveId(id, importer) {
+        // Wrap in try-catch to capture resolution errors
+        try {
+          return null; // Let Vite handle resolution
+        } catch (error: any) {
+          if (handleViteErrors) {
+            console.error("[Vite Resolution Error]", {
+              message: error.message,
+              stack: error.stack,
+              id: id,
+              importer: importer,
+              timestamp: new Date().toISOString()
+            });
+          }
+          throw error;
+        }
       }
-    }
-  };
+    });
+
+  return plugins;
 }
 
 // Default export for convenience
-export default herculesPlugin;
+export default hercules;
