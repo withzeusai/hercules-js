@@ -52,6 +52,11 @@ export interface TextContentAnalysis {
   reason?: "has-children" | "dynamic-content";
 }
 
+export interface ElementTypeAnalysis {
+  type: "static" | "dynamic";
+  reason?: "conditional-expression" | "complex-parent" | "map-expression";
+}
+
 export interface TextAnalysisResult {
   success: boolean;
   analysis?: TextContentAnalysis;
@@ -64,7 +69,57 @@ export interface UnifiedElementAnalysis {
   componentId: string;
   className?: ClassNameAnalysis;
   textContent?: TextContentAnalysis;
+  elementType?: ElementTypeAnalysis;
   error?: string;
+}
+
+// Helper to analyze if element can be safely deleted
+function analyzeElementDeletionSafety(path: any): ElementTypeAnalysis {
+  // Walk up the AST to check the element's context
+  let current = path.parent;
+  
+  while (current) {
+    // Check if element is in a conditional expression (ternary)
+    if (t.isConditionalExpression(current)) {
+      return { 
+        type: "dynamic", 
+        reason: "conditional-expression" 
+      };
+    }
+    
+    // Check if element is in array map expressions
+    if (t.isCallExpression(current) && 
+        t.isMemberExpression(current.callee) &&
+        t.isIdentifier(current.callee.property) &&
+        current.callee.property.name === "map") {
+      return { 
+        type: "dynamic", 
+        reason: "map-expression" 
+      };
+    }
+    
+    // Check for other complex expressions that might make deletion unsafe
+    if (t.isLogicalExpression(current) ||
+        t.isSequenceExpression(current) ||
+        t.isArrayExpression(current)) {
+      return { 
+        type: "dynamic", 
+        reason: "complex-parent" 
+      };
+    }
+    
+    // Stop checking at function/component boundaries
+    if (t.isFunction(current) || 
+        t.isArrowFunctionExpression(current) ||
+        t.isJSXElement(current)) {
+      break;
+    }
+    
+    current = current.parent;
+  }
+  
+  // If we didn't find any problematic parents, deletion should be safe
+  return { type: "static" };
 }
 
 // Helper to extract text content from JSX children
@@ -160,6 +215,7 @@ export async function analyzeElement(
 
     let classNameAnalysis: ClassNameAnalysis | undefined;
     let textContentAnalysis: TextContentAnalysis | undefined;
+    let elementTypeAnalysis: ElementTypeAnalysis | undefined;
     let elementFound = false;
 
     // Single traversal to find and analyze the element
@@ -192,6 +248,9 @@ export async function analyzeElement(
           const children = path.node.children;
           textContentAnalysis = extractTextContent(children);
 
+          // Analyze element deletion safety
+          elementTypeAnalysis = analyzeElementDeletionSafety(path);
+
           path.stop();
         }
       }
@@ -209,6 +268,10 @@ export async function analyzeElement(
 
       if (textContentAnalysis) {
         result.textContent = textContentAnalysis;
+      }
+
+      if (elementTypeAnalysis) {
+        result.elementType = elementTypeAnalysis;
       }
 
       return result;

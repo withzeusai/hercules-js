@@ -531,6 +531,7 @@ function getVisualEditorScript(dataAttribute: string): string {
             componentId: componentId,
             className: result.className,
             textContent: result.textContent,
+            elementType: result.elementType,
             element: {
               tagName: element.tagName.toLowerCase(),
               className: element.className,
