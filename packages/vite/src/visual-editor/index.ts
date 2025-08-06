@@ -692,7 +692,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       // Small delay to allow for clicks on the editor panel
       setTimeout(() => {
         if (inlineEditingState && inlineEditingState.element === element) {
-          saveInlineTextChanges();
+          saveInlineTextChanges(false);
         }
       }, 200);
     };
@@ -773,9 +773,11 @@ function getVisualEditorScript(dataAttribute: string): string {
     inlineEditingState = null;
   }
   
-  async function saveInlineTextChanges() {
+  async function saveInlineTextChanges(shouldCloseEditor = true) {
     if (!inlineEditingState || !inlineEditingState.hasChanges) {
-      cleanupInlineEditing();
+      if (shouldCloseEditor) {
+        closeEditor(); // This will cleanup inline editing and deselect element
+      }
       return;
     }
     
@@ -840,7 +842,7 @@ function getVisualEditorScript(dataAttribute: string): string {
         reason: error.message
       });
     } finally {
-      cleanupInlineEditing();
+      closeEditor(); // This will cleanup inline editing and deselect element
     }
   }
   
