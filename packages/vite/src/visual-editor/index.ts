@@ -798,9 +798,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       
       const result = await response.json();
       
-      if (result.success) {
-        console.log('[Hercules] Text content updated successfully');
-        
+      if (result.success) {        
         // Emit element-updated event for text changes
         emitToParent("element-updated", {
           success: true,
@@ -889,7 +887,6 @@ function getVisualEditorScript(dataAttribute: string): string {
         
         // Close the editor after successful deletion
         closeEditor();
-        console.log('[Hercules] Element deleted successfully');
       } else {
         console.error('[Hercules] Failed to delete element:', result.error);
         alert('Failed to delete element: ' + result.error);
@@ -1002,7 +999,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       });
 
       if (result.success) {
-        console.log("[Hercules] Element updated successfully");
         // Re-analyze the element to update the UI
         const componentId = selectedElement.getAttribute("${dataAttribute}");
         await selectElement(selectedElement, componentId, null);
