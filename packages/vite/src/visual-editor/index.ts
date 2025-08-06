@@ -798,17 +798,47 @@ function getVisualEditorScript(dataAttribute: string): string {
       
       if (result.success) {
         console.log('[Hercules] Text content updated successfully');
+        
+        // Emit element-updated event for text changes
+        emitToParent("element-updated", {
+          success: true,
+          data: {
+            componentId,
+            textContent: newText
+          },
+          reason: null
+        });
       } else {
         console.error('[Hercules] Failed to update text content:', result.error);
         alert('Failed to update text content: ' + result.error);
         // Restore original text on error
         inlineEditingState.element.textContent = inlineEditingState.originalText;
+        
+        // Emit element-updated event for failed text change
+        emitToParent("element-updated", {
+          success: false,
+          data: {
+            componentId,
+            textContent: newText
+          },
+          reason: result.error
+        });
       }
     } catch (error) {
       console.error('[Hercules] Error updating text content:', error);
       alert('Error updating text content: ' + error.message);
       // Restore original text on error
       inlineEditingState.element.textContent = inlineEditingState.originalText;
+      
+      // Emit element-updated event for error case
+      emitToParent("element-updated", {
+        success: false,
+        data: {
+          componentId,
+          textContent: newText
+        },
+        reason: error.message
+      });
     } finally {
       cleanupInlineEditing();
     }
