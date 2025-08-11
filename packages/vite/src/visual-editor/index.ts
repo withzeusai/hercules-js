@@ -151,6 +151,7 @@ function getVisualEditorScript(dataAttribute: string): string {
   let highlighterElement = null;
   let selectedHighlighterElement = null;
   let inlineEditingState = null;
+  let isSelectingElement = false;
   
   // PostMessage helper function
   function emitToParent(eventType, data) {
@@ -387,16 +388,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     };
   }
 
-  function positionEditorBelowElement(element) {
-    if (!editorPanel || !element) return;
-    
-    const position = calculateEditorPosition(element);
-    if (position) {
-      editorPanel.style.left = position.x + 'px';
-      editorPanel.style.top = position.y + 'px';
-    }
-  }
-
   function emitPositionUpdate() {
     if (selectedElement) {
       const position = calculateEditorPosition(selectedElement);
@@ -418,7 +409,7 @@ function getVisualEditorScript(dataAttribute: string): string {
       }
     }
     
-		if (selectedElement) {
+		if (selectedElement && !isSelectingElement) {
 			closeEditor();
 		}
   }
@@ -428,7 +419,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     if (selectedElement && selectedHighlighterElement) {
       const tagName = getElementTagName(selectedElement);
       updateHighlighter(selectedHighlighterElement, selectedElement, tagName);
-      positionEditorBelowElement(selectedElement);
       emitPositionUpdate();
     }
   }
@@ -496,6 +486,12 @@ function getVisualEditorScript(dataAttribute: string): string {
     
     selectedElement = element;
     
+    // Set isSelectingElement to true and reset after 50ms
+    isSelectingElement = true;
+    setTimeout(() => {
+      isSelectingElement = false;
+    }, 50);
+    
     // Create a separate highlighter for the selected element
     if (!selectedHighlighterElement) {
       selectedHighlighterElement = createHighlighter();
@@ -506,7 +502,6 @@ function getVisualEditorScript(dataAttribute: string): string {
     updateHighlighter(selectedHighlighterElement, element, tagName);
     
     // Position and show editor panel
-    positionEditorBelowElement(element);
     editorPanel.classList.add('active');
     
     // Analyze element (both className and textContent in one call)
@@ -673,8 +668,6 @@ function getVisualEditorScript(dataAttribute: string): string {
         updateHighlighter(selectedHighlighterElement, element, tagName);
       }
       
-      // Also update the editor panel position if needed
-      positionEditorBelowElement(element);
       emitPositionUpdate();
     };
     
@@ -702,7 +695,6 @@ function getVisualEditorScript(dataAttribute: string): string {
       if (selectedHighlighterElement) {
         const tagName = getElementTagName(element);
         updateHighlighter(selectedHighlighterElement, element, tagName);
-        positionEditorBelowElement(element);
         emitPositionUpdate();
       }
     };
