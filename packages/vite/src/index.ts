@@ -2,6 +2,7 @@ import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
+import { badgePlugin, type BadgePluginOptions } from "./badge";
 
 export interface HerculesPluginOptions {
   /**
@@ -33,6 +34,12 @@ export interface HerculesPluginOptions {
    * @default { enabled: true }
    */
   visualEditor?: VisualEditorOptions & { enabled?: boolean };
+
+  /**
+   * Badge options for displaying "Made with Hercules"
+   * @default { enabled: true }
+   */
+  badge?: BadgePluginOptions & { enabled?: boolean };
 }
 
 /**
@@ -45,27 +52,46 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     message = "Hercules plugin is running!",
     handleViteErrors = true,
     componentTagger = { enabled: true },
-    visualEditor = { enabled: true }
+    visualEditor = { enabled: true },
+    badge = { enabled: true }
   } = options;
 
   const plugins: Plugin[] = [];
 
+  // Add badge plugin if enabled
+  if (
+    badge.enabled &&
+    process.env.NODE_ENV === "production" &&
+    process.env.VITE_HERCULES_SHOW_WATERMARK === "true"
+  ) {
+    plugins.push(
+      badgePlugin({
+        debug,
+        ...badge
+      })
+    );
+  }
+
   // Add component tagger plugin if enabled
   if (componentTagger.enabled) {
-    plugins.push(componentTaggerPlugin({
-      debug,
-      dataAttribute: visualEditor.enabled ? "data-hercules-id" : "data-component-id",
-      ...componentTagger
-    }));
+    plugins.push(
+      componentTaggerPlugin({
+        debug,
+        dataAttribute: visualEditor.enabled ? "data-hercules-id" : "data-component-id",
+        ...componentTagger
+      })
+    );
   }
 
   // Add visual editor plugin if enabled (dev mode only)
   if (visualEditor.enabled && process.env.NODE_ENV !== "production") {
-    plugins.push(visualEditorPlugin({
-      debug,
-      dataAttribute: "data-hercules-id",
-      ...visualEditor
-    }));
+    plugins.push(
+      visualEditorPlugin({
+        debug,
+        dataAttribute: "data-hercules-id",
+        ...visualEditor
+      })
+    );
   }
 
   // Main Hercules plugin
@@ -110,107 +136,106 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       });
     },
 
-      transformIndexHtml(html) {
-        if (handleViteErrors) {
-          // Inject our error handling script before any other scripts
-          const errorHandlerScript =
-            '<script type="module" src="/__hercules_error_handler.js"></script>';
+    transformIndexHtml(html) {
+      if (handleViteErrors) {
+        // Inject our error handling script before any other scripts
+        const errorHandlerScript =
+          '<script type="module" src="/__hercules_error_handler.js"></script>';
 
-          // Insert before closing head tag, or before first script tag if no head
-          if (html.includes("</head>")) {
-            return html.replace("</head>", `${errorHandlerScript}\n</head>`);
-          } else if (html.includes("<script")) {
-            return html.replace("<script", `${errorHandlerScript}\n<script`);
-          } else {
-            // Fallback: append to end of html
-            return html.replace("</html>", `${errorHandlerScript}\n</html>`);
-          }
-        }
-        return html;
-      },
-
-      load(id) {
-        try {
-          // Let Vite handle loading normally
-          return null;
-        } catch (error: any) {
-          if (handleViteErrors) {
-            console.error("[Vite Load Error]", {
-              message: error.message,
-              stack: error.stack,
-              id: id,
-              timestamp: new Date().toISOString()
-            });
-          }
-          throw error;
-        }
-      },
-
-      async transform(_code, id) {
-        try {
-          // Pass through unchanged - component tagging is handled by separate plugin
-          return null;
-        } catch (error: any) {
-          if (handleViteErrors) {
-            console.error("[Vite Transform Error]", {
-              message: error.message,
-              stack: error.stack,
-              id: id,
-              timestamp: new Date().toISOString()
-            });
-          }
-          throw error;
-        }
-      },
-
-      handleHotUpdate(ctx) {
-        try {
-          // Let Vite handle the update normally
-          return undefined;
-        } catch (error: any) {
-          if (handleViteErrors) {
-            console.error("[Vite HMR Update Error]", {
-              message: error.message,
-              stack: error.stack,
-              file: ctx.file,
-              timestamp: new Date().toISOString()
-            });
-          }
-          throw error;
-        }
-      },
-
-      generateBundle(_options, bundle) {
-        if (debug) {
-          console.log(
-            "[Hercules Plugin] Bundle generated with",
-            Object.keys(bundle).length,
-            "files"
-          );
-        }
-      },
-
-      resolveId(id, importer) {
-        // Wrap in try-catch to capture resolution errors
-        try {
-          return null; // Let Vite handle resolution
-        } catch (error: any) {
-          if (handleViteErrors) {
-            console.error("[Vite Resolution Error]", {
-              message: error.message,
-              stack: error.stack,
-              id: id,
-              importer: importer,
-              timestamp: new Date().toISOString()
-            });
-          }
-          throw error;
+        // Insert before closing head tag, or before first script tag if no head
+        if (html.includes("</head>")) {
+          return html.replace("</head>", `${errorHandlerScript}\n</head>`);
+        } else if (html.includes("<script")) {
+          return html.replace("<script", `${errorHandlerScript}\n<script`);
+        } else {
+          // Fallback: append to end of html
+          return html.replace("</html>", `${errorHandlerScript}\n</html>`);
         }
       }
-    });
+      return html;
+    },
+
+    load(id) {
+      try {
+        // Let Vite handle loading normally
+        return null;
+      } catch (error: any) {
+        if (handleViteErrors) {
+          console.error("[Vite Load Error]", {
+            message: error.message,
+            stack: error.stack,
+            id: id,
+            timestamp: new Date().toISOString()
+          });
+        }
+        throw error;
+      }
+    },
+
+    async transform(_code, id) {
+      try {
+        // Pass through unchanged - component tagging is handled by separate plugin
+        return null;
+      } catch (error: any) {
+        if (handleViteErrors) {
+          console.error("[Vite Transform Error]", {
+            message: error.message,
+            stack: error.stack,
+            id: id,
+            timestamp: new Date().toISOString()
+          });
+        }
+        throw error;
+      }
+    },
+
+    handleHotUpdate(ctx) {
+      try {
+        // Let Vite handle the update normally
+        return undefined;
+      } catch (error: any) {
+        if (handleViteErrors) {
+          console.error("[Vite HMR Update Error]", {
+            message: error.message,
+            stack: error.stack,
+            file: ctx.file,
+            timestamp: new Date().toISOString()
+          });
+        }
+        throw error;
+      }
+    },
+
+    generateBundle(_options, bundle) {
+      if (debug) {
+        console.log("[Hercules Plugin] Bundle generated with", Object.keys(bundle).length, "files");
+      }
+    },
+
+    resolveId(id, importer) {
+      // Wrap in try-catch to capture resolution errors
+      try {
+        return null; // Let Vite handle resolution
+      } catch (error: any) {
+        if (handleViteErrors) {
+          console.error("[Vite Resolution Error]", {
+            message: error.message,
+            stack: error.stack,
+            id: id,
+            importer: importer,
+            timestamp: new Date().toISOString()
+          });
+        }
+        throw error;
+      }
+    }
+  });
 
   return plugins;
 }
+
+// Re-export badge plugin for standalone use
+export { badgePlugin, type BadgePluginOptions } from "./badge";
 
 // Default export for convenience
 export default hercules;
