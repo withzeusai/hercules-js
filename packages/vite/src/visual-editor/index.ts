@@ -952,6 +952,9 @@ function getVisualEditorScript(dataAttribute: string): string {
 
     // Update UI based on active state
     if (!active) {
+      // Remove crosshair cursor
+      document.body.style.cursor = '';
+      
       // Remove all event listeners
       document.removeEventListener("click", handleElementClick);
       document.removeEventListener("mouseover", handleElementHover);
@@ -960,6 +963,9 @@ function getVisualEditorScript(dataAttribute: string): string {
 			window.removeEventListener("resize", handleResize);
       closeEditor();
     } else {
+      // Set crosshair cursor for design mode
+      document.body.style.cursor = 'crosshair';
+      
 			// Add event listeners
       document.addEventListener("click", handleElementClick, true);
       document.addEventListener("mouseover", handleElementHover);
