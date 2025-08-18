@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/eslint-plugin",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "ESLint plugin for Hercules",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest",
+    "test": "vitest --run",
     "test:watch": "vitest --watch",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit"
