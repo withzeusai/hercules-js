@@ -5,9 +5,17 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "docs",
+    "README.md",
+    "tsconfig.json",
+    "tsup.config.ts"
   ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -17,9 +25,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@typescript-eslint/scope-manager": "^7.0.0",
-    "@typescript-eslint/type-utils": "^7.0.0",
-    "@typescript-eslint/utils": "^7.0.0"
+    "@typescript-eslint/scope-manager": "^8.0.0",
+    "@typescript-eslint/type-utils": "^8.0.0",
+    "@typescript-eslint/utils": "^8.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
