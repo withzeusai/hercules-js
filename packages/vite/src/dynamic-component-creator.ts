@@ -106,7 +106,7 @@ export function dynamicComponentCreatorPlugin(
 
             await writeFile(
               resolvedPath,
-              `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div>loading</div>;\n}\n`,
+              `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
             );
             if (debug) {
               const importType = source.startsWith("@/")
