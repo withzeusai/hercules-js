@@ -84,9 +84,29 @@ export function dynamicComponentCreatorPlugin(
               }
             }
 
+            // Extract file name without extension and convert to component name
+            const fileName = path.basename(resolvedPath, '.tsx');
+            
+            // Convert file name to PascalCase component name if it's a valid identifier
+            const toComponentName = (name: string): string => {
+              // Check if it's a valid JavaScript identifier
+              // Allow names that start with letter or underscore, followed by letters, digits, or underscores
+              if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name.replace(/[-]/g, ''))) {
+                return 'Component'; // Fallback to generic name if not valid
+              }
+              
+              // Convert kebab-case, snake_case to PascalCase
+              return name
+                .split(/[-_]/)
+                .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+                .join('');
+            };
+            
+            const componentName = toComponentName(fileName);
+
             await writeFile(
               resolvedPath,
-              'import React from "react";\n\nexport default function Component(_props: unknown) {\n  return <div>loading</div>;\n}\n',
+              `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div>loading</div>;\n}\n`,
             );
             if (debug) {
               const importType = source.startsWith("@/")
