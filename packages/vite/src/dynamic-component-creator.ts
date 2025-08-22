@@ -1,6 +1,6 @@
 import type { Plugin } from "vite";
 import path from "path";
-import { access, writeFile } from "fs/promises";
+import { access, writeFile, mkdir } from "fs/promises";
 
 export interface DynamicComponentCreatorOptions {
   /**
@@ -14,6 +14,12 @@ export interface DynamicComponentCreatorOptions {
    * @default false
    */
   force?: boolean;
+
+  /**
+   * Base path for resolving @/ imports
+   * @default 'src'
+   */
+  aliasBase?: string;
 }
 
 /**
@@ -23,20 +29,40 @@ export interface DynamicComponentCreatorOptions {
 export function dynamicComponentCreatorPlugin(
   options: DynamicComponentCreatorOptions = {},
 ): Plugin {
-  const { debug = false } = options;
+  const { debug = false, aliasBase = "src" } = options;
+  let projectRoot: string;
 
   return {
     name: "vite-plugin-hercules-dynamic-component-creator",
     enforce: "pre",
+    configResolved(config) {
+      projectRoot = config.root;
+      console.log("configResolved", projectRoot);
+    },
     resolveId: {
       order: "pre",
       handler: async (source, importer, _options) => {
         // Only handle relative imports and specific extensions
-        if (!source.startsWith("./") && !source.startsWith("../")) return null;
+        if (
+          !source.startsWith("./") &&
+          !source.startsWith("../") &&
+          !source.startsWith("@/")
+        )
+          return null;
         if (!source.endsWith(".tsx")) return null;
 
         if (importer) {
-          const resolvedPath = path.resolve(path.dirname(importer), source);
+          let resolvedPath: string;
+
+          // Handle @/ imports
+          if (source.startsWith("@/")) {
+            // Replace @/ with the configured base path (default: src)
+            const relativePath = source.slice(2); // Remove @/
+            resolvedPath = path.resolve(projectRoot, aliasBase, relativePath);
+          } else {
+            // Handle relative imports as before
+            resolvedPath = path.resolve(path.dirname(importer), source);
+          }
 
           // Helper function to check if file exists
           const exists = async (filePath: string): Promise<boolean> => {
@@ -49,13 +75,26 @@ export function dynamicComponentCreatorPlugin(
           };
 
           if (!(await exists(resolvedPath))) {
+            // Create parent directory recursively if it doesn't exist
+            try {
+              const parentDir = path.dirname(resolvedPath);
+              await mkdir(parentDir, { recursive: true });
+            } catch (error) {
+              if (debug) {
+                console.error("Error creating parent directory", error);
+              }
+            }
+
             await writeFile(
               resolvedPath,
-              'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <></>;\n\nexport default Component;',
+              'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <div></div>;\n\nexport default Component;',
             );
             if (debug) {
+              const importType = source.startsWith("@/")
+                ? "@/ alias"
+                : "relative";
               console.log(
-                `[Dynamic Component Creator] Created component file: ${resolvedPath}`,
+                `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,
               );
             }
           }
