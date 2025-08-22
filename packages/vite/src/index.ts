@@ -48,7 +48,9 @@ export interface HerculesPluginOptions {
    * unless 'force' option is true
    * @default { enabled: true }
    */
-  dynamicComponentCreator?: DynamicComponentCreatorOptions & { enabled?: boolean };
+  dynamicComponentCreator?: DynamicComponentCreatorOptions & {
+    enabled?: boolean;
+  };
 
   /**
    * Badge options for displaying "Made with Hercules"
@@ -84,7 +86,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       badgePlugin({
         debug,
         ...badge,
-      })
+      }),
     );
   }
 
@@ -97,7 +99,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
           ? "data-hercules-id"
           : "data-component-id",
         ...componentTagger,
-      })
+      }),
     );
   }
 
@@ -108,7 +110,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
         debug,
         dataAttribute: "data-hercules-id",
         ...visualEditor,
-      })
+      }),
     );
   }
 
@@ -121,7 +123,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       dynamicComponentCreatorPlugin({
         debug,
         ...dynamicComponentCreator,
-      })
+      }),
     );
   }
 
@@ -159,7 +161,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
               status: "active",
               plugin: "hercules",
               timestamp: new Date().toISOString(),
-            })
+            }),
           );
         } else {
           next();
@@ -242,7 +244,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
         console.log(
           "[Hercules Plugin] Bundle generated with",
           Object.keys(bundle).length,
-          "files"
+          "files",
         );
       }
     },
@@ -271,7 +273,10 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 
 // Re-export plugins for standalone use
 export { badgePlugin, type BadgePluginOptions } from "./badge";
-export { dynamicComponentCreatorPlugin, type DynamicComponentCreatorOptions } from "./dynamic-component-creator";
+export {
+  dynamicComponentCreatorPlugin,
+  type DynamicComponentCreatorOptions,
+} from "./dynamic-component-creator";
 
 // Default export for convenience
 export default hercules;

@@ -18,7 +18,10 @@ interface RuleModule {
   create: (context: any) => any;
 }
 
-export function createRuleTester(ruleName: string, rule: RuleModule): {
+export function createRuleTester(
+  ruleName: string,
+  rule: RuleModule,
+): {
   run: (validCases: TestCase[], invalidCases: TestCase[]) => void;
 } {
   const linter = new Linter({ configType: "flat" });

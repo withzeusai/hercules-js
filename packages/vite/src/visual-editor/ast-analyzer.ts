@@ -38,7 +38,7 @@ export function analyzeClassNameExpression(node: any): ClassNameAnalysis {
   if (t.isTemplateLiteral(node) && node.expressions.length === 0) {
     return {
       type: "static",
-      value: node.quasis.map((q: any) => q.value.raw).join("")
+      value: node.quasis.map((q: any) => q.value.raw).join(""),
     };
   }
 
@@ -77,47 +77,53 @@ export interface UnifiedElementAnalysis {
 function analyzeElementDeletionSafety(path: any): ElementTypeAnalysis {
   // Walk up the AST to check the element's context
   let current = path.parent;
-  
+
   while (current) {
     // Check if element is in a conditional expression (ternary)
     if (t.isConditionalExpression(current)) {
-      return { 
-        type: "dynamic", 
-        reason: "conditional-expression" 
+      return {
+        type: "dynamic",
+        reason: "conditional-expression",
       };
     }
-    
+
     // Check if element is in array map expressions
-    if (t.isCallExpression(current) && 
-        t.isMemberExpression(current.callee) &&
-        t.isIdentifier(current.callee.property) &&
-        current.callee.property.name === "map") {
-      return { 
-        type: "dynamic", 
-        reason: "map-expression" 
+    if (
+      t.isCallExpression(current) &&
+      t.isMemberExpression(current.callee) &&
+      t.isIdentifier(current.callee.property) &&
+      current.callee.property.name === "map"
+    ) {
+      return {
+        type: "dynamic",
+        reason: "map-expression",
       };
     }
-    
+
     // Check for other complex expressions that might make deletion unsafe
-    if (t.isLogicalExpression(current) ||
-        t.isSequenceExpression(current) ||
-        t.isArrayExpression(current)) {
-      return { 
-        type: "dynamic", 
-        reason: "complex-parent" 
+    if (
+      t.isLogicalExpression(current) ||
+      t.isSequenceExpression(current) ||
+      t.isArrayExpression(current)
+    ) {
+      return {
+        type: "dynamic",
+        reason: "complex-parent",
       };
     }
-    
+
     // Stop checking at function/component boundaries
-    if (t.isFunction(current) || 
-        t.isArrowFunctionExpression(current) ||
-        t.isJSXElement(current)) {
+    if (
+      t.isFunction(current) ||
+      t.isArrowFunctionExpression(current) ||
+      t.isJSXElement(current)
+    ) {
       break;
     }
-    
+
     current = current.parent;
   }
-  
+
   // If we didn't find any problematic parents, deletion should be safe
   return { type: "static" };
 }
@@ -130,7 +136,7 @@ function extractTextContent(children: any[]): TextContentAnalysis {
 
   // Check if has nested JSX elements or fragments
   const hasNonTextChildren = children.some(
-    (child) => t.isJSXElement(child) || t.isJSXFragment(child)
+    (child) => t.isJSXElement(child) || t.isJSXFragment(child),
   );
 
   if (hasNonTextChildren) {
@@ -141,7 +147,8 @@ function extractTextContent(children: any[]): TextContentAnalysis {
   const allStatic = children.every(
     (child) =>
       t.isJSXText(child) ||
-      (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression))
+      (t.isJSXExpressionContainer(child) &&
+        t.isStringLiteral(child.expression)),
   );
 
   if (allStatic) {
@@ -149,7 +156,10 @@ function extractTextContent(children: any[]): TextContentAnalysis {
       .map((child) => {
         if (t.isJSXText(child)) {
           return child.value;
-        } else if (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression)) {
+        } else if (
+          t.isJSXExpressionContainer(child) &&
+          t.isStringLiteral(child.expression)
+        ) {
           return child.expression.value;
         }
         return "";
@@ -167,7 +177,7 @@ function extractTextContent(children: any[]): TextContentAnalysis {
 // Unified analyze function that combines className and textContent analysis
 export async function analyzeElement(
   componentId: string,
-  rootDir: string
+  rootDir: string,
 ): Promise<UnifiedElementAnalysis> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
@@ -176,7 +186,7 @@ export async function analyzeElement(
       return {
         success: false,
         componentId,
-        error: `Invalid component ID format: ${componentId}`
+        error: `Invalid component ID format: ${componentId}`,
       };
     }
 
@@ -193,7 +203,7 @@ export async function analyzeElement(
       return {
         success: false,
         componentId,
-        error: `Failed to read file ${filePath}: ${err}`
+        error: `Failed to read file ${filePath}: ${err}`,
       };
     }
 
@@ -203,13 +213,13 @@ export async function analyzeElement(
       ast = parse(code, {
         sourceType: "module",
         plugins: ["jsx", "typescript"],
-        sourceFilename: filePath
+        sourceFilename: filePath,
       });
     } catch (parseError: any) {
       return {
         success: false,
         componentId,
-        error: `Failed to parse ${filePath}: ${parseError.message}`
+        error: `Failed to parse ${filePath}: ${parseError.message}`,
       };
     }
 
@@ -235,7 +245,7 @@ export async function analyzeElement(
             (attr: any) =>
               t.isJSXAttribute(attr) &&
               t.isJSXIdentifier(attr.name) &&
-              attr.name.name === "className"
+              attr.name.name === "className",
           ) as t.JSXAttribute | undefined;
 
           if (classNameAttr) {
@@ -253,13 +263,13 @@ export async function analyzeElement(
 
           path.stop();
         }
-      }
+      },
     });
 
     if (elementFound) {
       const result: UnifiedElementAnalysis = {
         success: true,
-        componentId
+        componentId,
       };
 
       if (classNameAnalysis) {
@@ -279,7 +289,7 @@ export async function analyzeElement(
       return {
         success: false,
         componentId,
-        error: `Component not found at ${line}:${col}`
+        error: `Component not found at ${line}:${col}`,
       };
     }
   } catch (error: any) {
@@ -287,7 +297,7 @@ export async function analyzeElement(
     return {
       success: false,
       componentId,
-      error: error.message || String(error)
+      error: error.message || String(error),
     };
   }
 }

@@ -7,6 +7,7 @@ Disallow text or background color classes on Button components with `variant="ou
 This rule helps maintain consistent styling for outline button variants by preventing the override of their color scheme through Tailwind CSS utility classes.
 
 Outline buttons typically have their own predefined color scheme that includes:
+
 - A transparent or light background
 - A colored border
 - Text color that matches the border
@@ -55,11 +56,13 @@ Adding custom text or background colors through `className` can break this desig
 The rule detects the following Tailwind color utility patterns:
 
 ### Text Colors
+
 - Pattern: `text-{color}` or `text-{color}-{shade}`
 - Colors: slate, gray, zinc, neutral, stone, red, orange, amber, yellow, lime, green, emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink, rose, white, black, transparent, current, inherit
 - Shades: 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950
 
 ### Background Colors
+
 - Pattern: `bg-{color}` or `bg-{color}-{shade}`
 - Same colors and shades as text colors
 

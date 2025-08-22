@@ -160,14 +160,14 @@ const threeFiberElems = new Set([
   "fog",
   "fogExp2",
   "shape",
-  "colorShiftMaterial"
+  "colorShiftMaterial",
 ]);
 
 // Keep: Check if element should be tagged
 function shouldTagElement(
   elementName: string,
   threeDreiImportedElements: Set<string>,
-  threeDreiNamespaces: Set<string>
+  threeDreiNamespaces: Set<string>,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
     return false;
@@ -192,7 +192,7 @@ export class ComponentTagger {
   private stats: ComponentTaggerStats = {
     totalFiles: 0,
     processedFiles: 0,
-    totalElements: 0
+    totalElements: 0,
   };
   private cwd = process.cwd();
   private dataAttribute: string;
@@ -201,7 +201,10 @@ export class ComponentTagger {
     this.dataAttribute = options.dataAttribute || "data-component-id";
   }
 
-  async transformCode(code: string, id: string): Promise<{ code: string; map: any } | null> {
+  async transformCode(
+    code: string,
+    id: string,
+  ): Promise<{ code: string; map: any } | null> {
     if (!validExtensions.has(path.extname(id)) || id.includes("node_modules")) {
       return null;
     }
@@ -212,7 +215,7 @@ export class ComponentTagger {
     try {
       const parserOptions = {
         sourceType: "module" as const,
-        plugins: ["jsx", "typescript"] as any
+        plugins: ["jsx", "typescript"] as any,
       };
 
       const ast = parse(code, parserOptions);
@@ -229,7 +232,10 @@ export class ComponentTagger {
         enter(node) {
           if (node.type === "ImportDeclaration") {
             const source = node.source?.value;
-            if (typeof source === "string" && source.includes("@react-three/drei")) {
+            if (
+              typeof source === "string" &&
+              source.includes("@react-three/drei")
+            ) {
               node.specifiers.forEach((spec: any) => {
                 if (spec.type === "ImportSpecifier") {
                   threeDreiImportedElements.add(spec.local.name);
@@ -239,7 +245,7 @@ export class ComponentTagger {
               });
             }
           }
-        }
+        },
       });
 
       // Capture dataAttribute for use in the walker
@@ -262,7 +268,10 @@ export class ComponentTagger {
             }
 
             // Skip fragments
-            if (elementName === "Fragment" || elementName === "React.Fragment") {
+            if (
+              elementName === "Fragment" ||
+              elementName === "React.Fragment"
+            ) {
               return;
             }
 
@@ -273,7 +282,7 @@ export class ComponentTagger {
             const shouldTag = shouldTagElement(
               elementName,
               threeDreiImportedElements,
-              threeDreiNamespaces
+              threeDreiNamespaces,
             );
 
             if (shouldTag) {
@@ -287,7 +296,7 @@ export class ComponentTagger {
               changedElementsCount++;
             }
           }
-        }
+        },
       });
 
       this.stats.processedFiles++;
@@ -295,13 +304,13 @@ export class ComponentTagger {
 
       if (this.options.debug) {
         console.log(
-          `[Component Tagger] Processed ${relativePath}: ${changedElementsCount} elements`
+          `[Component Tagger] Processed ${relativePath}: ${changedElementsCount} elements`,
         );
       }
 
       return {
         code: magicString.toString(),
-        map: magicString.generateMap({ hires: true })
+        map: magicString.generateMap({ hires: true }),
       };
     } catch (error) {
       console.error(`Error processing file ${relativePath}:`, error);
@@ -323,13 +332,17 @@ export class ComponentTagger {
     // TODO: Implement Tailwind v4 CSS-based config handling
     // Tailwind v4 doesn't use tailwind.config.js, so this needs different approach
     if (this.options.debug) {
-      console.log("[Component Tagger] Tailwind v4 config handling not yet implemented");
+      console.log(
+        "[Component Tagger] Tailwind v4 config handling not yet implemented",
+      );
     }
   }
 }
 
 // Export Vite plugin for component tagging
-export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plugin {
+export function componentTaggerPlugin(
+  options: ComponentTaggerOptions = {},
+): Plugin {
   const tagger = new ComponentTagger(options);
   const stats = tagger.getStats.bind(tagger);
 
@@ -345,19 +358,22 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
       await tagger.handleTailwindConfig(server);
 
       // Expose stats endpoint
-      server.middlewares.use("/hercules-component-tagger-stats", (req, res, next) => {
-        if (req.method === "GET") {
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(stats()));
-        } else {
-          next();
-        }
-      });
+      server.middlewares.use(
+        "/hercules-component-tagger-stats",
+        (req, res, next) => {
+          if (req.method === "GET") {
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(stats()));
+          } else {
+            next();
+          }
+        },
+      );
     },
 
     async transform(code, id) {
       const result = await tagger.transformCode(code, id);
       return result;
-    }
+    },
   };
 }

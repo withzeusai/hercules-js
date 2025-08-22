@@ -6,7 +6,9 @@ import * as packageJson from "../package.json";
 const NAME = packageJson.name;
 const VERSION = packageJson.version;
 
-type TSESLintRule = typeof noEmptySelectValue | typeof noOutlineButtonColorOverride;
+type TSESLintRule =
+  | typeof noEmptySelectValue
+  | typeof noOutlineButtonColorOverride;
 const toESLintRule = (rule: TSESLintRule): Rule.RuleModule =>
   rule as unknown as Rule.RuleModule;
 
@@ -17,7 +19,9 @@ const plugin: ESLint.Plugin = {
   },
   rules: {
     "no-empty-select-value": toESLintRule(noEmptySelectValue),
-    "no-outline-button-color-override": toESLintRule(noOutlineButtonColorOverride),
+    "no-outline-button-color-override": toESLintRule(
+      noOutlineButtonColorOverride,
+    ),
   },
 };
 

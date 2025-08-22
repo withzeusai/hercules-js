@@ -62,14 +62,14 @@ export function badgePlugin(options: BadgePluginOptions = {}): Plugin {
     backgroundColor = "#1a1a1a",
     textColor = "#ffffff",
     zIndex = 9999,
-    showInProduction = false
+    showInProduction = false,
   } = options;
 
   // Skip in production unless explicitly enabled
   if (process.env.NODE_ENV === "production" && !showInProduction) {
     return {
       name: "vite-plugin-hercules-badge",
-      apply: () => false
+      apply: () => false,
     };
   }
 
@@ -175,7 +175,7 @@ export function badgePlugin(options: BadgePluginOptions = {}): Plugin {
         // Fallback: append to end of html if no body tag
         return html.replace("</html>", `${badgeHtml}\n</html>`);
       }
-    }
+    },
   };
 }
 

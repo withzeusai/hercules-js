@@ -4,7 +4,10 @@ import traverseModule from "@babel/traverse";
 import generateModule from "@babel/generator";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
-import { type ClassNameAnalysis, type TextContentAnalysis } from "./ast-analyzer";
+import {
+  type ClassNameAnalysis,
+  type TextContentAnalysis,
+} from "./ast-analyzer";
 
 // Extract the actual functions
 const traverse = (traverseModule as any).default || traverseModule;
@@ -23,13 +26,16 @@ export async function updateComponentElement(
     className?: string;
     textContent?: string;
   },
-  rootDir: string
+  rootDir: string,
 ): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
     const match = componentId.match(/^(.+):(\d+):(\d+)$/);
     if (!match) {
-      return { success: false, error: `Invalid component ID format: ${componentId}` };
+      return {
+        success: false,
+        error: `Invalid component ID format: ${componentId}`,
+      };
     }
 
     const [, relativePath, lineStr, colStr] = match;
@@ -41,7 +47,10 @@ export async function updateComponentElement(
     try {
       code = await readFile(filePath, "utf-8");
     } catch (err) {
-      return { success: false, error: `Failed to read file ${filePath}: ${err}` };
+      return {
+        success: false,
+        error: `Failed to read file ${filePath}: ${err}`,
+      };
     }
 
     // Parse the file with Babel
@@ -50,15 +59,19 @@ export async function updateComponentElement(
       ast = parse(code, {
         sourceType: "module",
         plugins: ["jsx", "typescript"],
-        sourceFilename: filePath
+        sourceFilename: filePath,
       });
     } catch (parseError: any) {
-      return { success: false, error: `Failed to parse ${filePath}: ${parseError.message}` };
+      return {
+        success: false,
+        error: `Failed to parse ${filePath}: ${parseError.message}`,
+      };
     }
 
     let modified = false;
     let foundElements = 0;
-    const nearbyElements: Array<{ line: number; col: number; tag: string }> = [];
+    const nearbyElements: Array<{ line: number; col: number; tag: string }> =
+      [];
 
     // Traverse the AST to find and update the JSX element
     traverse(ast, {
@@ -75,7 +88,7 @@ export async function updateComponentElement(
           nearbyElements.push({
             line: loc.start.line,
             col: loc.start.column,
-            tag: tagName
+            tag: tagName,
           });
         }
 
@@ -84,13 +97,13 @@ export async function updateComponentElement(
           // Update className if provided
           if (updates.className !== undefined) {
             const classNameAttr = openingElement.attributes.find(
-              (attr: any) => attr.name && attr.name.name === "className"
+              (attr: any) => attr.name && attr.name.name === "className",
             );
 
             if (updates.className === "") {
               // Remove className attribute if new value is empty
               openingElement.attributes = openingElement.attributes.filter(
-                (attr: any) => !(attr.name && attr.name.name === "className")
+                (attr: any) => !(attr.name && attr.name.name === "className"),
               );
             } else {
               if (classNameAttr) {
@@ -99,7 +112,10 @@ export async function updateComponentElement(
               } else {
                 // Add new className attribute
                 openingElement.attributes.push(
-                  t.jsxAttribute(t.jsxIdentifier("className"), t.stringLiteral(updates.className))
+                  t.jsxAttribute(
+                    t.jsxIdentifier("className"),
+                    t.stringLiteral(updates.className),
+                  ),
                 );
               }
             }
@@ -119,7 +135,7 @@ export async function updateComponentElement(
           modified = true;
           path.stop();
         }
-      }
+      },
     });
 
     if (!modified) {
@@ -129,7 +145,7 @@ export async function updateComponentElement(
           : ` Total JSX elements found: ${foundElements}`;
       return {
         success: false,
-        error: `Component not found at ${line}:${col}.${debugInfo}`
+        error: `Component not found at ${line}:${col}.${debugInfo}`,
       };
     }
 
@@ -142,9 +158,9 @@ export async function updateComponentElement(
           retainLines: true,
           compact: false,
           concise: false,
-          comments: true
+          comments: true,
         },
-        code
+        code,
       );
     } catch (genError) {
       return { success: false, error: `Failed to generate code: ${genError}` };
@@ -163,12 +179,18 @@ export async function updateComponentElement(
   }
 }
 
-export async function deleteComponent(componentId: string, rootDir: string): Promise<UpdateResult> {
+export async function deleteComponent(
+  componentId: string,
+  rootDir: string,
+): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
     const match = componentId.match(/^(.+):(\d+):(\d+)$/);
     if (!match) {
-      return { success: false, error: `Invalid component ID format: ${componentId}` };
+      return {
+        success: false,
+        error: `Invalid component ID format: ${componentId}`,
+      };
     }
 
     const [, relativePath, lineStr, colStr] = match;
@@ -180,7 +202,10 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
     try {
       code = await readFile(filePath, "utf-8");
     } catch (err) {
-      return { success: false, error: `Failed to read file ${filePath}: ${err}` };
+      return {
+        success: false,
+        error: `Failed to read file ${filePath}: ${err}`,
+      };
     }
 
     // Parse the file with Babel
@@ -189,15 +214,19 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
       ast = parse(code, {
         sourceType: "module",
         plugins: ["jsx", "typescript"],
-        sourceFilename: filePath
+        sourceFilename: filePath,
       });
     } catch (parseError: any) {
-      return { success: false, error: `Failed to parse ${filePath}: ${parseError.message}` };
+      return {
+        success: false,
+        error: `Failed to parse ${filePath}: ${parseError.message}`,
+      };
     }
 
     let modified = false;
     let foundElements = 0;
-    const nearbyElements: Array<{ line: number; col: number; tag: string }> = [];
+    const nearbyElements: Array<{ line: number; col: number; tag: string }> =
+      [];
 
     // Traverse the AST to find and delete the JSX element
     traverse(ast, {
@@ -214,7 +243,7 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
           nearbyElements.push({
             line: loc.start.line,
             col: loc.start.column,
-            tag: tagName
+            tag: tagName,
           });
         }
 
@@ -241,7 +270,7 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
           modified = true;
           path.stop();
         }
-      }
+      },
     });
 
     if (!modified) {
@@ -251,7 +280,7 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
           : ` Total JSX elements found: ${foundElements}`;
       return {
         success: false,
-        error: `Component not found at ${line}:${col}.${debugInfo}`
+        error: `Component not found at ${line}:${col}.${debugInfo}`,
       };
     }
 
@@ -264,9 +293,9 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
           retainLines: true,
           compact: false,
           concise: false,
-          comments: true
+          comments: true,
         },
-        code
+        code,
       );
     } catch (genError) {
       return { success: false, error: `Failed to generate code: ${genError}` };

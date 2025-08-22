@@ -8,7 +8,7 @@ export interface DynamicComponentCreatorOptions {
    * @default false
    */
   debug?: boolean;
-  
+
   /**
    * Force enable the plugin even when HERCULES_DEV_MACHINE is not set
    * @default false
@@ -21,7 +21,7 @@ export interface DynamicComponentCreatorOptions {
  * when they are imported but don't exist yet.
  */
 export function dynamicComponentCreatorPlugin(
-  options: DynamicComponentCreatorOptions = {}
+  options: DynamicComponentCreatorOptions = {},
 ): Plugin {
   const { debug = false } = options;
 
@@ -48,11 +48,11 @@ export function dynamicComponentCreatorPlugin(
         if (!(await exists(resolvedPath))) {
           await writeFile(
             resolvedPath,
-            'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <></>;\n\nexport default Component;'
+            'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <></>;\n\nexport default Component;',
           );
           if (debug) {
             console.log(
-              `[Dynamic Component Creator] Created component file: ${resolvedPath}`
+              `[Dynamic Component Creator] Created component file: ${resolvedPath}`,
             );
           }
         }

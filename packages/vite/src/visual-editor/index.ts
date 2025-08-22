@@ -30,105 +30,145 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
       server = _server;
 
       // Serve the visual editor UI script
-      server.middlewares.use("/__hercules_visual_editor.js", (req, res, next) => {
-        if (req.method === "GET") {
-          res.setHeader("Content-Type", "application/javascript");
-          res.end(getVisualEditorScript(dataAttribute));
-        } else {
-          next();
-        }
-      });
+      server.middlewares.use(
+        "/__hercules_visual_editor.js",
+        (req, res, next) => {
+          if (req.method === "GET") {
+            res.setHeader("Content-Type", "application/javascript");
+            res.end(getVisualEditorScript(dataAttribute));
+          } else {
+            next();
+          }
+        },
+      );
 
       // Handle unified element analysis requests
-      server.middlewares.use("/__hercules_analyze_element", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const { componentId } = JSON.parse(body);
+      server.middlewares.use(
+        "/__hercules_analyze_element",
+        async (req, res, next) => {
+          if (req.method === "POST") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", async () => {
+              try {
+                const { componentId } = JSON.parse(body);
 
-              const result = await analyzeElement(componentId, server.config.root);
+                const result = await analyzeElement(
+                  componentId,
+                  server.config.root,
+                );
 
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error analyzing element:", error);
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify(result));
+              } catch (error) {
+                if (debug) {
+                  console.error(
+                    "[Visual Editor] Error analyzing element:",
+                    error,
+                  );
+                }
+                res.statusCode = 500;
+                res.setHeader("Content-Type", "application/json");
+                res.end(
+                  JSON.stringify({ success: false, error: String(error) }),
+                );
               }
-              res.statusCode = 500;
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
+            });
+          } else {
+            next();
+          }
+        },
+      );
 
       // Handle unified element update requests
-      server.middlewares.use("/__hercules_update_element", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const data = JSON.parse(body);
-              const { componentId, className, textContent } = data;
+      server.middlewares.use(
+        "/__hercules_update_element",
+        async (req, res, next) => {
+          if (req.method === "POST") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", async () => {
+              try {
+                const data = JSON.parse(body);
+                const { componentId, className, textContent } = data;
 
-              const updates: { className?: string; textContent?: string } = {};
-              if (className !== undefined) updates.className = className;
-              if (textContent !== undefined) updates.textContent = textContent;
+                const updates: { className?: string; textContent?: string } =
+                  {};
+                if (className !== undefined) updates.className = className;
+                if (textContent !== undefined)
+                  updates.textContent = textContent;
 
-              const result = await updateComponentElement(componentId, updates, server.config.root);
+                const result = await updateComponentElement(
+                  componentId,
+                  updates,
+                  server.config.root,
+                );
 
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error updating element:", error);
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify(result));
+              } catch (error) {
+                if (debug) {
+                  console.error(
+                    "[Visual Editor] Error updating element:",
+                    error,
+                  );
+                }
+                res.statusCode = 500;
+                res.end(
+                  JSON.stringify({ success: false, error: String(error) }),
+                );
               }
-              res.statusCode = 500;
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
+            });
+          } else {
+            next();
+          }
+        },
+      );
 
       // Handle element deletion requests
-      server.middlewares.use("/__hercules_delete_element", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const data = JSON.parse(body);
-              const { componentId } = data;
+      server.middlewares.use(
+        "/__hercules_delete_element",
+        async (req, res, next) => {
+          if (req.method === "POST") {
+            let body = "";
+            req.on("data", (chunk) => (body += chunk));
+            req.on("end", async () => {
+              try {
+                const data = JSON.parse(body);
+                const { componentId } = data;
 
-              const result = await deleteComponent(componentId, server.config.root);
+                const result = await deleteComponent(
+                  componentId,
+                  server.config.root,
+                );
 
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error deleting element:", error);
+                res.setHeader("Content-Type", "application/json");
+                res.end(JSON.stringify(result));
+              } catch (error) {
+                if (debug) {
+                  console.error(
+                    "[Visual Editor] Error deleting element:",
+                    error,
+                  );
+                }
+                res.statusCode = 500;
+                res.end(
+                  JSON.stringify({ success: false, error: String(error) }),
+                );
               }
-              res.statusCode = 500;
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
+            });
+          } else {
+            next();
+          }
+        },
+      );
     },
 
     transformIndexHtml(html) {
       // Only inject in development mode
       if (process.env.NODE_ENV !== "production") {
-        const editorScript = '<script type="module" src="/__hercules_visual_editor.js"></script>';
+        const editorScript =
+          '<script type="module" src="/__hercules_visual_editor.js"></script>';
 
         if (html.includes("</body>")) {
           return html.replace("</body>", `${editorScript}\n</body>`);
@@ -137,7 +177,7 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
         }
       }
       return html;
-    }
+    },
   };
 }
 

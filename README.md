@@ -25,10 +25,10 @@ npm install @usehercules/hercules-js
 
 ```javascript
 // Import from individual package
-import { oidc, reactOidc } from '@usehercules/auth';
+import { oidc, reactOidc } from "@usehercules/auth";
 
 // Or import from the main package
-import { auth, oidc, reactOidc } from '@usehercules/hercules-js';
+import { auth, oidc, reactOidc } from "@usehercules/hercules-js";
 
 // Use OIDC client directly
 const client = new oidc.UserManager(settings);
@@ -40,15 +40,15 @@ const { AuthProvider } = reactOidc;
 ### Vite Plugin
 
 ```javascript
-import { defineConfig } from 'vite';
-import { herculesPlugin } from '@usehercules/vite';
+import { defineConfig } from "vite";
+import { herculesPlugin } from "@usehercules/vite";
 
 export default defineConfig({
   plugins: [
     herculesPlugin({
       debug: true,
-      message: 'Hercules is running!'
-    })
+      message: "Hercules is running!",
+    }),
   ],
 });
 ```

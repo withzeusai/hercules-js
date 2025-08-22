@@ -5,7 +5,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    
+
     // Emit
     "declaration": true,
     "declarationMap": true,
@@ -13,14 +13,14 @@
     "outDir": "dist",
     "removeComments": true,
     "importHelpers": true,
-    
+
     // Interop constraints
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true,
-    
+
     // Type checking
     "strict": true,
     "noUnusedLocals": true,
@@ -30,20 +30,13 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
-    
+
     // JSX (for React peer dependency)
     "jsx": "react-jsx",
-    
+
     // Skip type checking of declaration files
     "skipLibCheck": true
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "**/*.test.*",
-    "**/*.spec.*"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.*", "**/*.spec.*"]
 }

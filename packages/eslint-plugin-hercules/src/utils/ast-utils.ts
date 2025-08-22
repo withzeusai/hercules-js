@@ -1,29 +1,36 @@
-import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { Type, TypeChecker, TypeFlags } from 'typescript';
+import { ESLintUtils, TSESTree } from "@typescript-eslint/utils";
+import { Type, TypeChecker, TypeFlags } from "typescript";
 
 /**
  * Gets the name of a JSX element
  */
-export function getJSXElementName(node: TSESTree.JSXOpeningElement): string | null {
-  if (node.name.type === 'JSXIdentifier') {
+export function getJSXElementName(
+  node: TSESTree.JSXOpeningElement,
+): string | null {
+  if (node.name.type === "JSXIdentifier") {
     return node.name.name;
   }
-  if (node.name.type === 'JSXMemberExpression') {
+  if (node.name.type === "JSXMemberExpression") {
     const parts: string[] = [];
-    let current: TSESTree.JSXMemberExpression | TSESTree.JSXIdentifier | TSESTree.JSXNamespacedName = node.name;
-    
-    while (current.type === 'JSXMemberExpression') {
-      if (current.property.type === 'JSXIdentifier') {
+    let current:
+      | TSESTree.JSXMemberExpression
+      | TSESTree.JSXIdentifier
+      | TSESTree.JSXNamespacedName = node.name;
+
+    while (current.type === "JSXMemberExpression") {
+      if (current.property.type === "JSXIdentifier") {
         parts.unshift(current.property.name);
       }
-      current = current.object as TSESTree.JSXMemberExpression | TSESTree.JSXIdentifier;
+      current = current.object as
+        | TSESTree.JSXMemberExpression
+        | TSESTree.JSXIdentifier;
     }
-    
-    if (current.type === 'JSXIdentifier') {
+
+    if (current.type === "JSXIdentifier") {
       parts.unshift(current.name);
     }
-    
-    return parts.join('.');
+
+    return parts.join(".");
   }
   return null;
 }
@@ -32,20 +39,20 @@ export function getJSXElementName(node: TSESTree.JSXOpeningElement): string | nu
  * Gets the value of a JSX attribute
  */
 export function getJSXAttributeValue(
-  attribute: TSESTree.JSXAttribute
+  attribute: TSESTree.JSXAttribute,
 ): TSESTree.Expression | TSESTree.JSXEmptyExpression | TSESTree.Literal | null {
   if (!attribute.value) {
     return null;
   }
-  
-  if (attribute.value.type === 'Literal') {
+
+  if (attribute.value.type === "Literal") {
     return attribute.value;
   }
-  
-  if (attribute.value.type === 'JSXExpressionContainer') {
+
+  if (attribute.value.type === "JSXExpressionContainer") {
     return attribute.value.expression;
   }
-  
+
   return null;
 }
 
@@ -54,17 +61,19 @@ export function getJSXAttributeValue(
  */
 export function isFunctionCall(
   node: TSESTree.CallExpression,
-  functionName: string
+  functionName: string,
 ): boolean {
-  if (node.callee.type === 'Identifier') {
+  if (node.callee.type === "Identifier") {
     return node.callee.name === functionName;
   }
-  
-  if (node.callee.type === 'MemberExpression' && 
-      node.callee.property.type === 'Identifier') {
+
+  if (
+    node.callee.type === "MemberExpression" &&
+    node.callee.property.type === "Identifier"
+  ) {
     return node.callee.property.name === functionName;
   }
-  
+
   return false;
 }
 
@@ -73,16 +82,16 @@ export function isFunctionCall(
  */
 export function getNodeType(
   context: any,
-  node: TSESTree.Node
+  node: TSESTree.Node,
 ): Type | undefined {
   const parserServices = ESLintUtils.getParserServices(context);
   const checker = parserServices.program.getTypeChecker();
   const tsNode = parserServices.esTreeNodeToTSNodeMap.get(node);
-  
+
   if (!tsNode) {
     return undefined;
   }
-  
+
   return checker.getTypeAtLocation(tsNode);
 }
 
@@ -91,7 +100,7 @@ export function getNodeType(
  */
 export function isStringLiteralType(
   type: Type,
-  _checker: TypeChecker
+  _checker: TypeChecker,
 ): boolean {
   return !!(type.flags & TypeFlags.StringLiteral);
 }
@@ -99,10 +108,8 @@ export function isStringLiteralType(
 /**
  * Gets the literal value from a string literal type
  */
-export function getStringLiteralValue(
-  type: Type
-): string | undefined {
-  if ('value' in type && typeof type.value === 'string') {
+export function getStringLiteralValue(type: Type): string | undefined {
+  if ("value" in type && typeof type.value === "string") {
     return type.value;
   }
   return undefined;
@@ -112,9 +119,11 @@ export function getStringLiteralValue(
  * Checks if a node is an empty string literal
  */
 export function isEmptyStringLiteral(node: TSESTree.Node): boolean {
-  return node.type === 'Literal' && 
-         typeof node.value === 'string' && 
-         node.value === '';
+  return (
+    node.type === "Literal" &&
+    typeof node.value === "string" &&
+    node.value === ""
+  );
 }
 
 /**
@@ -129,34 +138,34 @@ export interface ParameterInfo {
 
 export function getFunctionParameters(
   context: any,
-  node: TSESTree.CallExpression
+  node: TSESTree.CallExpression,
 ): ParameterInfo[] | undefined {
   const parserServices = ESLintUtils.getParserServices(context);
   const checker = parserServices.program.getTypeChecker();
   const tsNode = parserServices.esTreeNodeToTSNodeMap.get(node);
-  
+
   if (!tsNode) {
     return undefined;
   }
-  
+
   const signature = checker.getResolvedSignature(tsNode as any);
   if (!signature) {
     return undefined;
   }
-  
+
   const parameters = signature.getParameters();
   return parameters.map((param, index) => {
     const paramType = checker.getTypeOfSymbolAtLocation(param, tsNode);
     const declarations = param.getDeclarations();
-    const isOptional = declarations?.some((decl: any) => 
-      decl.questionToken !== undefined
-    ) || false;
-    
+    const isOptional =
+      declarations?.some((decl: any) => decl.questionToken !== undefined) ||
+      false;
+
     return {
       name: param.getName(),
       index,
       type: paramType,
-      isOptional
+      isOptional,
     };
   });
 }

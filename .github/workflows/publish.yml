@@ -3,7 +3,7 @@ name: Publish to NPM
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
     branches:
       - main
 
@@ -13,7 +13,7 @@ jobs:
     permissions:
       contents: read
       id-token: write # Required for npm provenance
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,13 +23,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: '10.13.1'
+          version: "10.13.1"
           run_install: false
 
       - name: Get pnpm store directory
@@ -71,7 +71,7 @@ jobs:
           VERSION=${{ steps.changeset.outputs.version }}
           # Remove 'v' prefix if present
           VERSION=${VERSION#v}
-          
+
           # Update package.json versions in workspaces
           pnpm --recursive exec -- npm version $VERSION --no-git-tag-version
 
@@ -92,13 +92,13 @@ jobs:
           release_name: Release ${{ steps.changeset.outputs.version }}
           body: |
             ## Changes in ${{ steps.changeset.outputs.version }}
-            
+
             Published packages:
             - `@usehercules/auth@${{ steps.changeset.outputs.version }}`
             - `@usehercules/database@${{ steps.changeset.outputs.version }}`
             - `@usehercules/vite@${{ steps.changeset.outputs.version }}`
             - `@usehercules/hercules-js@${{ steps.changeset.outputs.version }}`
-            
+
             See the [changelog](./CHANGELOG.md) for detailed changes.
           draft: false
-          prerelease: ${{ contains(steps.changeset.outputs.version, '-') }} 
+          prerelease: ${{ contains(steps.changeset.outputs.version, '-') }}

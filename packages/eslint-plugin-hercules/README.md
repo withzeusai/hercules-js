@@ -15,6 +15,7 @@ yarn add -D @usehercules/eslint-plugin
 ### Peer Dependencies
 
 This plugin requires:
+
 - ESLint 9.0.0 or higher
 - TypeScript 4.0.0 or higher (for type checking features)
 - @typescript-eslint/parser 7.0.0 or higher (for TypeScript support)
@@ -24,11 +25,11 @@ This plugin requires:
 Create an `eslint.config.js` file in your project root:
 
 ```javascript
-import herculesPlugin from '@usehercules/eslint-plugin';
+import herculesPlugin from "@usehercules/eslint-plugin";
 
 export default [
   // Use the recommended opinionated configuration
-  herculesPlugin.configs.recommended
+  herculesPlugin.configs.recommended,
 ];
 ```
 
@@ -69,20 +70,18 @@ Validates function arguments based on configured constraints. The recommended co
   functions: [
     // Prevent invalid fetch URLs
     {
-      name: 'fetch',
-      arguments: [
-        { index: 0, notEmpty: true, pattern: '^https?://' }
-      ]
+      name: "fetch",
+      arguments: [{ index: 0, notEmpty: true, pattern: "^https?://" }],
     },
     // Prevent null/empty localStorage operations
     {
-      name: 'setItem',
+      name: "setItem",
       arguments: [
         { index: 0, notEmpty: true },
-        { index: 1, notNull: true }
-      ]
-    }
-  ]
+        { index: 1, notNull: true },
+      ],
+    },
+  ];
 }
 ```
 
@@ -90,10 +89,10 @@ Validates function arguments based on configured constraints. The recommended co
 
 ```javascript
 // ❌ Invalid
-fetch("");  // Empty URL
-fetch("ftp://example.com");  // Non-HTTP(S) protocol
-localStorage.setItem("", "value");  // Empty key
-localStorage.setItem("key", null);  // Null value
+fetch(""); // Empty URL
+fetch("ftp://example.com"); // Non-HTTP(S) protocol
+localStorage.setItem("", "value"); // Empty key
+localStorage.setItem("key", null); // Null value
 
 // ✅ Valid
 fetch("https://api.example.com");
@@ -111,14 +110,13 @@ Available in strict configuration for additional component prop validation.
 The recommended configuration includes our opinionated rules with sensible defaults:
 
 ```javascript
-import herculesPlugin from '@usehercules/eslint-plugin';
+import herculesPlugin from "@usehercules/eslint-plugin";
 
-export default [
-  herculesPlugin.configs.recommended
-];
+export default [herculesPlugin.configs.recommended];
 ```
 
 **Includes:**
+
 - `no-empty-select-value`: Error (non-configurable)
 - `no-invalid-function-args`: Error (with defaults for fetch and localStorage)
 
@@ -127,14 +125,13 @@ export default [
 For teams wanting additional validation:
 
 ```javascript
-import herculesPlugin from '@usehercules/eslint-plugin';
+import herculesPlugin from "@usehercules/eslint-plugin";
 
-export default [
-  herculesPlugin.configs.strict
-];
+export default [herculesPlugin.configs.strict];
 ```
 
 **Includes everything from recommended, plus:**
+
 - More function validations (getItem, removeItem)
 - Component prop validation (Button, Input, Form)
 
@@ -143,20 +140,20 @@ export default [
 Optimized for TypeScript projects:
 
 ```javascript
-import herculesPlugin from '@usehercules/eslint-plugin';
-import tsParser from '@typescript-eslint/parser';
+import herculesPlugin from "@usehercules/eslint-plugin";
+import tsParser from "@typescript-eslint/parser";
 
 export default [
   {
-    files: ['**/*.{ts,tsx}'],
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
-        project: './tsconfig.json'
-      }
+        project: "./tsconfig.json",
+      },
     },
-    ...herculesPlugin.configs.typescript
-  }
+    ...herculesPlugin.configs.typescript,
+  },
 ];
 ```
 
@@ -165,40 +162,41 @@ export default [
 While we recommend using our opinionated defaults, you can customize if needed:
 
 ```javascript
-import herculesPlugin from '@usehercules/eslint-plugin';
-import tsParser from '@typescript-eslint/parser';
+import herculesPlugin from "@usehercules/eslint-plugin";
+import tsParser from "@typescript-eslint/parser";
 
 export default [
   {
-    files: ['**/*.{js,jsx,ts,tsx}'],
+    files: ["**/*.{js,jsx,ts,tsx}"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
         ecmaVersion: 2020,
-        sourceType: 'module',
-        ecmaFeatures: { jsx: true }
-      }
+        sourceType: "module",
+        ecmaFeatures: { jsx: true },
+      },
     },
     plugins: {
-      '@usehercules': herculesPlugin
+      "@usehercules": herculesPlugin,
     },
     rules: {
       // Opinionated rule - not configurable
-      '@usehercules/no-empty-select-value': 'error',
-      
+      "@usehercules/no-empty-select-value": "error",
+
       // Add your own function validations
-      '@usehercules/no-invalid-function-args': ['error', {
-        functions: [
-          {
-            name: 'myCustomFunction',
-            arguments: [
-              { index: 0, notEmpty: true, minLength: 3 }
-            ]
-          }
-        ]
-      }]
-    }
-  }
+      "@usehercules/no-invalid-function-args": [
+        "error",
+        {
+          functions: [
+            {
+              name: "myCustomFunction",
+              arguments: [{ index: 0, notEmpty: true, minLength: 3 }],
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
 ```
 

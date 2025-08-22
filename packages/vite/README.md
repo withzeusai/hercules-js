@@ -17,25 +17,25 @@ yarn add @usehercules/vite --dev
 Add the plugin to your `vite.config.js` or `vite.config.ts`:
 
 ```typescript
-import { defineConfig } from 'vite';
-import { herculesPlugin } from '@usehercules/vite';
+import { defineConfig } from "vite";
+import { herculesPlugin } from "@usehercules/vite";
 
 export default defineConfig({
   plugins: [
     herculesPlugin({
       debug: true,
-      message: 'Custom message here!'
-    })
+      message: "Custom message here!",
+    }),
   ],
 });
 ```
 
 ## Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `debug` | `boolean` | `false` | Enable debug logging to console |
-| `message` | `string` | `'Hercules plugin is running!'` | Custom message to display during build |
+| Option    | Type      | Default                         | Description                            |
+| --------- | --------- | ------------------------------- | -------------------------------------- |
+| `debug`   | `boolean` | `false`                         | Enable debug logging to console        |
+| `message` | `string`  | `'Hercules plugin is running!'` | Custom message to display during build |
 
 ## Features
 
@@ -56,6 +56,7 @@ GET /hercules-status
 ```
 
 Returns:
+
 ```json
 {
   "status": "active",
@@ -85,4 +86,4 @@ pnpm run dev
 
 ## License
 
-MIT 
+MIT

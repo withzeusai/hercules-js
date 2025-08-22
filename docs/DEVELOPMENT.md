@@ -6,7 +6,7 @@ This document contains information for maintainers and contributors working on t
 
 ### Prerequisites
 
-- Node.js 20+ 
+- Node.js 20+
 - pnpm 10.13.1+
 
 ### Getting Started
@@ -28,6 +28,7 @@ pnpm test
 ### Project Structure
 
 This project uses:
+
 - **pnpm workspaces** for monorepo management
 - **Turbo** for build orchestration and caching
 - **TypeScript** for type safety
@@ -54,6 +55,7 @@ pnpm release
 ```
 
 This script will:
+
 - Check that your working directory is clean
 - Prompt for the new version number
 - Update all package.json files
@@ -145,6 +147,6 @@ Use the debug options in the Vite plugin for development:
 ```javascript
 herculesPlugin({
   debug: true,
-  message: 'Debug message here'
-})
-``` 
+  message: "Debug message here",
+});
+```
