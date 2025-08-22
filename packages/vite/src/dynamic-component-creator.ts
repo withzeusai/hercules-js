@@ -27,38 +27,42 @@ export function dynamicComponentCreatorPlugin(
 
   return {
     name: "vite-plugin-hercules-dynamic-component-creator",
-    resolveId: async (source, importer, _options) => {
-      // Only handle relative imports and specific extensions
-      if (!source.startsWith("./") && !source.startsWith("../")) return null;
-      if (!source.endsWith(".tsx")) return null;
+    enforce: "pre",
+    resolveId: {
+      order: "pre",
+      handler: async (source, importer, _options) => {
+        // Only handle relative imports and specific extensions
+        if (!source.startsWith("./") && !source.startsWith("../")) return null;
+        if (!source.endsWith(".tsx")) return null;
 
-      if (importer) {
-        const resolvedPath = path.resolve(path.dirname(importer), source);
+        if (importer) {
+          const resolvedPath = path.resolve(path.dirname(importer), source);
 
-        // Helper function to check if file exists
-        const exists = async (filePath: string): Promise<boolean> => {
-          try {
-            await access(filePath);
-            return true;
-          } catch {
-            return false;
-          }
-        };
+          // Helper function to check if file exists
+          const exists = async (filePath: string): Promise<boolean> => {
+            try {
+              await access(filePath);
+              return true;
+            } catch {
+              return false;
+            }
+          };
 
-        if (!(await exists(resolvedPath))) {
-          await writeFile(
-            resolvedPath,
-            'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <></>;\n\nexport default Component;',
-          );
-          if (debug) {
-            console.log(
-              `[Dynamic Component Creator] Created component file: ${resolvedPath}`,
+          if (!(await exists(resolvedPath))) {
+            await writeFile(
+              resolvedPath,
+              'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <></>;\n\nexport default Component;',
             );
+            if (debug) {
+              console.log(
+                `[Dynamic Component Creator] Created component file: ${resolvedPath}`,
+              );
+            }
           }
         }
-      }
 
-      return null;
+        return null;
+      },
     },
   };
 }

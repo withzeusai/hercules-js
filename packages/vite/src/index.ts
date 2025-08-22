@@ -76,6 +76,19 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 
   const plugins: Plugin[] = [];
 
+  // Dynamic component creator plugin (only when on Hercules dev machine or forced)
+  if (
+    dynamicComponentCreator.enabled &&
+    (process.env.HERCULES_DEV_MACHINE || dynamicComponentCreator.force)
+  ) {
+    plugins.push(
+      dynamicComponentCreatorPlugin({
+        debug,
+        ...dynamicComponentCreator,
+      }),
+    );
+  }
+
   // Add badge plugin if enabled
   if (
     badge.enabled &&
@@ -110,19 +123,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
         debug,
         dataAttribute: "data-hercules-id",
         ...visualEditor,
-      }),
-    );
-  }
-
-  // Dynamic component creator plugin (only when on Hercules dev machine or forced)
-  if (
-    dynamicComponentCreator.enabled &&
-    (process.env.HERCULES_DEV_MACHINE || dynamicComponentCreator.force)
-  ) {
-    plugins.push(
-      dynamicComponentCreatorPlugin({
-        debug,
-        ...dynamicComponentCreator,
       }),
     );
   }
