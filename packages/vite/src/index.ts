@@ -1,8 +1,15 @@
 import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
-import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
+import {
+  componentTaggerPlugin,
+  type ComponentTaggerOptions,
+} from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
 import { badgePlugin, type BadgePluginOptions } from "./badge";
+import {
+  dynamicComponentCreatorPlugin,
+  type DynamicComponentCreatorOptions,
+} from "./dynamic-component-creator";
 
 export interface HerculesPluginOptions {
   /**
@@ -36,6 +43,14 @@ export interface HerculesPluginOptions {
   visualEditor?: VisualEditorOptions & { enabled?: boolean };
 
   /**
+   * Dynamic component creator options
+   * Note: Only active when HERCULES_DEV_MACHINE environment variable is set,
+   * unless 'force' option is true
+   * @default { enabled: true }
+   */
+  dynamicComponentCreator?: DynamicComponentCreatorOptions & { enabled?: boolean };
+
+  /**
    * Badge options for displaying "Made with Hercules"
    * @default { enabled: true }
    */
@@ -53,7 +68,8 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     handleViteErrors = true,
     componentTagger = { enabled: true },
     visualEditor = { enabled: true },
-    badge = { enabled: true }
+    dynamicComponentCreator = { enabled: true },
+    badge = { enabled: true },
   } = options;
 
   const plugins: Plugin[] = [];
@@ -67,7 +83,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     plugins.push(
       badgePlugin({
         debug,
-        ...badge
+        ...badge,
       })
     );
   }
@@ -77,8 +93,10 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     plugins.push(
       componentTaggerPlugin({
         debug,
-        dataAttribute: visualEditor.enabled ? "data-hercules-id" : "data-component-id",
-        ...componentTagger
+        dataAttribute: visualEditor.enabled
+          ? "data-hercules-id"
+          : "data-component-id",
+        ...componentTagger,
       })
     );
   }
@@ -89,7 +107,20 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       visualEditorPlugin({
         debug,
         dataAttribute: "data-hercules-id",
-        ...visualEditor
+        ...visualEditor,
+      })
+    );
+  }
+
+  // Dynamic component creator plugin (only when on Hercules dev machine or forced)
+  if (
+    dynamicComponentCreator.enabled &&
+    (process.env.HERCULES_DEV_MACHINE || dynamicComponentCreator.force)
+  ) {
+    plugins.push(
+      dynamicComponentCreatorPlugin({
+        debug,
+        ...dynamicComponentCreator,
       })
     );
   }
@@ -127,7 +158,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             JSON.stringify({
               status: "active",
               plugin: "hercules",
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
             })
           );
         } else {
@@ -165,7 +196,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             message: error.message,
             stack: error.stack,
             id: id,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
         }
         throw error;
@@ -182,7 +213,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             message: error.message,
             stack: error.stack,
             id: id,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
         }
         throw error;
@@ -199,7 +230,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             message: error.message,
             stack: error.stack,
             file: ctx.file,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
         }
         throw error;
@@ -208,7 +239,11 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 
     generateBundle(_options, bundle) {
       if (debug) {
-        console.log("[Hercules Plugin] Bundle generated with", Object.keys(bundle).length, "files");
+        console.log(
+          "[Hercules Plugin] Bundle generated with",
+          Object.keys(bundle).length,
+          "files"
+        );
       }
     },
 
@@ -223,19 +258,20 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             stack: error.stack,
             id: id,
             importer: importer,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
         }
         throw error;
       }
-    }
+    },
   });
 
   return plugins;
 }
 
-// Re-export badge plugin for standalone use
+// Re-export plugins for standalone use
 export { badgePlugin, type BadgePluginOptions } from "./badge";
+export { dynamicComponentCreatorPlugin, type DynamicComponentCreatorOptions } from "./dynamic-component-creator";
 
 // Default export for convenience
 export default hercules;
