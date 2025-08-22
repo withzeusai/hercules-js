@@ -37,7 +37,6 @@ export function dynamicComponentCreatorPlugin(
     enforce: "pre",
     configResolved(config) {
       projectRoot = config.root;
-      console.log("configResolved", projectRoot);
     },
     resolveId: {
       order: "pre",
@@ -87,7 +86,7 @@ export function dynamicComponentCreatorPlugin(
 
             await writeFile(
               resolvedPath,
-              'import React from "react";\n\nconst Component: React.FC = (_props: unknown) => <div></div>;\n\nexport default Component;',
+              'import React from "react";\n\nexport default function Component(_props: unknown) {\n  return <div>loading</div>;\n}\n',
             );
             if (debug) {
               const importType = source.startsWith("@/")
