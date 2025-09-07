@@ -42,12 +42,6 @@ export interface BadgePluginOptions {
    * @default 9999
    */
   zIndex?: number;
-
-  /**
-   * Whether to show the badge in production
-   * @default false
-   */
-  showInProduction?: boolean;
 }
 
 /**
@@ -62,16 +56,7 @@ export function badgePlugin(options: BadgePluginOptions = {}): Plugin {
     backgroundColor = "#1a1a1a",
     textColor = "#ffffff",
     zIndex = 9999,
-    showInProduction = false,
   } = options;
-
-  // Skip in production unless explicitly enabled
-  if (process.env.NODE_ENV === "production" && !showInProduction) {
-    return {
-      name: "vite-plugin-hercules-badge",
-      apply: () => false,
-    };
-  }
 
   return {
     name: "vite-plugin-hercules-badge",
