@@ -1,6 +1,6 @@
 import type { Plugin } from "vite";
 
-export interface BadgePluginOptions {
+export interface BannerPluginOptions {
   /**
    * Enable debug logging
    * @default false
@@ -8,72 +8,74 @@ export interface BadgePluginOptions {
   debug?: boolean;
 
   /**
-   * Text to display in the badge
-   * @default "Made with Hercules"
+   * Text to display in the banner
+   * @default "Powered by Hercules"
    */
   text?: string;
 
   /**
-   * CSS position from bottom in pixels
-   * @default 20
+   * CSS position from top in pixels
+   * @default 0
    */
-  bottom?: number;
+  top?: number;
 
   /**
-   * CSS position from right in pixels
-   * @default 20
-   */
-  right?: number;
-
-  /**
-   * Background color of the badge
+   * Background color of the banner
    * @default "#1a1a1a"
    */
   backgroundColor?: string;
 
   /**
-   * Text color of the badge
+   * Text color of the banner
    * @default "#ffffff"
    */
   textColor?: string;
 
   /**
-   * Z-index of the badge
+   * Z-index of the banner
    * @default 9999
    */
   zIndex?: number;
+
+  /**
+   * Height of the banner in pixels
+   * @default 44
+   */
+  height?: number;
 }
 
 /**
- * Creates a badge plugin that injects a "Made with Hercules" badge
+ * Creates a banner plugin that injects a "Powered by Hercules" banner
  */
-export function badgePlugin(options: BadgePluginOptions = {}): Plugin {
+export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
   const {
     debug = false,
-    text = "Made with Hercules",
-    bottom = 20,
-    right = 20,
+    text = "Powered by Hercules",
+    top = 0,
     backgroundColor = "#1a1a1a",
     textColor = "#ffffff",
     zIndex = 9999,
+    height = 44,
   } = options;
 
   return {
-    name: "vite-plugin-hercules-badge",
+    name: "vite-plugin-hercules-banner",
 
     transformIndexHtml(html) {
       if (debug) {
-        console.log("[Hercules Badge] Injecting badge into HTML");
+        console.log("[Hercules Banner] Injecting banner into HTML");
       }
 
-      // Create the badge HTML with inline styles
-      const badgeHtml = `
-        <a href="https://hercules.app" target="_blank" rel="noopener noreferrer" id="hercules-badge" style="
+      // Create the banner HTML with inline styles
+      const bannerHtml = `
+        <a href="https://hercules.app" target="_blank" rel="noopener noreferrer" id="hercules-banner" style="
           position: fixed;
-          bottom: ${bottom}px;
-          right: ${right}px;
-          padding: 6px 12px;
-          border-radius: 6px;
+          top: ${top}px;
+          left: 0;
+          right: 0;
+          width: 100%;
+          height: ${height}px;
+          padding: 0 16px;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
           font-size: 13px;
           font-weight: 500;
@@ -82,15 +84,16 @@ export function badgePlugin(options: BadgePluginOptions = {}): Plugin {
           user-select: none;
           display: flex;
           align-items: center;
-          gap: 6px;
-          transition: transform 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+          justify-content: center;
+          gap: 8px;
+          transition: background-color 0.2s ease, box-shadow 0.2s ease;
           text-decoration: none;
           cursor: pointer;
           background-color: ${backgroundColor};
           color: ${textColor};
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
         ">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg" style="flex-shrink: 0;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg" style="flex-shrink: 0;">
             <path d="m7.99 0-7.01 9.38 6.02-.42-4.96 7.04 12.96-10-7.01.47 7.01-6.47z"></path>
           </svg>
           <span>${text}</span>
@@ -98,70 +101,75 @@ export function badgePlugin(options: BadgePluginOptions = {}): Plugin {
         <style>
           /* Light mode styles */
           @media (prefers-color-scheme: light) {
-            #hercules-badge {
+            #hercules-banner {
               background-color: #ffffff !important;
               color: #1a1a1a !important;
-              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), 0 1px 0 rgba(0, 0, 0, 0.08) !important;
             }
             
-            #hercules-badge:hover {
-              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
+            #hercules-banner:hover {
+              background-color: #f8f9fa !important;
+              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 1px 0 rgba(0, 0, 0, 0.1) !important;
             }
           }
           
           /* Dark mode styles */
           @media (prefers-color-scheme: dark) {
-            #hercules-badge {
+            #hercules-banner {
               background-color: #1a1a1a !important;
               color: #ffffff !important;
-              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 0 rgba(255, 255, 255, 0.1) !important;
             }
             
-            #hercules-badge:hover {
-              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15) !important;
+            #hercules-banner:hover {
+              background-color: #2a2a2a !important;
+              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 255, 255, 0.15) !important;
             }
           }
           
-          #hercules-badge:hover {
-            transform: translateY(-2px);
+          #hercules-banner:hover {
+            background-color: rgba(255, 255, 255, 0.05);
           }
           
-          #hercules-badge:active {
-            transform: translateY(0);
+          #hercules-banner:active {
+            background-color: rgba(255, 255, 255, 0.1);
           }
           
           @media (max-width: 640px) {
-            #hercules-badge {
+            #hercules-banner {
               font-size: 12px;
-              padding: 5px 10px;
-              gap: 5px;
-              bottom: ${Math.max(10, bottom - 10)}px;
-              right: ${Math.max(10, right - 10)}px;
+              height: ${Math.max(32, height - 8)}px;
+              gap: 6px;
+              padding: 0 12px;
             }
             
-            #hercules-badge svg {
-              width: 12px;
-              height: 12px;
+            #hercules-banner svg {
+              width: 14px;
+              height: 14px;
             }
           }
           
           @media print {
-            #hercules-badge {
+            #hercules-banner {
               display: none !important;
             }
           }
         </style>
       `;
 
-      // Inject the badge before the closing body tag
+      // Inject the banner before the closing body tag
       if (html.includes("</body>")) {
-        return html.replace("</body>", `${badgeHtml}\n</body>`);
+        return html.replace("</body>", `${bannerHtml}\n</body>`);
       } else {
         // Fallback: append to end of html if no body tag
-        return html.replace("</html>", `${badgeHtml}\n</html>`);
+        return html.replace("</html>", `${bannerHtml}\n</html>`);
       }
     },
   };
 }
 
-export default badgePlugin;
+// Legacy export for backward compatibility
+export const badgePlugin = bannerPlugin;
+export type BadgePluginOptions = BannerPluginOptions;
+
+export default bannerPlugin;

@@ -5,7 +5,10 @@ import {
   type ComponentTaggerOptions,
 } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
-import { badgePlugin, type BadgePluginOptions } from "./badge";
+import { bannerPlugin, type BannerPluginOptions } from "./badge";
+
+// For backward compatibility
+type BadgePluginOptions = BannerPluginOptions;
 import {
   dynamicComponentCreatorPlugin,
   type DynamicComponentCreatorOptions,
@@ -53,6 +56,13 @@ export interface HerculesPluginOptions {
   };
 
   /**
+   * Banner options for displaying "Powered by Hercules"
+   * @default { enabled: true }
+   */
+  banner?: BannerPluginOptions & { enabled?: boolean };
+
+  /**
+   * @deprecated Use banner instead
    * Badge options for displaying "Made with Hercules"
    * @default { enabled: true }
    */
@@ -71,7 +81,8 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     componentTagger = { enabled: true },
     visualEditor = { enabled: true },
     dynamicComponentCreator = { enabled: true },
-    badge = { enabled: true },
+    banner = { enabled: true },
+    badge = { enabled: true }, // backward compatibility
   } = options;
 
   const plugins: Plugin[] = [];
@@ -89,16 +100,17 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     );
   }
 
-  // Add badge plugin if enabled
+  // Add banner plugin if enabled (prefer banner over badge)
+  const bannerOptions = banner.enabled ? banner : (badge.enabled ? badge : { enabled: false });
   if (
-    badge.enabled &&
+    bannerOptions.enabled &&
     process.env.NODE_ENV === "production" &&
     process.env.VITE_HERCULES_SHOW_WATERMARK === "true"
   ) {
     plugins.push(
-      badgePlugin({
+      bannerPlugin({
         debug,
-        ...badge,
+        ...bannerOptions,
       }),
     );
   }
@@ -272,7 +284,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 }
 
 // Re-export plugins for standalone use
-export { badgePlugin, type BadgePluginOptions } from "./badge";
+export { bannerPlugin, badgePlugin, type BannerPluginOptions, type BadgePluginOptions } from "./badge";
 export {
   dynamicComponentCreatorPlugin,
   type DynamicComponentCreatorOptions,
