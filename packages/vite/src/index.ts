@@ -104,7 +104,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   const bannerOptions = banner.enabled ? banner : (badge.enabled ? badge : { enabled: false });
   if (
     bannerOptions.enabled &&
-    process.env.NODE_ENV === "production" &&
     process.env.VITE_HERCULES_SHOW_WATERMARK === "true"
   ) {
     plugins.push(
