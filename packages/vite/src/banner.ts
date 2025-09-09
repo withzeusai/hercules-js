@@ -1,4 +1,4 @@
-import type { Plugin } from "vite";
+import { loadEnv, type Plugin } from "vite";
 
 export interface BannerPluginOptions {
   /**
@@ -58,10 +58,21 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
     height = 44,
   } = options;
 
+  let enabled = false;
+
   return {
     name: "vite-plugin-hercules-banner",
 
+    configEnvironment(name) {
+      const env = loadEnv(name, process.cwd());
+      enabled = env.VITE_HERCULES_SHOW_WATERMARK?.trim() === "true";
+    },
+
     transformIndexHtml(html) {
+      if (!enabled) {
+        return html;
+      }
+
       if (debug) {
         console.log("[Hercules Banner] Injecting banner into HTML");
       }
@@ -167,9 +178,5 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
     },
   };
 }
-
-// Legacy export for backward compatibility
-export const badgePlugin = bannerPlugin;
-export type BadgePluginOptions = BannerPluginOptions;
 
 export default bannerPlugin;

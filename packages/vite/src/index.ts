@@ -5,10 +5,7 @@ import {
   type ComponentTaggerOptions,
 } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
-import { bannerPlugin, type BannerPluginOptions } from "./badge";
-
-// For backward compatibility
-type BadgePluginOptions = BannerPluginOptions;
+import { bannerPlugin, type BannerPluginOptions } from "./banner";
 import {
   dynamicComponentCreatorPlugin,
   type DynamicComponentCreatorOptions,
@@ -60,13 +57,6 @@ export interface HerculesPluginOptions {
    * @default { enabled: true }
    */
   banner?: BannerPluginOptions & { enabled?: boolean };
-
-  /**
-   * @deprecated Use banner instead
-   * Badge options for displaying "Made with Hercules"
-   * @default { enabled: true }
-   */
-  badge?: BadgePluginOptions & { enabled?: boolean };
 }
 
 /**
@@ -82,7 +72,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     visualEditor = { enabled: true },
     dynamicComponentCreator = { enabled: true },
     banner = { enabled: true },
-    badge = { enabled: true }, // backward compatibility
   } = options;
 
   const plugins: Plugin[] = [];
@@ -100,16 +89,12 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     );
   }
 
-  // Add banner plugin if enabled (prefer banner over badge)
-  const bannerOptions = banner.enabled ? banner : (badge.enabled ? badge : { enabled: false });
-  if (
-    bannerOptions.enabled &&
-    process.env.VITE_HERCULES_SHOW_WATERMARK === "true"
-  ) {
+  // Add banner plugin if enabled
+  if (banner.enabled) {
     plugins.push(
       bannerPlugin({
         debug,
-        ...bannerOptions,
+        ...banner,
       }),
     );
   }
@@ -283,7 +268,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 }
 
 // Re-export plugins for standalone use
-export { bannerPlugin, badgePlugin, type BannerPluginOptions, type BadgePluginOptions } from "./badge";
 export {
   dynamicComponentCreatorPlugin,
   type DynamicComponentCreatorOptions,
