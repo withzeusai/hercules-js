@@ -63,8 +63,8 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
   return {
     name: "vite-plugin-hercules-banner",
 
-    configEnvironment(name) {
-      const env = loadEnv(name, process.cwd());
+    config(_config, { mode }) {
+      const env = loadEnv(mode, process.cwd());
       enabled = env.VITE_HERCULES_SHOW_WATERMARK?.trim() === "true";
     },
 
