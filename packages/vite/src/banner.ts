@@ -77,9 +77,45 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
         console.log("[Hercules Banner] Injecting banner into HTML");
       }
 
-      // Create the banner HTML with inline styles
+      const randomId = Math.random().toString(36).substring(2, 15);
+
+      // Create the banner HTML with inline styles and tracking script
       const bannerHtml = `
-        <a href="https://hercules.app" target="_blank" rel="noopener noreferrer" id="hercules-banner" style="
+        <script>
+          (function() {
+            // Wait for DOM to be ready
+            function initHerculesBanner() {
+              const banner = document.getElementById('${randomId}');
+              if (!banner) return;
+              
+              // Get referral information
+              const hostname = window.location.hostname || 'unknown';
+              const pathname = window.location.pathname || '/';
+              const protocol = window.location.protocol || 'https:';
+              const fullUrl = encodeURIComponent(window.location.href);
+              
+              // Build tracking URL with UTM parameters
+              const baseUrl = 'https://hercules.app';
+              const params = new URLSearchParams({
+                utm_source: hostname,
+                utm_medium: 'watermark_banner',
+                utm_campaign: 'powered_by_hercules',
+                referrer: fullUrl
+              });
+              
+              // Update the banner href with tracking parameters
+              banner.href = baseUrl + '?' + params.toString();
+            }
+            
+            // Initialize when DOM is ready
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', initHerculesBanner);
+            } else {
+              initHerculesBanner();
+            }
+          })();
+        </script>
+        <a href="https://hercules.app" target="_blank" rel="noopener noreferrer" id="${randomId}" style="
           position: fixed;
           top: ${top}px;
           left: 0;
@@ -112,13 +148,13 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
         <style>
           /* Light mode styles */
           @media (prefers-color-scheme: light) {
-            #hercules-banner {
+            #${randomId} {
               background-color: #ffffff !important;
               color: #1a1a1a !important;
               box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), 0 1px 0 rgba(0, 0, 0, 0.08) !important;
             }
             
-            #hercules-banner:hover {
+            #${randomId}:hover {
               background-color: #f8f9fa !important;
               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 1px 0 rgba(0, 0, 0, 0.1) !important;
             }
@@ -126,42 +162,42 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
           
           /* Dark mode styles */
           @media (prefers-color-scheme: dark) {
-            #hercules-banner {
+            #${randomId} {
               background-color: #1a1a1a !important;
               color: #ffffff !important;
               box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 0 rgba(255, 255, 255, 0.1) !important;
             }
             
-            #hercules-banner:hover {
+            #${randomId}:hover {
               background-color: #2a2a2a !important;
               box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255, 255, 255, 0.15) !important;
             }
           }
           
-          #hercules-banner:hover {
+          #${randomId}:hover {
             background-color: rgba(255, 255, 255, 0.05);
           }
           
-          #hercules-banner:active {
+          #${randomId}:active {
             background-color: rgba(255, 255, 255, 0.1);
           }
           
           @media (max-width: 640px) {
-            #hercules-banner {
+            #${randomId} {
               font-size: 12px;
               height: ${Math.max(32, height - 8)}px;
               gap: 6px;
               padding: 0 12px;
             }
             
-            #hercules-banner svg {
+            #${randomId} svg {
               width: 14px;
               height: 14px;
             }
           }
           
           @media print {
-            #hercules-banner {
+            #${randomId} {
               display: none !important;
             }
           }
