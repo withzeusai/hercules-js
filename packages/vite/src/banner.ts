@@ -146,6 +146,10 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
           <span>${text}</span>
         </a>
         <style>
+          /* Prevent banner from covering content by adding padding to body */
+          body {
+            padding-top: ${height + top}px !important;
+          }
           /* Light mode styles */
           @media (prefers-color-scheme: light) {
             #${randomId} {
@@ -194,11 +198,21 @@ export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
               width: 14px;
               height: 14px;
             }
+            
+            /* Update body padding for mobile banner height */
+            body {
+              padding-top: ${Math.max(32, height - 8) + top}px !important;
+            }
           }
           
           @media print {
             #${randomId} {
               display: none !important;
+            }
+            
+            /* Remove body padding when printing */
+            body {
+              padding-top: 0 !important;
             }
           }
         </style>
