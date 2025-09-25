@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/hercules-js",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Main entry point for Hercules utilities",
   "type": "module",
   "main": "dist/index.js",
