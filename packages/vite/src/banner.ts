@@ -9,7 +9,7 @@ export interface BannerPluginOptions {
 
   /**
    * Text to display in the banner
-   * @default "Powered by Hercules"
+   * @default "Built with Hercules"
    */
   text?: string;
 
@@ -45,12 +45,12 @@ export interface BannerPluginOptions {
 }
 
 /**
- * Creates a banner plugin that injects a "Powered by Hercules" banner
+ * Creates a banner plugin that injects a "Built with Hercules" banner
  */
 export function bannerPlugin(options: BannerPluginOptions = {}): Plugin {
   const {
     debug = false,
-    text = "Powered by Hercules",
+    text = "Built with Hercules",
     top = 0,
     backgroundColor = "#1a1a1a",
     textColor = "#ffffff",

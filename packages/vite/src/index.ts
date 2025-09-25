@@ -53,7 +53,7 @@ export interface HerculesPluginOptions {
   };
 
   /**
-   * Banner options for displaying "Powered by Hercules"
+   * Banner options for displaying "Built with Hercules"
    * @default { enabled: true }
    */
   banner?: BannerPluginOptions & { enabled?: boolean };
