@@ -1,0 +1,39 @@
+{
+  "name": "@usehercules/analytics",
+  "version": "2.0.0",
+  "description": "Analytics utilities for Hercules applications with ULID-based ID generation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/analytics"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsup.config.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "exit 0"
+  },
+  "dependencies": {
+    "bowser": "^2.12.1",
+    "ulid": "^2.3.0",
+    "web-vitals": "^5.1.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  }
+}
