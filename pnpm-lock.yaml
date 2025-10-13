@@ -43,15 +43,6 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
-  packages/database:
-    devDependencies:
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.0(postcss@8.5.6)(typescript@5.8.3)
-      typescript:
-        specifier: ^5.8.3
-        version: 5.8.3
-
   packages/eslint-plugin-hercules:
     dependencies:
       '@typescript-eslint/scope-manager':
@@ -94,9 +85,6 @@ importers:
       '@usehercules/auth':
         specifier: workspace:*
         version: link:../auth
-      '@usehercules/database':
-        specifier: workspace:*
-        version: link:../database
       react:
         specifier: '>=16.14.0'
         version: 19.1.1

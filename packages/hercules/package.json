@@ -27,8 +27,7 @@
     "test": "exit 0"
   },
   "dependencies": {
-    "@usehercules/auth": "workspace:*",
-    "@usehercules/database": "workspace:*"
+    "@usehercules/auth": "workspace:*"
   },
   "peerDependencies": {
     "react": ">=16.14.0"
