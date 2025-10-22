@@ -1,16 +1,24 @@
 {
-  "name": "@usehercules/auth",
+  "name": "@usehercules/pay",
   "version": "1.0.18",
-  "description": "Authentication utilities for Hercules applications using OIDC",
+  "description": "Payment utilities for Hercules applications",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "exports": {
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./convex": {
+      "types": "./dist/convex/index.d.ts",
+      "import": "./dist/convex/index.js"
+    }
+  },
   "author": "Hercules Team",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/withzeusai/hercules-js.git",
-    "directory": "packages/auth"
+    "directory": "packages/pay"
   },
   "files": [
     "dist",
@@ -27,13 +35,15 @@
     "test": "exit 0"
   },
   "dependencies": {
-    "oidc-client-ts": "^3.3.0",
-    "react-oidc-context": "^3.3.0"
+    "@useautumn/convex": "^0.0.12",
+    "autumn-js": "^0.1.40",
+    "convex": "^1.28.0"
   },
   "peerDependencies": {
     "react": ">=16.14.0"
   },
   "devDependencies": {
+    "@types/node": "^24.9.1",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3"
   }
