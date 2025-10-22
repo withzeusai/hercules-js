@@ -1,5 +1,9 @@
 packages:
   - packages/*
 
+minimumReleaseAge: 2880 # 2 day
+# minimumReleaseAgeExclude:
+#   - excluded package name
+
 onlyBuiltDependencies:
   - esbuild
