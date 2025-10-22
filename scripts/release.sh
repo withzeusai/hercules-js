@@ -97,9 +97,11 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     print_status "Pushing to GitHub..."
     git push origin main
     git push origin "v$NEW_VERSION"
+    print_status "Pushed to GitHub"
     
-    print_success "Release pushed! Check GitHub Actions for publishing status."
-    print_status "GitHub Actions: https://github.com/withzeusai/hercules-js/actions"
+    print_status "Running publish workflow..."
+    gh workflow run publish.yml --ref main
+    print_status "Published to NPM"
 else
     print_warning "Release not pushed. To push later, run:"
     echo "  git push origin main"
