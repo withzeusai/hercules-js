@@ -4,6 +4,10 @@
   "description": "Payment utilities for Hercules applications",
   "type": "module",
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./react": {
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js"
@@ -35,6 +39,7 @@
     "test": "exit 0"
   },
   "dependencies": {
+    "@types/react": "^19.2.2",
     "@useautumn/convex": "^0.0.12",
     "autumn-js": "^0.1.40",
     "convex": "^1.28.0"
