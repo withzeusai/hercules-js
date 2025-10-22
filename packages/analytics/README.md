@@ -246,3 +246,4 @@ The library gracefully handles missing features in older browsers.
 
 MIT
 
+
