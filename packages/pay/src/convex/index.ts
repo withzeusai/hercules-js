@@ -35,7 +35,7 @@ export class HerculesPay {
   constructor(
     public options: {
       identify: any;
-      secretKey: string;
+      secretKey?: string;
       url?: string;
     },
   ) {}
@@ -48,11 +48,19 @@ export class HerculesPay {
     requireAuth?: boolean;
   }) {
     const identifierOpts = await this.getIdentifierOpts(ctx);
+    const secretKey =
+      this.options.secretKey ||
+      process.env.HERCULES_PAY_SECRET_KEY ||
+      process.env.AUTUMN_SECRET_KEY;
+
+    if (secretKey == null) {
+      throw new Error(
+        "No secret key found. Please set the HERCULES_PAY_SECRET_KEY environment variable.",
+      );
+    }
+
     const autumn = new AutumnSDK({
-      secretKey:
-        this.options.secretKey ||
-        process.env.HERCULES_PAY_SECRET_KEY ||
-        process.env.AUTUMN_SECRET_KEY,
+      secretKey,
     });
 
     if (requireAuth) {
