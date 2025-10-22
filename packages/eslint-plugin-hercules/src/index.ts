@@ -48,7 +48,7 @@ const recommendedConfig: Linter.Config = {
 };
 
 // Export configurations
-export const configs = {
+export const configs: Record<string, Linter.Config> = {
   recommended: recommendedConfig,
 };
 

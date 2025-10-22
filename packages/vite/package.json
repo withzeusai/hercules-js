@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/vite",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "Vite plugin for Hercules applications",
   "type": "module",
   "main": "dist/index.js",
