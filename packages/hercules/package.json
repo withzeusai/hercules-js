@@ -26,12 +26,6 @@
     "dev": "tsup --watch",
     "test": "exit 0"
   },
-  "dependencies": {
-    "@usehercules/auth": "workspace:*"
-  },
-  "peerDependencies": {
-    "react": ">=16.14.0"
-  },
   "devDependencies": {
     "tsup": "^8.5.0",
     "typescript": "^5.9.3"
