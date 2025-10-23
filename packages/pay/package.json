@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/pay",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "Payment utilities for Hercules applications",
   "type": "module",
   "exports": {
