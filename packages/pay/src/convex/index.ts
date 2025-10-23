@@ -1,4 +1,8 @@
-import { actionGeneric } from "convex/server";
+import {
+  actionGeneric,
+  type GenericActionCtx,
+  type GenericDataModel,
+} from "convex/server";
 import { v } from "convex/values";
 import {
   type TrackArgsType,
@@ -27,14 +31,19 @@ import {
   type CreateEntityArgsType,
   type CreateReferralCodeArgsType,
   type RedeemReferralCodeArgsType,
+  type IdentifierOptsType,
+  type CancelArgsType,
+  type QueryArgsType,
+  type SetupPaymentArgsType,
+  type UsageArgsType,
 } from "./types";
 import * as autumnHelpers from "./helpers";
 import { Autumn as AutumnSDK } from "autumn-js";
 
-export class HerculesPay {
+export class HerculesPay<T extends GenericDataModel> {
   constructor(
     public options: {
-      identify: any;
+      identify: (ctx: GenericActionCtx<T>) => Promise<IdentifierOptsType>;
       secretKey?: string;
       url?: string;
     },
@@ -44,7 +53,7 @@ export class HerculesPay {
     ctx,
     requireAuth = true,
   }: {
-    ctx: any;
+    ctx: GenericActionCtx<T>;
     requireAuth?: boolean;
   }) {
     const identifierOpts = await this.getIdentifierOpts(ctx);
@@ -75,7 +84,7 @@ export class HerculesPay {
     };
   }
 
-  async track(ctx: any, args: TrackArgsType) {
+  async track(ctx: GenericActionCtx<T>, args: TrackArgsType) {
     const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
     return await autumnHelpers.track({
       autumn,
@@ -84,7 +93,7 @@ export class HerculesPay {
     });
   }
 
-  async check(ctx: any, args: CheckArgsType) {
+  async check(ctx: GenericActionCtx<T>, args: CheckArgsType) {
     const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
     return await autumnHelpers.check({
       autumn,
@@ -93,7 +102,7 @@ export class HerculesPay {
     });
   }
 
-  async attach(ctx: any, args: AttachArgsType) {
+  async attach(ctx: GenericActionCtx<T>, args: AttachArgsType) {
     const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
     return await autumnHelpers.attach({
       autumn,
@@ -102,7 +111,7 @@ export class HerculesPay {
     });
   }
 
-  async checkout(ctx: any, args: CheckoutArgsType) {
+  async checkout(ctx: GenericActionCtx<T>, args: CheckoutArgsType) {
     const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
     return await autumnHelpers.checkout({
       autumn,
@@ -112,7 +121,7 @@ export class HerculesPay {
   }
 
   customers = {
-    get: async (ctx: any, args?: GetCustomerArgsType) => {
+    get: async (ctx: GenericActionCtx<T>, args?: GetCustomerArgsType) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.customers.get({
         autumn,
@@ -121,7 +130,7 @@ export class HerculesPay {
       });
     },
 
-    update: async (ctx: any, args: UpdateCustomerArgsType) => {
+    update: async (ctx: GenericActionCtx<T>, args: UpdateCustomerArgsType) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.customers.update({
         autumn,
@@ -129,14 +138,14 @@ export class HerculesPay {
         args,
       });
     },
-    delete: async (ctx: any) => {
+    delete: async (ctx: GenericActionCtx<T>) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.customers.discard({
         autumn,
         identifierOpts,
       });
     },
-    create: async (ctx: any, args: CreateCustomerArgsType) => {
+    create: async (ctx: GenericActionCtx<T>, args: CreateCustomerArgsType) => {
       const { autumn } = await this.getAuthParams({
         ctx,
       });
@@ -147,7 +156,10 @@ export class HerculesPay {
       });
     },
 
-    billingPortal: async (ctx: any, args: BillingPortalArgsType) => {
+    billingPortal: async (
+      ctx: GenericActionCtx<T>,
+      args: BillingPortalArgsType,
+    ) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.customers.billingPortal({
         autumn,
@@ -159,7 +171,7 @@ export class HerculesPay {
 
   entities = {
     get: async (
-      ctx: any,
+      ctx: GenericActionCtx<T>,
       entityId: string,
       args?: Omit<GetEntityArgsType, "entityId">,
     ) => {
@@ -171,7 +183,7 @@ export class HerculesPay {
       });
     },
 
-    create: async (ctx: any, args: CreateEntityArgsType) => {
+    create: async (ctx: GenericActionCtx<T>, args: CreateEntityArgsType) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.entities.create({
         autumn,
@@ -180,7 +192,7 @@ export class HerculesPay {
       });
     },
 
-    delete: async (ctx: any, entityId: string) => {
+    delete: async (ctx: GenericActionCtx<T>, entityId: string) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.entities.discard({
         autumn,
@@ -191,14 +203,14 @@ export class HerculesPay {
   };
 
   products = {
-    get: async (ctx: any, productId: string) => {
+    get: async (ctx: GenericActionCtx<T>, productId: string) => {
       const { autumn } = await this.getAuthParams({ ctx, requireAuth: false });
       return await autumnHelpers.products.get({
         autumn,
         productId,
       });
     },
-    list: async (ctx: any) => {
+    list: async (ctx: GenericActionCtx<T>) => {
       const { autumn, identifierOpts } = await this.getAuthParams({
         ctx,
         requireAuth: false,
@@ -212,7 +224,10 @@ export class HerculesPay {
   };
 
   referrals = {
-    createCode: async (ctx: any, args: CreateReferralCodeArgsType) => {
+    createCode: async (
+      ctx: GenericActionCtx<T>,
+      args: CreateReferralCodeArgsType,
+    ) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.referrals.createCode({
         autumn,
@@ -220,7 +235,10 @@ export class HerculesPay {
         args,
       });
     },
-    redeemCode: async (ctx: any, args: RedeemReferralCodeArgsType) => {
+    redeemCode: async (
+      ctx: GenericActionCtx<T>,
+      args: RedeemReferralCodeArgsType,
+    ) => {
       const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
       return await autumnHelpers.referrals.redeemCode({
         autumn,
@@ -240,7 +258,7 @@ export class HerculesPay {
       // Core tracking and checking methods
       track: actionGeneric({
         args: TrackArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: TrackArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.track({
@@ -253,7 +271,7 @@ export class HerculesPay {
 
       check: actionGeneric({
         args: CheckArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: CheckArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.check({
@@ -267,7 +285,7 @@ export class HerculesPay {
       // Product attachment and checkout
       attach: actionGeneric({
         args: AttachArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: AttachArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.attach({
@@ -280,7 +298,7 @@ export class HerculesPay {
 
       checkout: actionGeneric({
         args: CheckoutArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: CheckoutArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.checkout({
@@ -296,7 +314,10 @@ export class HerculesPay {
           expand: ExpandArgs,
           errorOnNotFound: v.optional(v.boolean()),
         }),
-        handler: async (ctx, args) => {
+        handler: async (
+          ctx: GenericActionCtx<T>,
+          args: CreateCustomerArgsType,
+        ) => {
           const { autumn, identifierOpts } = await this.getAuthParams({
             ctx,
             requireAuth: args.errorOnNotFound === false ? false : true,
@@ -320,7 +341,7 @@ export class HerculesPay {
 
       listProducts: actionGeneric({
         args: {},
-        handler: async (ctx) => {
+        handler: async (ctx: GenericActionCtx<T>) => {
           const { autumn, identifierOpts } = await this.getAuthParams({
             ctx,
             requireAuth: false,
@@ -338,7 +359,7 @@ export class HerculesPay {
       // Additional general methods
       usage: actionGeneric({
         args: UsageArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: UsageArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.usage({
@@ -351,7 +372,7 @@ export class HerculesPay {
 
       query: actionGeneric({
         args: QueryArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: QueryArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.autumnQuery({
@@ -364,7 +385,7 @@ export class HerculesPay {
 
       cancel: actionGeneric({
         args: CancelArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: CancelArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.cancel({
@@ -377,7 +398,10 @@ export class HerculesPay {
 
       setupPayment: actionGeneric({
         args: SetupPaymentArgs,
-        handler: async (ctx, args) => {
+        handler: async (
+          ctx: GenericActionCtx<T>,
+          args: SetupPaymentArgsType,
+        ) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.setupPayment({
@@ -390,7 +414,10 @@ export class HerculesPay {
 
       billingPortal: actionGeneric({
         args: BillingPortalArgs,
-        handler: async (ctx, args) => {
+        handler: async (
+          ctx: GenericActionCtx<T>,
+          args: BillingPortalArgsType,
+        ) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
 
           return await autumnHelpers.customers.billingPortal({
@@ -403,7 +430,10 @@ export class HerculesPay {
 
       createReferralCode: actionGeneric({
         args: CreateReferralCodeArgs,
-        handler: async (ctx, args) => {
+        handler: async (
+          ctx: GenericActionCtx<T>,
+          args: CreateReferralCodeArgsType,
+        ) => {
           const { autumn, identifierOpts } = await this.getAuthParams({
             ctx,
           });
@@ -417,7 +447,10 @@ export class HerculesPay {
 
       redeemReferralCode: actionGeneric({
         args: RedeemReferralCodeArgs,
-        handler: async (ctx, args) => {
+        handler: async (
+          ctx: GenericActionCtx<T>,
+          args: RedeemReferralCodeArgsType,
+        ) => {
           const { autumn, identifierOpts } = await this.getAuthParams({
             ctx,
           });
@@ -431,7 +464,10 @@ export class HerculesPay {
 
       createEntity: actionGeneric({
         args: CreateEntityArgs,
-        handler: async (ctx, args) => {
+        handler: async (
+          ctx: GenericActionCtx<T>,
+          args: CreateEntityArgsType,
+        ) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
           return await autumnHelpers.entities.create({
             autumn,
@@ -443,7 +479,7 @@ export class HerculesPay {
 
       getEntity: actionGeneric({
         args: GetEntityArgs,
-        handler: async (ctx, args) => {
+        handler: async (ctx: GenericActionCtx<T>, args: GetEntityArgsType) => {
           const { autumn, identifierOpts } = await this.getAuthParams({ ctx });
           return await autumnHelpers.entities.get({
             autumn,
@@ -455,9 +491,8 @@ export class HerculesPay {
     };
   }
 
-  async getIdentifierOpts(ctx: any) {
+  async getIdentifierOpts(ctx: GenericActionCtx<T>) {
     const identifierOpts = await this.options.identify(ctx);
-
     return identifierOpts;
   }
 }
