@@ -22,27 +22,14 @@ const DEFAULT_AUTH_CONFIG: Partial<AuthProviderProps> = {
   onSignoutCallback,
 };
 
+export type HerculesAuthProviderProps = AuthProviderProps;
+
 /**
  * A wrapper React component which provides a {@link ReactAuthProvider}
  * configured with Hercules Auth.
  *
  * @public
  */
-export function HerculesAuthProvider({
-  children,
-  config,
-}: {
-  children: React.ReactNode;
-  config: AuthProviderProps;
-}) {
-  return (
-    <ReactAuthProvider
-      {...DEFAULT_AUTH_CONFIG}
-      onSigninCallback={onSigninCallback}
-      onSignoutCallback={onSignoutCallback}
-      {...config}
-    >
-      {children}
-    </ReactAuthProvider>
-  );
+export function HerculesAuthProvider(props: HerculesAuthProviderProps) {
+  return <ReactAuthProvider {...DEFAULT_AUTH_CONFIG} {...props} />;
 }
