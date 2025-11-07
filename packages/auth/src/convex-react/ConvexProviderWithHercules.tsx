@@ -47,8 +47,8 @@ function useUseAuthFromHercules() {
   );
   return useMemo(
     () => ({
-      isLoading: !isLoading,
-      isAuthenticated: isAuthenticated ?? false,
+      isLoading,
+      isAuthenticated,
       fetchAccessToken,
     }),
     [isLoading, isAuthenticated, fetchAccessToken],
