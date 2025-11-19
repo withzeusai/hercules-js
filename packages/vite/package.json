@@ -38,17 +38,17 @@
     "vite": "^7.0.0"
   },
   "devDependencies": {
-    "@types/node": "^24.9.1",
-    "tsup": "^8.5.0",
+    "@types/node": "^24.10.1",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3",
-    "vite": "^7.1.11"
+    "vite": "^7.2.2"
   },
   "dependencies": {
-    "@babel/generator": "^7.28.3",
-    "@babel/parser": "^7.28.4",
-    "@babel/traverse": "^7.28.4",
-    "@babel/types": "^7.28.4",
+    "@babel/generator": "^7.28.5",
+    "@babel/parser": "^7.28.5",
+    "@babel/traverse": "^7.28.5",
+    "@babel/types": "^7.28.5",
     "estree-walker": "^3.0.3",
-    "magic-string": "^0.30.19"
+    "magic-string": "^0.30.21"
   }
 }

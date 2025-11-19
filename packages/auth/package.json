@@ -35,19 +35,19 @@
     "test": "exit 0"
   },
   "dependencies": {
-    "convex": "^1.28.0",
-    "oidc-client-ts": "^3.3.0",
+    "convex": "^1.29.2",
+    "oidc-client-ts": "^3.4.1",
     "react-oidc-context": "^3.3.0"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
-    "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "tsup": "^8.5.0",
+    "@types/react": "^18.3.26",
+    "@types/react-dom": "^18.3.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   }
 }
