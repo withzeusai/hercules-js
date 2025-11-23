@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useState } from "react";
 import {
-  hasAuthParams,
   AuthProvider as ReactAuthProvider,
-  useAuth,
   type AuthProviderProps,
+  type AuthProviderUserManagerProps,
 } from "react-oidc-context";
-import { WebStorageStateStore } from "oidc-client-ts";
+import {
+  UserManager,
+  WebStorageStateStore,
+  type UserManagerSettings,
+} from "oidc-client-ts";
 
 function onSigninCallback() {
   window.history.replaceState({}, document.title, window.location.pathname);
@@ -18,38 +21,13 @@ function onSignoutCallback() {
 }
 
 const DEFAULT_AUTH_CONFIG: Partial<AuthProviderProps> = {
-  authority: "https://hercules.app",
-  prompt: "select_account",
-  response_type: "code",
-  scope: "openid profile email offline_access",
-  redirect_uri: `${window.location.origin}/auth/callback`,
-  onSigninCallback,
   onSignoutCallback,
-  userStore: new WebStorageStateStore({ store: window.localStorage }),
+  onSigninCallback,
 };
 
-export type HerculesAuthProviderProps = AuthProviderProps;
-
-function AutoSignIn() {
-  const auth = useAuth();
-  const hasTriedSignin = useRef(false);
-
-  // automatically sign-in
-  useEffect(() => {
-    if (
-      !hasAuthParams() &&
-      !auth.isAuthenticated &&
-      !auth.activeNavigator &&
-      !auth.isLoading &&
-      !hasTriedSignin.current
-    ) {
-      auth.signinRedirect();
-      hasTriedSignin.current = true;
-    }
-  }, [auth]);
-
-  return null;
-}
+export type HerculesAuthProviderProps = AuthProviderUserManagerProps & {
+  userManagerSettings: UserManagerSettings;
+};
 
 /**
  * A wrapper React component which provides a {@link ReactAuthProvider}
@@ -59,11 +37,38 @@ function AutoSignIn() {
  */
 export function HerculesAuthProvider({
   children,
+  userManagerSettings,
   ...props
 }: HerculesAuthProviderProps) {
+  const [userManager] = useState(
+    () =>
+      new UserManager({
+        ...userManagerSettings,
+        authority: userManagerSettings.authority,
+        client_id: userManagerSettings.client_id,
+        prompt: userManagerSettings.prompt ?? "select_account",
+        response_type: userManagerSettings.response_type ?? "code",
+        scope:
+          userManagerSettings.scope ?? "openid profile email offline_access",
+        redirect_uri:
+          userManagerSettings.redirect_uri ??
+          `${window.location.origin}/auth/callback`,
+        post_logout_redirect_uri:
+          userManagerSettings.post_logout_redirect_uri ??
+          window.location.origin,
+        userStore:
+          userManagerSettings.userStore ??
+          new WebStorageStateStore({ store: window.localStorage }),
+        
+      }),
+  );
+
   return (
-    <ReactAuthProvider {...DEFAULT_AUTH_CONFIG} {...props}>
-      <AutoSignIn />
+    <ReactAuthProvider
+      userManager={userManager}
+      {...DEFAULT_AUTH_CONFIG}
+      {...props}
+    >
       {children}
     </ReactAuthProvider>
   );
