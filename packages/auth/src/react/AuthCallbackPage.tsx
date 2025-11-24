@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useAuth } from "react-oidc-context";
 
-export default function AuthCallback() {
+export function AuthCallback() {
   const { isLoading, isAuthenticated, error } = useAuth();
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig } from "tsdown";
 
 export default defineConfig((options) => [
   {
@@ -7,5 +7,7 @@ export default defineConfig((options) => [
     format: ["cjs", "esm"],
     dts: true,
     sourcemap: true,
+    exports: true,
+    ignoreWatch: [".turbo"],
   },
 ]);
