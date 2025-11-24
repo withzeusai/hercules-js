@@ -5,7 +5,6 @@ import {
   type ComponentTaggerOptions,
 } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
-import { bannerPlugin, type BannerPluginOptions } from "./banner";
 import {
   dynamicComponentCreatorPlugin,
   type DynamicComponentCreatorOptions,
@@ -51,12 +50,6 @@ export interface HerculesPluginOptions {
   dynamicComponentCreator?: DynamicComponentCreatorOptions & {
     enabled?: boolean;
   };
-
-  /**
-   * Banner options for displaying "Built with Hercules"
-   * @default { enabled: true }
-   */
-  banner?: BannerPluginOptions & { enabled?: boolean };
 }
 
 /**
@@ -71,7 +64,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     componentTagger = { enabled: true },
     visualEditor = { enabled: true },
     dynamicComponentCreator = { enabled: true },
-    banner = { enabled: true },
   } = options;
 
   const plugins: Plugin[] = [];
@@ -85,16 +77,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       dynamicComponentCreatorPlugin({
         debug,
         ...dynamicComponentCreator,
-      }),
-    );
-  }
-
-  // Add banner plugin if enabled
-  if (banner.enabled) {
-    plugins.push(
-      bannerPlugin({
-        debug,
-        ...banner,
       }),
     );
   }
