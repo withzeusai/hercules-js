@@ -2,8 +2,14 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAuth, hasAuthParams } from "react-oidc-context";
+import { ConvexError } from "convex/values";
+import * as z from "zod";
 
 const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
+
+const convexErrorSchema = z.object({
+  message: z.string(),
+});
 
 /**
  * Authentication callback status states
@@ -236,10 +242,20 @@ export function useAuthCallback(
 
         if (!mountedRef.current) return;
 
+        if (err instanceof ConvexError) {
+          // try to extract the error message from the convex error
+          const parseResult = convexErrorSchema.safeParse(err.data);
+          if (parseResult.success) {
+            setStatus("error");
+            setError(parseResult.data.message);
+            return;
+          }
+        }
+
         // Check if it's an authentication error
         const errorMessage =
-          err instanceof Error && err.message.includes("UNAUTHENTICATED")
-            ? "Your session expired. Please sign in again."
+          err instanceof Error
+            ? err.message
             : "Failed to complete authentication. Please try again.";
 
         setStatus("error");
