@@ -1,7 +1,7 @@
 packages:
   - packages/*
 
-minimumReleaseAge: 2880 # 2 day
+minimumReleaseAge: 4320 # 3 days
 # minimumReleaseAgeExclude:
 #   - excluded package name
 
