@@ -82,7 +82,8 @@ export class Analytics {
 
   constructor(config: AnalyticsConfig) {
     this.config = {
-      apiEndpoint: config.apiEndpoint || "",
+      apiEndpoint:
+        config.apiEndpoint ?? "https://analytics-ingest.hercules.app",
       organizationId: config.organizationId,
       websiteId: config.websiteId,
       debug: config.debug ?? false,
@@ -415,9 +416,9 @@ export class Analytics {
       }
 
       // Check if we have enough critical metrics to send the event
-      const hasCriticalMetrics = 
+      const hasCriticalMetrics =
         (this.webVitalsMetrics.largest_contentful_paint !== undefined ||
-         this.webVitalsMetrics.first_contentful_paint !== undefined) &&
+          this.webVitalsMetrics.first_contentful_paint !== undefined) &&
         this.webVitalsMetrics.cumulative_layout_shift !== undefined;
 
       if (hasCriticalMetrics && !webVitalsEventSent) {
@@ -475,7 +476,7 @@ export class Analytics {
     if (!this.config.enabled || !this.config.trackPerformance) return;
 
     // Only track if we have meaningful web vitals data
-    const hasVitals = 
+    const hasVitals =
       this.webVitalsMetrics.first_contentful_paint !== undefined ||
       this.webVitalsMetrics.largest_contentful_paint !== undefined ||
       this.webVitalsMetrics.cumulative_layout_shift !== undefined ||
@@ -485,7 +486,7 @@ export class Analytics {
     if (!hasVitals) return;
 
     const event = this.createEvent("web_vitals", "");
-    
+
     // Map web vitals metrics to abbreviated field names matching the schema
     if (this.webVitalsMetrics.first_contentful_paint !== undefined) {
       event.fcp = this.webVitalsMetrics.first_contentful_paint;
