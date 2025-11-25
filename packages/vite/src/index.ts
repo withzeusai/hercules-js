@@ -68,6 +68,9 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 
   const plugins: Plugin[] = [];
 
+  // Track whether we're in dev mode (for dev-only features like error handler injection)
+  let isDev = false;
+
   // Dynamic component creator plugin (only when on Hercules dev machine or forced)
   if (
     dynamicComponentCreator.enabled &&
@@ -110,6 +113,9 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     name: "vite-plugin-hercules",
     // Plugin hooks for Vite 6
     configResolved(config) {
+      // Check if we're in serve (dev) mode vs build mode
+      isDev = config.command === "serve";
+
       if (debug) {
         console.log("[Hercules Plugin] Config resolved:", config.command);
       }
@@ -148,7 +154,8 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     },
 
     transformIndexHtml(html) {
-      if (handleViteErrors) {
+      // Only inject error handler in dev mode
+      if (handleViteErrors && isDev) {
         // Inject our error handling script before any other scripts
         const errorHandlerScript =
           '<script type="module" src="/__hercules_error_handler.js"></script>';
