@@ -1,4 +1,4 @@
-export * from "./AuthCallbackPage";
+export * from "./auth-callback-hook";
 export * from "./HerculesAuthProvider";
 export * from "./use-user";
 

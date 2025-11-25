@@ -3,6 +3,7 @@
   "version": "1.0.29",
   "description": "Authentication utilities for Hercules applications using OIDC",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     "./convex-react": "./dist/convex-react/index.mjs",
     "./react": "./dist/react/index.mjs",
