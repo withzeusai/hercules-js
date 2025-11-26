@@ -7,7 +7,6 @@ export default defineConfig((options) => [
     entry: ["src/index.ts", "src/utils.ts", "src/types.ts"],
     dts: true,
     sourcemap: true,
-    exports: true,
     ignoreWatch: [".turbo"],
   },
   {
