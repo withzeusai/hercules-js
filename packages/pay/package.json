@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/pay",
-  "version": "1.0.35",
+  "version": "1.0.36",
   "description": "Payment utilities for Hercules applications",
   "type": "module",
   "main": "./dist/index.mjs",
