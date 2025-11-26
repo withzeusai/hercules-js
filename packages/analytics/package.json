@@ -16,6 +16,7 @@
   "exports": {
     ".": "./dist/es/index.mjs",
     "./types": "./dist/es/types.mjs",
+    "./schema": "./dist/es/schema.mjs",
     "./utils": "./dist/es/utils.mjs",
     "./package.json": "./package.json",
     "./script": "./dist/browser/script-content.mjs"

@@ -4,7 +4,7 @@ export default defineConfig((options) => [
   {
     ...options,
     outDir: "dist/es",
-    entry: ["src/index.ts", "src/utils.ts", "src/types.ts"],
+    entry: ["src/index.ts", "src/utils.ts", "src/types.ts", "src/schema.ts"],
     dts: true,
     sourcemap: true,
     ignoreWatch: [".turbo"],
