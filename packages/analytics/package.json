@@ -18,7 +18,7 @@
     "./types": "./dist/es/types.mjs",
     "./utils": "./dist/es/utils.mjs",
     "./package.json": "./package.json",
-    "./script": "./dist/browser/index.iife.js"
+    "./script": "./dist/browser/script-content.mjs"
   },
   "files": [
     "dist",
@@ -30,7 +30,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/generate-script-export.mjs",
     "dev": "tsdown --watch",
     "test": "exit 0"
   },
