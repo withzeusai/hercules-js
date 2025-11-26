@@ -14,6 +14,7 @@ export default defineConfig((options) => [
     ...options,
     outDir: "dist/browser",
     format: ["iife"],
+    globalName: "HerculesAnalytics",
     target: "es2022",
     platform: "browser",
     entry: ["src/index.ts"],

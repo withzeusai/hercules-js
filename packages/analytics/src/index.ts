@@ -77,7 +77,7 @@ export class Analytics {
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private visitorId: string;
   private sessionId: string;
-  private userId?: string;
+  private userId: string | undefined;
   private webVitalsMetrics: PerformanceMetrics = {};
 
   constructor(config: AnalyticsConfig) {
@@ -616,7 +616,7 @@ export class Analytics {
   reset(): void {
     this.buffer = [];
     this.sessionId = this.getSessionId();
-    delete this.userId;
+    this.userId = undefined;
     this.webVitalsMetrics = {};
   }
 
@@ -775,3 +775,49 @@ export const identify = (userId: string): void => {
 
 // Export default
 export default Analytics;
+
+// ============================================================================
+// Auto-initialization for script tag embedding
+// ============================================================================
+
+/**
+ * Auto-initialize from script tag attributes.
+ * Usage:
+ * <script
+ *   src="https://your-cdn.com/analytics.js"
+ *   data-website-id="your-website-id"
+ *   data-organization-id="your-org-id"
+ *   data-api-endpoint="https://custom-endpoint.com"  (optional)
+ *   data-debug="true"  (optional)
+ *   data-track-clicks="true"  (optional)
+ *   data-track-performance="true"  (optional, default: true)
+ * ></script>
+ */
+(function autoInit() {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+
+  const script = document.currentScript as HTMLScriptElement | null;
+  if (!script) return;
+
+  const websiteId = script.getAttribute("data-website-id");
+  const organizationId = script.getAttribute("data-organization-id");
+
+  // Only auto-init if required attributes are present
+  if (!websiteId || !organizationId) return;
+
+  const config: AnalyticsConfig = {
+    websiteId,
+    organizationId,
+    apiEndpoint:
+      script.getAttribute("data-api-endpoint") ??
+      "https://analytics-ingest.hercules.app",
+    debug: script.getAttribute("data-debug") === "true",
+    trackClicks: script.getAttribute("data-track-clicks") === "true",
+    trackPerformance: script.getAttribute("data-track-performance") !== "false",
+  };
+
+  const instance = initAnalytics(config);
+
+  // Expose instance globally for manual usage
+  (window as any).hercules = instance;
+})();
