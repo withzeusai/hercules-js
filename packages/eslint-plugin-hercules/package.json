@@ -2,8 +2,8 @@
   "name": "@usehercules/eslint-plugin",
   "version": "1.0.31",
   "description": "ESLint plugin for Hercules",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "files": [
     "dist",
     "src",
@@ -52,5 +52,10 @@
     "type": "git",
     "url": "https://github.com/withzeusai/hercules-js.git",
     "directory": "packages/eslint-plugin-hercules"
+  },
+  "module": "./dist/index.mjs",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
   }
 }
