@@ -21,6 +21,7 @@ export const HerculesEventSchema = z.object({
   session_id: z.string(),
   user_id: z.nullish(z.string()),
   origin: z.nullish(z.string()),
+  url: z.nullish(z.string()),
   url_path: z.string(),
   url_query: z.nullish(z.string()),
   url_hash: z.nullish(z.string()),

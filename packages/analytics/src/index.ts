@@ -210,6 +210,7 @@ export class Analytics {
       session_id: this.sessionId,
       ...(this.userId && { user_id: this.userId }),
       origin: url.origin,
+      url: url.href,
       url_path: url.pathname,
       url_query: url.search.substring(1),
       url_hash: url.hash.substring(1),
