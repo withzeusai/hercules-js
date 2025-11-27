@@ -1,5 +1,5 @@
 /**
- * Post-build script to generate a module that exports the IIFE script as a string.
+ * Post-build script to generate a module that exports the ESM script as a string.
  * This allows bundlers (esbuild, Vite, etc.) to import the script content directly.
  */
 
@@ -10,15 +10,15 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distBrowserDir = join(__dirname, "../dist/browser");
 
-// Read the IIFE script
-const iifeContent = readFileSync(join(distBrowserDir, "index.iife.js"), "utf-8");
+// Read the ESM script
+const esmContent = readFileSync(join(distBrowserDir, "auto-init.js"), "utf-8");
 
 // Generate wrapper module that exports the script as a string
 const wrapperContent = `// Auto-generated - do not edit
-// This module exports the IIFE analytics script as a string for embedding
+// This module exports the ESM analytics script as a string for embedding
 
-/** The minified IIFE analytics script content */
-export const script = ${JSON.stringify(iifeContent)};
+/** The minified ESM analytics script content */
+export const script = ${JSON.stringify(esmContent)};
 
 export default script;
 `;
@@ -29,7 +29,7 @@ writeFileSync(join(distBrowserDir, "script-content.mjs"), wrapperContent);
 // Also generate TypeScript declaration
 const dtsContent = `// Auto-generated - do not edit
 
-/** The minified IIFE analytics script content */
+/** The minified ESM analytics script content */
 export declare const script: string;
 
 export default script;

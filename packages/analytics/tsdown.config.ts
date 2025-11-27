@@ -9,14 +9,15 @@ export default defineConfig((options) => [
     sourcemap: true,
     ignoreWatch: [".turbo"],
   },
+  // ESM build for <script type="module"> tags
   {
     ...options,
     outDir: "dist/browser",
-    format: ["iife"],
-    globalName: "HerculesAnalytics",
     target: "es2022",
     platform: "browser",
-    entry: ["src/index.ts"],
+    entry: ["src/auto-init.ts"],
+    dts: false,
+    sourcemap: false,
     minify: true,
     ignoreWatch: [".turbo"],
     noExternal: ["ulid", "web-vitals", "bowser"],
