@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/eslint-plugin",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "description": "ESLint plugin for Hercules",
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
