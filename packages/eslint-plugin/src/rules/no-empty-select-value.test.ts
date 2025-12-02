@@ -1,5 +1,5 @@
 import { createRuleTester } from "./test-helper";
-import rule from "../../src/rules/no-empty-select-value";
+import rule from "./no-empty-select-value";
 
 const ruleTester = createRuleTester("no-empty-select-value", rule);
 
