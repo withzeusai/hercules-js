@@ -39,19 +39,8 @@ export interface PerformanceMetrics {
   interaction_to_next_paint?: number;
 }
 
-
-
-export interface CompressionConfig {
-  enabled?: boolean;
-  threshold?: number; // Minimum bytes to compress (default: 1024)
-  format?: CompressionFormat; // 'gzip' | 'deflate' | 'deflate-raw'
-  fallbackToUncompressed?: boolean; // Send uncompressed if compression fails
-}
-
 export interface AnalyticsConfig {
   apiEndpoint?: string;
-  organizationId: string;
-  websiteId: string;
   debug?: boolean;
   enabled?: boolean;
   bufferSize?: number;
@@ -61,10 +50,6 @@ export interface AnalyticsConfig {
   cookieDomain?: string;
   cookiePath?: string;
   sessionTimeout?: number; // in minutes
-  compression?: CompressionConfig;
-  beforeSend?: (
-    events: HerculesEvent[],
-  ) => HerculesEvent[] | Promise<HerculesEvent[]>;
 }
 
 export interface AnalyticsProvider {

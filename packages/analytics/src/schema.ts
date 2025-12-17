@@ -13,8 +13,6 @@ export const HerculesEventSchema = z.object({
   event_id: z.string(),
   event_type: EventTypeEnum,
   event_name: z.nullish(z.string()),
-  organization_id: z.string(),
-  website_id: z.string(),
   environment: z.nullish(z.string()),
   timestamp: z.number(), // Unix timestamp in milliseconds
   visitor_id: z.string(),

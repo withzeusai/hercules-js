@@ -4,7 +4,13 @@ export default defineConfig((options) => [
   {
     ...options,
     entry: ["src/react/index.ts", "src/convex-react/index.ts"],
-    external: ["react", "react/jsx-runtime", "convex"],
+    external: [
+      "react",
+      "react/jsx-runtime",
+      "convex",
+      "convex/react",
+      "convex/values",
+    ],
     dts: true,
     sourcemap: true,
     exports: true,

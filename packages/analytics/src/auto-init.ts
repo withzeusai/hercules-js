@@ -2,7 +2,7 @@
 // Auto-initialization for ES module script embedding
 // ============================================================================
 
-import { initAnalytics } from ".";
+import { initAnalytics } from "./index";
 
 declare global {
   interface Window {
@@ -19,8 +19,6 @@ function parseUrlConfig() {
   try {
     const params = new URL(import.meta.url).searchParams;
     return {
-      websiteId: params.get("websiteId") ?? undefined,
-      organizationId: params.get("organizationId") ?? undefined,
       apiEndpoint: params.get("apiEndpoint") ?? undefined,
       debug: params.has("debug") ? params.get("debug") === "true" : undefined,
       trackClicks: params.has("trackClicks")
@@ -57,17 +55,7 @@ function parseUrlConfig() {
 
   const config = parseUrlConfig();
 
-  // Only auto-init if required fields are present
-  if (!config.websiteId || !config.organizationId) {
-    console.warn(
-      "[@usehercules/analytics] Website ID and organization ID are required",
-    );
-    return;
-  }
-
   const instance = initAnalytics({
-    websiteId: config.websiteId,
-    organizationId: config.organizationId,
     apiEndpoint: config.apiEndpoint ?? "/_hercules/i",
     debug: config.debug ?? false,
     trackClicks: config.trackClicks ?? false,
