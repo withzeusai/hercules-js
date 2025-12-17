@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/analytics",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "Analytics utilities for Hercules applications with ULID-based ID generation",
   "author": "Hercules Team",
   "license": "MIT",
