@@ -36,13 +36,13 @@
     "test": "exit 0"
   },
   "dependencies": {
-    "bowser": "^2.12.1",
-    "ulid": "^2.3.0",
+    "bowser": "^2.13.1",
+    "ulid": "^3.0.2",
     "web-vitals": "^5.1.0",
-    "zod": "^4.1.12"
+    "zod": "^4.3.4"
   },
   "devDependencies": {
-    "tsdown": "^0.16.6",
+    "tsdown": "^0.18.4",
     "typescript": "^5.9.3"
   }
 }

@@ -27,7 +27,7 @@
     "test": "exit 0"
   },
   "devDependencies": {
-    "tsdown": "^0.16.6",
+    "tsdown": "^0.18.4",
     "typescript": "^5.9.3"
   }
 }

@@ -2,13 +2,11 @@
 // Auto-initialization for ES module script embedding
 // ============================================================================
 
-import { initAnalytics } from "./index";
+import { initAnalytics, type Analytics } from "./index";
 
 declare global {
-  interface Window {
-    hercules?: {
-      analytics?: ReturnType<typeof initAnalytics>;
-    };
+  namespace hercules {
+    let analytics: Analytics | undefined;
   }
 }
 
@@ -49,12 +47,12 @@ function parseUrlConfig() {
  *   - trackPerformance: Track web vitals (default: true)
  */
 (function autoInit() {
-  if (typeof window === "undefined") {
+  const g = globalThis ?? window;
+  if (g == null) {
     console.warn("[@usehercules/analytics] Window is not defined");
   }
 
   const config = parseUrlConfig();
-
   const instance = initAnalytics({
     apiEndpoint: config.apiEndpoint ?? "/_hercules/i",
     debug: config.debug ?? false,
@@ -63,6 +61,6 @@ function parseUrlConfig() {
   });
 
   // Expose instance globally for manual usage
-  window.hercules = window.hercules ?? {};
-  window.hercules.analytics = instance;
+  g.hercules = g.hercules ?? {};
+  g.hercules.analytics = instance;
 })();
