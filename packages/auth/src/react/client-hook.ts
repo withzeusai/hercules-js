@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useUserManager } from "./hercules-auth-provider";
 import { createAuthClient, type components } from "../client";
 import { type IdTokenClaims, User } from "oidc-client-ts";
+import { APIError } from "../client/error";
 
 function decodeIdToken(idToken: string): IdTokenClaims {
   const payload = idToken.split(".")[1];
@@ -35,12 +36,14 @@ export function useClient({ baseUrl }: { baseUrl: string }) {
 
   const signinEmail = useCallback(
     async ({ email, password }: { email: string; password: string }) => {
-      const res = await client.POST("/api/signin/email", {
+      const { response, data, error } = await client.POST("/api/signin/email", {
         body: { email, password },
       });
-      if (res.error != null) throw new Error(res.error.error);
+      if (error != null) {
+        throw new APIError(response.status, error, undefined, response.headers);
+      }
 
-      const user = createUser(res.data);
+      const user = createUser(data);
       await userManager.storeUser(user);
       userManager.events.load(user);
     },
@@ -57,16 +60,18 @@ export function useClient({ baseUrl }: { baseUrl: string }) {
       password: string;
       name: string;
     }) => {
-      const res = await client.POST("/api/signup/email", {
+      const { response, data, error } = await client.POST("/api/signup/email", {
         body: {
           email,
           password,
           name,
         },
       });
-      if (res.error != null) throw new Error(res.error.error);
+      if (error != null) {
+        throw new APIError(response.status, error, undefined, response.headers);
+      }
 
-      const user = createUser(res.data);
+      const user = createUser(data);
       await userManager.storeUser(user);
       userManager.events.load(user);
     },
