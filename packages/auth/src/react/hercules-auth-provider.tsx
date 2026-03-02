@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import {
   AuthProvider as ReactAuthProvider,
   type AuthProviderUserManagerProps,
@@ -10,6 +10,24 @@ import {
   WebStorageStateStore,
   type UserManagerSettings,
 } from "oidc-client-ts";
+
+const UserManagerContext = createContext<UserManager | null>(null);
+
+/**
+ * Returns the {@link UserManager} instance from the nearest
+ * {@link HerculesAuthProvider}.
+ *
+ * @public
+ */
+export function useUserManager(): UserManager {
+  const userManager = useContext(UserManagerContext);
+  if (!userManager) {
+    throw new Error(
+      "useUserManager must be used within a HerculesAuthProvider",
+    );
+  }
+  return userManager;
+}
 
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
@@ -69,12 +87,14 @@ export function HerculesAuthProvider({
   );
 
   return (
-    <ReactAuthProvider
-      userManager={userManager}
-      {...DEFAULT_AUTH_CONFIG}
-      {...props}
-    >
-      {children}
-    </ReactAuthProvider>
+    <UserManagerContext.Provider value={userManager}>
+      <ReactAuthProvider
+        userManager={userManager}
+        {...DEFAULT_AUTH_CONFIG}
+        {...props}
+      >
+        {children}
+      </ReactAuthProvider>
+    </UserManagerContext.Provider>
   );
 }

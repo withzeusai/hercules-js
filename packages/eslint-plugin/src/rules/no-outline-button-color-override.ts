@@ -73,7 +73,7 @@ export default createRule<Options, MessageIds>({
             variantValue.value === "outline") ||
           (variantValue?.type === "TemplateLiteral" &&
             variantValue.quasis.length === 1 &&
-            variantValue.quasis[0].value.raw === "outline");
+            variantValue.quasis[0]?.value.raw === "outline");
 
         if (!isOutlineVariant) {
           return;

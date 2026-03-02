@@ -106,7 +106,7 @@ export function createRuleTester(
 
               // Check each error matches expected
               testCase.errors?.forEach((expectedError, i) => {
-                const actualError = messages[i];
+                const actualError = messages[i]!;
                 expect(actualError.ruleId).toBe(`test/${ruleName}`);
                 expect(actualError.messageId).toBe(expectedError.messageId);
 

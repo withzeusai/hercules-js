@@ -73,7 +73,7 @@ export default createRule<Options, MessageIds>({
           value &&
           value.type === "TemplateLiteral" &&
           value.quasis.length === 1 &&
-          value.quasis[0].value.raw === ""
+          value.quasis[0]?.value.raw === ""
         ) {
           context.report({
             node: valueAttribute,
