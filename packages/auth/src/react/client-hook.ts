@@ -18,7 +18,7 @@ function createUser(
     refresh_token: oauthTokenResponse.refresh_token,
     id_token: oauthTokenResponse.id_token,
     profile: decodeIdToken(oauthTokenResponse.id_token),
-    token_type: oauthTokenResponse.refresh_token,
+    token_type: oauthTokenResponse.token_type,
     expires_at: oauthTokenResponse.expires_at,
   });
 }
@@ -35,7 +35,9 @@ export function useClient({ baseUrl }: { baseUrl: string }) {
 
   const signinEmail = useCallback(
     async ({ email, password }: { email: string; password: string }) => {
-      const res = await client.POST("/api/signin/email", { email, password });
+      const res = await client.POST("/api/signin/email", {
+        body: { email, password },
+      });
       if (res.error != null) throw new Error(res.error.error);
 
       const user = createUser(res.data);
@@ -56,9 +58,11 @@ export function useClient({ baseUrl }: { baseUrl: string }) {
       name: string;
     }) => {
       const res = await client.POST("/api/signup/email", {
-        email,
-        password,
-        name,
+        body: {
+          email,
+          password,
+          name,
+        },
       });
       if (res.error != null) throw new Error(res.error.error);
 
