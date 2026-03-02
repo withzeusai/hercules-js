@@ -28,10 +28,12 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "generate:client": "openapi-typescript openapi.json -o src/client/types.ts"
   },
   "dependencies": {
     "oidc-client-ts": "^3.4.1",
+    "openapi-fetch": "^0.17.0",
     "react-oidc-context": "^3.3.0",
     "zod": "^4.3.6"
   },
@@ -46,6 +48,7 @@
     "@types/react-dom": "^19.2.3",
     "convex": "^1.32.0",
     "jsdom": "^28.1.0",
+    "openapi-typescript": "^7.13.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "tsdown": "^0.18.4",

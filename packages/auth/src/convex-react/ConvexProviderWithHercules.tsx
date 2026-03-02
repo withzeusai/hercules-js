@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
 import { useCallback, useMemo } from "react";
 import { useAuth } from "react-oidc-context";
-import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
+import type { HerculesAuthProvider } from "../react/hercules-auth-provider";
 
 /**
  * A wrapper React component which provides a {@link ConvexReactClient}

@@ -17,7 +17,7 @@ export function useUser() {
     const email = user?.profile.email;
     const avatar = user?.profile.picture;
     return {
-      ...(user ?? {}),
+      ...user,
       id,
       name,
       email,

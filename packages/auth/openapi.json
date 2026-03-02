@@ -1,0 +1,201 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hercules Auth Gateway API",
+    "description": "Authentication gateway API for the Hercules platform",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Hercules Support",
+      "url": "https://hercules.app",
+      "email": "hello@hercules.app"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://{tenant}.auth.onhercules.app",
+      "description": "Production",
+      "variables": {
+        "tenant": {
+          "default": "demo",
+          "description": "Tenant name"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/api/signup/email": {
+      "post": {
+        "operationId": "postApiSignupEmail",
+        "tags": ["Authentication"],
+        "summary": "Sign up with email",
+        "description": "Register a new user with email, name, and password and return OAuth tokens.",
+        "responses": {
+          "200": {
+            "description": "OAuth token response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sign-up failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": ["email", "name", "password"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/signin/email": {
+      "post": {
+        "operationId": "postApiSigninEmail",
+        "tags": ["Authentication"],
+        "summary": "Sign in with email",
+        "description": "Authenticate a user with email and password and return OAuth tokens.",
+        "responses": {
+          "200": {
+            "description": "OAuth token response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "required": ["email", "password"]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OAuthTokenResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "Opaque access token"
+          },
+          "refresh_token": {
+            "type": "string",
+            "description": "Opaque refresh token"
+          },
+          "id_token": {
+            "type": "string",
+            "description": "Signed JWT ID token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Access token lifetime in seconds"
+          },
+          "expires_at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Unix epoch timestamp (seconds) when the access token expires"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token",
+          "id_token",
+          "token_type",
+          "expires_in",
+          "expires_at"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        },
+        "required": ["error"]
+      }
+    }
+  }
+}
