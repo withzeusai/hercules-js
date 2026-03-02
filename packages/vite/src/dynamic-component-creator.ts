@@ -1,6 +1,7 @@
 import type { Plugin } from "vite";
 import path from "path";
-import { access, writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
+import { constants } from "fs";
 
 export interface DynamicComponentCreatorOptions {
   /**
@@ -63,50 +64,30 @@ export function dynamicComponentCreatorPlugin(
             resolvedPath = path.resolve(path.dirname(importer), source);
           }
 
-          // Helper function to check if file exists
-          const exists = async (filePath: string): Promise<boolean> => {
-            try {
-              await access(filePath);
-              return true;
-            } catch {
-              return false;
+          // Create parent directory recursively (no-ops if it exists)
+          await mkdir(path.dirname(resolvedPath), { recursive: true });
+
+          // Extract file name without extension and convert to component name
+          const fileName = path.basename(resolvedPath, '.tsx');
+
+          const toComponentName = (name: string): string => {
+            if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name.replace(/[-]/g, ''))) {
+              return 'Component';
             }
+            return name
+              .split(/[-_]/)
+              .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+              .join('');
           };
 
-          if (!(await exists(resolvedPath))) {
-            // Create parent directory recursively if it doesn't exist
-            try {
-              const parentDir = path.dirname(resolvedPath);
-              await mkdir(parentDir, { recursive: true });
-            } catch (error) {
-              if (debug) {
-                console.error("Error creating parent directory", error);
-              }
-            }
+          const componentName = toComponentName(fileName);
 
-            // Extract file name without extension and convert to component name
-            const fileName = path.basename(resolvedPath, '.tsx');
-            
-            // Convert file name to PascalCase component name if it's a valid identifier
-            const toComponentName = (name: string): string => {
-              // Check if it's a valid JavaScript identifier
-              // Allow names that start with letter or underscore, followed by letters, digits, or underscores
-              if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name.replace(/[-]/g, ''))) {
-                return 'Component'; // Fallback to generic name if not valid
-              }
-              
-              // Convert kebab-case, snake_case to PascalCase
-              return name
-                .split(/[-_]/)
-                .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-                .join('');
-            };
-            
-            const componentName = toComponentName(fileName);
-
+          try {
+            // wx flag: write exclusively — fails with EEXIST if file already exists
             await writeFile(
               resolvedPath,
               `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
+              { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL },
             );
             if (debug) {
               const importType = source.startsWith("@/")
@@ -116,6 +97,9 @@ export function dynamicComponentCreatorPlugin(
                 `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,
               );
             }
+          } catch (error: any) {
+            // EEXIST means the file already exists — not an error, just skip
+            if (error?.code !== "EEXIST") throw error;
           }
         }
 
