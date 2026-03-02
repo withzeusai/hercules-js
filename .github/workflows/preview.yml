@@ -2,9 +2,14 @@ name: Preview Packages
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   preview:
@@ -33,3 +38,6 @@ jobs:
 
       - name: Publish preview packages
         run: pnpm dlx pkg-pr-new publish './packages/*'
+
+      - name: Run tests
+        run: pnpm test
