@@ -25,19 +25,19 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@typescript-eslint/scope-manager": "^8.51.0",
-    "@typescript-eslint/type-utils": "^8.51.0",
-    "@typescript-eslint/utils": "^8.51.0"
+    "@typescript-eslint/scope-manager": "^8.56.1",
+    "@typescript-eslint/type-utils": "^8.56.1",
+    "@typescript-eslint/utils": "^8.56.1"
   },
   "devDependencies": {
-    "@types/node": "^24.10.4",
-    "@typescript-eslint/eslint-plugin": "^8.51.0",
-    "@typescript-eslint/parser": "^8.51.0",
-    "@typescript-eslint/rule-tester": "^8.51.0",
-    "eslint": "^9.39.2",
+    "@types/node": "^24.10.15",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "@typescript-eslint/rule-tester": "^8.56.1",
+    "eslint": "^9.39.3",
     "tsdown": "^0.18.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.16"
+    "vitest": "^4.0.18"
   },
   "peerDependencies": {
     "@typescript-eslint/parser": ">=8.0.0",
