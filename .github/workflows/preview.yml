@@ -33,11 +33,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages
-        run: pnpm build
+      - name: Build and test packages
+        run: pnpm build test
 
       - name: Publish preview packages
         run: pnpm dlx pkg-pr-new publish './packages/*'
-
-      - name: Run tests
-        run: pnpm test
