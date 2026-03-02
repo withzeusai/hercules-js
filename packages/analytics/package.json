@@ -36,10 +36,10 @@
     "test": "exit 0"
   },
   "dependencies": {
-    "bowser": "^2.13.1",
+    "bowser": "^2.14.1",
     "ulid": "^3.0.2",
     "web-vitals": "^5.1.0",
-    "zod": "^4.3.4"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "tsdown": "^0.18.4",

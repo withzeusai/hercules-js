@@ -145,8 +145,10 @@ export function useAuthCallback(
   // Track if we've already started sync to prevent double execution
   const syncStarted = useRef(false);
 
-  // Cleanup on unmount
+  // Reset on mount, cleanup on unmount
   useEffect(() => {
+    mountedRef.current = true;
+    syncStarted.current = false;
     return () => {
       mountedRef.current = false;
     };
