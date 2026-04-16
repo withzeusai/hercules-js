@@ -6,10 +6,28 @@ import {
   type AuthProviderUserManagerProps,
 } from "react-oidc-context";
 import {
+  InMemoryWebStorage,
   UserManager,
   WebStorageStateStore,
   type UserManagerSettings,
 } from "oidc-client-ts";
+
+function resolveStorage(
+  getStorage: () => Storage,
+): Storage | InMemoryWebStorage {
+  if (typeof window === "undefined") {
+    return new InMemoryWebStorage();
+  }
+  try {
+    const storage = getStorage();
+    const probeKey = "__hercules_auth_probe__";
+    storage.setItem(probeKey, "1");
+    storage.removeItem(probeKey);
+    return storage;
+  } catch {
+    return new InMemoryWebStorage();
+  }
+}
 
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
@@ -64,7 +82,14 @@ export function HerculesAuthProvider({
           window.location.origin,
         userStore:
           userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
+          new WebStorageStateStore({
+            store: resolveStorage(() => window.localStorage),
+          }),
+        stateStore:
+          userManagerSettings?.stateStore ??
+          new WebStorageStateStore({
+            store: resolveStorage(() => window.localStorage),
+          }),
       }),
   );
 
