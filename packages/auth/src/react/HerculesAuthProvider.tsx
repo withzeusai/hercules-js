@@ -13,20 +13,23 @@ import {
 } from "oidc-client-ts";
 
 function resolveStorage(
-  getStorage: () => Storage,
+  getStorageFns: Array<() => Storage>,
 ): Storage | InMemoryWebStorage {
   if (typeof window === "undefined") {
     return new InMemoryWebStorage();
   }
-  try {
-    const storage = getStorage();
-    const probeKey = "__hercules_auth_probe__";
-    storage.setItem(probeKey, "1");
-    storage.removeItem(probeKey);
-    return storage;
-  } catch {
-    return new InMemoryWebStorage();
+  for (const getStorage of getStorageFns) {
+    try {
+      const storage = getStorage();
+      const probeKey = "__hercules_auth_probe__";
+      storage.setItem(probeKey, "1");
+      storage.removeItem(probeKey);
+      return storage;
+    } catch {
+      continue;
+    }
   }
+  return new InMemoryWebStorage();
 }
 
 export type HerculesAuthProviderProps = Omit<
@@ -83,12 +86,18 @@ export function HerculesAuthProvider({
         userStore:
           userManagerSettings?.userStore ??
           new WebStorageStateStore({
-            store: resolveStorage(() => window.localStorage),
+            store: resolveStorage([
+              () => window.localStorage,
+              () => window.sessionStorage,
+            ]),
           }),
         stateStore:
           userManagerSettings?.stateStore ??
           new WebStorageStateStore({
-            store: resolveStorage(() => window.localStorage),
+            store: resolveStorage([
+              () => window.localStorage,
+              () => window.sessionStorage,
+            ]),
           }),
       }),
   );
