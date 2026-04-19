@@ -1,0 +1,48 @@
+{
+  "name": "@usehercules/session-replay",
+  "version": "0.1.0",
+  "description": "Session replay (rrweb) recorder for Hercules applications",
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/session-replay"
+  },
+  "type": "module",
+  "main": "./dist/es/index.mjs",
+  "module": "./dist/es/index.mjs",
+  "types": "./dist/es/index.d.mts",
+  "exports": {
+    ".": "./dist/es/index.mjs",
+    "./types": "./dist/es/types.mjs",
+    "./schema": "./dist/es/schema.mjs",
+    "./utils": "./dist/es/utils.mjs",
+    "./package.json": "./package.json",
+    "./script": "./dist/browser/script-content.mjs"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsdown.config.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown && node scripts/generate-script-export.mjs",
+    "dev": "tsdown --watch",
+    "test": "exit 0"
+  },
+  "dependencies": {
+    "bowser": "^2.14.1",
+    "rrweb": "^2.0.0-alpha.4",
+    "ulid": "^3.0.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "tsdown": "^0.18.4",
+    "typescript": "^5.9.3"
+  }
+}
