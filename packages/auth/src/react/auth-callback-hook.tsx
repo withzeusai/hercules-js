@@ -5,7 +5,7 @@ import { useAuth, hasAuthParams } from "react-oidc-context";
 import { ConvexError } from "convex/values";
 import * as z from "zod";
 
-const DEFAULT_TIMEOUT_MS = 20000;
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 const convexErrorSchema = z.object({
   message: z.string(),
@@ -236,13 +236,14 @@ export function useAuthCallback(
     async function performSync() {
       if (!mountedRef.current) return;
 
-      setStatus("syncing");
+      setStatus((s) => (s === "success" || s === "error" ? s : "syncing"));
 
       try {
         const { onSync } = callbacksRef.current;
         if (onSync) await onSync();
 
-        if (mountedRef.current) setStatus("success");
+        if (mountedRef.current)
+          setStatus((s) => (s === "error" ? s : "success"));
       } catch (err) {
         console.error("Auth callback sync failed:", err);
 

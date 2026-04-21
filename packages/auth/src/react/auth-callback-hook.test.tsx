@@ -165,6 +165,57 @@ describe("useAuthCallback", () => {
       }
     });
 
+    it("timeout remains terminal even when onSync resolves after deadline", async () => {
+      vi.useFakeTimers();
+
+      try {
+        let resolveSync!: () => void;
+        const onSync = vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveSync = resolve;
+            }),
+        );
+        const onSuccess = vi.fn();
+
+        setAuthState({ isLoading: false, isAuthenticated: true });
+
+        const { result } = renderHook(() =>
+          useAuthCallback({
+            isBackendAuthenticated: true,
+            onSync,
+            onSuccess,
+            timeoutMs: 5000,
+          }),
+        );
+
+        // Let the hook advance into the syncing phase.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+
+        expect(result.current.status).toBe("syncing");
+
+        // Fire the wall-clock timeout while onSync is still pending.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+
+        expect(result.current.status).toBe("error");
+
+        // Now let onSync resolve — status must stay "error".
+        await act(async () => {
+          resolveSync();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(result.current.status).toBe("error");
+        expect(onSuccess).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("uses a single wall-clock deadline across status transitions", async () => {
       vi.useFakeTimers();
 
