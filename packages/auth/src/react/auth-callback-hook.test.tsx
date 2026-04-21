@@ -269,6 +269,24 @@ describe("useAuthCallback", () => {
 
       expect(onNoAuthParams).toHaveBeenCalledOnce();
     });
+
+    it("fires onNoAuthParams when it becomes available on a later rerender", () => {
+      mockHasAuthParams = false;
+      setAuthState({ isLoading: false, isAuthenticated: false });
+
+      const onNoAuthParams = vi.fn();
+
+      const { rerender } = renderHook(
+        ({ cb }: { cb?: () => void }) => useAuthCallback({ onNoAuthParams: cb }),
+        { initialProps: { cb: undefined as (() => void) | undefined } },
+      );
+
+      expect(onNoAuthParams).not.toHaveBeenCalled();
+
+      rerender({ cb: onNoAuthParams });
+
+      expect(onNoAuthParams).toHaveBeenCalledOnce();
+    });
   });
 
   describe("benign OIDC settled state", () => {
@@ -380,6 +398,35 @@ describe("useAuthCallback", () => {
       await waitFor(() => {
         expect(result.current.status).toBe("success");
       });
+    });
+  });
+
+  describe("late-bound onSuccess", () => {
+    it("fires onSuccess when it becomes available after status already reached success", async () => {
+      const onSync = vi.fn().mockResolvedValue(undefined);
+      const onSuccess = vi.fn();
+
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const { result, rerender } = renderHook(
+        ({ cb }: { cb?: () => void }) =>
+          useAuthCallback({
+            isBackendAuthenticated: true,
+            onSync,
+            onSuccess: cb,
+          }),
+        { initialProps: { cb: undefined as (() => void) | undefined } },
+      );
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("success");
+      });
+
+      expect(onSuccess).not.toHaveBeenCalled();
+
+      rerender({ cb: onSuccess });
+
+      expect(onSuccess).toHaveBeenCalledOnce();
     });
   });
 

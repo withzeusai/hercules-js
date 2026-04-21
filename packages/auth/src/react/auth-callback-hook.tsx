@@ -176,6 +176,12 @@ export function useAuthCallback(
   }, [timeoutMs]);
 
   // OIDC progression: processing-oauth -> waiting-backend, or error.
+  //
+  // If we had auth params but OIDC settled unauthenticated with no error,
+  // we intentionally do NOT declare failure here. react-oidc-context can
+  // reach this shape from benign paths (silent nav close, INITIALISED with
+  // null user due to storage issues, StrictMode double-init, etc.). The
+  // wall-clock timeout above is the authoritative "stuck" signal.
   useEffect(() => {
     if (status !== "processing-oauth") return;
 
@@ -197,20 +203,29 @@ export function useAuthCallback(
       setStatus("waiting-backend");
       return;
     }
+  }, [isOidcAuthenticated, oidcError, status]);
 
-    // No auth params on mount and OIDC has settled unauthenticated —
-    // user landed on the callback page directly.
-    if (!hadAuthParams && !isAuthLoading && !noAuthParamsFiredRef.current) {
-      noAuthParamsFiredRef.current = true;
-      callbacksRef.current.onNoAuthParams?.();
-    }
+  // Fire onNoAuthParams when OIDC settles unauthenticated with no auth
+  // params. Kept separate from OIDC progression so the firing re-triggers
+  // if the callback is provided on a later rerender (e.g. after parent
+  // hydration). The firedRef guard ensures it still runs at most once.
+  useEffect(() => {
+    if (status !== "processing-oauth") return;
+    if (noAuthParamsFiredRef.current) return;
+    if (hadAuthParams || isAuthLoading || isOidcAuthenticated || oidcError)
+      return;
+    if (!onNoAuthParams) return;
 
-    // If we had auth params but OIDC settled unauthenticated with no error,
-    // we intentionally do NOT declare failure here. react-oidc-context can
-    // reach this shape from benign paths (silent nav close, INITIALISED with
-    // null user due to storage issues, StrictMode double-init, etc.). The
-    // wall-clock timeout above is the authoritative "stuck" signal.
-  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, hadAuthParams]);
+    noAuthParamsFiredRef.current = true;
+    onNoAuthParams();
+  }, [
+    status,
+    hadAuthParams,
+    isAuthLoading,
+    isOidcAuthenticated,
+    oidcError,
+    onNoAuthParams,
+  ]);
 
   useEffect(() => {
     if (status !== "waiting-backend" || !isBackendAuthenticated) return;
@@ -254,11 +269,14 @@ export function useAuthCallback(
     performSync();
   }, [status, isBackendAuthenticated]);
 
+  // Latch only once onSuccess is callable so apps that supply the handler
+  // after mount (e.g. redirect setup post-hydration) still get notified.
   useEffect(() => {
     if (status !== "success" || successFiredRef.current) return;
+    if (!onSuccess) return;
     successFiredRef.current = true;
-    callbacksRef.current.onSuccess?.();
-  }, [status]);
+    onSuccess();
+  }, [status, onSuccess]);
 
   const retry = useCallback(async () => {
     try {
