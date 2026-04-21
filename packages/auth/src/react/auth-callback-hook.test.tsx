@@ -2,8 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor, configure } from "@testing-library/react";
 import { useAuthCallback } from "./auth-callback-hook.js";
 
-// Run every test under StrictMode so the double-mount cycle
-// (mount → unmount → remount) is always exercised.
 configure({ reactStrictMode: true });
 
 // ---- Mocks ----
@@ -34,13 +32,9 @@ vi.mock("convex/values", () => ({
   },
 }));
 
-// ---- Helpers ----
-
 function setAuthState(overrides: Partial<typeof mockAuthState>) {
   mockAuthState = { ...mockAuthState, ...overrides };
 }
-
-// ---- Tests ----
 
 beforeEach(() => {
   mockAuthState = {
@@ -93,7 +87,6 @@ describe("useAuthCallback", () => {
     it("transitions through waiting-backend when OIDC finishes after mount", async () => {
       const onSync = vi.fn().mockResolvedValue(undefined);
 
-      // Start with OIDC still loading
       const { result, rerender } = renderHook(() =>
         useAuthCallback({
           isBackendAuthenticated: true,
@@ -103,7 +96,6 @@ describe("useAuthCallback", () => {
 
       expect(result.current.status).toBe("processing-oauth");
 
-      // OIDC finishes
       setAuthState({ isLoading: false, isAuthenticated: true });
       rerender();
 
@@ -157,14 +149,12 @@ describe("useAuthCallback", () => {
           }),
         );
 
-        // Flush microtasks for async sync to complete
         await act(async () => {
           await vi.advanceTimersByTimeAsync(100);
         });
 
         expect(result.current.status).toBe("success");
 
-        // Advance past timeout — should still be success, not error
         act(() => {
           vi.advanceTimersByTime(10000);
         });
@@ -174,16 +164,81 @@ describe("useAuthCallback", () => {
         vi.useRealTimers();
       }
     });
+
+    it("uses a single wall-clock deadline across status transitions", async () => {
+      vi.useFakeTimers();
+
+      try {
+        const onSync = vi.fn().mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              setTimeout(resolve, 10000);
+            }),
+        );
+
+        setAuthState({ isLoading: false, isAuthenticated: true });
+
+        const { result } = renderHook(() =>
+          useAuthCallback({
+            isBackendAuthenticated: true,
+            onSync,
+            timeoutMs: 5000,
+          }),
+        );
+
+        // Let status move through waiting-backend -> syncing.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+
+        expect(result.current.status).toBe("syncing");
+
+        // Advance past the original 5s deadline; timer should not have reset.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+
+        expect(result.current.status).toBe("error");
+        expect(result.current.error).toBe(
+          "Authentication timed out. Please try again.",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("OIDC errors", () => {
-    it("transitions to error when OIDC reports an error", () => {
+    it("transitions to error when OIDC reports an error and is not authenticated", () => {
       setAuthState({ error: new Error("OIDC failed") });
 
       const { result } = renderHook(() => useAuthCallback());
 
       expect(result.current.status).toBe("error");
       expect(result.current.error).toBe("OIDC failed");
+    });
+
+    it("treats OIDC error alongside authenticated user as success path (StrictMode double-init)", async () => {
+      const onSync = vi.fn().mockResolvedValue(undefined);
+
+      setAuthState({
+        isLoading: false,
+        isAuthenticated: true,
+        error: new Error("code already used"),
+      });
+
+      const { result } = renderHook(() =>
+        useAuthCallback({
+          isBackendAuthenticated: true,
+          onSync,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("success");
+      });
+
+      expect(onSync).toHaveBeenCalledOnce();
     });
   });
 
@@ -196,7 +251,58 @@ describe("useAuthCallback", () => {
 
       renderHook(() => useAuthCallback({ onNoAuthParams }));
 
-      expect(onNoAuthParams).toHaveBeenCalled();
+      expect(onNoAuthParams).toHaveBeenCalledOnce();
+    });
+
+    it("does not call onNoAuthParams more than once across rerenders", () => {
+      mockHasAuthParams = false;
+      setAuthState({ isLoading: false, isAuthenticated: false });
+
+      const onNoAuthParams = vi.fn();
+
+      const { rerender } = renderHook(() =>
+        useAuthCallback({ onNoAuthParams }),
+      );
+
+      rerender();
+      rerender();
+
+      expect(onNoAuthParams).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("benign OIDC settled state", () => {
+    it("does not declare failure when OIDC briefly settles unauthenticated with no error", async () => {
+      vi.useFakeTimers();
+
+      try {
+        const { result, rerender } = renderHook(() =>
+          useAuthCallback({ timeoutMs: 10000 }),
+        );
+
+        setAuthState({ isLoading: false, isAuthenticated: false });
+        rerender();
+
+        // Let any pending microtasks settle.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+
+        // Should still be processing — no spurious "cancelled or failed".
+        expect(result.current.status).toBe("processing-oauth");
+
+        // Recovery: OIDC authenticates after the transient state.
+        setAuthState({ isLoading: false, isAuthenticated: true });
+        rerender();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+
+        expect(result.current.status).toBe("success");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -236,11 +342,9 @@ describe("useAuthCallback", () => {
         { initialProps: { backendAuth: false } },
       );
 
-      // Should be in waiting-backend (OIDC done, but backend not ready)
       expect(result.current.status).toBe("waiting-backend");
       expect(onSync).not.toHaveBeenCalled();
 
-      // Backend becomes authenticated
       rerender({ backendAuth: true });
 
       await waitFor(() => {
@@ -276,6 +380,35 @@ describe("useAuthCallback", () => {
       await waitFor(() => {
         expect(result.current.status).toBe("success");
       });
+    });
+  });
+
+  describe("callback identity churn", () => {
+    it("fires onSuccess exactly once even when parent re-renders with a new reference", async () => {
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const calls: number[] = [];
+      let counter = 0;
+
+      const { result, rerender } = renderHook(() => {
+        const n = ++counter;
+        return useAuthCallback({
+          isBackendAuthenticated: true,
+          onSuccess: () => {
+            calls.push(n);
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("success");
+      });
+
+      rerender();
+      rerender();
+      rerender();
+
+      expect(calls).toHaveLength(1);
     });
   });
 });
