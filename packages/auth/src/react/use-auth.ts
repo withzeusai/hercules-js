@@ -1,14 +1,15 @@
 import {
   useAuth as useOidcAuth,
-  type AuthContextProps,
+  type AuthContextProps as OidcAuthContextProps,
 } from "react-oidc-context";
 import { useHerculesAuthProvider } from "./HerculesAuthProvider";
 import { useCallback, useMemo } from "react";
 
-interface UseHerculesAuthResult extends AuthContextProps {
+export interface AuthContextProps extends OidcAuthContextProps {
   signout: () => Promise<void>;
 }
-export function useAuth(): UseHerculesAuthResult {
+
+export function useAuth(): AuthContextProps {
   const { userManager } = useHerculesAuthProvider();
   const auth = useOidcAuth();
 
@@ -18,7 +19,7 @@ export function useAuth(): UseHerculesAuthResult {
     if (endpoint != null) {
       await signoutRedirect();
     } else {
-      removeUser();
+      await removeUser();
     }
   }, [userManager, signoutRedirect, removeUser]);
 
@@ -26,6 +27,6 @@ export function useAuth(): UseHerculesAuthResult {
     return {
       ...auth,
       signout,
-    } satisfies UseHerculesAuthResult;
+    } satisfies AuthContextProps;
   }, [auth, signout]);
 }
