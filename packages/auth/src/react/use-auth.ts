@@ -7,13 +7,14 @@ import { useCallback, useMemo } from "react";
 
 export interface AuthContextProps extends OidcAuthContextProps {
   signout: () => Promise<void>;
+  signin: () => Promise<void>;
 }
 
 export function useAuth(): AuthContextProps {
   const { userManager } = useHerculesAuthProvider();
   const auth = useOidcAuth();
 
-  const { signoutRedirect, removeUser } = auth;
+  const { signoutRedirect, removeUser, signinRedirect } = auth;
   const signout = useCallback(async () => {
     const endpoint = await userManager.metadataService.getEndSessionEndpoint();
     if (endpoint != null) {
@@ -23,10 +24,15 @@ export function useAuth(): AuthContextProps {
     }
   }, [userManager, signoutRedirect, removeUser]);
 
+  const signin = useCallback(async () => {
+    await signinRedirect();
+  }, [signinRedirect]);
+
   return useMemo(() => {
     return {
       ...auth,
       signout,
+      signin,
     } satisfies AuthContextProps;
-  }, [auth, signout]);
+  }, [auth, signout, signin]);
 }
