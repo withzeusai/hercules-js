@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -20,6 +20,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.HERCULES_BOT_TOKEN }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -55,6 +56,11 @@ jobs:
       - name: Run tests
         run: pnpm test
 
+      - name: Set up Git user
+        run: |
+          git config user.name "hercules-bot[bot]"
+          git config user.email "hercules-bot@users.noreply.github.com"
+
       - name: Create release PR or publish
         uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1.7.0
         with:
@@ -62,7 +68,9 @@ jobs:
           version: pnpm changeset:version
           title: "chore: version packages"
           commit: "chore: version packages"
+          setupGitUser: false
+          commitMode: "git-cli"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.HERCULES_BOT_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
