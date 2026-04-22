@@ -5,9 +5,7 @@
     { "repo": "withzeusai/hercules-js" }
   ],
   "commit": false,
-  "fixed": [
-    ["@usehercules/analytics", "@usehercules/auth", "@usehercules/eslint-plugin", "@usehercules/vite"]
-  ],
+  "fixed": [],
   "linked": [],
   "access": "public",
   "baseBranch": "main",
