@@ -424,6 +424,40 @@ describe("useAuthCallback", () => {
     });
   });
 
+  describe("OIDC loading gate", () => {
+    it("does not transition to waiting-backend while OIDC is still loading", async () => {
+      // Simulates a prior authenticated session where isAuthenticated is true
+      // but OIDC is still loading (processing the callback). If the callback
+      // later fails, the hook must report the error, not success.
+      setAuthState({ isLoading: true, isAuthenticated: true });
+
+      const onSync = vi.fn().mockResolvedValue(undefined);
+
+      const { result, rerender } = renderHook(() =>
+        useAuthCallback({
+          isBackendAuthenticated: true,
+          onSync,
+        }),
+      );
+
+      // Should stay in processing-oauth while OIDC is still loading.
+      expect(result.current.status).toBe("processing-oauth");
+      expect(onSync).not.toHaveBeenCalled();
+
+      // Callback processing fails — error arrives while loading completes.
+      setAuthState({
+        isLoading: false,
+        isAuthenticated: false,
+        error: new Error("callback_failed"),
+      });
+      rerender();
+
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("callback_failed");
+      expect(onSync).not.toHaveBeenCalled();
+    });
+  });
+
   describe("retry", () => {
     it("calls signinRedirect on retry", async () => {
       mockSigninRedirect.mockResolvedValue(undefined);

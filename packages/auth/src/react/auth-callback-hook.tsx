@@ -190,7 +190,7 @@ export function useAuthCallback(
       // from a concurrent silent/retry op (common in StrictMode when the
       // init effect runs twice and the second signinCallback sees a
       // consumed code). Treat the user as authenticated.
-      if (isOidcAuthenticated) {
+      if (isOidcAuthenticated && !isAuthLoading) {
         setStatus("waiting-backend");
         return;
       }
@@ -199,11 +199,11 @@ export function useAuthCallback(
       return;
     }
 
-    if (isOidcAuthenticated) {
+    if (isOidcAuthenticated && !isAuthLoading) {
       setStatus("waiting-backend");
       return;
     }
-  }, [isOidcAuthenticated, oidcError, status]);
+  }, [isOidcAuthenticated, isAuthLoading, oidcError, status]);
 
   // Fire onNoAuthParams when OIDC settles unauthenticated with no auth
   // params. Kept separate from OIDC progression so the firing re-triggers
