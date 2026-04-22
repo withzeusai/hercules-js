@@ -10,6 +10,7 @@ import {
   WebStorageStateStore,
   type UserManagerSettings,
 } from "oidc-client-ts";
+import { createContext, useContext } from "react";
 
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
@@ -32,6 +33,21 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
   onSignoutCallback,
   onSigninCallback,
 };
+
+interface HerculesAuthProviderContext {
+  userManager: UserManager;
+}
+
+const HerculesAuthProviderContext =
+  createContext<HerculesAuthProviderContext | null>(null);
+
+export function useHerculesAuthProvider() {
+  const context = useContext(HerculesAuthProviderContext);
+  if (!context) {
+    throw new Error("HerculesAuthProviderContext not found");
+  }
+  return context;
+}
 
 /**
  * A wrapper React component which provides a {@link ReactAuthProvider}
@@ -69,12 +85,14 @@ export function HerculesAuthProvider({
   );
 
   return (
-    <ReactAuthProvider
-      userManager={userManager}
-      {...DEFAULT_AUTH_CONFIG}
-      {...props}
-    >
-      {children}
-    </ReactAuthProvider>
+    <HerculesAuthProviderContext.Provider value={{ userManager }}>
+      <ReactAuthProvider
+        userManager={userManager}
+        {...DEFAULT_AUTH_CONFIG}
+        {...props}
+      >
+        {children}
+      </ReactAuthProvider>
+    </HerculesAuthProviderContext.Provider>
   );
 }
