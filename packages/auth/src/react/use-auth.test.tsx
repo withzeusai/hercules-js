@@ -7,6 +7,7 @@ configure({ reactStrictMode: true });
 // ---- Mocks ----
 
 const mockSignoutRedirect = vi.fn();
+const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 const mockGetEndSessionEndpoint = vi.fn();
 
@@ -33,6 +34,7 @@ function setAuthState(overrides: Record<string, unknown>) {
     isLoading: false,
     isAuthenticated: true,
     signoutRedirect: mockSignoutRedirect,
+    signinRedirect: mockSigninRedirect,
     removeUser: mockRemoveUser,
     ...overrides,
   };
@@ -43,6 +45,7 @@ function setAuthState(overrides: Record<string, unknown>) {
 beforeEach(() => {
   setAuthState({});
   mockSignoutRedirect.mockReset();
+  mockSigninRedirect.mockReset();
   mockRemoveUser.mockReset();
   mockGetEndSessionEndpoint.mockReset();
 });
@@ -54,6 +57,7 @@ describe("useAuth", () => {
     expect(result.current.isAuthenticated).toBe(true);
     expect(result.current.isLoading).toBe(false);
     expect(typeof result.current.signout).toBe("function");
+    expect(typeof result.current.signin).toBe("function");
   });
 
   it("spreads all properties from the oidc auth context", () => {
@@ -111,6 +115,20 @@ describe("useAuth", () => {
     });
   });
 
+  describe("signin", () => {
+    it("calls signinRedirect", async () => {
+      mockSigninRedirect.mockResolvedValue(undefined);
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await result.current.signin();
+      });
+
+      expect(mockSigninRedirect).toHaveBeenCalledOnce();
+    });
+  });
+
   describe("memoization", () => {
     it("returns a stable signout reference across rerenders with same deps", () => {
       const { result, rerender } = renderHook(() => useAuth());
@@ -120,6 +138,16 @@ describe("useAuth", () => {
       const secondSignout = result.current.signout;
 
       expect(firstSignout).toBe(secondSignout);
+    });
+
+    it("returns a stable signin reference across rerenders with same deps", () => {
+      const { result, rerender } = renderHook(() => useAuth());
+
+      const firstSignin = result.current.signin;
+      rerender();
+      const secondSignin = result.current.signin;
+
+      expect(firstSignin).toBe(secondSignin);
     });
   });
 });
