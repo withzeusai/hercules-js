@@ -14,7 +14,9 @@
     "changeset": "changeset",
     "changeset:version": "changeset version",
     "changeset:publish": "pnpm build && changeset publish",
-    "release": "./scripts/release.sh"
+    "release": "./scripts/release.sh",
+    "postinstall": "pnpm dlx @socketsecurity/socket-patch apply --silent --ecosystems npm",
+    "dependencies": "pnpm dlx @socketsecurity/socket-patch apply --silent --ecosystems npm"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.6.0",
