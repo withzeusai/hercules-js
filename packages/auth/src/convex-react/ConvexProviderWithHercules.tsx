@@ -32,12 +32,12 @@ function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
   const fetchAccessToken = useCallback(
-    async ({ forceRefreshToken: _ignore }: { forceRefreshToken: boolean }) => {
+    async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
       try {
-        // if (forceRefreshToken) {
-        //   const user = await signinSilent();
-        //   return user?.id_token ?? null;
-        // }
+        if (forceRefreshToken) {
+          const refreshed = await signinSilent();
+          return refreshed?.id_token ?? null;
+        }
         return idToken ?? null;
       } catch {
         return null;
