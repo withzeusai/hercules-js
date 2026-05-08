@@ -67,6 +67,26 @@ function renderUseAuth() {
   return renderHook(() => captured());
 }
 
+describe("ConvexProviderWithHerculesAuth isLoading", () => {
+  it("reports isLoading false when isAuthenticated is true even if underlying isLoading is true", () => {
+    setAuthState({ isLoading: true, isAuthenticated: true });
+
+    const { result } = renderUseAuth();
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  it("reports isLoading true when not authenticated and still loading", () => {
+    setAuthState({ isLoading: true, isAuthenticated: false, user: null });
+
+    const { result } = renderUseAuth();
+
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.isAuthenticated).toBe(false);
+  });
+});
+
 describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
   it("returns the cached id token when forceRefreshToken is false", async () => {
     const { result } = renderUseAuth();

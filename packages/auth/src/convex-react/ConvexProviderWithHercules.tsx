@@ -6,28 +6,6 @@ import { useCallback, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
-/**
- * A wrapper React component which provides a {@link ConvexReactClient}
- * authenticated with Hercules Auth.
- *
- * It must be wrapped by a configured `{@link HerculesAuthProvider}`.
- *
- * @public
- */
-export function ConvexProviderWithHerculesAuth({
-  children,
-  client,
-}: {
-  children: ReactNode;
-  client: ConvexReactClient;
-}) {
-  return (
-    <ConvexProviderWithAuth client={client} useAuth={useUseAuthFromHercules}>
-      {children}
-    </ConvexProviderWithAuth>
-  );
-}
-
 function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
@@ -57,12 +35,35 @@ function useUseAuthFromHercules() {
     },
     [idToken, signinSilent],
   );
+
   return useMemo(
     () => ({
-      isLoading,
+      isLoading: isAuthenticated ? false : isLoading,
       isAuthenticated,
       fetchAccessToken,
     }),
     [isLoading, isAuthenticated, fetchAccessToken],
+  );
+}
+
+/**
+ * A wrapper React component which provides a {@link ConvexReactClient}
+ * authenticated with Hercules Auth.
+ *
+ * It must be wrapped by a configured `{@link HerculesAuthProvider}`.
+ *
+ * @public
+ */
+export function ConvexProviderWithHerculesAuth({
+  children,
+  client,
+}: {
+  children: ReactNode;
+  client: ConvexReactClient;
+}) {
+  return (
+    <ConvexProviderWithAuth client={client} useAuth={useUseAuthFromHercules}>
+      {children}
+    </ConvexProviderWithAuth>
   );
 }
