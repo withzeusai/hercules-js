@@ -5,7 +5,7 @@ import { useAuth, hasAuthParams } from "react-oidc-context";
 import { ConvexError } from "convex/values";
 import * as z from "zod";
 
-const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
+const DEFAULT_TIMEOUT_MS = 60_000;
 
 const convexErrorSchema = z.object({
   message: z.string(),
@@ -16,11 +16,11 @@ const convexErrorSchema = z.object({
  * @public
  */
 export type AuthCallbackStatus =
-  | "processing-oauth" // OIDC is processing the callback
-  | "waiting-backend" // OIDC authenticated, waiting for backend
-  | "syncing" // Syncing user with backend (e.g., creating user record)
-  | "success" // All done
-  | "error"; // Something went wrong
+  | "processing-oauth"
+  | "waiting-backend"
+  | "syncing"
+  | "success"
+  | "error";
 
 /**
  * Options for the useAuthCallback hook
@@ -138,114 +138,118 @@ export function useAuthCallback(
   const [status, setStatus] = useState<AuthCallbackStatus>("processing-oauth");
   const [error, setError] = useState<string | null>(null);
 
-  // Track mount state to prevent state updates after unmount
-  const mountedRef = useRef(true);
-  // Track if we had auth params on mount (won't change during lifecycle)
-  const hadAuthParams = useRef(hasAuthParams());
-  // Track if we've already started sync to prevent double execution
-  const syncStarted = useRef(false);
+  // Stable snapshot of whether auth params were present on first mount.
+  const [hadAuthParams] = useState(() => hasAuthParams());
 
-  // Reset on mount, cleanup on unmount
+  // Latest callbacks, kept in a ref so effects don't churn when parents
+  // pass inline functions.
+  const callbacksRef = useRef({ onSync, onSuccess, onNoAuthParams });
+  callbacksRef.current = { onSync, onSuccess, onNoAuthParams };
+
+  // Guard one-shot side effects.
+  const syncStartedRef = useRef(false);
+  const successFiredRef = useRef(false);
+  const noAuthParamsFiredRef = useRef(false);
+
+  const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
-    syncStarted.current = false;
     return () => {
       mountedRef.current = false;
     };
   }, []);
 
-  // Timeout protection with state awareness
+  // Single wall-clock deadline from mount. Using the functional setState
+  // form lets us no-op when we've already reached a terminal state, so the
+  // timer doesn't need to reset on each status transition.
   useEffect(() => {
-    if (status === "success" || status === "error") return;
-
     const timeout = setTimeout(() => {
-      if (mountedRef.current) {
-        setStatus("error");
+      if (!mountedRef.current) return;
+      setStatus((s) => {
+        if (s === "success" || s === "error") return s;
         setError("Authentication timed out. Please try again.");
-      }
+        return "error";
+      });
     }, timeoutMs);
 
     return () => clearTimeout(timeout);
-  }, [status, timeoutMs]);
+  }, [timeoutMs]);
 
-  // Track OIDC authentication progression
+  // OIDC progression: processing-oauth -> waiting-backend, or error.
+  //
+  // If we had auth params but OIDC settled unauthenticated with no error,
+  // we intentionally do NOT declare failure here. react-oidc-context can
+  // reach this shape from benign paths (silent nav close, INITIALISED with
+  // null user due to storage issues, StrictMode double-init, etc.). The
+  // wall-clock timeout above is the authoritative "stuck" signal.
   useEffect(() => {
-    // Don't update if we're already past processing or in an error state
-    if (status !== "processing-oauth" && status !== "waiting-backend") return;
+    if (status !== "processing-oauth") return;
 
-    // Handle OIDC errors
     if (oidcError) {
+      // If OIDC is also reporting an authenticated user, the error came
+      // from a concurrent silent/retry op (common in StrictMode when the
+      // init effect runs twice and the second signinCallback sees a
+      // consumed code). Treat the user as authenticated.
+      if (isOidcAuthenticated && !isAuthLoading) {
+        setStatus("waiting-backend");
+        return;
+      }
       setStatus("error");
       setError(oidcError.message || "Authentication failed");
       return;
     }
 
-    // No auth params and not authenticated - navigated here directly
-    if (!hadAuthParams.current && !isAuthLoading && !isOidcAuthenticated) {
-      onNoAuthParams?.();
-      return;
-    }
-
-    // OIDC is done loading and authenticated - move to waiting for backend
-    if (
-      !isAuthLoading &&
-      isOidcAuthenticated &&
-      status === "processing-oauth"
-    ) {
+    if (isOidcAuthenticated && !isAuthLoading) {
       setStatus("waiting-backend");
       return;
     }
+  }, [isOidcAuthenticated, isAuthLoading, oidcError, status]);
 
-    // OIDC finished but not authenticated (and we had auth params)
-    // Wait a bit before declaring failure to avoid race conditions
-    if (
-      hadAuthParams.current &&
-      !isAuthLoading &&
-      !isOidcAuthenticated &&
-      !oidcError &&
-      status === "processing-oauth"
-    ) {
-      // Use a small delay to avoid race condition during OIDC state transitions
-      const failureTimeout = setTimeout(() => {
-        if (mountedRef.current && !isOidcAuthenticated) {
-          setStatus("error");
-          setError("Authentication was cancelled or failed. Please try again.");
-        }
-      }, 500);
+  // Fire onNoAuthParams when OIDC settles unauthenticated with no auth
+  // params. Kept separate from OIDC progression so the firing re-triggers
+  // if the callback is provided on a later rerender (e.g. after parent
+  // hydration). The firedRef guard ensures it still runs at most once.
+  useEffect(() => {
+    if (status !== "processing-oauth") return;
+    if (noAuthParamsFiredRef.current) return;
+    if (hadAuthParams || isAuthLoading || isOidcAuthenticated || oidcError)
+      return;
+    if (!onNoAuthParams) return;
 
-      return () => clearTimeout(failureTimeout);
-    }
+    noAuthParamsFiredRef.current = true;
+    onNoAuthParams();
+  }, [
+    status,
+    hadAuthParams,
+    isAuthLoading,
+    isOidcAuthenticated,
+    oidcError,
+    onNoAuthParams,
+  ]);
 
-    return;
-  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, onNoAuthParams]);
-
-  // Sync with backend once backend is authenticated
   useEffect(() => {
     if (status !== "waiting-backend" || !isBackendAuthenticated) return;
-    if (syncStarted.current) return;
+    if (syncStartedRef.current) return;
 
-    syncStarted.current = true;
+    syncStartedRef.current = true;
 
     async function performSync() {
       if (!mountedRef.current) return;
 
-      setStatus("syncing");
+      setStatus((s) => (s === "success" || s === "error" ? s : "syncing"));
 
       try {
-        if (onSync) {
-          await onSync();
-        }
+        const { onSync } = callbacksRef.current;
+        if (onSync) await onSync();
 
-        if (mountedRef.current) {
-          setStatus("success");
-        }
+        if (mountedRef.current)
+          setStatus((s) => (s === "error" ? s : "success"));
       } catch (err) {
         console.error("Auth callback sync failed:", err);
 
         if (!mountedRef.current) return;
 
         if (err instanceof ConvexError) {
-          // try to extract the error message from the convex error
           const parseResult = convexErrorSchema.safeParse(err.data);
           if (parseResult.success) {
             setStatus("error");
@@ -254,28 +258,27 @@ export function useAuthCallback(
           }
         }
 
-        // Check if it's an authentication error
-        const errorMessage =
+        setStatus("error");
+        setError(
           err instanceof Error
             ? err.message
-            : "Failed to complete authentication. Please try again.";
-
-        setStatus("error");
-        setError(errorMessage);
+            : "Failed to complete authentication. Please try again.",
+        );
       }
     }
 
     performSync();
-  }, [status, isBackendAuthenticated, onSync]);
+  }, [status, isBackendAuthenticated]);
 
-  // Handle successful completion
+  // Latch only once onSuccess is callable so apps that supply the handler
+  // after mount (e.g. redirect setup post-hydration) still get notified.
   useEffect(() => {
-    if (status === "success") {
-      onSuccess?.();
-    }
+    if (status !== "success" || successFiredRef.current) return;
+    if (!onSuccess) return;
+    successFiredRef.current = true;
+    onSuccess();
   }, [status, onSuccess]);
 
-  // Retry handler
   const retry = useCallback(async () => {
     try {
       await signinRedirect();
