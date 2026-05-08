@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
@@ -31,17 +31,29 @@ export function ConvexProviderWithHerculesAuth({
 function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
+
+  const inFlightRefresh = useRef<Promise<string | null> | null>(null);
+
   const fetchAccessToken = useCallback(
-    async ({ forceRefreshToken: _ignore }: { forceRefreshToken: boolean }) => {
-      try {
-        // if (forceRefreshToken) {
-        //   const user = await signinSilent();
-        //   return user?.id_token ?? null;
-        // }
+    async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
+      if (!forceRefreshToken) {
         return idToken ?? null;
-      } catch {
-        return null;
       }
+      if (inFlightRefresh.current) {
+        return inFlightRefresh.current;
+      }
+      const refresh = (async () => {
+        try {
+          const refreshed = await signinSilent();
+          return refreshed?.id_token ?? null;
+        } catch {
+          return null;
+        } finally {
+          inFlightRefresh.current = null;
+        }
+      })();
+      inFlightRefresh.current = refresh;
+      return refresh;
     },
     [idToken, signinSilent],
   );
