@@ -1,5 +1,15 @@
 # @usehercules/auth
 
+## 1.0.43
+
+### Patch Changes
+
+- [#20](https://github.com/withzeusai/hercules-js/pull/20) [`1b71f08`](https://github.com/withzeusai/hercules-js/commit/1b71f08fbc22204fed07475fa35a672accbed1bc) Thanks [@delbyte](https://github.com/delbyte)! - Re-enable forced token refresh in `ConvexProviderWithHerculesAuth` so Convex
+  can recover after a 401 instead of getting the same expired id token back.
+  Concurrent refresh requests share a single in-flight `signinSilent` call to
+  avoid the React 19 strict-mode duplicate-refresh race that motivated the
+  original disable.
+
 ## 1.0.42
 
 ### Patch Changes
