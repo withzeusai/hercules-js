@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/auth",
-  "version": "1.0.42",
+  "version": "1.0.43",
   "description": "Authentication utilities for Hercules applications using OIDC",
   "type": "module",
   "sideEffects": false,
