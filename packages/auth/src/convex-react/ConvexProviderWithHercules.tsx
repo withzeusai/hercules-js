@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
+import { jwtDecode } from "jwt-decode";
 import { useCallback, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
@@ -11,8 +12,8 @@ const LOCK_KEY = "__herculesAuthRefresh";
 
 function tokenExpiresWithin(token: string, ms: number): boolean {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1]!));
-    return payload.exp * 1000 - Date.now() < ms;
+    const payload = jwtDecode(token);
+    return payload.exp! * 1000 - Date.now() < ms;
   } catch {
     return true;
   }
