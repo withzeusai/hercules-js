@@ -1,5 +1,11 @@
 # @usehercules/auth
 
+## 1.0.44
+
+### Patch Changes
+
+- [#24](https://github.com/withzeusai/hercules-js/pull/24) [`3c01de3`](https://github.com/withzeusai/hercules-js/commit/3c01de3f1f3c075362abc5e8e8dc45a710b4baf5) Thanks [@grant0417](https://github.com/grant0417)! - Fix Convex provider reporting `isLoading` as `true` when `isAuthenticated` is already `true`, preventing unnecessary loading states. Skip token refresh when the current token won't expire within the next hour.
+
 ## 1.0.43
 
 ### Patch Changes
