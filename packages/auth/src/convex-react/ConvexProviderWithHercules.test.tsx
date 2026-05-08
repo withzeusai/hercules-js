@@ -5,6 +5,12 @@ import { ConvexProviderWithHerculesAuth } from "./ConvexProviderWithHercules.js"
 
 configure({ reactStrictMode: true });
 
+function makeJwt(exp: number): string {
+  const header = btoa(JSON.stringify({ alg: "none" }));
+  const payload = btoa(JSON.stringify({ exp }));
+  return `${header}.${payload}.sig`;
+}
+
 const mockSigninSilent = vi.fn();
 
 let mockAuthState: Record<string, unknown> = {};
@@ -36,11 +42,16 @@ vi.mock("convex/react", () => ({
   },
 }));
 
+// Token expiring in 30 minutes (within the 1hr refresh threshold)
+const EXPIRING_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+// Token expiring in 2 hours (outside the 1hr refresh threshold)
+const LONG_LIVED_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 2 * 60 * 60);
+
 function setAuthState(overrides: Record<string, unknown>) {
   mockAuthState = {
     isLoading: false,
     isAuthenticated: true,
-    user: { id_token: "cached-token" },
+    user: { id_token: EXPIRING_TOKEN },
     signinSilent: mockSigninSilent,
     ...overrides,
   };
@@ -95,7 +106,20 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
       forceRefreshToken: false,
     });
 
-    expect(token).toBe("cached-token");
+    expect(token).toBe(EXPIRING_TOKEN);
+    expect(mockSigninSilent).not.toHaveBeenCalled();
+  });
+
+  it("skips refresh when token expires more than 1 hour from now", async () => {
+    setAuthState({ user: { id_token: LONG_LIVED_TOKEN } });
+
+    const { result } = renderUseAuth();
+
+    const token = await result.current.fetchAccessToken({
+      forceRefreshToken: true,
+    });
+
+    expect(token).toBe(LONG_LIVED_TOKEN);
     expect(mockSigninSilent).not.toHaveBeenCalled();
   });
 
