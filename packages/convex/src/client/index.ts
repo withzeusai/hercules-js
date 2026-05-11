@@ -155,24 +155,13 @@ function resolveComponent<DataModel extends GenericDataModel>(
   const defaultComponent = options.components?.hercules_access_control;
   const component = namedComponent ?? defaultComponent;
 
-  if (!isAccessControlComponent(component)) {
+  if (!component) {
     throw new Error(
       "Missing Hercules Access Control component. Install @usehercules/convex in convex/convex.config.ts.",
     );
   }
 
-  return component;
-}
-
-function isAccessControlComponent(component: unknown): component is AccessControlComponent {
-  return (
-    typeof component === "object" &&
-    component !== null &&
-    "checks" in component &&
-    typeof component.checks === "object" &&
-    component.checks !== null &&
-    "authorize" in component.checks
-  );
+  return component as AccessControlComponent;
 }
 
 function makeAuthenticatedBuilder<TBuilder>(

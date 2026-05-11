@@ -75,24 +75,13 @@ function resolveSyncComponent(
   const defaultComponent = options.components?.hercules_access_control;
   const component = namedComponent ?? defaultComponent;
 
-  if (!isSyncComponent(component)) {
+  if (!component) {
     throw new Error(
       "Missing Hercules Access Control component. Install @usehercules/convex in convex/convex.config.ts.",
     );
   }
 
-  return component;
-}
-
-function isSyncComponent(component: unknown): component is AccessControlSyncComponent {
-  return (
-    typeof component === "object" &&
-    component !== null &&
-    "sync" in component &&
-    typeof component.sync === "object" &&
-    component.sync !== null &&
-    "applySnapshot" in component.sync
-  );
+  return component as AccessControlSyncComponent;
 }
 
 function verifyWebhookPayload(secret: string, rawBody: string, headers: Headers) {
