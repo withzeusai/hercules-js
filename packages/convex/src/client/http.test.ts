@@ -1,0 +1,120 @@
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { Webhook } from "standardwebhooks";
+import { registerAccessControlRoutes } from "./http";
+import type { AccessProjectionSnapshot } from "../shared/sync";
+
+const secret = `whsec_${Buffer.from("test-secret").toString("base64")}`;
+
+const snapshot: AccessProjectionSnapshot = {
+  type: "access.projection.snapshot",
+  schemaVersion: 1,
+  eventId: "evt_1",
+  accessScopeId: "scope_1",
+  accessScopeAppId: "scope_app_1",
+  projectionId: "projection_1",
+  sourceVersion: 1,
+  config: {
+    expectedIssuer: "https://auth.example.com",
+    accountEntryMode: "open",
+    defaultRoleId: "role_member",
+  },
+  entities: {
+    principals: [],
+    principalMemberships: [],
+    roles: [],
+    permissions: [],
+    rolePermissions: [],
+    roleAssignments: [],
+  },
+};
+
+describe("registerAccessControlRoutes", () => {
+  beforeEach(() => {
+    process.env.HERCULES_ACCESS_SYNC_SECRET = secret;
+  });
+
+  test("applies a signed snapshot", async () => {
+    const route = registerRouteForTest();
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
+
+    const response = await route.handler(
+      { runMutation },
+      signedRequest(JSON.stringify(snapshot)),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
+    expect(response.status).toBe(200);
+    expect(runMutation).toHaveBeenCalledWith("applySnapshot", snapshot);
+  });
+
+  test("rejects an unsigned snapshot", async () => {
+    const route = registerRouteForTest();
+    const runMutation = vi.fn();
+
+    const response = await route.handler(
+      { runMutation },
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify(snapshot),
+      }),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      status: "invalid_signature",
+    });
+    expect(response.status).toBe(401);
+    expect(runMutation).not.toHaveBeenCalled();
+  });
+
+  test("rejects an invalid signed payload", async () => {
+    const route = registerRouteForTest();
+    const runMutation = vi.fn();
+
+    const response = await route.handler(
+      { runMutation },
+      signedRequest(JSON.stringify({ type: "unexpected" })),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      status: "invalid_payload",
+    });
+    expect(response.status).toBe(400);
+    expect(runMutation).not.toHaveBeenCalled();
+  });
+});
+
+function registerRouteForTest() {
+  const routes: Array<{ path: string; method: string; handler: Function }> = [];
+  registerAccessControlRoutes(
+    { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
+    {
+      httpAction: (handler) => handler as never,
+      component: { sync: { applySnapshot: "applySnapshot" as never } },
+    },
+  );
+  return routes[0]!;
+}
+
+function signedRequest(rawBody: string) {
+  const webhook = new Webhook(secret);
+  const timestamp = new Date();
+  return new Request("https://example.com", {
+    method: "POST",
+    body: rawBody,
+    headers: {
+      "webhook-id": "evt_1",
+      "webhook-timestamp": String(Math.floor(timestamp.getTime() / 1000)),
+      "webhook-signature": webhook.sign("evt_1", timestamp, rawBody),
+    },
+  });
+}
