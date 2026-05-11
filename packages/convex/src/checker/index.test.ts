@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -116,6 +116,42 @@ describe("checkAccessControlSource", () => {
         },
       ],
     });
+  });
+
+  test("can rewrite exported raw builders to authenticated builders", () => {
+    const root = createFixture({
+      "convex/posts.ts": `
+        import { query, mutation as rawMutation, internalMutation } from "./_generated/server";
+        import { v } from "convex/values";
+
+        export const list = query({
+          args: {},
+          handler: async () => [],
+        });
+
+        export const create = rawMutation({
+          args: { title: v.string() },
+          handler: async () => null,
+        });
+
+        export const repair = internalMutation({
+          args: {},
+          handler: async () => null,
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root, fixAuthenticated: true });
+    const source = readFileSync(join(root, "convex/posts.ts"), "utf8");
+
+    expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
+    expect(source).toContain(
+      'import { authenticatedMutation, authenticatedQuery } from "./access";',
+    );
+    expect(source).toContain("export const list = authenticatedQuery({");
+    expect(source).toContain("export const create = authenticatedMutation({");
+    expect(source).toContain('import { internalMutation } from "./_generated/server";');
+    expect(source).toContain("export const repair = internalMutation({");
   });
 });
 

@@ -9,6 +9,7 @@ type ParsedArgs =
       ok: true;
       convexDir?: string;
       json: boolean;
+      fixAuthenticated: boolean;
       help: boolean;
     }
   | {
@@ -28,6 +29,7 @@ if (!parsedArgs.ok) {
   const result = checkAccessControlSource({
     cwd: process.cwd(),
     convexDir: parsedArgs.convexDir,
+    fixAuthenticated: parsedArgs.fixAuthenticated,
   });
 
   if (parsedArgs.json) {
@@ -42,11 +44,16 @@ if (!parsedArgs.ok) {
 function parseArgs(args: string[]): ParsedArgs {
   let convexDir: string | undefined;
   let json = false;
+  let fixAuthenticated = false;
   let help = false;
 
   for (const arg of args) {
     if (arg === "--json") {
       json = true;
+      continue;
+    }
+    if (arg === "--fix-authenticated") {
+      fixAuthenticated = true;
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -72,15 +79,20 @@ function parseArgs(args: string[]): ParsedArgs {
     ok: true,
     convexDir,
     json,
+    fixAuthenticated,
     help,
   };
 }
 
 function helpText(): string {
   return [
-    "Usage: hercules-convex-access-check [convex-dir] [--json]",
+    "Usage: hercules-convex-access-check [convex-dir] [--json] [--fix-authenticated]",
     "",
     "Checks exported Convex functions for raw query(), mutation(), or action()",
     "builders that should use Hercules Access Control builders from convex/access.ts.",
+    "",
+    "--fix-authenticated rewrites exported raw builders to authenticated* builders",
+    "as a conservative migration starting point. Review public and permissioned",
+    "handlers afterward and switch them to public* or access* deliberately.",
   ].join("\n");
 }

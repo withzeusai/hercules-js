@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 
@@ -28,12 +28,14 @@ export type AccessControlCheckResult = {
   ok: boolean;
   convexDir: string;
   filesChecked: number;
+  fixedFiles: number;
   findings: AccessControlCheckFinding[];
 };
 
 export type CheckAccessControlSourceOptions = {
   cwd?: string;
   convexDir?: string;
+  fixAuthenticated?: boolean;
 };
 
 const rawBuilderNames = new Set<string>(["query", "mutation", "action"]);
@@ -57,6 +59,7 @@ export function checkAccessControlSource(
       ok: false,
       convexDir,
       filesChecked: 0,
+      fixedFiles: 0,
       findings: [
         {
           code: "convex_dir_missing",
@@ -72,12 +75,16 @@ export function checkAccessControlSource(
   }
 
   const sourceFiles = collectSourceFiles(convexDir);
+  const fixedFiles = options.fixAuthenticated
+    ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath)).length
+    : 0;
   const findings = sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath));
 
   return {
     ok: findings.length === 0,
     convexDir,
     filesChecked: sourceFiles.length,
+    fixedFiles,
     findings,
   };
 }
@@ -85,7 +92,11 @@ export function checkAccessControlSource(
 export function formatAccessControlCheckResult(result: AccessControlCheckResult): string {
   if (result.ok) {
     const fileLabel = result.filesChecked === 1 ? "file" : "files";
-    return `Hercules Access Control check passed (${result.filesChecked} ${fileLabel} checked).`;
+    const fixedLabel =
+      result.fixedFiles > 0
+        ? ` ${result.fixedFiles} ${result.fixedFiles === 1 ? "file was" : "files were"} updated.`
+        : "";
+    return `Hercules Access Control check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel}`;
   }
 
   const lines = [
@@ -102,6 +113,40 @@ export function formatAccessControlCheckResult(result: AccessControlCheckResult)
   }
 
   return lines.join("\n");
+}
+
+function fixSourceFileToAuthenticatedBuilders(filePath: string): boolean {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+  const rawBuilderImports = collectRawBuilderImports(sourceFile);
+  if (rawBuilderImports.size === 0) {
+    return false;
+  }
+
+  const exportedNames = collectExportedNames(sourceFile);
+  const candidates = collectRawBuilderCandidates(sourceFile, rawBuilderImports)
+    .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
+    .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration));
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  const replacements = candidates.map((candidate) => ({
+    start: candidate.builderNode.getStart(sourceFile),
+    end: candidate.builderNode.getEnd(),
+    text: authenticatedBuilderName(candidate.builder),
+  }));
+  const accessImports = new Set(replacements.map((replacement) => replacement.text));
+  replacements.push(...buildGeneratedServerImportRemovals(sourceFile, sourceText, candidates));
+  replacements.push(buildAccessImportReplacement(sourceFile, sourceText, accessImports));
+
+  const nextSourceText = applyTextReplacements(sourceText, replacements);
+  if (nextSourceText === sourceText) {
+    return false;
+  }
+
+  writeFileSync(filePath, nextSourceText);
+  return true;
 }
 
 function collectSourceFiles(directory: string): string[] {
@@ -131,15 +176,7 @@ function collectSourceFiles(directory: string): string[] {
 
 function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-      ? ts.ScriptKind.TSX
-      : ts.ScriptKind.TS,
-  );
+  const sourceFile = createSourceFile(filePath, sourceText);
   const rawBuilderImports = collectRawBuilderImports(sourceFile);
   if (rawBuilderImports.size === 0) {
     return [];
@@ -151,6 +188,18 @@ function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFindi
     .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
     .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration))
     .map((candidate) => createFinding(cwd, sourceFile, candidate));
+}
+
+function createSourceFile(filePath: string, sourceText: string): ts.SourceFile {
+  return ts.createSourceFile(
+    filePath,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
+      ? ts.ScriptKind.TSX
+      : ts.ScriptKind.TS,
+  );
 }
 
 function collectRawBuilderImports(sourceFile: ts.SourceFile): Map<string, RawConvexBuilder> {
@@ -181,6 +230,181 @@ function collectRawBuilderImports(sourceFile: ts.SourceFile): Map<string, RawCon
   }
 
   return imports;
+}
+
+function buildGeneratedServerImportRemovals(
+  sourceFile: ts.SourceFile,
+  sourceText: string,
+  candidates: RawBuilderCandidate[],
+): Array<{ start: number; end: number; text: string }> {
+  const builderNodeStarts = new Set(
+    candidates.map((candidate) => candidate.builderNode.getStart(sourceFile)),
+  );
+  const builderNamesToReplace = new Set(candidates.map((candidate) => candidate.builderNode.text));
+  const identifierUses = collectIdentifierUses(sourceFile, builderNamesToReplace);
+  const removableNames = new Set<string>();
+
+  for (const name of builderNamesToReplace) {
+    const uses = identifierUses.get(name) ?? [];
+    if (uses.length > 0 && uses.every((position) => builderNodeStarts.has(position))) {
+      removableNames.add(name);
+    }
+  }
+
+  if (removableNames.size === 0) {
+    return [];
+  }
+
+  const replacements: Array<{ start: number; end: number; text: string }> = [];
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
+      continue;
+    }
+    if (
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      !isGeneratedServerImport(statement.moduleSpecifier.text)
+    ) {
+      continue;
+    }
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+      continue;
+    }
+
+    const rawSpecifiersToRemove = namedBindings.elements.filter((specifier) =>
+      removableNames.has(specifier.name.text),
+    );
+    if (rawSpecifiersToRemove.length === 0) {
+      continue;
+    }
+
+    if (rawSpecifiersToRemove.length === namedBindings.elements.length) {
+      const start = statement.getFullStart();
+      const end = includeTrailingNewline(sourceText, statement.getEnd());
+      replacements.push({ start, end, text: "" });
+      continue;
+    }
+
+    for (const specifier of rawSpecifiersToRemove) {
+      replacements.push(buildImportSpecifierRemoval(namedBindings, specifier));
+    }
+  }
+
+  return replacements;
+}
+
+function collectIdentifierUses(
+  sourceFile: ts.SourceFile,
+  names: Set<string>,
+): Map<string, number[]> {
+  const uses = new Map<string, number[]>();
+
+  function visit(node: ts.Node) {
+    if (ts.isImportSpecifier(node) && names.has(node.name.text)) {
+      return;
+    }
+    if (ts.isIdentifier(node) && names.has(node.text)) {
+      const positions = uses.get(node.text) ?? [];
+      positions.push(node.getStart(sourceFile));
+      uses.set(node.text, positions);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return uses;
+}
+
+function buildImportSpecifierRemoval(
+  namedImports: ts.NamedImports,
+  specifier: ts.ImportSpecifier,
+): { start: number; end: number; text: string } {
+  const elements = namedImports.elements;
+  const index = elements.findIndex((element) => element === specifier);
+  if (index === -1) {
+    return { start: specifier.getFullStart(), end: specifier.getEnd(), text: "" };
+  }
+
+  const previous = elements[index - 1];
+  const next = elements[index + 1];
+  if (next) {
+    return {
+      start: specifier.getFullStart(),
+      end: next.getFullStart(),
+      text: "",
+    };
+  }
+
+  if (previous) {
+    return {
+      start: previous.getEnd(),
+      end: specifier.getEnd(),
+      text: "",
+    };
+  }
+
+  return { start: specifier.getFullStart(), end: specifier.getEnd(), text: "" };
+}
+
+function buildAccessImportReplacement(
+  sourceFile: ts.SourceFile,
+  sourceText: string,
+  accessImports: Set<string>,
+): { start: number; end: number; text: string } {
+  const sortedImports = [...accessImports].sort();
+  const accessImport = findAccessImport(sourceFile);
+
+  if (accessImport?.namedBindings && ts.isNamedImports(accessImport.namedBindings)) {
+    const existingNames = new Set(
+      accessImport.namedBindings.elements.map((specifier) => specifier.name.text),
+    );
+    const missingNames = sortedImports.filter((name) => !existingNames.has(name));
+    if (missingNames.length === 0) {
+      return { start: 0, end: 0, text: "" };
+    }
+
+    const closingBraceStart = accessImport.namedBindings.getEnd() - 1;
+    const prefix = accessImport.namedBindings.elements.length > 0 ? ", " : "";
+    return {
+      start: closingBraceStart,
+      end: closingBraceStart,
+      text: `${prefix}${missingNames.join(", ")}`,
+    };
+  }
+
+  const importLine = `import { ${sortedImports.join(", ")} } from "./access";\n`;
+  const lastImport = sourceFile.statements
+    .filter(ts.isImportDeclaration)
+    .at(-1);
+  if (!lastImport) {
+    return { start: 0, end: 0, text: importLine };
+  }
+
+  return {
+    start: includeTrailingNewline(sourceText, lastImport.getEnd()),
+    end: includeTrailingNewline(sourceText, lastImport.getEnd()),
+    text: importLine,
+  };
+}
+
+function findAccessImport(sourceFile: ts.SourceFile):
+  | {
+      namedBindings?: ts.NamedImportBindings;
+    }
+  | null {
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
+      continue;
+    }
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== "./access") {
+      continue;
+    }
+
+    return { namedBindings: statement.importClause?.namedBindings };
+  }
+
+  return null;
 }
 
 function collectExportedNames(sourceFile: ts.SourceFile): Set<string> {
@@ -339,6 +563,17 @@ function isRawBuilderName(value: string): value is RawConvexBuilder {
   return rawBuilderNames.has(value);
 }
 
+function authenticatedBuilderName(builder: RawConvexBuilder): string {
+  switch (builder) {
+    case "query":
+      return "authenticatedQuery";
+    case "mutation":
+      return "authenticatedMutation";
+    case "action":
+      return "authenticatedAction";
+  }
+}
+
 function builderDisplaySuffix(builder: RawConvexBuilder): string {
   switch (builder) {
     case "query":
@@ -348,6 +583,33 @@ function builderDisplaySuffix(builder: RawConvexBuilder): string {
     case "action":
       return "Action";
   }
+}
+
+function includeTrailingNewline(sourceText: string, position: number): number {
+  if (sourceText[position] === "\r" && sourceText[position + 1] === "\n") {
+    return position + 2;
+  }
+  if (sourceText[position] === "\n") {
+    return position + 1;
+  }
+  return position;
+}
+
+function applyTextReplacements(
+  sourceText: string,
+  replacements: Array<{ start: number; end: number; text: string }>,
+): string {
+  const sorted = replacements
+    .filter((replacement) => replacement.start !== replacement.end || replacement.text.length > 0)
+    .sort((left, right) => right.start - left.start);
+  let result = sourceText;
+
+  for (const replacement of sorted) {
+    result =
+      result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
+  }
+
+  return result;
 }
 
 function displayPathFor(cwd: string, filePath: string): string {
