@@ -2,21 +2,21 @@ import type { FunctionReference, HttpActionBuilder, HttpRouter } from "convex/se
 import { Webhook, WebhookVerificationError } from "standardwebhooks";
 import {
   ACCESS_CONTROL_SYNC_PATH,
-  accessProjectionSnapshotSchema,
-  type AccessProjectionSnapshot,
+  accessProjectionSyncPayloadSchema,
+  type AccessProjectionSyncPayload,
   type SyncResponse,
 } from "../shared/sync";
 
-type ApplySnapshotReference = FunctionReference<
+type ApplySyncReference = FunctionReference<
   "mutation",
   "public",
-  AccessProjectionSnapshot,
-  { ok: true; status: "applied" | "duplicate"; acknowledgedVersion: number }
+  AccessProjectionSyncPayload,
+  SyncResponse
 >;
 
 export type AccessControlSyncComponent = {
   sync: {
-    applySnapshot: ApplySnapshotReference;
+    applySnapshot: ApplySyncReference;
   };
 };
 
@@ -52,7 +52,7 @@ export function registerAccessControlRoutes(
         return jsonResponse({ ok: false, status: "invalid_signature" }, 401);
       }
 
-      const parsedPayload = accessProjectionSnapshotSchema.safeParse(verifiedPayload.payload);
+      const parsedPayload = accessProjectionSyncPayloadSchema.safeParse(verifiedPayload.payload);
       if (!parsedPayload.success) {
         return jsonResponse({ ok: false, status: "invalid_payload" }, 400);
       }

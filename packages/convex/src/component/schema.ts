@@ -98,6 +98,7 @@ export default defineSchema({
   })
     .index("by_assignment_id", ["assignmentId"])
     .index("by_principal", ["accessScopeId", "principalId"])
+    .index("by_role", ["accessScopeId", "roleId"])
     .index("by_target", ["accessScopeId", "targetType", "targetId"])
     .index("by_principal_target", [
       "accessScopeId",

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { Webhook } from "standardwebhooks";
 import { registerAccessControlRoutes } from "./http";
-import type { AccessProjectionSnapshot } from "../shared/sync";
+import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
 
 const secret = `whsec_${Buffer.from("test-secret").toString("base64")}`;
 
@@ -23,6 +23,31 @@ const snapshot: AccessProjectionSnapshot = {
     principalMemberships: [],
     roles: [],
     permissions: [],
+    rolePermissions: [],
+    roleAssignments: [],
+  },
+};
+
+const event: AccessProjectionEvent = {
+  type: "access.projection.event",
+  schemaVersion: 1,
+  eventId: "evt_2",
+  accessScopeId: "scope_1",
+  sourceVersion: 2,
+  changes: [{ entityType: "permission", entityId: "permission_1", operation: "upsert" }],
+  entities: {
+    principals: [],
+    principalMemberships: [],
+    roles: [],
+    permissions: [
+      {
+        permissionId: "permission_1",
+        key: "tasks:create",
+        resourceType: "tasks",
+        action: "create",
+        updatedAt: 1,
+      },
+    ],
     rolePermissions: [],
     roleAssignments: [],
   },
@@ -53,6 +78,25 @@ describe("registerAccessControlRoutes", () => {
     });
     expect(response.status).toBe(200);
     expect(runMutation).toHaveBeenCalledWith("applySnapshot", snapshot);
+  });
+
+  test("applies a signed incremental event", async () => {
+    const route = registerRouteForTest();
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 2,
+    });
+
+    const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(event)));
+
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 2,
+    });
+    expect(response.status).toBe(200);
+    expect(runMutation).toHaveBeenCalledWith("applySnapshot", event);
   });
 
   test("rejects an unsigned snapshot", async () => {

@@ -67,6 +67,19 @@ const roleAssignmentSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
 });
 
+export const accessProjectionChangeSchema = z.object({
+  entityType: z.enum([
+    "principal",
+    "principal_membership",
+    "role",
+    "permission",
+    "role_permission",
+    "role_assignment",
+  ]),
+  entityId: z.string().min(1),
+  operation: z.enum(["upsert", "delete"]),
+});
+
 export const accessProjectionSnapshotSchema = z.object({
   type: z.literal("access.projection.snapshot"),
   schemaVersion: z.literal(1),
@@ -91,6 +104,32 @@ export const accessProjectionSnapshotSchema = z.object({
 });
 
 export type AccessProjectionSnapshot = z.infer<typeof accessProjectionSnapshotSchema>;
+
+export const accessProjectionEventSchema = z.object({
+  type: z.literal("access.projection.event"),
+  schemaVersion: z.literal(1),
+  eventId: z.string().min(1),
+  accessScopeId: z.string().min(1),
+  sourceVersion: z.number().int().nonnegative(),
+  changes: z.array(accessProjectionChangeSchema),
+  entities: z.object({
+    principals: z.array(principalSchema),
+    principalMemberships: z.array(principalMembershipSchema),
+    roles: z.array(roleSchema),
+    permissions: z.array(permissionSchema),
+    rolePermissions: z.array(rolePermissionSchema),
+    roleAssignments: z.array(roleAssignmentSchema),
+  }),
+});
+
+export const accessProjectionSyncPayloadSchema = z.union([
+  accessProjectionSnapshotSchema,
+  accessProjectionEventSchema,
+]);
+
+export type AccessProjectionChange = z.infer<typeof accessProjectionChangeSchema>;
+export type AccessProjectionEvent = z.infer<typeof accessProjectionEventSchema>;
+export type AccessProjectionSyncPayload = z.infer<typeof accessProjectionSyncPayloadSchema>;
 
 export type SyncResponse =
   | { ok: true; status: "applied" | "duplicate"; acknowledgedVersion: number }
