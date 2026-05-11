@@ -13,6 +13,10 @@
       "types": "./dist/client/http.d.ts",
       "default": "./dist/client/http.js"
     },
+    "./checker": {
+      "types": "./dist/checker/index.d.ts",
+      "default": "./dist/checker/index.js"
+    },
     "./convex.config.js": {
       "types": "./dist/component/convex.config.d.ts",
       "default": "./dist/component/convex.config.js"
@@ -22,6 +26,9 @@
       "default": "./dist/component/convex.config.js"
     },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "hercules-convex-access-check": "./dist/checker/cli.js"
   },
   "author": "Hercules Team",
   "license": "MIT",
@@ -46,6 +53,7 @@
   },
   "dependencies": {
     "standardwebhooks": "^1.0.0",
+    "typescript": "^5.9.3",
     "zod": "^4.3.6"
   },
   "peerDependencies": {
