@@ -1,15 +1,15 @@
 # Development Guide
 
-This document contains information for maintainers and contributors working on the hercules-js monorepo.
+This document covers the maintainer and contributor workflow for the
+`hercules-js` monorepo.
 
-## Development Setup
+## Prerequisites
 
-### Prerequisites
+- Node.js `>=24` (see `engines` in `package.json`)
+- pnpm `10.19.0` (managed via `packageManager` in `package.json` — Corepack will
+  pick it up automatically)
 
-- Node.js 20+
-- pnpm 10.13.1+
-
-### Getting Started
+## Getting started
 
 ```bash
 # Install dependencies
@@ -18,135 +18,134 @@ pnpm install
 # Build all packages
 pnpm build
 
-# Run development mode (watch mode)
+# Watch mode
 pnpm dev
 
 # Run tests
 pnpm test
 ```
 
-### Project Structure
+## Project structure
 
-This project uses:
+- **pnpm workspaces** for monorepo management (`pnpm-workspace.yaml`).
+- **Turbo** for build orchestration and caching (`turbo.json`).
+- **TypeScript** + `tsdown` for package builds.
+- **Changesets** for versioning and the npm publish flow.
+- **GitHub Actions** for CI, preview publishing, and releases.
 
-- **pnpm workspaces** for monorepo management
-- **Turbo** for build orchestration and caching
-- **TypeScript** for type safety
-- **GitHub Actions** for automated publishing
+Published packages live under `packages/`:
 
-## Publishing
+- `@usehercules/analytics`
+- `@usehercules/auth`
+- `@usehercules/eslint-plugin`
+- `@usehercules/vite`
 
-### Automated Publishing
+## Releasing
 
-Packages are automatically published to npm when you push a tag to the main branch. The GitHub Actions workflow will:
+Releases are driven by [Changesets](https://github.com/changesets/changesets)
+and the `.github/workflows/release.yml` workflow. There is no local release
+script — every published artifact is built and published from CI so npm
+provenance attestations are produced.
 
-1. Build all packages
-2. Run tests
-3. Update package versions to match the tag
-4. Publish to npm with public access
-5. Create a GitHub release
+### 1. Add a changeset with your PR
 
-### Creating a Release
-
-Use the included release script for an interactive release process:
-
-```bash
-pnpm release
-```
-
-This script will:
-
-- Check that your working directory is clean
-- Prompt for the new version number
-- Update all package.json files
-- Build and test packages
-- Create a git commit and tag
-- Optionally push to GitHub to trigger publishing
-
-### Manual Release
-
-If you prefer to create releases manually:
+When you open a PR that should ship in the next release, include a changeset
+describing the change:
 
 ```bash
-# Update versions in all packages
-pnpm --recursive exec -- npm version 1.2.3 --no-git-tag-version
-
-# Commit and tag
-git add .
-git commit -m "chore: release v1.2.3"
-git tag -a "v1.2.3" -m "Release v1.2.3"
-
-# Push to trigger publishing
-git push origin main
-git push origin v1.2.3
+pnpm changeset
 ```
 
-### Setting up NPM Token
+Follow the prompts to pick the affected packages and bump type (patch / minor /
+major), then commit the generated file under `.changeset/` along with your code
+changes.
 
-To enable publishing, you need to add an `NPM_TOKEN` secret to your GitHub repository:
+### 2. Merge to `main`
 
-1. Create an npm access token at https://www.npmjs.com/settings/tokens
-2. Add it as a repository secret named `NPM_TOKEN`
-3. The token needs publish permissions for the `@usehercules` organization
+When the PR lands on `main`, the `Release` workflow runs:
 
-## Package Development
+- If there are pending changesets, it opens (or updates) a "chore: version
+  packages" PR that bumps versions and rewrites `CHANGELOG.md`.
+- When that version PR is merged, the same workflow runs `pnpm changeset:publish`
+  which builds and publishes the affected packages to npm with provenance.
 
-### Adding a New Package
+### 3. (Rare) Manual publish
 
-1. Create a new directory under `packages/`
-2. Add a `package.json` with the `@usehercules/` scope
-3. Include the package in the workspace by updating `pnpm-workspace.yaml` (if needed)
-4. Add build scripts and proper TypeScript configuration
-5. Update the main README to include the new package
+`.github/workflows/publish.yml` exposes a `workflow_dispatch` trigger that runs
+the same build / test / `pnpm publish --recursive` pipeline. Use it only to
+recover from a failed automated release. It is gated on the `release`
+deployment environment, so an approving reviewer is required.
+
+### Required secrets and environment
+
+The `release` GitHub deployment environment must contain:
+
+- `NPM_PUBLISH_TOKEN` — npm publish token with access to the `@usehercules`
+  scope. Releases also set `NPM_CONFIG_PROVENANCE=true`, so the workflow's
+  `id-token: write` permission is required (already configured).
+- `HERCULES_BOT_TOKEN` — token used by `changesets/action` to push the
+  version-packages PR back to the repo.
+
+Required reviewers on the `release` environment gate every publish.
+
+See `SECURITY.md` for the supply-chain practices in effect (action pinning,
+`permissions: {}` baseline, dependency cooldown, etc.).
+
+## Package development
+
+### Adding a new package
+
+1. Create a new directory under `packages/`.
+2. Add a `package.json` under the `@usehercules/` scope; mirror the
+   `publishConfig`, `exports`, and `files` shape used by existing packages.
+3. Add `tsconfig.json` and a `tsdown.config.ts`.
+4. The package is picked up automatically via the `packages/*` glob in
+   `pnpm-workspace.yaml`.
+5. Update the root `README.md` to list the new package.
 
 ### Testing
 
-Each package should include its own tests. Run tests across all packages with:
+Each package owns its tests. Run the whole suite from the root:
 
 ```bash
 pnpm test
 ```
 
+Or a single package:
+
+```bash
+pnpm --filter @usehercules/auth test
+```
+
 ### Building
 
-Build all packages:
-
 ```bash
+# All packages (Turbo will cache)
 pnpm build
-```
 
-Build a specific package:
-
-```bash
-# Build individual packages
+# Single package
 pnpm --filter @usehercules/auth build
-pnpm --filter @usehercules/database build
+pnpm --filter @usehercules/eslint-plugin build
 pnpm --filter @usehercules/vite build
-pnpm --filter @usehercules/hercules-js build
-
-# Or build all packages
-pnpm build
+pnpm --filter @usehercules/analytics build
 ```
 
-### Linting and Formatting
+### Preview packages
 
-(Add your linting setup here when implemented)
+Every PR runs `.github/workflows/preview.yml`, which publishes preview builds
+via [`pkg-pr-new`](https://github.com/stackblitz-labs/pkg.pr.new). The bot
+comments on the PR with installable preview URLs you can use to test changes
+against a downstream app before merging.
 
 ## Troubleshooting
 
-### Common Issues
-
-- **Build failures**: Ensure all dependencies are installed with `pnpm install`
-- **Version conflicts**: Clear node_modules and reinstall dependencies
-- **Publishing failures**: Check that NPM_TOKEN is properly set in GitHub secrets
-
-### Debugging
-
-Use the debug options in the Vite plugin for development:
-
-```javascript
-herculesPlugin({
-  debug: true,
-  message: "Debug message here",
-});
-```
+- **Build failures** — re-run `pnpm install`; the lockfile is enforced with
+  `--frozen-lockfile` in CI.
+- **`pnpm install` rejects a recently-published dep** — expected: the workspace
+  enforces a 3-day cooldown (`minimumReleaseAge` in `pnpm-workspace.yaml`) to
+  reduce exposure to compromised npm releases. Wait, or add the package to
+  `minimumReleaseAgeExclude` if absolutely needed.
+- **Release workflow paused** — the `release` environment requires reviewer
+  approval before the publish job runs. Check the workflow run page.
+- **Publish failures** — confirm `NPM_PUBLISH_TOKEN` is set on the `release`
+  environment and that the token has access to the `@usehercules` scope.
