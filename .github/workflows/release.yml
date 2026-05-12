@@ -22,8 +22,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          # persist-credentials intentionally left default: changesets/action
-          # uses this remote to push the version-packages PR via HERCULES_BOT_TOKEN.
+          # zizmor: ignore[artipacked] persist-credentials is required so
+          # changesets/action can push the version-packages PR with
+          # HERCULES_BOT_TOKEN. This job does not upload artifacts, so the
+          # token cannot leak via that path.
           token: ${{ secrets.HERCULES_BOT_TOKEN }}
 
       - name: Setup pnpm

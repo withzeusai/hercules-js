@@ -7,7 +7,7 @@ from this repository (`@usehercules/*`), please report it privately.
 
 - Open a [private vulnerability report](https://github.com/withzeusai/hercules-js/security/advisories/new)
   via GitHub's Security Advisories, or
-- Email `security@withzeus.ai` if GitHub access is not possible.
+- Email `security@hercules.app` if GitHub access is not possible.
 
 Please do not open public issues or pull requests for suspected vulnerabilities.
 
