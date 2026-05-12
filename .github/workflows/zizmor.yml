@@ -1,0 +1,36 @@
+name: Workflow security (zizmor)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - ".github/dependabot.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/dependabot.yml"
+  schedule:
+    - cron: "0 12 * * 1"
+
+permissions: {}
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        run: pipx install zizmor==1.5.2
+
+      - name: Run zizmor
+        run: zizmor --min-severity medium .
+        env:
+          GH_TOKEN: ${{ github.token }}

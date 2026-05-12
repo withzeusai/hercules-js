@@ -6,20 +6,24 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
-permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
+permissions: {}
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          # persist-credentials intentionally left default: changesets/action
+          # uses this remote to push the version-packages PR via HERCULES_BOT_TOKEN.
           token: ${{ secrets.HERCULES_BOT_TOKEN }}
 
       - name: Setup pnpm
@@ -31,21 +35,7 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: package.json
-          cache: "pnpm"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
