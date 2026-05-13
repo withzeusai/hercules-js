@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AuthProvider as ReactAuthProvider,
   type AuthProviderUserManagerProps,
+  useAuth as useOidcAuth,
 } from "react-oidc-context";
 import {
   UserManager,
@@ -11,6 +12,13 @@ import {
   type UserManagerSettings,
 } from "oidc-client-ts";
 import { createContext, useContext } from "react";
+import {
+  clearHerculesImpersonationParamsFromUrl,
+  getHerculesImpersonationStorageKey,
+  HERCULES_IMPERSONATION_SESSION_ID_PARAM,
+  HERCULES_IMPERSONATION_TOKEN_PARAM,
+  rememberHerculesImpersonationSession,
+} from "./impersonation-core";
 
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
@@ -36,6 +44,7 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
 
 interface HerculesAuthProviderContext {
   userManager: UserManager;
+  impersonationStorageKey: string;
 }
 
 const HerculesAuthProviderContext =
@@ -62,12 +71,15 @@ export function HerculesAuthProvider({
   client_id,
   ...props
 }: HerculesAuthProviderProps) {
-  const [userManager] = useState(
-    () =>
-      new UserManager({
+  const [{ userManager, impersonationStorageKey }] = useState(() => {
+    const effectiveAuthority = userManagerSettings?.authority ?? authority;
+    const effectiveClientId = userManagerSettings?.client_id ?? client_id;
+
+    return {
+      userManager: new UserManager({
         ...userManagerSettings,
-        authority: userManagerSettings?.authority ?? authority,
-        client_id: userManagerSettings?.client_id ?? client_id,
+        authority: effectiveAuthority,
+        client_id: effectiveClientId,
         prompt: userManagerSettings?.prompt ?? "select_account",
         response_type: userManagerSettings?.response_type ?? "code",
         scope:
@@ -82,17 +94,67 @@ export function HerculesAuthProvider({
           userManagerSettings?.userStore ??
           new WebStorageStateStore({ store: window.localStorage }),
       }),
-  );
+      impersonationStorageKey: getHerculesImpersonationStorageKey(
+        effectiveAuthority,
+        effectiveClientId,
+      ),
+    };
+  });
 
   return (
-    <HerculesAuthProviderContext.Provider value={{ userManager }}>
+    <HerculesAuthProviderContext.Provider
+      value={{ userManager, impersonationStorageKey }}
+    >
       <ReactAuthProvider
         userManager={userManager}
         {...DEFAULT_AUTH_CONFIG}
         {...props}
       >
+        <HerculesImpersonationHandoff storageKey={impersonationStorageKey} />
         {children}
       </ReactAuthProvider>
     </HerculesAuthProviderContext.Provider>
   );
+}
+
+function HerculesImpersonationHandoff({ storageKey }: { storageKey: string }) {
+  const auth = useOidcAuth();
+  const hasStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasStartedRef.current || typeof window === "undefined") return;
+
+    const url = new URL(window.location.href);
+    const impersonationSessionId = url.searchParams.get(
+      HERCULES_IMPERSONATION_SESSION_ID_PARAM,
+    );
+    const impersonationToken = url.searchParams.get(
+      HERCULES_IMPERSONATION_TOKEN_PARAM,
+    );
+    if (!impersonationSessionId && !impersonationToken) return;
+    if (!impersonationSessionId || !impersonationToken || auth.isLoading) return;
+
+    hasStartedRef.current = true;
+    rememberHerculesImpersonationSession(storageKey, impersonationSessionId);
+    window.history.replaceState(
+      {},
+      document.title,
+      clearHerculesImpersonationParamsFromUrl(url).toString(),
+    );
+
+    void (async () => {
+      if (auth.isAuthenticated) {
+        await auth.removeUser();
+      }
+
+      await auth.signinRedirect({
+        extraQueryParams: {
+          [HERCULES_IMPERSONATION_SESSION_ID_PARAM]: impersonationSessionId,
+          [HERCULES_IMPERSONATION_TOKEN_PARAM]: impersonationToken,
+        },
+      });
+    })();
+  }, [auth, storageKey]);
+
+  return null;
 }
