@@ -39,4 +39,6 @@ jobs:
         run: pnpm build test
 
       - name: Publish preview packages
+        # zizmor: ignore[use-trusted-publishing] pkg-pr-new publishes preview
+        # builds to pkg.pr.new (not npm); trusted publishing does not apply.
         run: pnpm dlx pkg-pr-new@0.0.71 publish './packages/*'
