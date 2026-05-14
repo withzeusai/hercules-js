@@ -163,16 +163,17 @@ export const applySnapshot = mutation({
         };
       }
 
+      const applyChanges: Array<() => Promise<void>> = [];
       for (const change of args.changes) {
-        const applied = await applyChange();
-        if (!applied) {
+        const applyChange = validateChange();
+        if (!applyChange) {
           return { ok: false as const, status: "invalid_payload" as const };
         }
+        applyChanges.push(applyChange);
 
-        async function applyChange() {
+        function validateChange(): (() => Promise<void>) | null {
           if (change.operation === "delete") {
-            await deleteEntity(change.entityType, change.entityId, args.accessScopeId);
-            return true;
+            return () => deleteEntity(change.entityType, change.entityId, args.accessScopeId);
           }
 
           switch (change.entityType) {
@@ -180,59 +181,57 @@ export const applySnapshot = mutation({
               const principal = args.entities.principals.find(
                 (candidate) => candidate.principalId === change.entityId,
               );
-              if (!principal) return false;
-              await upsertPrincipal(args.accessScopeId, principal);
-              return true;
+              if (!principal) return null;
+              return () => upsertPrincipal(args.accessScopeId, principal);
             }
             case "principal_membership": {
               const [groupPrincipalId, memberPrincipalId] = change.entityId.split(":");
-              if (!groupPrincipalId || !memberPrincipalId) return false;
+              if (!groupPrincipalId || !memberPrincipalId) return null;
               const membership = args.entities.principalMemberships.find(
                 (candidate) =>
                   candidate.groupPrincipalId === groupPrincipalId &&
                   candidate.memberPrincipalId === memberPrincipalId,
               );
-              if (!membership) return false;
-              await upsertPrincipalMembership(args.accessScopeId, membership);
-              return true;
+              if (!membership) return null;
+              return () => upsertPrincipalMembership(args.accessScopeId, membership);
             }
             case "role": {
               const role = args.entities.roles.find((candidate) => candidate.roleId === change.entityId);
-              if (!role) return false;
-              await upsertRole(args.accessScopeId, role);
-              return true;
+              if (!role) return null;
+              return () => upsertRole(args.accessScopeId, role);
             }
             case "permission": {
               const permission = args.entities.permissions.find(
                 (candidate) => candidate.permissionId === change.entityId,
               );
-              if (!permission) return false;
-              await upsertPermission(args.accessScopeId, permission);
-              return true;
+              if (!permission) return null;
+              return () => upsertPermission(args.accessScopeId, permission);
             }
             case "role_permission": {
               const [roleId, permissionId] = change.entityId.split(":");
-              if (!roleId || !permissionId) return false;
+              if (!roleId || !permissionId) return null;
               const rolePermission = args.entities.rolePermissions.find(
                 (candidate) =>
                   candidate.roleId === roleId && candidate.permissionId === permissionId,
               );
-              if (!rolePermission) return false;
-              await upsertRolePermission(args.accessScopeId, rolePermission);
-              return true;
+              if (!rolePermission) return null;
+              return () => upsertRolePermission(args.accessScopeId, rolePermission);
             }
             case "role_assignment": {
               const assignment = args.entities.roleAssignments.find(
                 (candidate) => candidate.assignmentId === change.entityId,
               );
-              if (!assignment) return false;
-              await upsertRoleAssignment(args.accessScopeId, assignment);
-              return true;
+              if (!assignment) return null;
+              return () => upsertRoleAssignment(args.accessScopeId, assignment);
             }
             default:
-              return false;
+              return null;
           }
         }
+      }
+
+      for (const applyChange of applyChanges) {
+        await applyChange();
       }
 
       await ctx.db.replace(state._id, {
