@@ -6,6 +6,7 @@ import { ConvexError } from "convex/values";
 import * as z from "zod";
 import { useHerculesAuthProvider } from "./HerculesAuthProvider";
 import {
+  clearAuthAttemptId,
   reportAuthDiagnostic,
   startAuthAttempt,
   type AuthDiagnosticPhase,
@@ -141,7 +142,7 @@ export function useAuthCallback(
     signinRedirect,
   } = useAuth();
 
-  const { authority, clientId, redirectUri, diagnostics, userManager } =
+  const { authority, clientId, redirectUri, diagnostics } =
     useHerculesAuthProvider();
 
   const [status, setStatus] = useState<AuthCallbackStatus>("processing-oauth");
@@ -161,39 +162,20 @@ export function useAuthCallback(
     (phase: AuthDiagnosticPhase, err: unknown) => {
       if (reportedPhases.current.has(phase)) return;
       reportedPhases.current.add(phase);
-      // metadata may already be cached on the userManager. Reading it here
-      // (vs. capturing from outside) keeps the call cheap and consistent
-      // with what the OIDC SDK believed it was talking to.
-      Promise.resolve()
-        .then(async () => {
-          let metadataIssuer: string | undefined;
-          let tokenEndpoint: string | undefined;
-          try {
-            metadataIssuer = await userManager.metadataService.getIssuer();
-          } catch {
-            // ignore
-          }
-          try {
-            tokenEndpoint =
-              await userManager.metadataService.getTokenEndpoint();
-          } catch {
-            // ignore
-          }
-          reportAuthDiagnostic(diagnostics, {
-            phase,
-            error: err,
-            authority,
-            clientId,
-            redirectUri,
-            metadataIssuer,
-            tokenEndpoint,
-          });
-        })
-        .catch(() => {
-          // diagnostic reporting must never throw
-        });
+      // Synchronous: report immediately with the static authority/client
+      // info from the active UserManager. We deliberately don't reach into
+      // metadataService here because, if discovery is what failed, that
+      // call would either hang on the same failing fetch or trigger
+      // another one before we ever get the diagnostic out.
+      reportAuthDiagnostic(diagnostics, {
+        phase,
+        error: err,
+        authority,
+        clientId,
+        redirectUri,
+      });
     },
-    [diagnostics, authority, clientId, redirectUri, userManager],
+    [diagnostics, authority, clientId, redirectUri],
   );
 
   // Reset on mount, cleanup on unmount
@@ -338,6 +320,10 @@ export function useAuthCallback(
   // Handle successful completion
   useEffect(() => {
     if (status === "success") {
+      // Burn the correlation id so the next sign-in flow starts fresh.
+      // Failures that happen later in the same tab will still get a new
+      // attempt id from the next startAuthAttempt() call.
+      clearAuthAttemptId();
       onSuccess?.();
     }
   }, [status, onSuccess]);

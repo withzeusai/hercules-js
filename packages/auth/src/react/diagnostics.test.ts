@@ -29,6 +29,44 @@ function setOnline(online: boolean) {
   });
 }
 
+/**
+ * Replace `window.sessionStorage` with a throwing stub. More robust than
+ * `vi.spyOn(Storage.prototype, ...)` because it isolates from any other
+ * Storage instances (localStorage) the test environment exposes, and
+ * matches the failure mode browsers actually produce (the storage getter
+ * itself throwing) more closely than method-level spies.
+ */
+function installThrowingSessionStorage(): () => void {
+  const original = Object.getOwnPropertyDescriptor(window, "sessionStorage");
+  const throwingStub = {
+    getItem: () => {
+      throw new Error("SecurityError");
+    },
+    setItem: () => {
+      throw new Error("QuotaExceededError");
+    },
+    removeItem: () => {
+      throw new Error("SecurityError");
+    },
+    clear: () => {
+      throw new Error("SecurityError");
+    },
+    key: () => null,
+    length: 0,
+  };
+  Object.defineProperty(window, "sessionStorage", {
+    configurable: true,
+    value: throwingStub,
+  });
+  return () => {
+    if (original) {
+      Object.defineProperty(window, "sessionStorage", original);
+    } else {
+      delete (window as { sessionStorage?: unknown }).sessionStorage;
+    }
+  };
+}
+
 beforeEach(() => {
   __resetDiagnosticsState();
   try {
@@ -123,25 +161,16 @@ describe("attempt id", () => {
   });
 
   it("falls back to in-memory id when sessionStorage throws", () => {
-    const setItem = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(() => {
-        throw new Error("QuotaExceededError");
-      });
-    const getItem = vi
-      .spyOn(Storage.prototype, "getItem")
-      .mockImplementation(() => {
-        throw new Error("SecurityError");
-      });
+    const restore = installThrowingSessionStorage();
+    try {
+      const id = getOrCreateAuthAttemptId();
+      expect(id).toBeTruthy();
 
-    const id = getOrCreateAuthAttemptId();
-    expect(id).toBeTruthy();
-
-    // second call should return same in-memory id
-    expect(getOrCreateAuthAttemptId()).toBe(id);
-
-    setItem.mockRestore();
-    getItem.mockRestore();
+      // second call should return same in-memory id
+      expect(getOrCreateAuthAttemptId()).toBe(id);
+    } finally {
+      restore();
+    }
   });
 });
 
@@ -270,6 +299,52 @@ describe("reportAuthDiagnostic", () => {
     expect(onDiagnostic).toHaveBeenCalledTimes(2);
   });
 
+  it("does not serialize arbitrary thrown objects", async () => {
+    class CustomBoom {
+      // Pretend this is an axios-style error carrying request data.
+      readonly request = {
+        headers: { authorization: "Bearer SUPER_SECRET_TOKEN" },
+        body: { user: "alice", password: "hunter2" },
+      };
+      readonly response = { status: 401, body: "id_token=DO_NOT_LEAK" };
+    }
+
+    reportAuthDiagnostic(
+      {},
+      { phase: "backend-sync-failed", error: new CustomBoom() },
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(beaconCalls).toHaveLength(1);
+    const raw = beaconCalls[0]!.body;
+    expect(raw).not.toContain("SUPER_SECRET_TOKEN");
+    expect(raw).not.toContain("hunter2");
+    expect(raw).not.toContain("DO_NOT_LEAK");
+    expect(raw).not.toContain("authorization");
+
+    const event = JSON.parse(raw) as AuthDiagnosticEvent;
+    expect(event.errorName).toBe("CustomBoom");
+    expect(event.errorMessage).toBeUndefined();
+  });
+
+  it("does not include the content of thrown strings", async () => {
+    reportAuthDiagnostic(
+      {},
+      {
+        phase: "backend-sync-failed",
+        // `throw "token=" + tokenValue` is a real anti-pattern in customer code
+        error: "auth failed: token=DO_NOT_LEAK_STRING",
+      },
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    const raw = beaconCalls[0]!.body;
+    expect(raw).not.toContain("DO_NOT_LEAK_STRING");
+    const event = JSON.parse(raw) as AuthDiagnosticEvent;
+    expect(event.errorName).toBe("ThrownString");
+    expect(event.errorMessage).toBeUndefined();
+  });
+
   it("never sends sensitive fields like code, state, full URL, or tokens", async () => {
     setLocation(
       "https://app.example.com/auth/callback?code=SECRET_CODE&state=SECRET_STATE&error=interaction_required",
@@ -295,23 +370,21 @@ describe("reportAuthDiagnostic", () => {
   });
 
   it("reports storageAvailable: false when sessionStorage is broken", async () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("QuotaExceededError");
-    });
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("SecurityError");
-    });
+    const restore = installThrowingSessionStorage();
+    try {
+      reportAuthDiagnostic(
+        {},
+        { phase: "signin-redirect-failed", error: new Error("boom") },
+      );
 
-    reportAuthDiagnostic(
-      {},
-      { phase: "signin-redirect-failed", error: new Error("boom") },
-    );
-
-    await new Promise((r) => setTimeout(r, 0));
-    expect(beaconCalls).toHaveLength(1);
-    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-    expect(event.storageAvailable).toBe(false);
-    expect(event.authAttemptId).toBeTruthy();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(beaconCalls).toHaveLength(1);
+      const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
+      expect(event.storageAvailable).toBe(false);
+      expect(event.authAttemptId).toBeTruthy();
+    } finally {
+      restore();
+    }
   });
 
   it("truncates oversized error messages", async () => {

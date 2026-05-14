@@ -37,36 +37,22 @@ export function useAuth(): AuthContextProps {
       try {
         await rawSigninRedirect(args);
       } catch (err) {
-        // Best-effort: try to surface the issuer the SDK believed it was
-        // talking to. metadataService caches the doc; this is cheap on hit
-        // and a no-op on miss.
-        let metadataIssuer: string | undefined;
-        let tokenEndpoint: string | undefined;
-        try {
-          metadataIssuer = await userManager.metadataService.getIssuer();
-        } catch {
-          // metadata fetch itself failed — that's the most likely cause of
-          // this branch. The error itself is already captured below.
-        }
-        try {
-          tokenEndpoint = await userManager.metadataService.getTokenEndpoint();
-        } catch {
-          // ignore
-        }
-
+        // Synchronous-only context: don't reach back into metadataService
+        // here. If discovery is what failed, awaiting another metadata
+        // read would hang behind the same failure or trigger a second
+        // failing fetch. The static authority/clientId/redirectUri are
+        // already enough to locate the misconfiguration server-side.
         reportAuthDiagnostic(diagnostics, {
           phase: "signin-redirect-failed",
           error: err,
           authority,
           clientId,
           redirectUri,
-          metadataIssuer,
-          tokenEndpoint,
         });
         throw err;
       }
     },
-    [rawSigninRedirect, userManager, diagnostics, authority, clientId, redirectUri],
+    [rawSigninRedirect, diagnostics, authority, clientId, redirectUri],
   );
 
   const signin = useCallback(async () => {

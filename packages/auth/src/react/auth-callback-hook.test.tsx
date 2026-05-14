@@ -43,6 +43,7 @@ const defaultProviderContext = {
   clientId: "client_xyz",
   redirectUri: "https://app.example.com/auth/callback",
   diagnostics: { enabled: false } as unknown,
+  storageAvailable: true,
 };
 let mockProviderContext: typeof defaultProviderContext = defaultProviderContext;
 
@@ -405,6 +406,29 @@ describe("useAuthCallback", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("clears the auth attempt id on success", async () => {
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+      };
+
+      // Seed an attempt id like a real sign-in would.
+      sessionStorage.setItem("_hrc_auth_attempt", "att_existing");
+
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const { result } = renderHook(() =>
+        useAuthCallback({ isBackendAuthenticated: true }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("success");
+      });
+
+      expect(sessionStorage.getItem("_hrc_auth_attempt")).toBeNull();
     });
 
     it("does not report diagnostics on the happy path", async () => {

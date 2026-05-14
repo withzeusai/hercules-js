@@ -37,6 +37,7 @@ const defaultProviderContext = {
   clientId: "client_xyz",
   redirectUri: "https://app.example.com/auth/callback",
   diagnostics: { enabled: false },
+  storageAvailable: true,
 };
 let mockProviderContext: typeof defaultProviderContext & {
   diagnostics?: unknown;

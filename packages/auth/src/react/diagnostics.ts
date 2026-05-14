@@ -12,15 +12,19 @@ const DEDUPE_WINDOW_MS = 60_000;
 const MAX_ERROR_MESSAGE_LEN = 500;
 const MAX_STRING_FIELD_LEN = 256;
 
+// Replaced at build time by tsdown's `define` with the literal package
+// version. In test or unbundled environments where the substitution
+// hasn't happened, this resolves to `undefined` via the safe access below.
+declare const __HERCULES_AUTH_SDK_VERSION__: string | undefined;
+
 function readSdkVersion(): string | undefined {
-  // Injected by the build via tsdown `define`. Guarded so missing injection
-  // (e.g. tests, unbundled consumers) degrades to `undefined` instead of
-  // throwing a ReferenceError.
   try {
-    const g = globalThis as { __HERCULES_AUTH_SDK_VERSION__?: string };
-    return typeof g.__HERCULES_AUTH_SDK_VERSION__ === "string"
-      ? g.__HERCULES_AUTH_SDK_VERSION__
-      : undefined;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    const v: unknown =
+      typeof __HERCULES_AUTH_SDK_VERSION__ !== "undefined"
+        ? __HERCULES_AUTH_SDK_VERSION__
+        : undefined;
+    return typeof v === "string" ? v : undefined;
   } catch {
     return undefined;
   }
@@ -405,6 +409,17 @@ interface CreateDiagnosticInput {
   appBuildId?: string;
 }
 
+/**
+ * Describes the thrown value safely. Privacy rule: never serialize the
+ * thrown value itself, because `onSync()` and other customer-provided
+ * callbacks can throw arbitrary objects that may carry tokens, headers,
+ * or request bodies. We only trust:
+ *   - real `Error` instances → name + message (both truncated)
+ *   - everything else → record the constructor name only, no payload
+ *
+ * Even thrown strings are excluded: `throw "auth failed: token=" + t` is a
+ * known anti-pattern and we'd rather lose context than leak a token.
+ */
 function describeError(err: unknown): { name?: string; message?: string } {
   if (err == null) return {};
   if (err instanceof Error) {
@@ -414,13 +429,13 @@ function describeError(err: unknown): { name?: string; message?: string } {
     };
   }
   if (typeof err === "string") {
-    return { message: truncate(err, MAX_ERROR_MESSAGE_LEN) };
+    return { name: "ThrownString" };
   }
-  try {
-    return { message: truncate(JSON.stringify(err), MAX_ERROR_MESSAGE_LEN) };
-  } catch {
-    return {};
+  if (typeof err === "object") {
+    const ctor = (err as { constructor?: { name?: string } }).constructor?.name;
+    return { name: truncate(ctor ?? "ThrownObject", MAX_STRING_FIELD_LEN) };
   }
+  return { name: truncate(`Thrown<${typeof err}>`, MAX_STRING_FIELD_LEN) };
 }
 
 function buildEvent(input: CreateDiagnosticInput): AuthDiagnosticEvent {

@@ -6,6 +6,7 @@ import {
   type AuthProviderUserManagerProps,
 } from "react-oidc-context";
 import {
+  InMemoryWebStorage,
   UserManager,
   WebStorageStateStore,
   type UserManagerSettings,
@@ -46,10 +47,15 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
 
 interface HerculesAuthProviderContext {
   userManager: UserManager;
+  /** Resolved authority from the active UserManager settings. */
   authority: string;
+  /** Resolved client_id from the active UserManager settings. */
   clientId: string;
+  /** Resolved redirect_uri from the active UserManager settings. */
   redirectUri: string;
   diagnostics: DiagnosticsConfig | undefined;
+  /** True iff browser storage is usable for OIDC state. */
+  storageAvailable: boolean;
 }
 
 const HerculesAuthProviderContext =
@@ -61,6 +67,30 @@ export function useHerculesAuthProvider() {
     throw new Error("HerculesAuthProviderContext not found");
   }
   return context;
+}
+
+/**
+ * Best-effort access to localStorage. Some sandboxed iframes, hardened
+ * browsers, and Safari private windows throw on the `window.localStorage`
+ * getter itself — not just on `setItem`. If that happens we fall back to an
+ * in-memory store so the provider can still construct, the diagnostics
+ * pipeline can still run, and sign-in attempts can still report failure.
+ */
+function pickOidcStateStore(
+  override: WebStorageStateStore | undefined,
+): { store: WebStorageStateStore; storageAvailable: boolean } {
+  if (override) return { store: override, storageAvailable: true };
+  try {
+    return {
+      store: new WebStorageStateStore({ store: window.localStorage }),
+      storageAvailable: true,
+    };
+  } catch {
+    return {
+      store: new WebStorageStateStore({ store: new InMemoryWebStorage() }),
+      storageAvailable: false,
+    };
+  }
 }
 
 /**
@@ -77,9 +107,12 @@ export function HerculesAuthProvider({
   diagnostics,
   ...props
 }: HerculesAuthProviderProps) {
-  const [userManager] = useState(
-    () =>
-      new UserManager({
+  const [{ userManager, storageAvailable }] = useState(() => {
+    const { store, storageAvailable: ok } = pickOidcStateStore(
+      userManagerSettings?.userStore as WebStorageStateStore | undefined,
+    );
+    return {
+      userManager: new UserManager({
         ...userManagerSettings,
         authority: userManagerSettings?.authority ?? authority,
         client_id: userManagerSettings?.client_id ?? client_id,
@@ -93,21 +126,26 @@ export function HerculesAuthProvider({
         post_logout_redirect_uri:
           userManagerSettings?.post_logout_redirect_uri ??
           window.location.origin,
-        userStore:
-          userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
+        userStore: store,
       }),
-  );
+      storageAvailable: ok,
+    };
+  });
 
   const contextValue = useMemo<HerculesAuthProviderContext>(
     () => ({
       userManager,
-      authority,
-      clientId: client_id,
+      // Pull from UserManager.settings so diagnostics always reflect what
+      // the OIDC client actually used, not what the caller passed at the
+      // top level (these can diverge when userManagerSettings overrides
+      // authority/client_id).
+      authority: userManager.settings.authority,
+      clientId: userManager.settings.client_id,
       redirectUri: userManager.settings.redirect_uri,
       diagnostics,
+      storageAvailable,
     }),
-    [userManager, authority, client_id, diagnostics],
+    [userManager, diagnostics, storageAvailable],
   );
 
   return (
