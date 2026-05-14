@@ -25,6 +25,14 @@
       "types": "./dist/component/convex.config.d.ts",
       "default": "./dist/component/convex.config.js"
     },
+    "./_generated/component.js": {
+      "types": "./dist/_generated/component.d.ts",
+      "default": "./dist/_generated/component.js"
+    },
+    "./_generated/component": {
+      "types": "./dist/_generated/component.d.ts",
+      "default": "./dist/_generated/component.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
