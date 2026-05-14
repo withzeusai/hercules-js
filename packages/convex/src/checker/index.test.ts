@@ -153,6 +153,26 @@ describe("checkAccessControlSource", () => {
     expect(source).toContain('import { internalMutation } from "./_generated/server";');
     expect(source).toContain("export const repair = internalMutation({");
   });
+
+  test("rewrites nested files with a relative access import", () => {
+    const root = createFixture({
+      "convex/admin/posts.ts": `
+        import { query } from "../_generated/server";
+
+        export const list = query({
+          args: {},
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root, fixAuthenticated: true });
+    const source = readFileSync(join(root, "convex/admin/posts.ts"), "utf8");
+
+    expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
+    expect(source).toContain('import { authenticatedQuery } from "../access";');
+    expect(source).toContain("export const list = authenticatedQuery({");
+  });
 });
 
 function createFixture(files: Record<string, string>): string {

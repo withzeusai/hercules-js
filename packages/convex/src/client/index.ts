@@ -38,7 +38,7 @@ type AuthorizationArgs = {
 
 export type AccessControlComponent = {
   checks: {
-    authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision>;
+    authorize: FunctionReference<"query", "internal", AuthorizationArgs, AuthorizationDecision>;
   };
 };
 

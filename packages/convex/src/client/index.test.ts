@@ -1,6 +1,7 @@
 import { ConvexError } from "convex/values";
-import { describe, expect, test, vi } from "vitest";
-import { createAccessControl } from "./index";
+import { describe, expect, expectTypeOf, test, vi } from "vitest";
+import type { ComponentApi } from "../_generated/component";
+import { createAccessControl, type AccessControlComponent } from "./index";
 
 const component = {
   checks: {
@@ -9,6 +10,10 @@ const component = {
 };
 
 describe("createAccessControl", () => {
+  test("accepts the generated component API type", () => {
+    expectTypeOf<ComponentApi<"accessControl">>().toMatchTypeOf<AccessControlComponent>();
+  });
+
   test("requires access builders to declare a permission", () => {
     const builders = createAccessControl({
       query: identityBuilder,

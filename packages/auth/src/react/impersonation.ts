@@ -37,7 +37,7 @@ export function useHerculesImpersonation(): HerculesImpersonationState {
     typeof profile.hercules_actor_sub === "string"
       ? profile.hercules_actor_sub
       : null;
-  const sessionId = profileSessionId ?? storedSessionId;
+  const sessionId = auth.isAuthenticated ? profileSessionId : storedSessionId;
 
   useEffect(() => {
     if (!auth.isAuthenticated) return;
@@ -48,7 +48,13 @@ export function useHerculesImpersonation(): HerculesImpersonationState {
         profileSessionId,
       );
       setStoredSessionId(profileSessionId);
+      return;
     }
+
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(impersonationStorageKey);
+    }
+    setStoredSessionId(null);
   }, [auth.isAuthenticated, impersonationStorageKey, profileSessionId]);
 
   const stopImpersonating = useCallback(async () => {

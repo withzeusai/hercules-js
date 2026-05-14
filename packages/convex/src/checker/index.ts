@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 
 type RawConvexBuilder = "query" | "mutation" | "action";
@@ -76,7 +76,7 @@ export function checkAccessControlSource(
 
   const sourceFiles = collectSourceFiles(convexDir);
   const fixedFiles = options.fixAuthenticated
-    ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath)).length
+    ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir)).length
     : 0;
   const findings = sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath));
 
@@ -115,7 +115,7 @@ export function formatAccessControlCheckResult(result: AccessControlCheckResult)
   return lines.join("\n");
 }
 
-function fixSourceFileToAuthenticatedBuilders(filePath: string): boolean {
+function fixSourceFileToAuthenticatedBuilders(filePath: string, convexDir: string): boolean {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
   const rawBuilderImports = collectRawBuilderImports(sourceFile);
@@ -138,7 +138,7 @@ function fixSourceFileToAuthenticatedBuilders(filePath: string): boolean {
   }));
   const accessImports = new Set(replacements.map((replacement) => replacement.text));
   replacements.push(...buildGeneratedServerImportRemovals(sourceFile, sourceText, candidates));
-  replacements.push(buildAccessImportReplacement(sourceFile, sourceText, accessImports));
+  replacements.push(buildAccessImportReplacement(sourceFile, sourceText, accessImports, convexDir));
 
   const nextSourceText = applyTextReplacements(sourceText, replacements);
   if (nextSourceText === sourceText) {
@@ -351,9 +351,10 @@ function buildAccessImportReplacement(
   sourceFile: ts.SourceFile,
   sourceText: string,
   accessImports: Set<string>,
+  convexDir: string,
 ): { start: number; end: number; text: string } {
   const sortedImports = [...accessImports].sort();
-  const accessImport = findAccessImport(sourceFile);
+  const accessImport = findAccessImport(sourceFile, convexDir);
 
   if (accessImport?.namedBindings && ts.isNamedImports(accessImport.namedBindings)) {
     const existingNames = new Set(
@@ -373,7 +374,8 @@ function buildAccessImportReplacement(
     };
   }
 
-  const importLine = `import { ${sortedImports.join(", ")} } from "./access";\n`;
+  const accessImportPath = buildAccessImportPath(sourceFile, convexDir);
+  const importLine = `import { ${sortedImports.join(", ")} } from "${accessImportPath}";\n`;
   const lastImport = sourceFile.statements
     .filter(ts.isImportDeclaration)
     .at(-1);
@@ -388,7 +390,7 @@ function buildAccessImportReplacement(
   };
 }
 
-function findAccessImport(sourceFile: ts.SourceFile):
+function findAccessImport(sourceFile: ts.SourceFile, convexDir: string):
   | {
       namedBindings?: ts.NamedImportBindings;
     }
@@ -397,7 +399,10 @@ function findAccessImport(sourceFile: ts.SourceFile):
     if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
       continue;
     }
-    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== "./access") {
+    if (
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      !isAccessImport(sourceFile, statement.moduleSpecifier.text, convexDir)
+    ) {
       continue;
     }
 
@@ -405,6 +410,22 @@ function findAccessImport(sourceFile: ts.SourceFile):
   }
 
   return null;
+}
+
+function buildAccessImportPath(sourceFile: ts.SourceFile, convexDir: string): string {
+  const relativePath = normalizePath(relative(dirname(sourceFile.fileName), join(convexDir, "access")));
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+}
+
+function isAccessImport(sourceFile: ts.SourceFile, moduleSpecifier: string, convexDir: string): boolean {
+  if (!moduleSpecifier.startsWith(".")) {
+    return false;
+  }
+
+  return (
+    stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
+    join(convexDir, "access")
+  );
 }
 
 function collectExportedNames(sourceFile: ts.SourceFile): Set<string> {
@@ -622,4 +643,8 @@ function displayPathFor(cwd: string, filePath: string): string {
 
 function normalizePath(filePath: string): string {
   return filePath.split("\\").join("/");
+}
+
+function stripKnownModuleExtension(filePath: string): string {
+  return filePath.replace(/\.(?:c|m)?(?:t|j)sx?$/, "");
 }
