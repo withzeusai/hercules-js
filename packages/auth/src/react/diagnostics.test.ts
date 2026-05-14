@@ -387,6 +387,39 @@ describe("reportAuthDiagnostic", () => {
     }
   });
 
+  it("reports storageAvailable: false when only OIDC localStorage is broken", async () => {
+    // sessionStorage works (the default jsdom one), but the caller tells
+    // us the OIDC localStorage probe failed at provider construction.
+    reportAuthDiagnostic(
+      {},
+      {
+        phase: "callback-not-authenticated",
+        error: new Error("missing state"),
+        oidcStorageAvailable: false,
+      },
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(beaconCalls).toHaveLength(1);
+    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
+    expect(event.storageAvailable).toBe(false);
+  });
+
+  it("reports storageAvailable: true when both storages are working", async () => {
+    reportAuthDiagnostic(
+      {},
+      {
+        phase: "signin-redirect-failed",
+        error: new Error("boom"),
+        oidcStorageAvailable: true,
+      },
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
+    expect(event.storageAvailable).toBe(true);
+  });
+
   it("truncates oversized error messages", async () => {
     const longMsg = "x".repeat(2000);
     reportAuthDiagnostic(

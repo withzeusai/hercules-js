@@ -13,8 +13,14 @@ export interface AuthContextProps extends OidcAuthContextProps {
 }
 
 export function useAuth(): AuthContextProps {
-  const { userManager, authority, clientId, redirectUri, diagnostics } =
-    useHerculesAuthProvider();
+  const {
+    userManager,
+    authority,
+    clientId,
+    redirectUri,
+    diagnostics,
+    storageAvailable,
+  } = useHerculesAuthProvider();
   const auth = useOidcAuth();
 
   const { signoutRedirect, removeUser, signinRedirect: rawSigninRedirect } =
@@ -48,11 +54,19 @@ export function useAuth(): AuthContextProps {
           authority,
           clientId,
           redirectUri,
+          oidcStorageAvailable: storageAvailable,
         });
         throw err;
       }
     },
-    [rawSigninRedirect, diagnostics, authority, clientId, redirectUri],
+    [
+      rawSigninRedirect,
+      diagnostics,
+      authority,
+      clientId,
+      redirectUri,
+      storageAvailable,
+    ],
   );
 
   const signin = useCallback(async () => {

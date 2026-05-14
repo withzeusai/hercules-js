@@ -142,7 +142,7 @@ export function useAuthCallback(
     signinRedirect,
   } = useAuth();
 
-  const { authority, clientId, redirectUri, diagnostics } =
+  const { authority, clientId, redirectUri, diagnostics, storageAvailable } =
     useHerculesAuthProvider();
 
   const [status, setStatus] = useState<AuthCallbackStatus>("processing-oauth");
@@ -173,9 +173,10 @@ export function useAuthCallback(
         authority,
         clientId,
         redirectUri,
+        oidcStorageAvailable: storageAvailable,
       });
     },
-    [diagnostics, authority, clientId, redirectUri],
+    [diagnostics, authority, clientId, redirectUri, storageAvailable],
   );
 
   // Reset on mount, cleanup on unmount
@@ -342,9 +343,17 @@ export function useAuthCallback(
         authority,
         clientId,
         redirectUri,
+        oidcStorageAvailable: storageAvailable,
       });
     }
-  }, [signinRedirect, diagnostics, authority, clientId, redirectUri]);
+  }, [
+    signinRedirect,
+    diagnostics,
+    authority,
+    clientId,
+    redirectUri,
+    storageAvailable,
+  ]);
 
   return {
     status,

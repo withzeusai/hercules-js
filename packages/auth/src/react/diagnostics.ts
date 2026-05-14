@@ -407,6 +407,14 @@ interface CreateDiagnosticInput {
   /** Override for the attempt id (e.g. when caller already resolved one). */
   attemptId?: string;
   appBuildId?: string;
+  /**
+   * OIDC state-store availability (localStorage probe at provider mount).
+   * Distinct from the diagnostics module's own sessionStorage check — both
+   * can fail independently. If either is false, the event reports
+   * `storageAvailable: false` so we can search for OIDC-storage-broken
+   * failures specifically.
+   */
+  oidcStorageAvailable?: boolean;
 }
 
 /**
@@ -450,6 +458,15 @@ function buildEvent(input: CreateDiagnosticInput): AuthDiagnosticEvent {
   });
   const { name, message } = describeError(input.error);
 
+  // Storage is considered available iff BOTH our sessionStorage (for the
+  // attempt id) and the caller-supplied OIDC localStorage probe pass.
+  // If either is broken, the failure-investigation answer the user needs
+  // is the same: "browser storage was unavailable" — collapsing both into
+  // one boolean keeps the bucket simple to search on.
+  const sessionStorageOk = ctx.storageAvailable !== false;
+  const oidcStorageOk = input.oidcStorageAvailable !== false;
+  const storageAvailable = sessionStorageOk && oidcStorageOk;
+
   return {
     ...ctx,
     phase: input.phase,
@@ -458,6 +475,7 @@ function buildEvent(input: CreateDiagnosticInput): AuthDiagnosticEvent {
     errorName: name,
     errorMessage: message,
     appBuildId: input.appBuildId ?? ctx.appBuildId,
+    storageAvailable,
   };
 }
 

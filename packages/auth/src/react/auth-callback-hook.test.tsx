@@ -408,6 +408,25 @@ describe("useAuthCallback", () => {
       }
     });
 
+    it("propagates OIDC storage availability from provider into events", async () => {
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+        storageAvailable: false,
+      };
+
+      setAuthState({ error: new Error("OIDC failed") });
+
+      renderHook(() => useAuthCallback());
+
+      await waitFor(() => {
+        expect(onDiagnostic).toHaveBeenCalled();
+      });
+      const event = onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent;
+      expect(event.storageAvailable).toBe(false);
+    });
+
     it("clears the auth attempt id on success", async () => {
       const onDiagnostic = vi.fn();
       mockProviderContext = {

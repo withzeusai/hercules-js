@@ -70,19 +70,31 @@ export function useHerculesAuthProvider() {
 }
 
 /**
- * Best-effort access to localStorage. Some sandboxed iframes, hardened
- * browsers, and Safari private windows throw on the `window.localStorage`
- * getter itself — not just on `setItem`. If that happens we fall back to an
- * in-memory store so the provider can still construct, the diagnostics
- * pipeline can still run, and sign-in attempts can still report failure.
+ * Best-effort access to localStorage for OIDC state. Some sandboxed iframes,
+ * hardened browsers, and Safari private windows do one of:
+ *   - throw on the `window.localStorage` getter itself
+ *   - return a storage object whose `setItem` throws (private mode quota)
+ *   - return a storage object that silently drops writes
+ *
+ * The first two are catastrophic for OIDC because `signinRedirect()` writes
+ * state/nonce to the store and the callback reads it back; a broken store
+ * makes every callback look like `missing_oidc_state`. We probe with a real
+ * round-trip (read + write + remove) at construction time and fall back to
+ * an in-memory store so the provider can still mount, sign-in can still
+ * fire, and diagnostics can still report what actually happened.
  */
 function pickOidcStateStore(
   override: WebStorageStateStore | undefined,
 ): { store: WebStorageStateStore; storageAvailable: boolean } {
   if (override) return { store: override, storageAvailable: true };
   try {
+    const store = window.localStorage;
+    const probeKey = "__hrc_oidc_probe__";
+    store.setItem(probeKey, "1");
+    store.getItem(probeKey);
+    store.removeItem(probeKey);
     return {
-      store: new WebStorageStateStore({ store: window.localStorage }),
+      store: new WebStorageStateStore({ store }),
       storageAvailable: true,
     };
   } catch {
