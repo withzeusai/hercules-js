@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 1.0.42
+
+### Patch Changes
+
+- [#41](https://github.com/withzeusai/hercules-js/pull/41) [`2aed44b`](https://github.com/withzeusai/hercules-js/commit/2aed44b24fd0a6df4e72f57f0eaeb3e678a3d1d5) Thanks [@delbyte](https://github.com/delbyte)! - Fix component-tagger injecting `data-hercules-name` onto JSX from `@react-three/*` companion packages (postprocessing, cannon, rapier, xr), which crashed React Three Fiber's reconciler with `R3F: Cannot set 'data-hercules-name'`. The import-source filter now covers every `@react-three/*` package except `@react-three/fiber`, whose `<Canvas>` renders a real DOM canvas where data attributes are valid.
+
 ## 1.0.41
 
 ### Patch Changes
