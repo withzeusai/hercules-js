@@ -74,18 +74,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A minimal Map-backed Storage that behaves like a healthy localStorage.
+ * Used by the positive test so it does not depend on the test runner's
+ * ambient localStorage configuration.
+ */
+function createWorkingLocalStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    getItem: (key: string) => map.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      map.set(key, String(value));
+    },
+    removeItem: (key: string) => {
+      map.delete(key);
+    },
+    clear: () => map.clear(),
+    key: (index: number) => Array.from(map.keys())[index] ?? null,
+    get length() {
+      return map.size;
+    },
+  } as Storage;
+}
+
 describe("HerculesAuthProvider storage probe", () => {
   it("reports storageAvailable: true when localStorage works", () => {
-    let captured: ReturnType<typeof useHerculesAuthProvider> | undefined;
-    render(
-      <HerculesAuthProvider
-        authority="https://issuer.example.com"
-        client_id="client_xyz"
-      >
-        <ProviderProbe onContext={(c) => (captured = c)} />
-      </HerculesAuthProvider>,
-    );
-    expect(captured?.storageAvailable).toBe(true);
+    const restore = installLocalStorage(createWorkingLocalStorage());
+    try {
+      let captured: ReturnType<typeof useHerculesAuthProvider> | undefined;
+      render(
+        <HerculesAuthProvider
+          authority="https://issuer.example.com"
+          client_id="client_xyz"
+        >
+          <ProviderProbe onContext={(c) => (captured = c)} />
+        </HerculesAuthProvider>,
+      );
+      expect(captured?.storageAvailable).toBe(true);
+    } finally {
+      restore();
+    }
   });
 
   it("falls back to in-memory store when the localStorage getter throws", () => {
