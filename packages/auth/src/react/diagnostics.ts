@@ -140,6 +140,17 @@ function tryWriteStorage(key: string, value: string): boolean {
       return false;
     }
     sessionStorage.setItem(key, value);
+    // Verify the write actually persisted. Some extension-injected
+    // sessionStorage polyfills (and a few hardened browser modes) accept
+    // setItem silently but never persist — without this check, the next
+    // page load reads `null`, generates a NEW attempt id, and the
+    // start→callback correlation is lost while we still report
+    // `storageAvailable: true`. Symmetric with the localStorage probe
+    // in HerculesAuthProvider.
+    if (sessionStorage.getItem(key) !== value) {
+      storageBroken = true;
+      return false;
+    }
     return true;
   } catch {
     storageBroken = true;
@@ -389,21 +400,46 @@ interface CreateDiagnosticInput {
 }
 
 /**
+ * Phases whose error comes from customer-provided code (e.g. `onSync()`).
+ * For these we drop `Error.message` because customers commonly build
+ * messages like `new Error("user " + email + " is locked")` or
+ * `new Error("Failed: token=" + token)` — privacy-equivalent to the
+ * thrown-string anti-pattern. We still record `errorName` so the failure
+ * is debuggable by type.
+ *
+ * Library-controlled phases (oidc-client-ts, our own timeout/state
+ * constructions) keep the message — those are bounded sources whose
+ * error text is the primary debugging signal and doesn't echo customer
+ * input.
+ */
+const CUSTOMER_CONTROLLED_PHASES = new Set<AuthDiagnosticPhase>([
+  "backend-sync-failed",
+]);
+
+/**
  * Describes the thrown value safely. Privacy rule: never serialize the
  * thrown value itself, because `onSync()` and other customer-provided
  * callbacks can throw arbitrary objects that may carry tokens, headers,
  * or request bodies. We only trust:
- *   - real `Error` instances → name + message (both truncated)
+ *   - real `Error` instances from library-controlled phases → name + message
+ *   - real `Error` instances from customer-controlled phases → name only
  *   - everything else → record the constructor name only, no payload
  *
  * Even thrown strings are excluded: `throw "auth failed: token=" + t` is a
  * known anti-pattern and we'd rather lose context than leak a token.
  */
-function describeError(err: unknown): { name?: string; message?: string } {
+function describeError(
+  err: unknown,
+  phase: AuthDiagnosticPhase,
+): { name?: string; message?: string } {
   if (err == null) return {};
   if (err instanceof Error) {
+    const name = truncate(err.name, MAX_STRING_FIELD_LEN);
+    if (CUSTOMER_CONTROLLED_PHASES.has(phase)) {
+      return { name };
+    }
     return {
-      name: truncate(err.name, MAX_STRING_FIELD_LEN),
+      name,
       message: truncate(err.message, MAX_ERROR_MESSAGE_LEN),
     };
   }
@@ -427,7 +463,7 @@ function buildEvent(input: CreateDiagnosticInput): AuthDiagnosticEvent {
     metadataIssuer: input.metadataIssuer,
     tokenEndpoint: input.tokenEndpoint,
   });
-  const { name, message } = describeError(input.error);
+  const { name, message } = describeError(input.error, input.phase);
 
   // Storage is considered available iff BOTH our sessionStorage (for the
   // attempt id) and the caller-supplied OIDC localStorage probe pass.

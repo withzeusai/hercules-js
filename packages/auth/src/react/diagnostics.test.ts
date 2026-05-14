@@ -172,6 +172,42 @@ describe("attempt id", () => {
       restore();
     }
   });
+
+  it("falls back to in-memory id when sessionStorage silently drops writes", () => {
+    // setItem accepts the call but the value never persists. Without a
+    // readback check the next page load would read null, generate a NEW
+    // attempt id, and lose the start→callback correlation.
+    const silentDropStub = {
+      getItem: () => null, // never returns what was set
+      setItem: () => {},
+      removeItem: () => {},
+      clear: () => {},
+      key: () => null,
+      length: 0,
+    };
+    const original = Object.getOwnPropertyDescriptor(window, "sessionStorage");
+    Object.defineProperty(window, "sessionStorage", {
+      configurable: true,
+      value: silentDropStub,
+    });
+    try {
+      const id = getOrCreateAuthAttemptId();
+      expect(id).toBeTruthy();
+      // Same in-memory id on second call (didn't trust the silent storage).
+      expect(getOrCreateAuthAttemptId()).toBe(id);
+
+      // A diagnostic now reports storageAvailable: false even though
+      // setItem didn't throw.
+      reportAuthDiagnostic(
+        {},
+        { phase: "signin-redirect-failed", error: new Error("boom") },
+      );
+    } finally {
+      if (original) {
+        Object.defineProperty(window, "sessionStorage", original);
+      }
+    }
+  });
 });
 
 describe("reportAuthDiagnostic", () => {
@@ -327,6 +363,46 @@ describe("reportAuthDiagnostic", () => {
     expect(event.errorMessage).toBeUndefined();
   });
 
+  it("scrubs Error.message for the customer-controlled backend-sync-failed phase", async () => {
+    // Customer onSync() callbacks frequently build messages like
+    //   new Error("user " + email + " is locked")
+    //   new Error("Failed: token=" + token)
+    // We keep the errorName so the failure is still debuggable by type,
+    // but drop the message so customer-generated content never ships.
+    reportAuthDiagnostic(
+      {},
+      {
+        phase: "backend-sync-failed",
+        error: new Error("user alice@example.com session SENSITIVE_X is locked"),
+      },
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    const raw = beaconCalls[0]!.body;
+    expect(raw).not.toContain("SENSITIVE_X");
+    expect(raw).not.toContain("alice@example.com");
+    const event = JSON.parse(raw) as AuthDiagnosticEvent;
+    expect(event.errorName).toBe("Error");
+    expect(event.errorMessage).toBeUndefined();
+  });
+
+  it("keeps Error.message for library-controlled phases", async () => {
+    // oidc-client-ts / our own constructions are bounded sources whose
+    // error text is the primary debugging signal and doesn't echo
+    // customer input — we keep the message there.
+    reportAuthDiagnostic(
+      {},
+      {
+        phase: "oidc-error",
+        error: new Error("iss mismatch in id_token"),
+      },
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
+    expect(event.errorMessage).toBe("iss mismatch in id_token");
+  });
+
   it("does not include the content of thrown strings", async () => {
     reportAuthDiagnostic(
       {},
@@ -422,10 +498,12 @@ describe("reportAuthDiagnostic", () => {
 
   it("truncates oversized error messages", async () => {
     const longMsg = "x".repeat(2000);
+    // Use a library-controlled phase since the customer-controlled
+    // `backend-sync-failed` phase drops `errorMessage` entirely.
     reportAuthDiagnostic(
       {},
       {
-        phase: "backend-sync-failed",
+        phase: "oidc-error",
         error: new Error(longMsg),
       },
     );
