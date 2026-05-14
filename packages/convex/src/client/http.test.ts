@@ -55,7 +55,7 @@ const event: AccessProjectionEvent = {
 
 describe("registerAccessControlRoutes", () => {
   beforeEach(() => {
-    process.env.HERCULES_ACCESS_SYNC_SECRET = secret;
+    process.env.HERCULES_SYNC_SECRET = secret;
   });
 
   test("applies a signed snapshot", async () => {

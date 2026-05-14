@@ -35,7 +35,7 @@ export function registerAccessControlRoutes(
 ) {
   const component = resolveSyncComponent(options);
   const path = options.path ?? ACCESS_CONTROL_SYNC_PATH;
-  const envVarName = options.envVarName ?? "HERCULES_ACCESS_SYNC_SECRET";
+  const envVarName = options.envVarName ?? "HERCULES_SYNC_SECRET";
 
   http.route({
     path,
