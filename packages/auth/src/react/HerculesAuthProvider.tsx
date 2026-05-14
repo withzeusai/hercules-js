@@ -90,8 +90,15 @@ function pickOidcStateStore(
   try {
     const store = window.localStorage;
     const probeKey = "__hrc_oidc_probe__";
-    store.setItem(probeKey, "1");
-    store.getItem(probeKey);
+    const probeValue = "1";
+    store.setItem(probeKey, probeValue);
+    // Verify the value actually round-trips. Some hardened browsers and
+    // certain extension-injected polyfills accept setItem silently but
+    // never persist — without this check we'd mark such a store usable
+    // and every OIDC callback would look like missing_oidc_state.
+    if (store.getItem(probeKey) !== probeValue) {
+      throw new Error("localStorage probe write was not readable");
+    }
     store.removeItem(probeKey);
     return {
       store: new WebStorageStateStore({ store }),
@@ -120,9 +127,23 @@ export function HerculesAuthProvider({
   ...props
 }: HerculesAuthProviderProps) {
   const [{ userManager, storageAvailable }] = useState(() => {
-    const { store, storageAvailable: ok } = pickOidcStateStore(
-      userManagerSettings?.userStore as WebStorageStateStore | undefined,
-    );
+    const userOverride = userManagerSettings?.userStore as
+      | WebStorageStateStore
+      | undefined;
+    const stateOverride = userManagerSettings?.stateStore as
+      | WebStorageStateStore
+      | undefined;
+    // The probe is the source of truth; we run it once and use the same
+    // resolved store for both userStore and stateStore. oidc-client-ts
+    // defaults stateStore to a fresh `WebStorageStateStore({ store:
+    // localStorage })` inside the UserManager constructor — if we only
+    // override userStore, that default still throws on a broken
+    // localStorage before our wrapper ever sees an error.
+    const { store: userStore, storageAvailable: userOk } =
+      pickOidcStateStore(userOverride);
+    const { store: stateStore, storageAvailable: stateOk } = stateOverride
+      ? { store: stateOverride, storageAvailable: true }
+      : pickOidcStateStore(undefined);
     return {
       userManager: new UserManager({
         ...userManagerSettings,
@@ -138,9 +159,10 @@ export function HerculesAuthProvider({
         post_logout_redirect_uri:
           userManagerSettings?.post_logout_redirect_uri ??
           window.location.origin,
-        userStore: store,
+        userStore,
+        stateStore,
       }),
-      storageAvailable: ok,
+      storageAvailable: userOk && stateOk,
     };
   });
 
