@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor, configure } from "@testing-library/react";
 import { useAuthCallback } from "./auth-callback-hook.js";
+import {
+  __resetDiagnosticsState,
+  type AuthDiagnosticEvent,
+} from "./diagnostics.js";
 
 // Run every test under StrictMode so the double-mount cycle
 // (mount → unmount → remount) is always exercised.
@@ -22,6 +26,28 @@ let mockHasAuthParams = true;
 vi.mock("react-oidc-context", () => ({
   useAuth: () => mockAuthState,
   hasAuthParams: () => mockHasAuthParams,
+}));
+
+const mockGetIssuer = vi.fn().mockResolvedValue(undefined);
+const mockGetTokenEndpoint = vi.fn().mockResolvedValue(undefined);
+const mockUserManager = {
+  metadataService: {
+    getIssuer: mockGetIssuer,
+    getTokenEndpoint: mockGetTokenEndpoint,
+  },
+};
+
+const defaultProviderContext = {
+  userManager: mockUserManager,
+  authority: "https://issuer.example.com",
+  clientId: "client_xyz",
+  redirectUri: "https://app.example.com/auth/callback",
+  diagnostics: { enabled: false } as unknown,
+};
+let mockProviderContext: typeof defaultProviderContext = defaultProviderContext;
+
+vi.mock("./HerculesAuthProvider", () => ({
+  useHerculesAuthProvider: () => mockProviderContext,
 }));
 
 vi.mock("convex/values", () => ({
@@ -51,6 +77,17 @@ beforeEach(() => {
   };
   mockHasAuthParams = true;
   mockSigninRedirect.mockReset();
+  mockGetIssuer.mockResolvedValue("https://issuer.example.com");
+  mockGetTokenEndpoint.mockResolvedValue(
+    "https://issuer.example.com/oauth/token",
+  );
+  mockProviderContext = defaultProviderContext;
+  __resetDiagnosticsState();
+  try {
+    sessionStorage.clear();
+  } catch {
+    // ignore
+  }
 });
 
 describe("useAuthCallback", () => {
@@ -276,6 +313,119 @@ describe("useAuthCallback", () => {
       await waitFor(() => {
         expect(result.current.status).toBe("success");
       });
+    });
+  });
+
+  describe("diagnostics", () => {
+    it("reports oidc-error when OIDC reports an error", async () => {
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+      };
+
+      setAuthState({ error: new Error("OIDC failed") });
+
+      renderHook(() => useAuthCallback());
+
+      await waitFor(() => {
+        expect(onDiagnostic).toHaveBeenCalled();
+      });
+      const event = onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent;
+      expect(event.phase).toBe("oidc-error");
+      expect(event.errorClass).toBe("oidc_provider_error");
+    });
+
+    it("reports callback-timeout after timeout fires", async () => {
+      vi.useFakeTimers();
+      try {
+        const onDiagnostic = vi.fn();
+        mockProviderContext = {
+          ...defaultProviderContext,
+          diagnostics: { onDiagnostic, reportToHercules: false },
+        };
+
+        renderHook(() => useAuthCallback({ timeoutMs: 5000 }));
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+
+        expect(onDiagnostic).toHaveBeenCalled();
+        const event = onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent;
+        expect(event.phase).toBe("callback-timeout");
+        expect(event.errorClass).toBe("callback_timeout");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports backend-sync-failed when onSync throws", async () => {
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+      };
+
+      const onSync = vi.fn().mockRejectedValue(new Error("backend exploded"));
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      renderHook(() =>
+        useAuthCallback({ isBackendAuthenticated: true, onSync }),
+      );
+
+      await waitFor(() => {
+        expect(onDiagnostic).toHaveBeenCalled();
+      });
+      const event = onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent;
+      expect(event.phase).toBe("backend-sync-failed");
+      expect(event.errorClass).toBe("backend_sync_failed");
+    });
+
+    it("reports callback-not-authenticated after the OIDC callback stays unauthenticated", async () => {
+      vi.useFakeTimers();
+      try {
+        const onDiagnostic = vi.fn();
+        mockProviderContext = {
+          ...defaultProviderContext,
+          diagnostics: { onDiagnostic, reportToHercules: false },
+        };
+
+        setAuthState({ isLoading: false, isAuthenticated: false });
+
+        renderHook(() => useAuthCallback());
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(600);
+        });
+
+        expect(onDiagnostic).toHaveBeenCalled();
+        const event = onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent;
+        expect(event.phase).toBe("callback-not-authenticated");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not report diagnostics on the happy path", async () => {
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+      };
+
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const onSync = vi.fn().mockResolvedValue(undefined);
+      const { result } = renderHook(() =>
+        useAuthCallback({ isBackendAuthenticated: true, onSync }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("success");
+      });
+
+      expect(onDiagnostic).not.toHaveBeenCalled();
     });
   });
 });

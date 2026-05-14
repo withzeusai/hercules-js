@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AuthProvider as ReactAuthProvider,
   type AuthProviderUserManagerProps,
@@ -11,6 +11,7 @@ import {
   type UserManagerSettings,
 } from "oidc-client-ts";
 import { createContext, useContext } from "react";
+import type { DiagnosticsConfig } from "./diagnostics";
 
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
@@ -19,6 +20,15 @@ export type HerculesAuthProviderProps = Omit<
   userManagerSettings?: Partial<UserManagerSettings>;
   authority: string;
   client_id: string;
+  /**
+   * Failure-only auth diagnostics. Reports browser-side sign-in failures to
+   * Hercules so we can debug issues that never surface clearly in server
+   * logs. Successful sign-ins are never reported.
+   *
+   * Defaults: `enabled: true`, `reportToHercules: true`,
+   * `endpoint: "/_hercules/report"` (same-origin via the Hercules worker).
+   */
+  diagnostics?: DiagnosticsConfig;
 };
 
 function onSigninCallback() {
@@ -36,6 +46,10 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
 
 interface HerculesAuthProviderContext {
   userManager: UserManager;
+  authority: string;
+  clientId: string;
+  redirectUri: string;
+  diagnostics: DiagnosticsConfig | undefined;
 }
 
 const HerculesAuthProviderContext =
@@ -60,6 +74,7 @@ export function HerculesAuthProvider({
   userManagerSettings,
   authority,
   client_id,
+  diagnostics,
   ...props
 }: HerculesAuthProviderProps) {
   const [userManager] = useState(
@@ -84,8 +99,19 @@ export function HerculesAuthProvider({
       }),
   );
 
+  const contextValue = useMemo<HerculesAuthProviderContext>(
+    () => ({
+      userManager,
+      authority,
+      clientId: client_id,
+      redirectUri: userManager.settings.redirect_uri,
+      diagnostics,
+    }),
+    [userManager, authority, client_id, diagnostics],
+  );
+
   return (
-    <HerculesAuthProviderContext.Provider value={{ userManager }}>
+    <HerculesAuthProviderContext.Provider value={contextValue}>
       <ReactAuthProvider
         userManager={userManager}
         {...DEFAULT_AUTH_CONFIG}
