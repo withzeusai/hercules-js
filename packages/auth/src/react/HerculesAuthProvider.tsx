@@ -132,7 +132,15 @@ function HerculesImpersonationHandoff({ storageKey }: { storageKey: string }) {
       HERCULES_IMPERSONATION_TOKEN_PARAM,
     );
     if (!impersonationSessionId && !impersonationToken) return;
-    if (!impersonationSessionId || !impersonationToken || auth.isLoading) return;
+    if (!impersonationSessionId || !impersonationToken) {
+      window.history.replaceState(
+        {},
+        document.title,
+        clearHerculesImpersonationParamsFromUrl(url).toString(),
+      );
+      return;
+    }
+    if (auth.isLoading) return;
 
     hasStartedRef.current = true;
     rememberHerculesImpersonationSession(storageKey, impersonationSessionId);

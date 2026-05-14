@@ -144,6 +144,10 @@ export const applySnapshot = mutation({
         };
       }
 
+      if (state.accessScopeId !== args.accessScopeId) {
+        return { ok: false as const, status: "invalid_payload" as const };
+      }
+
       if (args.sourceVersion <= state.sourceVersion) {
         return {
           ok: true as const,
@@ -249,6 +253,10 @@ export const applySnapshot = mutation({
     }
 
     if (!args.config || !args.accessScopeAppId || !args.projectionId) {
+      return { ok: false as const, status: "invalid_payload" as const };
+    }
+
+    if (state && state.accessScopeId !== args.accessScopeId) {
       return { ok: false as const, status: "invalid_payload" as const };
     }
 
