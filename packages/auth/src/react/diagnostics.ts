@@ -12,24 +12,6 @@ const DEDUPE_WINDOW_MS = 60_000;
 const MAX_ERROR_MESSAGE_LEN = 500;
 const MAX_STRING_FIELD_LEN = 256;
 
-// Replaced at build time by tsdown's `define` with the literal package
-// version. In test or unbundled environments where the substitution
-// hasn't happened, this resolves to `undefined` via the safe access below.
-declare const __HERCULES_AUTH_SDK_VERSION__: string | undefined;
-
-function readSdkVersion(): string | undefined {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    const v: unknown =
-      typeof __HERCULES_AUTH_SDK_VERSION__ !== "undefined"
-        ? __HERCULES_AUTH_SDK_VERSION__
-        : undefined;
-    return typeof v === "string" ? v : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Phases at which client auth can fail. New phases must be reflected in the
  * backend classifier so events stay searchable by stable category.
@@ -82,7 +64,6 @@ export interface AuthDiagnosticEvent {
   iss?: string;
   errorName?: string;
   errorMessage?: string;
-  sdkVersion?: string;
   appBuildId?: string;
   online?: boolean;
   serviceWorkerControlled?: boolean;
@@ -299,11 +280,10 @@ export function classifyAuthError(err: unknown, phase: AuthDiagnosticPhase): Aut
   return "unknown";
 }
 
-interface DedupeEntry {
-  expiresAt: number;
-}
-
-const dedupeCache = new Map<string, DedupeEntry>();
+// Map values are expiry timestamps. The cache is bounded in practice by
+// the number of distinct (phase, errorClass, authorityHost, hasCode,
+// hasState) tuples that fail in a tab session, which is small.
+const dedupeCache = new Map<string, number>();
 
 /**
  * Returns true if an event matching the given key has already been reported
@@ -311,17 +291,9 @@ const dedupeCache = new Map<string, DedupeEntry>();
  * messages to avoid unstable-text defeating dedupe.
  */
 function shouldDedupe(key: string, now: number): boolean {
-  const existing = dedupeCache.get(key);
-  if (existing && existing.expiresAt > now) {
-    return true;
-  }
-  dedupeCache.set(key, { expiresAt: now + DEDUPE_WINDOW_MS });
-  // Prune lazily.
-  if (dedupeCache.size > 64) {
-    for (const [k, v] of dedupeCache) {
-      if (v.expiresAt <= now) dedupeCache.delete(k);
-    }
-  }
+  const expiresAt = dedupeCache.get(key);
+  if (expiresAt != null && expiresAt > now) return true;
+  dedupeCache.set(key, now + DEDUPE_WINDOW_MS);
   return false;
 }
 
@@ -392,7 +364,6 @@ function collectBrowserContext(options: CollectContextOptions): Omit<AuthDiagnos
   }
 
   event.storageAvailable = isStorageAvailable();
-  event.sdkVersion = readSdkVersion();
   return event;
 }
 

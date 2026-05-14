@@ -83,10 +83,10 @@ export function useHerculesAuthProvider() {
  * an in-memory store so the provider can still mount, sign-in can still
  * fire, and diagnostics can still report what actually happened.
  */
-function pickOidcStateStore(
-  override: WebStorageStateStore | undefined,
-): { store: WebStorageStateStore; storageAvailable: boolean } {
-  if (override) return { store: override, storageAvailable: true };
+function pickOidcStateStore(): {
+  store: WebStorageStateStore;
+  storageAvailable: boolean;
+} {
   try {
     const store = window.localStorage;
     const probeKey = "__hrc_oidc_probe__";
@@ -133,17 +133,19 @@ export function HerculesAuthProvider({
     const stateOverride = userManagerSettings?.stateStore as
       | WebStorageStateStore
       | undefined;
-    // The probe is the source of truth; we run it once and use the same
-    // resolved store for both userStore and stateStore. oidc-client-ts
-    // defaults stateStore to a fresh `WebStorageStateStore({ store:
-    // localStorage })` inside the UserManager constructor — if we only
-    // override userStore, that default still throws on a broken
-    // localStorage before our wrapper ever sees an error.
-    const { store: userStore, storageAvailable: userOk } =
-      pickOidcStateStore(userOverride);
-    const { store: stateStore, storageAvailable: stateOk } = stateOverride
-      ? { store: stateOverride, storageAvailable: true }
-      : pickOidcStateStore(undefined);
+    // Probe localStorage at most once and share the resolved store between
+    // userStore and stateStore. oidc-client-ts defaults stateStore to a
+    // fresh `WebStorageStateStore({ store: localStorage })` inside the
+    // UserManager constructor, so if we only override userStore that
+    // default still throws on broken localStorage before our wrapper sees
+    // it. Skip the probe entirely when both stores are caller-supplied.
+    let storageAvailable = true;
+    let defaultStore: WebStorageStateStore | undefined;
+    if (!userOverride || !stateOverride) {
+      const probe = pickOidcStateStore();
+      defaultStore = probe.store;
+      storageAvailable = probe.storageAvailable;
+    }
     return {
       userManager: new UserManager({
         ...userManagerSettings,
@@ -159,10 +161,10 @@ export function HerculesAuthProvider({
         post_logout_redirect_uri:
           userManagerSettings?.post_logout_redirect_uri ??
           window.location.origin,
-        userStore,
-        stateStore,
+        userStore: userOverride ?? defaultStore!,
+        stateStore: stateOverride ?? defaultStore!,
       }),
-      storageAvailable: userOk && stateOk,
+      storageAvailable,
     };
   });
 

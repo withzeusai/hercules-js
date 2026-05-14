@@ -4,8 +4,6 @@ export * from "./use-user";
 export * from "./use-auth";
 export {
   classifyAuthError,
-  clearAuthAttemptId,
-  getOrCreateAuthAttemptId,
   reportAuthDiagnostic,
   startAuthAttempt,
   type AuthDiagnosticEvent,
