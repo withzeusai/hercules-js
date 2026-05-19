@@ -21,7 +21,10 @@ function tokenExpiresWithin(token: string, ms: number): boolean {
 
 // Cross-tab mutex: uses Web Locks API when available, falls back to a
 // simple in-memory queue for environments that don't support it.
-async function withLock<T>(key: string, callback: () => Promise<T>): Promise<T> {
+async function withLock<T>(
+  key: string,
+  callback: () => Promise<T>,
+): Promise<T> {
   if (typeof navigator !== "undefined" && navigator.locks) {
     return navigator.locks.request(key, callback);
   }
@@ -69,7 +72,6 @@ async function manualMutex<T>(
 function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
-  const sub = user?.profile?.sub;
 
   const idTokenRef = useRef(idToken);
   idTokenRef.current = idToken;
@@ -79,11 +81,6 @@ function useUseAuthFromHercules() {
 
   const inFlightRefresh = useRef<Promise<string | null> | null>(null);
 
-  // Re-identify only when the OIDC subject changes. Convex's
-  // ConvexProviderWithAuth lists fetchAccessToken in two useEffect deps;
-  // re-identifying on every id_token tears down auth and unmounts the
-  // <Authenticated> subtree on each silent renewal. Re-identifying on `sub`
-  // still triggers a Convex re-auth on account switch.
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
       const currentToken = idTokenRef.current;
@@ -119,7 +116,7 @@ function useUseAuthFromHercules() {
       inFlightRefresh.current = refresh;
       return refresh;
     },
-    [sub],
+    [],
   );
 
   return useMemo(

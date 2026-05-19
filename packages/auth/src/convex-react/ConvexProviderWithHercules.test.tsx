@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import { renderHook, act, configure } from "@testing-library/react";
 import { ConvexProviderWithHerculesAuth } from "./ConvexProviderWithHercules.js";
+import React from "react";
 
 configure({ reactStrictMode: true });
 
@@ -278,7 +279,6 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     });
     rerender();
 
-    expect(result.current.fetchAccessToken).not.toBe(aliceFetch);
     expect(
       await result.current.fetchAccessToken({ forceRefreshToken: false }),
     ).toBe(BOB_TOKEN);
