@@ -5,7 +5,6 @@ import {
   reportAuthDiagnostic,
   startAuthAttempt,
   __resetDiagnosticsState,
-  type AuthDiagnosticEvent,
 } from "./diagnostics.js";
 
 function setLocation(url: string) {
@@ -27,6 +26,32 @@ function setOnline(online: boolean) {
     value: online,
     configurable: true,
   });
+}
+
+interface ReportedAppErrorEvent {
+  event_id: string;
+  timestamp: number;
+  level: string;
+  logger: string;
+  platform: string;
+  release?: string;
+  fingerprint: string[];
+  message: string;
+  error_type: string;
+  error_value?: string;
+  url?: string;
+  session_id: string;
+  auth_action: string;
+  auth_provider?: string;
+  sdk_name: string;
+  tags: Record<string, string>;
+  extra: Record<string, string>;
+}
+
+function parseReportedAppError(body: string): ReportedAppErrorEvent {
+  const envelope = JSON.parse(body) as { events: ReportedAppErrorEvent[] };
+  expect(envelope.events).toHaveLength(1);
+  return envelope.events[0]!;
 }
 
 /**
@@ -266,9 +291,9 @@ describe("reportAuthDiagnostic", () => {
     expect(beaconCalls).toHaveLength(0);
   });
 
-  it("posts to the configured endpoint when enabled", async () => {
+  it("posts to the app error endpoint when enabled", async () => {
     reportAuthDiagnostic(
-      { endpoint: "/_hercules/report" },
+      {},
       {
         phase: "signin-redirect-failed",
         error: new TypeError("Failed to fetch"),
@@ -281,18 +306,37 @@ describe("reportAuthDiagnostic", () => {
     // sendBeacon mock resolves async because Blob.text() is async
     await new Promise((r) => setTimeout(r, 0));
     expect(beaconCalls).toHaveLength(1);
-    expect(beaconCalls[0]!.url).toBe("/_hercules/report");
-    const body = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-    expect(body.phase).toBe("signin-redirect-failed");
-    expect(body.errorClass).toBe("failed_fetch");
-    expect(body.authorityHost).toBe("issuer.example.com");
-    expect(body.clientId).toBe("client_abc");
-    expect(body.redirectUriOrigin).toBe("https://app.example.com");
-    expect(body.redirectUriPath).toBe("/auth/callback");
-    expect(body.origin).toBe("https://app.example.com");
-    expect(body.online).toBe(true);
-    expect(body.storageAvailable).toBe(true);
-    expect(body.authAttemptId).toBeTruthy();
+    expect(beaconCalls[0]!.url).toBe("/_hercules/e");
+    const event = parseReportedAppError(beaconCalls[0]!.body);
+    expect(event.event_id).toBeTruthy();
+    expect(event.timestamp).toBeGreaterThan(0);
+    expect(event.level).toBe("error");
+    expect(event.logger).toBe("auth");
+    expect(event.platform).toBe("javascript");
+    expect(event.message).toBe(
+      "Hercules auth diagnostic: signin-redirect-failed",
+    );
+    expect(event.error_type).toBe("TypeError");
+    expect(event.error_value).toBe("Failed to fetch");
+    expect(event.url).toBe("https://app.example.com/auth/callback");
+    expect(event.session_id).toBeTruthy();
+    expect(event.auth_action).toBe("sign_in");
+    expect(event.auth_provider).toBe("issuer.example.com");
+    expect(event.sdk_name).toBe("@usehercules/auth");
+    expect(event.fingerprint).toEqual([
+      "@usehercules/auth",
+      "signin-redirect-failed",
+      "failed_fetch",
+      "issuer.example.com",
+    ]);
+    expect(event.tags.auth_phase).toBe("signin-redirect-failed");
+    expect(event.tags.auth_error_class).toBe("failed_fetch");
+    expect(event.tags.online).toBe("true");
+    expect(event.tags.storage_available).toBe("true");
+    expect(event.extra.client_id).toBe("client_abc");
+    expect(event.extra.redirect_uri_origin).toBe("https://app.example.com");
+    expect(event.extra.redirect_uri_path).toBe("/auth/callback");
+    expect(event.extra.origin).toBe("https://app.example.com");
   });
 
   it("dedupes repeated failures with the same normalized key within the window", async () => {
@@ -358,9 +402,9 @@ describe("reportAuthDiagnostic", () => {
     expect(raw).not.toContain("DO_NOT_LEAK");
     expect(raw).not.toContain("authorization");
 
-    const event = JSON.parse(raw) as AuthDiagnosticEvent;
-    expect(event.errorName).toBe("CustomBoom");
-    expect(event.errorMessage).toBeUndefined();
+    const event = parseReportedAppError(raw);
+    expect(event.error_type).toBe("CustomBoom");
+    expect(event.error_value).toBe("backend_sync_failed");
   });
 
   it("scrubs Error.message for the customer-controlled backend-sync-failed phase", async () => {
@@ -381,9 +425,9 @@ describe("reportAuthDiagnostic", () => {
     const raw = beaconCalls[0]!.body;
     expect(raw).not.toContain("SENSITIVE_X");
     expect(raw).not.toContain("alice@example.com");
-    const event = JSON.parse(raw) as AuthDiagnosticEvent;
-    expect(event.errorName).toBe("Error");
-    expect(event.errorMessage).toBeUndefined();
+    const event = parseReportedAppError(raw);
+    expect(event.error_type).toBe("Error");
+    expect(event.error_value).toBe("backend_sync_failed");
   });
 
   it("keeps Error.message for library-controlled phases", async () => {
@@ -399,8 +443,9 @@ describe("reportAuthDiagnostic", () => {
     );
 
     await new Promise((r) => setTimeout(r, 0));
-    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-    expect(event.errorMessage).toBe("iss mismatch in id_token");
+    const event = parseReportedAppError(beaconCalls[0]!.body);
+    expect(event.error_type).toBe("Error");
+    expect(event.error_value).toBe("iss mismatch in id_token");
   });
 
   it("does not include the content of thrown strings", async () => {
@@ -416,9 +461,9 @@ describe("reportAuthDiagnostic", () => {
     await new Promise((r) => setTimeout(r, 0));
     const raw = beaconCalls[0]!.body;
     expect(raw).not.toContain("DO_NOT_LEAK_STRING");
-    const event = JSON.parse(raw) as AuthDiagnosticEvent;
-    expect(event.errorName).toBe("ThrownString");
-    expect(event.errorMessage).toBeUndefined();
+    const event = parseReportedAppError(raw);
+    expect(event.error_type).toBe("ThrownString");
+    expect(event.error_value).toBe("backend_sync_failed");
   });
 
   it("never sends sensitive fields like code, state, full URL, or tokens", async () => {
@@ -439,10 +484,10 @@ describe("reportAuthDiagnostic", () => {
     const raw = beaconCalls[0]!.body;
     expect(raw).not.toContain("SECRET_CODE");
     expect(raw).not.toContain("SECRET_STATE");
-    const event = JSON.parse(raw) as AuthDiagnosticEvent;
-    expect(event.hasCode).toBe(true);
-    expect(event.hasState).toBe(true);
-    expect(event.hasErrorParam).toBe(true);
+    const event = parseReportedAppError(raw);
+    expect(event.tags.has_code).toBe("true");
+    expect(event.tags.has_state).toBe("true");
+    expect(event.tags.has_error_param).toBe("true");
   });
 
   it("reports storageAvailable: false when sessionStorage is broken", async () => {
@@ -455,9 +500,9 @@ describe("reportAuthDiagnostic", () => {
 
       await new Promise((r) => setTimeout(r, 0));
       expect(beaconCalls).toHaveLength(1);
-      const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-      expect(event.storageAvailable).toBe(false);
-      expect(event.authAttemptId).toBeTruthy();
+      const event = parseReportedAppError(beaconCalls[0]!.body);
+      expect(event.tags.storage_available).toBe("false");
+      expect(event.session_id).toBeTruthy();
     } finally {
       restore();
     }
@@ -477,8 +522,8 @@ describe("reportAuthDiagnostic", () => {
 
     await new Promise((r) => setTimeout(r, 0));
     expect(beaconCalls).toHaveLength(1);
-    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-    expect(event.storageAvailable).toBe(false);
+    const event = parseReportedAppError(beaconCalls[0]!.body);
+    expect(event.tags.storage_available).toBe("false");
   });
 
   it("reports storageAvailable: true when both storages are working", async () => {
@@ -492,8 +537,8 @@ describe("reportAuthDiagnostic", () => {
     );
 
     await new Promise((r) => setTimeout(r, 0));
-    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-    expect(event.storageAvailable).toBe(true);
+    const event = parseReportedAppError(beaconCalls[0]!.body);
+    expect(event.tags.storage_available).toBe("true");
   });
 
   it("truncates oversized error messages", async () => {
@@ -508,8 +553,8 @@ describe("reportAuthDiagnostic", () => {
       },
     );
     await new Promise((r) => setTimeout(r, 0));
-    const event = JSON.parse(beaconCalls[0]!.body) as AuthDiagnosticEvent;
-    expect(event.errorMessage?.length).toBeLessThanOrEqual(501);
+    const event = parseReportedAppError(beaconCalls[0]!.body);
+    expect(event.error_value?.length).toBeLessThanOrEqual(501);
   });
 
   it("falls back to fetch when sendBeacon is unavailable", async () => {
@@ -523,7 +568,7 @@ describe("reportAuthDiagnostic", () => {
       .mockResolvedValue(new Response(null, { status: 200 }));
 
     reportAuthDiagnostic(
-      { endpoint: "/_hercules/report" },
+      { endpoint: "/_hercules/e" },
       { phase: "signin-redirect-failed", error: new Error("boom") },
     );
 

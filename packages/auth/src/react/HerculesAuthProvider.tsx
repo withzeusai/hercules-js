@@ -27,7 +27,7 @@ export type HerculesAuthProviderProps = Omit<
    * logs. Successful sign-ins are never reported.
    *
    * Defaults: `enabled: true`, `reportToHercules: true`,
-   * `endpoint: "/_hercules/report"` (same-origin via the Hercules worker).
+   * `endpoint: "/_hercules/e"` (same-origin via the Hercules worker).
    */
   diagnostics?: DiagnosticsConfig;
 };

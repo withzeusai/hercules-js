@@ -6,7 +6,8 @@
  * never reported. See the design doc for the full contract.
  */
 
-const DEFAULT_DIAGNOSTICS_ENDPOINT = "/_hercules/report";
+const DEFAULT_DIAGNOSTICS_ENDPOINT = "/_hercules/e";
+const HERCULES_AUTH_SDK_NAME = "@usehercules/auth";
 const ATTEMPT_ID_STORAGE_KEY = "_hrc_auth_attempt";
 const DEDUPE_WINDOW_MS = 60_000;
 const MAX_ERROR_MESSAGE_LEN = 500;
@@ -41,7 +42,8 @@ export type AuthDiagnosticErrorClass =
   | "unknown";
 
 /**
- * Payload sent to the diagnostics endpoint. All fields are optional except
+ * Auth diagnostic observed locally and converted to the Hercules app-error
+ * ingestion schema for network reporting. All fields are optional except
  * `phase` and `authAttemptId` so callers can report partial information when
  * the browser context is degraded.
  * @public
@@ -73,7 +75,7 @@ export interface AuthDiagnosticEvent {
 
 /**
  * SDK configuration for diagnostics. All fields optional; sensible defaults
- * report to the same-origin `/_hercules/report` endpoint.
+ * report to the same-origin `/_hercules/e` endpoint.
  * @public
  */
 export interface DiagnosticsConfig {
@@ -81,7 +83,7 @@ export interface DiagnosticsConfig {
   enabled?: boolean;
   /** Whether diagnostics are sent over the network. Defaults to true. */
   reportToHercules?: boolean;
-  /** Override the diagnostics endpoint. Defaults to `/_hercules/report`. */
+  /** Override the diagnostics endpoint. Defaults to `/_hercules/e`. */
   endpoint?: string;
   /** Observer fired for every diagnostic event regardless of network reporting. */
   onDiagnostic?: (event: AuthDiagnosticEvent) => void;
@@ -121,6 +123,20 @@ function randomAttemptId(): string {
   // Non-cryptographic fallback. Acceptable: attempt IDs are correlation
   // identifiers, not security tokens.
   return `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function randomEventId(): string {
+  try {
+    if (
+      typeof crypto !== "undefined" &&
+      typeof crypto.randomUUID === "function"
+    ) {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // fall through to fallback
+  }
+  return `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
 function tryReadStorage(key: string): string | null {
@@ -486,8 +502,96 @@ function buildEvent(input: CreateDiagnosticInput): AuthDiagnosticEvent {
   };
 }
 
+interface AppErrorEventPayload {
+  event_id: string;
+  timestamp: number;
+  level: "error";
+  logger: "auth";
+  platform: "javascript";
+  release?: string;
+  fingerprint: string[];
+  message: string;
+  error_type: string;
+  error_value?: string;
+  url?: string;
+  session_id: string;
+  auth_action: "sign_in";
+  auth_provider?: string;
+  sdk_name: string;
+  tags: Record<string, string>;
+  extra: Record<string, string>;
+}
+
+function stringRecord(
+  entries: Record<string, string | number | boolean | undefined>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (value == null) continue;
+    out[key] = String(value);
+  }
+  return out;
+}
+
+function urlWithoutQuery(event: AuthDiagnosticEvent): string | undefined {
+  if (!event.pathname) return undefined;
+  if (!event.origin) return event.pathname;
+  return `${event.origin}${event.pathname}`;
+}
+
+function toAppErrorEvent(event: AuthDiagnosticEvent): AppErrorEventPayload {
+  const errorType = event.errorName ?? event.errorClass;
+  return {
+    event_id: randomEventId(),
+    timestamp: Date.now(),
+    level: "error",
+    logger: "auth",
+    platform: "javascript",
+    release: event.appBuildId,
+    fingerprint: [
+      HERCULES_AUTH_SDK_NAME,
+      event.phase,
+      event.errorClass,
+      event.authorityHost ?? "unknown",
+    ],
+    message: `Hercules auth diagnostic: ${event.phase}`,
+    error_type: errorType,
+    error_value: event.errorMessage ?? event.errorClass,
+    url: urlWithoutQuery(event),
+    session_id: event.authAttemptId,
+    auth_action: "sign_in",
+    auth_provider: event.authorityHost,
+    sdk_name: HERCULES_AUTH_SDK_NAME,
+    tags: stringRecord({
+      auth_phase: event.phase,
+      auth_error_class: event.errorClass,
+      has_code: event.hasCode,
+      has_state: event.hasState,
+      has_error_param: event.hasErrorParam,
+      online: event.online,
+      service_worker_controlled: event.serviceWorkerControlled,
+      storage_available: event.storageAvailable,
+      document_visibility_state: event.documentVisibilityState,
+    }),
+    extra: stringRecord({
+      auth_attempt_id: event.authAttemptId,
+      origin: event.origin,
+      pathname: event.pathname,
+      authority_host: event.authorityHost,
+      metadata_issuer: event.metadataIssuer,
+      token_endpoint_host: event.tokenEndpointHost,
+      client_id: event.clientId,
+      redirect_uri_origin: event.redirectUriOrigin,
+      redirect_uri_path: event.redirectUriPath,
+      iss: event.iss,
+      error_name: event.errorName,
+      app_build_id: event.appBuildId,
+    }),
+  };
+}
+
 function sendEvent(endpoint: string, event: AuthDiagnosticEvent): void {
-  const body = JSON.stringify(event);
+  const body = JSON.stringify({ events: [toAppErrorEvent(event)] });
   try {
     // text/plain avoids the cross-origin preflight that would mask exactly
     // the network/CORS failures we are trying to observe.
