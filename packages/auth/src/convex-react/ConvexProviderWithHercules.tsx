@@ -70,38 +70,41 @@ function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
 
-  // Ref so the re-check inside the lock sees updates from other tabs
   const idTokenRef = useRef(idToken);
   idTokenRef.current = idToken;
 
+  const signinSilentRef = useRef(signinSilent);
+  signinSilentRef.current = signinSilent;
+
   const inFlightRefresh = useRef<Promise<string | null> | null>(null);
 
+  // Must stay referentially stable: Convex's ConvexProviderWithAuth lists
+  // fetchAccessToken in two useEffect deps and tears down auth on re-identity.
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
+      const currentToken = idTokenRef.current;
       if (!forceRefreshToken) {
-        return idToken ?? null;
+        return currentToken ?? null;
       }
       if (
-        idToken != null &&
-        !tokenExpiresWithin(idToken, REFRESH_THRESHOLD_MS)
+        currentToken != null &&
+        !tokenExpiresWithin(currentToken, REFRESH_THRESHOLD_MS)
       ) {
-        return idToken;
+        return currentToken;
       }
-      // Same-tab dedup: concurrent callers share one promise
       if (inFlightRefresh.current) {
         return inFlightRefresh.current;
       }
       const refresh = withLock(LOCK_KEY, async () => {
-        // Re-check after acquiring lock — another tab may have refreshed
-        const currentToken = idTokenRef.current;
+        const tokenAfterLock = idTokenRef.current;
         if (
-          currentToken != null &&
-          !tokenExpiresWithin(currentToken, REFRESH_THRESHOLD_MS)
+          tokenAfterLock != null &&
+          !tokenExpiresWithin(tokenAfterLock, REFRESH_THRESHOLD_MS)
         ) {
-          return currentToken;
+          return tokenAfterLock;
         }
         try {
-          const refreshed = await signinSilent();
+          const refreshed = await signinSilentRef.current();
           return refreshed?.id_token ?? null;
         } catch {
           return null;
@@ -112,7 +115,7 @@ function useUseAuthFromHercules() {
       inFlightRefresh.current = refresh;
       return refresh;
     },
-    [idToken, signinSilent],
+    [],
   );
 
   return useMemo(

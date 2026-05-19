@@ -237,4 +237,25 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(secondToken).toBe("second-fresh");
     expect(mockSigninSilent).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps fetchAccessToken referentially stable when id_token changes", async () => {
+    const FIRST_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+    const SECOND_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 60 * 60);
+    setAuthState({ user: { id_token: FIRST_TOKEN } });
+
+    const { result, rerender } = renderUseAuth();
+    const firstFetch = result.current.fetchAccessToken;
+
+    expect(
+      await result.current.fetchAccessToken({ forceRefreshToken: false }),
+    ).toBe(FIRST_TOKEN);
+
+    setAuthState({ user: { id_token: SECOND_TOKEN } });
+    rerender();
+
+    expect(result.current.fetchAccessToken).toBe(firstFetch);
+    expect(
+      await result.current.fetchAccessToken({ forceRefreshToken: false }),
+    ).toBe(SECOND_TOKEN);
+  });
 });
