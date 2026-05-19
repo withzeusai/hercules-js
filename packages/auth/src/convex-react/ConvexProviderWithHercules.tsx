@@ -69,6 +69,7 @@ async function manualMutex<T>(
 function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
+  const sub = user?.profile?.sub;
 
   const idTokenRef = useRef(idToken);
   idTokenRef.current = idToken;
@@ -78,8 +79,11 @@ function useUseAuthFromHercules() {
 
   const inFlightRefresh = useRef<Promise<string | null> | null>(null);
 
-  // Must stay referentially stable: Convex's ConvexProviderWithAuth lists
-  // fetchAccessToken in two useEffect deps and tears down auth on re-identity.
+  // Re-identify only when the OIDC subject changes. Convex's
+  // ConvexProviderWithAuth lists fetchAccessToken in two useEffect deps;
+  // re-identifying on every id_token tears down auth and unmounts the
+  // <Authenticated> subtree on each silent renewal. Re-identifying on `sub`
+  // still triggers a Convex re-auth on account switch.
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
       const currentToken = idTokenRef.current;
@@ -115,7 +119,7 @@ function useUseAuthFromHercules() {
       inFlightRefresh.current = refresh;
       return refresh;
     },
-    [],
+    [sub],
   );
 
   return useMemo(

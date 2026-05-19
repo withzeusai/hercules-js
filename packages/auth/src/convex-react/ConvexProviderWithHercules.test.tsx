@@ -238,10 +238,12 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(mockSigninSilent).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps fetchAccessToken referentially stable when id_token changes", async () => {
+  it("keeps fetchAccessToken stable across silent renewal of the same subject", async () => {
     const FIRST_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
     const SECOND_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 60 * 60);
-    setAuthState({ user: { id_token: FIRST_TOKEN } });
+    setAuthState({
+      user: { id_token: FIRST_TOKEN, profile: { sub: "alice" } },
+    });
 
     const { result, rerender } = renderUseAuth();
     const firstFetch = result.current.fetchAccessToken;
@@ -250,12 +252,35 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
       await result.current.fetchAccessToken({ forceRefreshToken: false }),
     ).toBe(FIRST_TOKEN);
 
-    setAuthState({ user: { id_token: SECOND_TOKEN } });
+    setAuthState({
+      user: { id_token: SECOND_TOKEN, profile: { sub: "alice" } },
+    });
     rerender();
 
     expect(result.current.fetchAccessToken).toBe(firstFetch);
     expect(
       await result.current.fetchAccessToken({ forceRefreshToken: false }),
     ).toBe(SECOND_TOKEN);
+  });
+
+  it("re-identifies fetchAccessToken when the subject changes", async () => {
+    const ALICE_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+    const BOB_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+    setAuthState({
+      user: { id_token: ALICE_TOKEN, profile: { sub: "alice" } },
+    });
+
+    const { result, rerender } = renderUseAuth();
+    const aliceFetch = result.current.fetchAccessToken;
+
+    setAuthState({
+      user: { id_token: BOB_TOKEN, profile: { sub: "bob" } },
+    });
+    rerender();
+
+    expect(result.current.fetchAccessToken).not.toBe(aliceFetch);
+    expect(
+      await result.current.fetchAccessToken({ forceRefreshToken: false }),
+    ).toBe(BOB_TOKEN);
   });
 });
