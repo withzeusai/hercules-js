@@ -243,7 +243,10 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     const FIRST_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
     const SECOND_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 60 * 60);
     setAuthState({
-      user: { id_token: FIRST_TOKEN, profile: { sub: "alice" } },
+      user: {
+        id_token: FIRST_TOKEN,
+        profile: { iss: "https://issuer.example", sub: "alice" },
+      },
     });
 
     const { result, rerender } = renderUseAuth();
@@ -254,7 +257,10 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     ).toBe(FIRST_TOKEN);
 
     setAuthState({
-      user: { id_token: SECOND_TOKEN, profile: { sub: "alice" } },
+      user: {
+        id_token: SECOND_TOKEN,
+        profile: { iss: "https://issuer.example", sub: "alice" },
+      },
     });
     rerender();
 
@@ -282,5 +288,33 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(
       await result.current.fetchAccessToken({ forceRefreshToken: false }),
     ).toBe(BOB_TOKEN);
+    expect(result.current.fetchAccessToken).not.toBe(aliceFetch);
+  });
+
+  it("re-identifies fetchAccessToken when the issuer changes", async () => {
+    const FIRST_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+    const SECOND_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+    setAuthState({
+      user: {
+        id_token: FIRST_TOKEN,
+        profile: { iss: "https://issuer-a.example", sub: "shared-sub" },
+      },
+    });
+
+    const { result, rerender } = renderUseAuth();
+    const firstFetch = result.current.fetchAccessToken;
+
+    setAuthState({
+      user: {
+        id_token: SECOND_TOKEN,
+        profile: { iss: "https://issuer-b.example", sub: "shared-sub" },
+      },
+    });
+    rerender();
+
+    expect(result.current.fetchAccessToken).not.toBe(firstFetch);
+    expect(
+      await result.current.fetchAccessToken({ forceRefreshToken: false }),
+    ).toBe(SECOND_TOKEN);
   });
 });

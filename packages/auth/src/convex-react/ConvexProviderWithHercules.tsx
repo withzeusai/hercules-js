@@ -72,6 +72,8 @@ async function manualMutex<T>(
 function useUseAuthFromHercules() {
   const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
   const idToken = user?.id_token;
+  const issuer = user?.profile?.iss;
+  const subject = user?.profile?.sub;
 
   const idTokenRef = useRef(idToken);
   idTokenRef.current = idToken;
@@ -116,7 +118,7 @@ function useUseAuthFromHercules() {
       inFlightRefresh.current = refresh;
       return refresh;
     },
-    [],
+    [issuer, subject],
   );
 
   return useMemo(
