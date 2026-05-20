@@ -261,9 +261,16 @@ export class ComponentTagger {
               source.startsWith("@react-three/") &&
               (node as any).importKind !== "type"
             ) {
+              const specifiers = node.specifiers ?? [];
+              const hasValueSpec =
+                specifiers.length === 0 ||
+                specifiers.some((spec: any) => spec.importKind !== "type");
+              if (!hasValueSpec) {
+                return;
+              }
               hasReactThreeImport = true;
               if (source !== "@react-three/fiber") {
-                node.specifiers.forEach((spec: any) => {
+                specifiers.forEach((spec: any) => {
                   if (spec.importKind === "type") {
                     return;
                   }
