@@ -285,13 +285,18 @@ export class ComponentTagger {
         },
       });
 
-      // Binding-aware check: does this JSX opening name resolve to a
-      // @react-three/fiber Canvas import (direct, aliased, or via namespace)
-      // in the CURRENT lexical scope? path.scope.getBinding follows the usual
-      // JavaScript scoping rules, so a function param / local var named
-      // "Canvas" that shadows the import returns the shadowing binding and
-      // we treat the subtree as DOM, not R3F.
-      const isCanvasReference = (name: any, scope: any): boolean => {
+      // Binding-aware check: does this JSX opening name resolve to a named
+      // export from a particular @react-three/* package in the CURRENT
+      // lexical scope? path.scope.getBinding follows the usual JavaScript
+      // scoping rules, so a function param or local var that shadows the
+      // import returns the shadowing binding and we correctly conclude that
+      // the subtree is not the imported component.
+      const resolvesToImport = (
+        name: any,
+        scope: any,
+        sourceModule: string,
+        importedName: string,
+      ): boolean => {
         if (!name) return false;
         if (name.type === "JSXIdentifier") {
           const binding = scope.getBinding(name.name);
@@ -303,8 +308,8 @@ export class ComponentTagger {
             bindingNode.importKind !== "type" &&
             bindingParent?.type === "ImportDeclaration" &&
             bindingParent.importKind !== "type" &&
-            bindingParent.source?.value === "@react-three/fiber" &&
-            bindingNode.imported?.name === "Canvas"
+            bindingParent.source?.value === sourceModule &&
+            bindingNode.imported?.name === importedName
           ) {
             return true;
           }
@@ -314,7 +319,7 @@ export class ComponentTagger {
           name.type === "JSXMemberExpression" &&
           name.object?.type === "JSXIdentifier" &&
           name.property?.type === "JSXIdentifier" &&
-          name.property.name === "Canvas"
+          name.property.name === importedName
         ) {
           const binding = scope.getBinding(name.object.name);
           if (!binding) return false;
@@ -324,7 +329,7 @@ export class ComponentTagger {
             bindingNode?.type === "ImportNamespaceSpecifier" &&
             bindingParent?.type === "ImportDeclaration" &&
             bindingParent.importKind !== "type" &&
-            bindingParent.source?.value === "@react-three/fiber"
+            bindingParent.source?.value === sourceModule
           ) {
             return true;
           }
@@ -332,28 +337,50 @@ export class ComponentTagger {
         return false;
       };
 
+      const isCanvasReference = (name: any, scope: any) =>
+        resolvesToImport(name, scope, "@react-three/fiber", "Canvas");
+      // drei's <Html> portals its children into the regular DOM (outside the
+      // WebGL canvas), so DOM-conflict intrinsics inside it must keep their
+      // tags. Track Html subtrees so we can suppress the canvas-subtree skip
+      // while we are inside one.
+      const isHtmlPortalReference = (name: any, scope: any) =>
+        resolvesToImport(name, scope, "@react-three/drei", "Html");
+
       // Capture dataAttribute for use in the walker
       const dataAttribute = this.dataAttribute;
 
       // Second pass: tag elements. canvasDepth tracks whether the current
-      // JSX node is nested inside an R3F <Canvas>; DOM-conflict intrinsics
+      // JSX node is nested inside an R3F <Canvas>; htmlPortalDepth tracks
+      // nesting inside a drei <Html> (which portals back to the DOM, so
+      // children there are real DOM elements again). DOM-conflict intrinsics
       // (<line>, <path>, <audio>, <source>, <clippingGroup>) are skipped
-      // only when canvasDepth > 0, so the same file can render ordinary
-      // SVG/HTML versions outside the canvas and keep them selectable in
-      // the visual editor. We use @babel/traverse here (not estree-walker)
-      // for path.scope.getBinding, which lets us resolve <Canvas> by lexical
-      // binding rather than by raw name and so respects shadowing scopes.
+      // only when canvasDepth > 0 AND we are not currently inside an Html
+      // portal, so the same file can render ordinary SVG/HTML versions
+      // outside the canvas (or inside a portal back to DOM) and keep them
+      // selectable in the visual editor. We use @babel/traverse here (not
+      // estree-walker) for path.scope.getBinding, which lets us resolve
+      // <Canvas>/<Html> by lexical binding rather than by raw name and so
+      // respects shadowing scopes.
       let canvasDepth = 0;
+      let htmlPortalDepth = 0;
       traverse(ast as any, {
         JSXElement: {
           enter(path: any) {
             if (isCanvasReference(path.node.openingElement?.name, path.scope)) {
               canvasDepth++;
+            } else if (
+              isHtmlPortalReference(path.node.openingElement?.name, path.scope)
+            ) {
+              htmlPortalDepth++;
             }
           },
           exit(path: any) {
             if (isCanvasReference(path.node.openingElement?.name, path.scope)) {
               canvasDepth--;
+            } else if (
+              isHtmlPortalReference(path.node.openingElement?.name, path.scope)
+            ) {
+              htmlPortalDepth--;
             }
           },
         },
@@ -387,7 +414,7 @@ export class ComponentTagger {
               elementName,
               threeDreiImportedElements,
               threeDreiNamespaces,
-              canvasDepth > 0,
+              canvasDepth > 0 && htmlPortalDepth === 0,
             );
 
             if (shouldTag) {
