@@ -180,12 +180,12 @@ function shouldTagElement(
   elementName: string,
   threeDreiImportedElements: Set<string>,
   threeDreiNamespaces: Set<string>,
-  hasReactThreeImport: boolean,
+  insideCanvasSubtree: boolean,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
     return false;
   }
-  if (hasReactThreeImport && threeFiberDomConflictElems.has(elementName)) {
+  if (insideCanvasSubtree && threeFiberDomConflictElems.has(elementName)) {
     return false;
   }
   if (threeDreiImportedElements.has(elementName)) {
@@ -239,7 +239,13 @@ export class ComponentTagger {
       let changedElementsCount = 0;
       const threeDreiImportedElements = new Set<string>();
       const threeDreiNamespaces = new Set<string>();
-      let hasReactThreeImport = false;
+      // Local identifiers that resolve to @react-three/fiber's Canvas
+      // (handles aliases via local.name). When JSX opens one of these, we
+      // are entering an R3F render subtree.
+      const canvasIdentifiers = new Set<string>();
+      // Local namespace identifiers for `import * as X from "@react-three/fiber"`.
+      // <X.Canvas> opens an R3F subtree.
+      const fiberNamespaces = new Set<string>();
 
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
@@ -247,11 +253,11 @@ export class ComponentTagger {
       // First pass: collect @react-three/* companion-package imports (drei,
       // postprocessing, cannon, rapier, xr). Their named exports render into
       // the R3F reconciler, which trips on injected data-hercules-name.
-      // @react-three/fiber's <Canvas> is excluded since it renders a real
-      // DOM canvas where data-* attributes are valid; we still record that
-      // the file imports from @react-three/* so the lowercased intrinsics
-      // that conflict with DOM names (<line>, <path>, <audio>, <source>) can
-      // be skipped only inside R3F files.
+      // From @react-three/fiber we additionally track which local identifier
+      // refers to Canvas so the second pass can scope DOM-conflict skips
+      // (<line>, <path>, <audio>, <source>, <clippingGroup>) to JSX actually
+      // rendered inside an R3F Canvas subtree, leaving DOM/SVG usage in the
+      // same file taggable.
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
@@ -268,8 +274,21 @@ export class ComponentTagger {
               if (!hasValueSpec) {
                 return;
               }
-              hasReactThreeImport = true;
-              if (source !== "@react-three/fiber") {
+              if (source === "@react-three/fiber") {
+                specifiers.forEach((spec: any) => {
+                  if (spec.importKind === "type") {
+                    return;
+                  }
+                  if (
+                    spec.type === "ImportSpecifier" &&
+                    spec.imported?.name === "Canvas"
+                  ) {
+                    canvasIdentifiers.add(spec.local.name);
+                  } else if (spec.type === "ImportNamespaceSpecifier") {
+                    fiberNamespaces.add(spec.local.name);
+                  }
+                });
+              } else {
                 specifiers.forEach((spec: any) => {
                   if (spec.importKind === "type") {
                     return;
@@ -286,12 +305,41 @@ export class ComponentTagger {
         },
       });
 
+      // True iff the given JSX opening name resolves to an R3F Canvas: either
+      // a direct identifier alias of @react-three/fiber's Canvas, or a
+      // `<Namespace.Canvas>` whose namespace was imported from fiber. Used to
+      // bracket canvasDepth in the second walk.
+      const isCanvasOpening = (name: any): boolean => {
+        if (!name) return false;
+        if (name.type === "JSXIdentifier") {
+          return canvasIdentifiers.has(name.name);
+        }
+        if (
+          name.type === "JSXMemberExpression" &&
+          name.object?.type === "JSXIdentifier" &&
+          fiberNamespaces.has(name.object.name) &&
+          name.property?.type === "JSXIdentifier" &&
+          name.property.name === "Canvas"
+        ) {
+          return true;
+        }
+        return false;
+      };
+
       // Capture dataAttribute for use in the walker
       const dataAttribute = this.dataAttribute;
 
-      // Second pass: tag elements
+      // Second pass: tag elements. canvasDepth tracks whether the current
+      // JSX node is nested inside an R3F <Canvas>; DOM-conflict intrinsics
+      // are skipped only when canvasDepth > 0 so the same file can render
+      // ordinary SVG/HTML <line>, <path>, <audio>, <source> outside the
+      // canvas and keep them selectable in the visual editor.
+      let canvasDepth = 0;
       walk(ast as any, {
         enter(node: any) {
+          if (node.type === "JSXElement" && isCanvasOpening(node.openingElement?.name)) {
+            canvasDepth++;
+          }
           if (node.type === "JSXOpeningElement") {
             const jsxNode = node;
             let elementName: string;
@@ -321,7 +369,7 @@ export class ComponentTagger {
               elementName,
               threeDreiImportedElements,
               threeDreiNamespaces,
-              hasReactThreeImport,
+              canvasDepth > 0,
             );
 
             if (shouldTag) {
@@ -334,6 +382,11 @@ export class ComponentTagger {
               magicString.appendLeft(endPosition, attributesString);
               changedElementsCount++;
             }
+          }
+        },
+        leave(node: any) {
+          if (node.type === "JSXElement" && isCanvasOpening(node.openingElement?.name)) {
+            canvasDepth--;
           }
         },
       });

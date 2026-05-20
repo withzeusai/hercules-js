@@ -15,6 +15,6 @@ That throws `R3F: Cannot set "data-hercules-name". Ensure it is an object
 before setting "hercules-name".`, kills the WebGL context, and blanks the
 preview. Same story for `<path>`, `<audio>`, `<source>`, `<clippingGroup>`.
 
-Skip these names only in files that import from `@react-three/*` so that SVG
-charts and HTML media tags in non-R3F files are still selectable in the visual
-editor.
+Skip these names only inside an R3F `<Canvas>` subtree so that SVG charts and
+HTML media tags in the same file (rendered outside any `<Canvas>`) are still
+selectable in the visual editor.
