@@ -1,7 +1,11 @@
 import path from "path";
 import { parse } from "@babel/parser";
+import _traverse from "@babel/traverse";
 import MagicString from "magic-string";
 import type { Plugin, ViteDevServer } from "vite";
+
+// @babel/traverse ships a CJS default-export, so unwrap it for ESM consumers.
+const traverse = ((_traverse as any).default ?? _traverse) as typeof _traverse;
 
 // Types
 export interface ComponentTaggerOptions {
@@ -239,25 +243,16 @@ export class ComponentTagger {
       let changedElementsCount = 0;
       const threeDreiImportedElements = new Set<string>();
       const threeDreiNamespaces = new Set<string>();
-      // Local identifiers that resolve to @react-three/fiber's Canvas
-      // (handles aliases via local.name). When JSX opens one of these, we
-      // are entering an R3F render subtree.
-      const canvasIdentifiers = new Set<string>();
-      // Local namespace identifiers for `import * as X from "@react-three/fiber"`.
-      // <X.Canvas> opens an R3F subtree.
-      const fiberNamespaces = new Set<string>();
 
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
 
       // First pass: collect @react-three/* companion-package imports (drei,
       // postprocessing, cannon, rapier, xr). Their named exports render into
-      // the R3F reconciler, which trips on injected data-hercules-name.
-      // From @react-three/fiber we additionally track which local identifier
-      // refers to Canvas so the second pass can scope DOM-conflict skips
-      // (<line>, <path>, <audio>, <source>, <clippingGroup>) to JSX actually
-      // rendered inside an R3F Canvas subtree, leaving DOM/SVG usage in the
-      // same file taggable.
+      // the R3F reconciler, which trips on injected data-hercules-name. Also
+      // walk @react-three/fiber's import specifiers so the second pass can
+      // resolve a JSX <Canvas> reference back to the import via
+      // path.scope.getBinding (binding-aware, not just by name).
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
@@ -265,6 +260,7 @@ export class ComponentTagger {
             if (
               typeof source === "string" &&
               source.startsWith("@react-three/") &&
+              source !== "@react-three/fiber" &&
               (node as any).importKind !== "type"
             ) {
               const specifiers = node.specifiers ?? [];
@@ -274,54 +270,64 @@ export class ComponentTagger {
               if (!hasValueSpec) {
                 return;
               }
-              if (source === "@react-three/fiber") {
-                specifiers.forEach((spec: any) => {
-                  if (spec.importKind === "type") {
-                    return;
-                  }
-                  if (
-                    spec.type === "ImportSpecifier" &&
-                    spec.imported?.name === "Canvas"
-                  ) {
-                    canvasIdentifiers.add(spec.local.name);
-                  } else if (spec.type === "ImportNamespaceSpecifier") {
-                    fiberNamespaces.add(spec.local.name);
-                  }
-                });
-              } else {
-                specifiers.forEach((spec: any) => {
-                  if (spec.importKind === "type") {
-                    return;
-                  }
-                  if (spec.type === "ImportSpecifier") {
-                    threeDreiImportedElements.add(spec.local.name);
-                  } else if (spec.type === "ImportNamespaceSpecifier") {
-                    threeDreiNamespaces.add(spec.local.name);
-                  }
-                });
-              }
+              specifiers.forEach((spec: any) => {
+                if (spec.importKind === "type") {
+                  return;
+                }
+                if (spec.type === "ImportSpecifier") {
+                  threeDreiImportedElements.add(spec.local.name);
+                } else if (spec.type === "ImportNamespaceSpecifier") {
+                  threeDreiNamespaces.add(spec.local.name);
+                }
+              });
             }
           }
         },
       });
 
-      // True iff the given JSX opening name resolves to an R3F Canvas: either
-      // a direct identifier alias of @react-three/fiber's Canvas, or a
-      // `<Namespace.Canvas>` whose namespace was imported from fiber. Used to
-      // bracket canvasDepth in the second walk.
-      const isCanvasOpening = (name: any): boolean => {
+      // Binding-aware check: does this JSX opening name resolve to a
+      // @react-three/fiber Canvas import (direct, aliased, or via namespace)
+      // in the CURRENT lexical scope? path.scope.getBinding follows the usual
+      // JavaScript scoping rules, so a function param / local var named
+      // "Canvas" that shadows the import returns the shadowing binding and
+      // we treat the subtree as DOM, not R3F.
+      const isCanvasReference = (name: any, scope: any): boolean => {
         if (!name) return false;
         if (name.type === "JSXIdentifier") {
-          return canvasIdentifiers.has(name.name);
+          const binding = scope.getBinding(name.name);
+          if (!binding) return false;
+          const bindingNode = binding.path?.node;
+          const bindingParent = binding.path?.parent;
+          if (
+            bindingNode?.type === "ImportSpecifier" &&
+            bindingNode.importKind !== "type" &&
+            bindingParent?.type === "ImportDeclaration" &&
+            bindingParent.importKind !== "type" &&
+            bindingParent.source?.value === "@react-three/fiber" &&
+            bindingNode.imported?.name === "Canvas"
+          ) {
+            return true;
+          }
+          return false;
         }
         if (
           name.type === "JSXMemberExpression" &&
           name.object?.type === "JSXIdentifier" &&
-          fiberNamespaces.has(name.object.name) &&
           name.property?.type === "JSXIdentifier" &&
           name.property.name === "Canvas"
         ) {
-          return true;
+          const binding = scope.getBinding(name.object.name);
+          if (!binding) return false;
+          const bindingNode = binding.path?.node;
+          const bindingParent = binding.path?.parent;
+          if (
+            bindingNode?.type === "ImportNamespaceSpecifier" &&
+            bindingParent?.type === "ImportDeclaration" &&
+            bindingParent.importKind !== "type" &&
+            bindingParent.source?.value === "@react-three/fiber"
+          ) {
+            return true;
+          }
         }
         return false;
       };
@@ -331,17 +337,29 @@ export class ComponentTagger {
 
       // Second pass: tag elements. canvasDepth tracks whether the current
       // JSX node is nested inside an R3F <Canvas>; DOM-conflict intrinsics
-      // are skipped only when canvasDepth > 0 so the same file can render
-      // ordinary SVG/HTML <line>, <path>, <audio>, <source> outside the
-      // canvas and keep them selectable in the visual editor.
+      // (<line>, <path>, <audio>, <source>, <clippingGroup>) are skipped
+      // only when canvasDepth > 0, so the same file can render ordinary
+      // SVG/HTML versions outside the canvas and keep them selectable in
+      // the visual editor. We use @babel/traverse here (not estree-walker)
+      // for path.scope.getBinding, which lets us resolve <Canvas> by lexical
+      // binding rather than by raw name and so respects shadowing scopes.
       let canvasDepth = 0;
-      walk(ast as any, {
-        enter(node: any) {
-          if (node.type === "JSXElement" && isCanvasOpening(node.openingElement?.name)) {
-            canvasDepth++;
-          }
-          if (node.type === "JSXOpeningElement") {
-            const jsxNode = node;
+      traverse(ast as any, {
+        JSXElement: {
+          enter(path: any) {
+            if (isCanvasReference(path.node.openingElement?.name, path.scope)) {
+              canvasDepth++;
+            }
+          },
+          exit(path: any) {
+            if (isCanvasReference(path.node.openingElement?.name, path.scope)) {
+              canvasDepth--;
+            }
+          },
+        },
+        JSXOpeningElement: {
+          enter(path: any) {
+            const jsxNode = path.node;
             let elementName: string;
 
             if (jsxNode.name.type === "JSXIdentifier") {
@@ -382,12 +400,7 @@ export class ComponentTagger {
               magicString.appendLeft(endPosition, attributesString);
               changedElementsCount++;
             }
-          }
-        },
-        leave(node: any) {
-          if (node.type === "JSXElement" && isCanvasOpening(node.openingElement?.name)) {
-            canvasDepth--;
-          }
+          },
         },
       });
 
