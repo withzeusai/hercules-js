@@ -163,13 +163,29 @@ const threeFiberElems = new Set([
   "colorShiftMaterial",
 ]);
 
+// Keep: Three.js objects whose lowercased R3F intrinsic names also exist as
+// real DOM/SVG element names (<line>, <path>, <audio>, <source>). We only skip
+// tagging on these when the file imports from @react-three/* so non-R3F files
+// can still tag their SVG/HTML usage.
+const threeFiberDomConflictElems = new Set([
+  "line",
+  "path",
+  "audio",
+  "source",
+  "clippingGroup",
+]);
+
 // Keep: Check if element should be tagged
 function shouldTagElement(
   elementName: string,
   threeDreiImportedElements: Set<string>,
   threeDreiNamespaces: Set<string>,
+  hasReactThreeImport: boolean,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
+    return false;
+  }
+  if (hasReactThreeImport && threeFiberDomConflictElems.has(elementName)) {
     return false;
   }
   if (threeDreiImportedElements.has(elementName)) {
@@ -223,6 +239,7 @@ export class ComponentTagger {
       let changedElementsCount = 0;
       const threeDreiImportedElements = new Set<string>();
       const threeDreiNamespaces = new Set<string>();
+      let hasReactThreeImport = false;
 
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
@@ -231,23 +248,28 @@ export class ComponentTagger {
       // postprocessing, cannon, rapier, xr). Their named exports render into
       // the R3F reconciler, which trips on injected data-hercules-name.
       // @react-three/fiber's <Canvas> is excluded since it renders a real
-      // DOM canvas where data-* attributes are valid.
+      // DOM canvas where data-* attributes are valid; we still record that
+      // the file imports from @react-three/* so the lowercased intrinsics
+      // that conflict with DOM names (<line>, <path>, <audio>, <source>) can
+      // be skipped only inside R3F files.
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
             const source = node.source?.value;
             if (
               typeof source === "string" &&
-              source.startsWith("@react-three/") &&
-              source !== "@react-three/fiber"
+              source.startsWith("@react-three/")
             ) {
-              node.specifiers.forEach((spec: any) => {
-                if (spec.type === "ImportSpecifier") {
-                  threeDreiImportedElements.add(spec.local.name);
-                } else if (spec.type === "ImportNamespaceSpecifier") {
-                  threeDreiNamespaces.add(spec.local.name);
-                }
-              });
+              hasReactThreeImport = true;
+              if (source !== "@react-three/fiber") {
+                node.specifiers.forEach((spec: any) => {
+                  if (spec.type === "ImportSpecifier") {
+                    threeDreiImportedElements.add(spec.local.name);
+                  } else if (spec.type === "ImportNamespaceSpecifier") {
+                    threeDreiNamespaces.add(spec.local.name);
+                  }
+                });
+              }
             }
           }
         },
@@ -288,6 +310,7 @@ export class ComponentTagger {
               elementName,
               threeDreiImportedElements,
               threeDreiNamespaces,
+              hasReactThreeImport,
             );
 
             if (shouldTag) {
