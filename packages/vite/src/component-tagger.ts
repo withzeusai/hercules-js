@@ -258,11 +258,15 @@ export class ComponentTagger {
             const source = node.source?.value;
             if (
               typeof source === "string" &&
-              source.startsWith("@react-three/")
+              source.startsWith("@react-three/") &&
+              (node as any).importKind !== "type"
             ) {
               hasReactThreeImport = true;
               if (source !== "@react-three/fiber") {
                 node.specifiers.forEach((spec: any) => {
+                  if (spec.importKind === "type") {
+                    return;
+                  }
                   if (spec.type === "ImportSpecifier") {
                     threeDreiImportedElements.add(spec.local.name);
                   } else if (spec.type === "ImportNamespaceSpecifier") {
