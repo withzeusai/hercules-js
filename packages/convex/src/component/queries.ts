@@ -63,7 +63,7 @@ export const listMyMemberships = query({
         kind: scope.kind,
         roleKey: role.key,
         roleName: role.name,
-        joinedAt: principal._creationTime,
+        joinedAt: principal.joinedAt,
         status: principal.status,
       });
     }

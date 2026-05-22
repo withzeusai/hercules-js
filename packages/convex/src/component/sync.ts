@@ -50,6 +50,7 @@ const principalValidator = v.object({
   type: v.union(v.literal("user"), v.literal("group")),
   herculesAuthUserId: v.optional(v.string()),
   status: principalStatusValidator,
+  joinedAt: v.number(),
   updatedAt: v.number(),
 });
 
@@ -390,6 +391,7 @@ export const applySnapshot = mutation({
         type: "user" | "group";
         herculesAuthUserId?: string;
         status: "active" | "blocked" | "suspended" | "pending_approval";
+        joinedAt: number;
         updatedAt: number;
       },
     ) {
@@ -404,6 +406,7 @@ export const applySnapshot = mutation({
         type: principal.type,
         herculesAuthUserId: principal.herculesAuthUserId,
         status: principal.status,
+        joinedAt: principal.joinedAt,
         updatedAt: principal.updatedAt,
       };
       if (existing) {

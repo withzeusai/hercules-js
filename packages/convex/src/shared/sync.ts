@@ -38,6 +38,7 @@ const principalSchema = z.object({
   type: z.enum(["user", "group"]),
   herculesAuthUserId: z.string().min(1).optional(),
   status: principalStatusSchema,
+  joinedAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 });
 

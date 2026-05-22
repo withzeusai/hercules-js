@@ -38,6 +38,7 @@ export default defineSchema({
       v.literal("suspended"),
       v.literal("pending_approval"),
     ),
+    joinedAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_principal_id", ["principalId"])
