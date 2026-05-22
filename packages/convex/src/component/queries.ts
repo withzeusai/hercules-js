@@ -48,7 +48,7 @@ export const listMyMemberships = query({
             .eq("targetType", "scope")
             .eq("targetId", principal.accessScopeId),
         )
-        .first();
+        .unique();
       if (!assignment) continue;
 
       const role = await ctx.db
