@@ -79,8 +79,6 @@ export type AccessQueryBuilder<DataModel extends GenericDataModel> = {
   >(query: {
     permission: string;
     extractScope: ExtractScope<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
-    targetType?: AccessTargetType;
-    targetId?: string;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericQueryCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -97,8 +95,6 @@ export type AccessMutationBuilder<DataModel extends GenericDataModel> = {
   >(mutation: {
     permission: string;
     extractScope: ExtractScope<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
-    targetType?: AccessTargetType;
-    targetId?: string;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericMutationCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -115,8 +111,6 @@ export type AccessActionBuilder<DataModel extends GenericDataModel> = {
   >(action: {
     permission: string;
     extractScope: ExtractScope<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
-    targetType?: AccessTargetType;
-    targetId?: string;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -248,8 +242,6 @@ function makeAccessBuilder<TBuilder>(
     const accessDefinition = definition as ConvexDefinitionObject<AuthorizationCtx> & {
       permission?: unknown;
       extractScope?: unknown;
-      targetType?: AccessTargetType;
-      targetId?: string;
     };
     if (
       typeof accessDefinition.permission !== "string" ||
@@ -261,25 +253,17 @@ function makeAccessBuilder<TBuilder>(
       throw new Error("access* builders require an extractScope function.");
     }
 
-    const { permission, extractScope, targetType, targetId, ...convexDefinition } =
-      accessDefinition;
+    const { permission, extractScope, ...convexDefinition } = accessDefinition;
     return (builder as BuilderCaller)(
       wrapDefinition(convexDefinition, component, "permission", {
         permission,
         extractScope: extractScope as ExtractScope<AuthorizationCtx, unknown>,
-        targetType,
-        targetId,
       }),
     );
   }) as TBuilder;
 }
 
-type AccessConfig = {
-  permission?: string;
-  extractScope?: ExtractScope<AuthorizationCtx, unknown>;
-  targetType?: AccessTargetType;
-  targetId?: string;
-};
+type AccessConfig = { permission?: string; extractScope?: ExtractScope<AuthorizationCtx, unknown> };
 
 function wrapDefinition(
   definition: unknown,
@@ -336,8 +320,6 @@ async function ensureAuthorized(
     tokenIdentifier: identity?.tokenIdentifier,
     scopeId,
     permission: mode === "permission" ? access?.permission : undefined,
-    targetType: access?.targetType,
-    targetId: access?.targetId,
   });
 
   if (!decision.allowed) {

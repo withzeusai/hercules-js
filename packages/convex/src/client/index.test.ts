@@ -84,8 +84,6 @@ describe("createAccessControl", () => {
       tokenIdentifier: "https://auth.example.com|user_1",
       scopeId: undefined,
       permission: undefined,
-      targetType: undefined,
-      targetId: undefined,
     });
   });
 
@@ -125,8 +123,6 @@ describe("createAccessControl", () => {
       tokenIdentifier: "https://auth.example.com|user_1",
       scopeId: "scope_abc",
       permission: "appointments:create",
-      targetType: undefined,
-      targetId: undefined,
     });
   });
 
