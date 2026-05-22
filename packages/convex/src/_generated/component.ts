@@ -69,7 +69,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     >;
   };
   sync: {
-    applySnapshot: FunctionReference<
+    applySync: FunctionReference<
       "mutation",
       "internal",
       AccessProjectionSyncPayload,

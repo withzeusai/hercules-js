@@ -127,7 +127,7 @@ const syncPayloadArgs = {
   }),
 };
 
-export const applySnapshot = mutation({
+export const applySync = mutation({
   args: syncPayloadArgs,
   handler: async (ctx, args) => {
     const state = await ctx.db.query("sync_state").unique();

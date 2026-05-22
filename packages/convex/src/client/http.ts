@@ -14,11 +14,7 @@ type ApplySyncReference = FunctionReference<
   SyncResponse
 >;
 
-export type AccessControlSyncComponent = {
-  sync: {
-    applySnapshot: ApplySyncReference;
-  };
-};
+export type AccessControlSyncComponent = { sync: { applySync: ApplySyncReference } };
 
 export type RegisterAccessControlRoutesOptions = {
   httpAction: HttpActionBuilder;
@@ -57,7 +53,7 @@ export function registerAccessControlRoutes(
         return jsonResponse({ ok: false, status: "invalid_payload" }, 400);
       }
 
-      const result = await ctx.runMutation(component.sync.applySnapshot, parsedPayload.data);
+      const result = await ctx.runMutation(component.sync.applySync, parsedPayload.data);
       return jsonResponse(result satisfies SyncResponse, 200);
     }),
   });
@@ -91,10 +87,7 @@ function verifyWebhookPayload(secret: string, rawBody: string, headers: Headers)
   }
 
   try {
-    return {
-      ok: true as const,
-      payload: new Webhook(secret).verify(rawBody, webhookHeaders),
-    };
+    return { ok: true as const, payload: new Webhook(secret).verify(rawBody, webhookHeaders) };
   } catch (error) {
     if (error instanceof WebhookVerificationError) {
       return { ok: false as const };
@@ -106,8 +99,6 @@ function verifyWebhookPayload(secret: string, rawBody: string, headers: Headers)
 function jsonResponse(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
   });
 }

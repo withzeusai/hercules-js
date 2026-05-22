@@ -82,7 +82,7 @@ describe("registerAccessControlRoutes", () => {
       acknowledgedVersion: 1,
     });
     expect(response.status).toBe(200);
-    expect(runMutation).toHaveBeenCalledWith("applySnapshot", snapshot);
+    expect(runMutation).toHaveBeenCalledWith("applySync", snapshot);
   });
 
   test("applies a signed incremental event", async () => {
@@ -99,7 +99,7 @@ describe("registerAccessControlRoutes", () => {
       acknowledgedVersion: 2,
     });
     expect(response.status).toBe(200);
-    expect(runMutation).toHaveBeenCalledWith("applySnapshot", event);
+    expect(runMutation).toHaveBeenCalledWith("applySync", event);
   });
 
   test("rejects an unsigned snapshot", async () => {
@@ -137,7 +137,7 @@ function registerRouteForTest() {
     { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
     {
       httpAction: (handler) => handler as never,
-      component: { sync: { applySnapshot: "applySnapshot" as never } },
+      component: { sync: { applySync: "applySync" as never } },
     },
   );
   return routes[0]!;
