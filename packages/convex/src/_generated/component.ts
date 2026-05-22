@@ -9,10 +9,16 @@
  */
 
 import type { FunctionReference } from "convex/server";
-import type { AccessProjectionSyncPayload, AccessTargetType, SyncResponse } from "../shared/sync";
+import type {
+  AccessProjectionSyncPayload,
+  AccessTargetType,
+  ScopeKind,
+  SyncResponse,
+} from "../shared/sync";
 
 type AuthorizationArgs = {
   tokenIdentifier?: string;
+  scopeId?: string;
   permission?: string;
   targetType?: AccessTargetType;
   targetId?: string;
@@ -24,6 +30,18 @@ type AuthorizationDecision = {
   sourceVersion?: number;
   principalId?: string;
   effectiveRoleIds: string[];
+};
+
+type ListMyMembershipsArgs = { tokenIdentifier?: string };
+
+type Membership = {
+  scopeId: string;
+  scopeName: string;
+  kind: ScopeKind;
+  roleKey: string;
+  roleName: string;
+  joinedAt: number;
+  status: "active" | "blocked" | "suspended" | "pending_approval";
 };
 
 /**
@@ -38,6 +56,15 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "internal",
       AuthorizationArgs,
       AuthorizationDecision,
+      Name
+    >;
+  };
+  queries: {
+    listMyMemberships: FunctionReference<
+      "query",
+      "internal",
+      ListMyMembershipsArgs,
+      Membership[],
       Name
     >;
   };

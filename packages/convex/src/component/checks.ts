@@ -1,10 +1,5 @@
+import { queryGeneric, type DataModelFromSchemaDefinition, type QueryBuilder } from "convex/server";
 import { v } from "convex/values";
-import {
-  queryGeneric,
-  type DataModelFromSchemaDefinition,
-  type QueryBuilder,
-} from "convex/server";
-import { ACCESS_CONTROL_SYNC_STATE_KEY } from "../shared/sync";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -20,6 +15,7 @@ const targetTypeValidator = v.union(
 export const authorize = query({
   args: {
     tokenIdentifier: v.optional(v.string()),
+    scopeId: v.optional(v.string()),
     permission: v.optional(v.string()),
     targetType: v.optional(targetTypeValidator),
     targetId: v.optional(v.string()),
@@ -29,10 +25,7 @@ export const authorize = query({
       return deny("missing_identity");
     }
 
-    const state = await ctx.db
-      .query("sync_state")
-      .withIndex("by_key", (q) => q.eq("key", ACCESS_CONTROL_SYNC_STATE_KEY))
-      .unique();
+    const state = await ctx.db.query("sync_state").unique();
     if (!state) {
       return deny("mirror_not_ready");
     }
@@ -42,10 +35,29 @@ export const authorize = query({
       return deny("unexpected_issuer");
     }
 
+    if (!args.permission) {
+      return allow(state.sourceVersion, undefined, []);
+    }
+
+    if (!args.scopeId) {
+      return deny("scope_missing", state.sourceVersion);
+    }
+
+    const scope = await ctx.db
+      .query("scopes")
+      .withIndex("by_scope_id", (q) => q.eq("accessScopeId", args.scopeId!))
+      .unique();
+    if (!scope) {
+      return deny("scope_missing", state.sourceVersion);
+    }
+    if (scope.status === "disabled") {
+      return deny("scope_disabled", state.sourceVersion);
+    }
+
     const principal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
-        q.eq("accessScopeId", state.accessScopeId).eq("herculesAuthUserId", token.subject),
+        q.eq("accessScopeId", scope.accessScopeId).eq("herculesAuthUserId", token.subject),
       )
       .unique();
 
@@ -56,14 +68,10 @@ export const authorize = query({
       return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
     }
 
-    if (!args.permission) {
-      return allow(state.sourceVersion, principal.principalId, []);
-    }
-
     const permission = await ctx.db
       .query("permissions")
       .withIndex("by_scope_key", (q) =>
-        q.eq("accessScopeId", state.accessScopeId).eq("key", args.permission ?? ""),
+        q.eq("accessScopeId", scope.accessScopeId).eq("key", args.permission!),
       )
       .unique();
     if (!permission) {
@@ -71,12 +79,12 @@ export const authorize = query({
     }
 
     const targetType = args.targetType ?? "scope";
-    const targetId = args.targetId ?? state.accessScopeId;
+    const targetId = args.targetId ?? scope.accessScopeId;
     const principalIds = [principal.principalId];
     const memberships = await ctx.db
       .query("principal_memberships")
       .withIndex("by_member", (q) =>
-        q.eq("accessScopeId", state.accessScopeId).eq("memberPrincipalId", principal.principalId),
+        q.eq("accessScopeId", scope.accessScopeId).eq("memberPrincipalId", principal.principalId),
       )
       .collect();
     for (const membership of memberships) {
@@ -89,7 +97,7 @@ export const authorize = query({
         .query("role_assignments")
         .withIndex("by_principal_target", (q) =>
           q
-            .eq("accessScopeId", state.accessScopeId)
+            .eq("accessScopeId", scope.accessScopeId)
             .eq("principalId", principalId)
             .eq("targetType", targetType)
             .eq("targetId", targetId),
@@ -105,7 +113,7 @@ export const authorize = query({
         .query("role_permissions")
         .withIndex("by_role_permission", (q) =>
           q
-            .eq("accessScopeId", state.accessScopeId)
+            .eq("accessScopeId", scope.accessScopeId)
             .eq("roleId", roleId)
             .eq("permissionId", permission.permissionId),
         )
@@ -130,7 +138,7 @@ function parseTokenIdentifier(tokenIdentifier: string) {
   };
 }
 
-function allow(sourceVersion: number, principalId: string, effectiveRoleIds: string[]) {
+function allow(sourceVersion: number, principalId: string | undefined, effectiveRoleIds: string[]) {
   return {
     allowed: true as const,
     reasonCode: "allowed",
@@ -140,7 +148,12 @@ function allow(sourceVersion: number, principalId: string, effectiveRoleIds: str
   };
 }
 
-function deny(reasonCode: string, sourceVersion?: number, principalId?: string, effectiveRoleIds?: string[]) {
+function deny(
+  reasonCode: string,
+  sourceVersion?: number,
+  principalId?: string,
+  effectiveRoleIds?: string[],
+) {
   return {
     allowed: false as const,
     reasonCode,

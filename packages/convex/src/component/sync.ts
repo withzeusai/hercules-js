@@ -1,10 +1,9 @@
-import { v } from "convex/values";
 import {
   mutationGeneric,
   type DataModelFromSchemaDefinition,
   type MutationBuilder,
 } from "convex/server";
-import { ACCESS_CONTROL_SYNC_STATE_KEY } from "../shared/sync";
+import { v } from "convex/values";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -23,6 +22,10 @@ const accountEntryModeValidator = v.union(
   v.literal("invite_only"),
   v.literal("approval_required"),
 );
+
+const scopeKindValidator = v.union(v.literal("default"), v.literal("org"), v.literal("suite"));
+
+const scopeStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
 
 const principalStatusValidator = v.union(
   v.literal("active"),
@@ -87,21 +90,23 @@ const roleAssignmentValidator = v.object({
   updatedAt: v.number(),
 });
 
+const scopeMetadataValidator = v.object({
+  accessScopeId: v.string(),
+  name: v.string(),
+  kind: scopeKindValidator,
+  status: scopeStatusValidator,
+  accountEntryMode: accountEntryModeValidator,
+  defaultRoleId: v.string(),
+  updatedAt: v.number(),
+});
+
 const syncPayloadArgs = {
   type: v.union(v.literal("access.projection.snapshot"), v.literal("access.projection.event")),
   schemaVersion: v.literal(1),
   eventId: v.string(),
-  accessScopeId: v.string(),
-  accessScopeAppId: v.optional(v.string()),
-  projectionId: v.optional(v.string()),
   sourceVersion: v.number(),
-  config: v.optional(
-    v.object({
-      expectedIssuer: v.string(),
-      accountEntryMode: accountEntryModeValidator,
-      defaultRoleId: v.string(),
-    }),
-  ),
+  expectedIssuer: v.optional(v.string()),
+  scope: scopeMetadataValidator,
   changes: v.optional(
     v.array(
       v.object({
@@ -124,10 +129,8 @@ const syncPayloadArgs = {
 export const applySnapshot = mutation({
   args: syncPayloadArgs,
   handler: async (ctx, args) => {
-    const state = await ctx.db
-      .query("sync_state")
-      .withIndex("by_key", (q) => q.eq("key", ACCESS_CONTROL_SYNC_STATE_KEY))
-      .unique();
+    const state = await ctx.db.query("sync_state").unique();
+    const scopeId = args.scope.accessScopeId;
 
     if (args.type === "access.projection.event") {
       if (!args.changes) {
@@ -142,10 +145,6 @@ export const applySnapshot = mutation({
           expectedVersion: 1,
           receivedVersion: args.sourceVersion,
         };
-      }
-
-      if (state.accessScopeId !== args.accessScopeId) {
-        return { ok: false as const, status: "invalid_payload" as const };
       }
 
       if (args.sourceVersion <= state.sourceVersion) {
@@ -177,7 +176,7 @@ export const applySnapshot = mutation({
 
         function validateChange(): (() => Promise<void>) | null {
           if (change.operation === "delete") {
-            return () => deleteEntity(change.entityType, change.entityId, args.accessScopeId);
+            return () => deleteEntity(change.entityType, change.entityId, scopeId);
           }
 
           switch (change.entityType) {
@@ -186,7 +185,7 @@ export const applySnapshot = mutation({
                 (candidate) => candidate.principalId === change.entityId,
               );
               if (!principal) return null;
-              return () => upsertPrincipal(args.accessScopeId, principal);
+              return () => upsertPrincipal(scopeId, principal);
             }
             case "principal_membership": {
               const [groupPrincipalId, memberPrincipalId] = change.entityId.split(":");
@@ -197,19 +196,21 @@ export const applySnapshot = mutation({
                   candidate.memberPrincipalId === memberPrincipalId,
               );
               if (!membership) return null;
-              return () => upsertPrincipalMembership(args.accessScopeId, membership);
+              return () => upsertPrincipalMembership(scopeId, membership);
             }
             case "role": {
-              const role = args.entities.roles.find((candidate) => candidate.roleId === change.entityId);
+              const role = args.entities.roles.find(
+                (candidate) => candidate.roleId === change.entityId,
+              );
               if (!role) return null;
-              return () => upsertRole(args.accessScopeId, role);
+              return () => upsertRole(scopeId, role);
             }
             case "permission": {
               const permission = args.entities.permissions.find(
                 (candidate) => candidate.permissionId === change.entityId,
               );
               if (!permission) return null;
-              return () => upsertPermission(args.accessScopeId, permission);
+              return () => upsertPermission(scopeId, permission);
             }
             case "role_permission": {
               const [roleId, permissionId] = change.entityId.split(":");
@@ -219,20 +220,22 @@ export const applySnapshot = mutation({
                   candidate.roleId === roleId && candidate.permissionId === permissionId,
               );
               if (!rolePermission) return null;
-              return () => upsertRolePermission(args.accessScopeId, rolePermission);
+              return () => upsertRolePermission(scopeId, rolePermission);
             }
             case "role_assignment": {
               const assignment = args.entities.roleAssignments.find(
                 (candidate) => candidate.assignmentId === change.entityId,
               );
               if (!assignment) return null;
-              return () => upsertRoleAssignment(args.accessScopeId, assignment);
+              return () => upsertRoleAssignment(scopeId, assignment);
             }
             default:
               return null;
           }
         }
       }
+
+      await upsertScope(args.scope);
 
       for (const applyChange of applyChanges) {
         await applyChange();
@@ -242,7 +245,7 @@ export const applySnapshot = mutation({
         ...state,
         sourceVersion: args.sourceVersion,
         lastEventId: args.eventId,
-        updatedAt: Date.now(),
+        lastSyncedAt: Date.now(),
       });
 
       return {
@@ -252,15 +255,11 @@ export const applySnapshot = mutation({
       };
     }
 
-    if (!args.config || !args.accessScopeAppId || !args.projectionId) {
+    if (!args.expectedIssuer) {
       return { ok: false as const, status: "invalid_payload" as const };
     }
 
-    if (state && state.accessScopeId !== args.accessScopeId) {
-      return { ok: false as const, status: "invalid_payload" as const };
-    }
-
-    if (state && args.sourceVersion <= state.sourceVersion) {
+    if (state && args.sourceVersion < state.sourceVersion) {
       return {
         ok: true as const,
         status: "duplicate" as const,
@@ -268,55 +267,37 @@ export const applySnapshot = mutation({
       };
     }
 
-    for (const row of await ctx.db.query("role_assignments").collect()) {
-      await ctx.db.delete(row._id);
-    }
-    for (const row of await ctx.db.query("role_permissions").collect()) {
-      await ctx.db.delete(row._id);
-    }
-    for (const row of await ctx.db.query("permissions").collect()) {
-      await ctx.db.delete(row._id);
-    }
-    for (const row of await ctx.db.query("roles").collect()) {
-      await ctx.db.delete(row._id);
-    }
-    for (const row of await ctx.db.query("principal_memberships").collect()) {
-      await ctx.db.delete(row._id);
-    }
-    for (const row of await ctx.db.query("principals").collect()) {
-      await ctx.db.delete(row._id);
-    }
+    await clearScopeEntities(scopeId);
+    await upsertScope(args.scope);
 
     for (const principal of args.entities.principals) {
-      await upsertPrincipal(args.accessScopeId, principal);
+      await upsertPrincipal(scopeId, principal);
     }
     for (const membership of args.entities.principalMemberships) {
-      await upsertPrincipalMembership(args.accessScopeId, membership);
+      await upsertPrincipalMembership(scopeId, membership);
     }
     for (const role of args.entities.roles) {
-      await upsertRole(args.accessScopeId, role);
+      await upsertRole(scopeId, role);
     }
     for (const permission of args.entities.permissions) {
-      await upsertPermission(args.accessScopeId, permission);
+      await upsertPermission(scopeId, permission);
     }
     for (const rolePermission of args.entities.rolePermissions) {
-      await upsertRolePermission(args.accessScopeId, rolePermission);
+      await upsertRolePermission(scopeId, rolePermission);
     }
     for (const assignment of args.entities.roleAssignments) {
-      await upsertRoleAssignment(args.accessScopeId, assignment);
+      await upsertRoleAssignment(scopeId, assignment);
     }
 
+    const nextSourceVersion = state
+      ? Math.max(state.sourceVersion, args.sourceVersion)
+      : args.sourceVersion;
+
     const nextState = {
-      key: ACCESS_CONTROL_SYNC_STATE_KEY,
-      accessScopeId: args.accessScopeId,
-      accessScopeAppId: args.accessScopeAppId,
-      projectionId: args.projectionId,
-      sourceVersion: args.sourceVersion,
-      expectedIssuer: args.config.expectedIssuer,
-      accountEntryMode: args.config.accountEntryMode,
-      defaultRoleId: args.config.defaultRoleId,
+      sourceVersion: nextSourceVersion,
+      expectedIssuer: args.expectedIssuer,
       lastEventId: args.eventId,
-      updatedAt: Date.now(),
+      lastSyncedAt: Date.now(),
     };
 
     if (state) {
@@ -328,8 +309,79 @@ export const applySnapshot = mutation({
     return {
       ok: true as const,
       status: "applied" as const,
-      acknowledgedVersion: args.sourceVersion,
+      acknowledgedVersion: nextSourceVersion,
     };
+
+    async function upsertScope(scope: {
+      accessScopeId: string;
+      name: string;
+      kind: "default" | "org" | "suite";
+      status: "active" | "disabled";
+      accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+      defaultRoleId: string;
+      updatedAt: number;
+    }) {
+      const existing = await ctx.db
+        .query("scopes")
+        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scope.accessScopeId))
+        .unique();
+      if (existing) {
+        await ctx.db.replace(existing._id, scope);
+      } else {
+        await ctx.db.insert("scopes", scope);
+      }
+    }
+
+    function assertSameScope(
+      entityKind: string,
+      entityId: string,
+      existing: { accessScopeId: string } | null,
+      incomingScopeId: string,
+    ) {
+      if (existing && existing.accessScopeId !== incomingScopeId) {
+        throw new Error(
+          `Refusing to rekey ${entityKind} ${entityId} from scope ${existing.accessScopeId} to ${incomingScopeId}`,
+        );
+      }
+    }
+
+    async function clearScopeEntities(accessScopeId: string) {
+      const assignmentRows = await ctx.db
+        .query("role_assignments")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect();
+      for (const row of assignmentRows) await ctx.db.delete(row._id);
+
+      const rolePermissionRows = await ctx.db
+        .query("role_permissions")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect();
+      for (const row of rolePermissionRows) await ctx.db.delete(row._id);
+
+      const permissionRows = await ctx.db
+        .query("permissions")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect();
+      for (const row of permissionRows) await ctx.db.delete(row._id);
+
+      const roleRows = await ctx.db
+        .query("roles")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect();
+      for (const row of roleRows) await ctx.db.delete(row._id);
+
+      const membershipRows = await ctx.db
+        .query("principal_memberships")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect();
+      for (const row of membershipRows) await ctx.db.delete(row._id);
+
+      const principalRows = await ctx.db
+        .query("principals")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect();
+      for (const row of principalRows) await ctx.db.delete(row._id);
+    }
 
     async function upsertPrincipal(
       accessScopeId: string,
@@ -345,6 +397,7 @@ export const applySnapshot = mutation({
         .query("principals")
         .withIndex("by_principal_id", (q) => q.eq("principalId", principal.principalId))
         .unique();
+      assertSameScope("principal", principal.principalId, existing, accessScopeId);
       const row = {
         accessScopeId,
         principalId: principal.principalId,
@@ -362,11 +415,7 @@ export const applySnapshot = mutation({
 
     async function upsertPrincipalMembership(
       accessScopeId: string,
-      membership: {
-        groupPrincipalId: string;
-        memberPrincipalId: string;
-        updatedAt: number;
-      },
+      membership: { groupPrincipalId: string; memberPrincipalId: string; updatedAt: number },
     ) {
       const existing = await ctx.db
         .query("principal_memberships")
@@ -392,12 +441,19 @@ export const applySnapshot = mutation({
 
     async function upsertRole(
       accessScopeId: string,
-      role: { roleId: string; key: string; kind: "system" | "custom"; name: string; updatedAt: number },
+      role: {
+        roleId: string;
+        key: string;
+        kind: "system" | "custom";
+        name: string;
+        updatedAt: number;
+      },
     ) {
       const existing = await ctx.db
         .query("roles")
         .withIndex("by_role_id", (q) => q.eq("roleId", role.roleId))
         .unique();
+      assertSameScope("role", role.roleId, existing, accessScopeId);
       const row = {
         accessScopeId,
         roleId: role.roleId,
@@ -427,6 +483,7 @@ export const applySnapshot = mutation({
         .query("permissions")
         .withIndex("by_permission_id", (q) => q.eq("permissionId", permission.permissionId))
         .unique();
+      assertSameScope("permission", permission.permissionId, existing, accessScopeId);
       const row = {
         accessScopeId,
         permissionId: permission.permissionId,
@@ -483,6 +540,7 @@ export const applySnapshot = mutation({
         .query("role_assignments")
         .withIndex("by_assignment_id", (q) => q.eq("assignmentId", assignment.assignmentId))
         .unique();
+      assertSameScope("role_assignment", assignment.assignmentId, existing, accessScopeId);
       const row = {
         accessScopeId,
         assignmentId: assignment.assignmentId,
@@ -611,7 +669,10 @@ export const applySnapshot = mutation({
       const rolePermission = await ctx.db
         .query("role_permissions")
         .withIndex("by_role_permission", (q) =>
-          q.eq("accessScopeId", accessScopeId).eq("roleId", roleId).eq("permissionId", permissionId),
+          q
+            .eq("accessScopeId", accessScopeId)
+            .eq("roleId", roleId)
+            .eq("permissionId", permissionId),
         )
         .unique();
       if (rolePermission) await ctx.db.delete(rolePermission._id);

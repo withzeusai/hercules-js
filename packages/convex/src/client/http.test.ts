@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
 import { Webhook } from "standardwebhooks";
-import { registerAccessControlRoutes } from "./http";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
+import { registerAccessControlRoutes } from "./http";
 
 const secret = `whsec_${Buffer.from("test-secret").toString("base64")}`;
 
@@ -9,14 +9,16 @@ const snapshot: AccessProjectionSnapshot = {
   type: "access.projection.snapshot",
   schemaVersion: 1,
   eventId: "evt_1",
-  accessScopeId: "scope_1",
-  accessScopeAppId: "scope_app_1",
-  projectionId: "projection_1",
   sourceVersion: 1,
-  config: {
-    expectedIssuer: "https://auth.example.com",
+  expectedIssuer: "https://auth.example.com",
+  scope: {
+    accessScopeId: "scope_1",
+    name: "Default",
+    kind: "default",
+    status: "active",
     accountEntryMode: "open",
     defaultRoleId: "role_member",
+    updatedAt: 1,
   },
   entities: {
     principals: [],
@@ -32,8 +34,16 @@ const event: AccessProjectionEvent = {
   type: "access.projection.event",
   schemaVersion: 1,
   eventId: "evt_2",
-  accessScopeId: "scope_1",
   sourceVersion: 2,
+  scope: {
+    accessScopeId: "scope_1",
+    name: "Default",
+    kind: "default",
+    status: "active",
+    accountEntryMode: "open",
+    defaultRoleId: "role_member",
+    updatedAt: 2,
+  },
   changes: [{ entityType: "permission", entityId: "permission_1", operation: "upsert" }],
   entities: {
     principals: [],
@@ -60,16 +70,11 @@ describe("registerAccessControlRoutes", () => {
 
   test("applies a signed snapshot", async () => {
     const route = registerRouteForTest();
-    const runMutation = vi.fn().mockResolvedValue({
-      ok: true,
-      status: "applied",
-      acknowledgedVersion: 1,
-    });
+    const runMutation = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
 
-    const response = await route.handler(
-      { runMutation },
-      signedRequest(JSON.stringify(snapshot)),
-    );
+    const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
 
     await expect(response.json()).resolves.toEqual({
       ok: true,
@@ -82,11 +87,9 @@ describe("registerAccessControlRoutes", () => {
 
   test("applies a signed incremental event", async () => {
     const route = registerRouteForTest();
-    const runMutation = vi.fn().mockResolvedValue({
-      ok: true,
-      status: "applied",
-      acknowledgedVersion: 2,
-    });
+    const runMutation = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 2 });
 
     const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(event)));
 
@@ -105,16 +108,10 @@ describe("registerAccessControlRoutes", () => {
 
     const response = await route.handler(
       { runMutation },
-      new Request("https://example.com", {
-        method: "POST",
-        body: JSON.stringify(snapshot),
-      }),
+      new Request("https://example.com", { method: "POST", body: JSON.stringify(snapshot) }),
     );
 
-    await expect(response.json()).resolves.toEqual({
-      ok: false,
-      status: "invalid_signature",
-    });
+    await expect(response.json()).resolves.toEqual({ ok: false, status: "invalid_signature" });
     expect(response.status).toBe(401);
     expect(runMutation).not.toHaveBeenCalled();
   });
@@ -128,10 +125,7 @@ describe("registerAccessControlRoutes", () => {
       signedRequest(JSON.stringify({ type: "unexpected" })),
     );
 
-    await expect(response.json()).resolves.toEqual({
-      ok: false,
-      status: "invalid_payload",
-    });
+    await expect(response.json()).resolves.toEqual({ ok: false, status: "invalid_payload" });
     expect(response.status).toBe(400);
     expect(runMutation).not.toHaveBeenCalled();
   });

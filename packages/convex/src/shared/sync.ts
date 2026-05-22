@@ -1,17 +1,11 @@
 import { z } from "zod";
 
 export const ACCESS_CONTROL_SYNC_PATH = "/_hercules/access-control/sync";
-export const ACCESS_CONTROL_SYNC_STATE_KEY = "default";
 
 export const accessTargetTypeSchema = z.enum(["scope", "app", "org", "resource"]);
 export type AccessTargetType = z.infer<typeof accessTargetTypeSchema>;
 
-export const principalStatusSchema = z.enum([
-  "active",
-  "blocked",
-  "suspended",
-  "pending_approval",
-]);
+export const principalStatusSchema = z.enum(["active", "blocked", "suspended", "pending_approval"]);
 export type PrincipalStatus = z.infer<typeof principalStatusSchema>;
 
 export const accountEntryModeSchema = z.enum([
@@ -21,6 +15,23 @@ export const accountEntryModeSchema = z.enum([
   "approval_required",
 ]);
 export type AccountEntryMode = z.infer<typeof accountEntryModeSchema>;
+
+export const scopeKindSchema = z.enum(["default", "org", "suite"]);
+export type ScopeKind = z.infer<typeof scopeKindSchema>;
+
+export const scopeStatusSchema = z.enum(["active", "disabled"]);
+export type ScopeStatus = z.infer<typeof scopeStatusSchema>;
+
+export const scopeMetadataSchema = z.object({
+  accessScopeId: z.string().min(1),
+  name: z.string().min(1),
+  kind: scopeKindSchema,
+  status: scopeStatusSchema,
+  accountEntryMode: accountEntryModeSchema,
+  defaultRoleId: z.string().min(1),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type ScopeMetadata = z.infer<typeof scopeMetadataSchema>;
 
 const principalSchema = z.object({
   principalId: z.string().min(1),
@@ -67,6 +78,15 @@ const roleAssignmentSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
 });
 
+const entitiesSchema = z.object({
+  principals: z.array(principalSchema),
+  principalMemberships: z.array(principalMembershipSchema),
+  roles: z.array(roleSchema),
+  permissions: z.array(permissionSchema),
+  rolePermissions: z.array(rolePermissionSchema),
+  roleAssignments: z.array(roleAssignmentSchema),
+});
+
 export const accessProjectionChangeSchema = z.object({
   entityType: z.enum([
     "principal",
@@ -84,23 +104,10 @@ export const accessProjectionSnapshotSchema = z.object({
   type: z.literal("access.projection.snapshot"),
   schemaVersion: z.literal(1),
   eventId: z.string().min(1),
-  accessScopeId: z.string().min(1),
-  accessScopeAppId: z.string().min(1),
-  projectionId: z.string().min(1),
   sourceVersion: z.number().int().nonnegative(),
-  config: z.object({
-    expectedIssuer: z.string().min(1),
-    accountEntryMode: accountEntryModeSchema,
-    defaultRoleId: z.string().min(1),
-  }),
-  entities: z.object({
-    principals: z.array(principalSchema),
-    principalMemberships: z.array(principalMembershipSchema),
-    roles: z.array(roleSchema),
-    permissions: z.array(permissionSchema),
-    rolePermissions: z.array(rolePermissionSchema),
-    roleAssignments: z.array(roleAssignmentSchema),
-  }),
+  expectedIssuer: z.string().min(1),
+  scope: scopeMetadataSchema,
+  entities: entitiesSchema,
 });
 
 export type AccessProjectionSnapshot = z.infer<typeof accessProjectionSnapshotSchema>;
@@ -109,17 +116,10 @@ export const accessProjectionEventSchema = z.object({
   type: z.literal("access.projection.event"),
   schemaVersion: z.literal(1),
   eventId: z.string().min(1),
-  accessScopeId: z.string().min(1),
   sourceVersion: z.number().int().nonnegative(),
+  scope: scopeMetadataSchema,
   changes: z.array(accessProjectionChangeSchema),
-  entities: z.object({
-    principals: z.array(principalSchema),
-    principalMemberships: z.array(principalMembershipSchema),
-    roles: z.array(roleSchema),
-    permissions: z.array(permissionSchema),
-    rolePermissions: z.array(rolePermissionSchema),
-    roleAssignments: z.array(roleAssignmentSchema),
-  }),
+  entities: entitiesSchema,
 });
 
 export const accessProjectionSyncPayloadSchema = z.union([
