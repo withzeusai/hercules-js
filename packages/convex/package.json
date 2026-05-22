@@ -68,8 +68,10 @@
     "convex": "^1.34.0"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^24.10.15",
     "convex": "^1.34.1",
+    "convex-test": "^0.0.53",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
