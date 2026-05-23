@@ -4,6 +4,13 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useAuth, hasAuthParams } from "react-oidc-context";
 import { ConvexError } from "convex/values";
 import * as z from "zod";
+import { useHerculesAuthProvider } from "./HerculesAuthProvider";
+import {
+  clearAuthAttemptId,
+  reportAuthDiagnostic,
+  startAuthAttempt,
+  type AuthDiagnosticPhase,
+} from "./diagnostics";
 
 const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
 
@@ -135,6 +142,9 @@ export function useAuthCallback(
     signinRedirect,
   } = useAuth();
 
+  const { authority, clientId, redirectUri, diagnostics, storageAvailable } =
+    useHerculesAuthProvider();
+
   const [status, setStatus] = useState<AuthCallbackStatus>("processing-oauth");
   const [error, setError] = useState<string | null>(null);
 
@@ -144,11 +154,36 @@ export function useAuthCallback(
   const hadAuthParams = useRef(hasAuthParams());
   // Track if we've already started sync to prevent double execution
   const syncStarted = useRef(false);
+  // Track which failure phases have already reported, so a single failure
+  // doesn't fire diagnostics on every re-render of the same effect.
+  const reportedPhases = useRef<Set<AuthDiagnosticPhase>>(new Set());
+
+  const reportPhase = useCallback(
+    (phase: AuthDiagnosticPhase, err: unknown) => {
+      if (reportedPhases.current.has(phase)) return;
+      reportedPhases.current.add(phase);
+      // Synchronous: report immediately with the static authority/client
+      // info from the active UserManager. We deliberately don't reach into
+      // metadataService here because, if discovery is what failed, that
+      // call would either hang on the same failing fetch or trigger
+      // another one before we ever get the diagnostic out.
+      reportAuthDiagnostic(diagnostics, {
+        phase,
+        error: err,
+        authority,
+        clientId,
+        redirectUri,
+        oidcStorageAvailable: storageAvailable,
+      });
+    },
+    [diagnostics, authority, clientId, redirectUri, storageAvailable],
+  );
 
   // Reset on mount, cleanup on unmount
   useEffect(() => {
     mountedRef.current = true;
     syncStarted.current = false;
+    reportedPhases.current = new Set();
     return () => {
       mountedRef.current = false;
     };
@@ -160,13 +195,14 @@ export function useAuthCallback(
 
     const timeout = setTimeout(() => {
       if (mountedRef.current) {
+        reportPhase("callback-timeout", new Error("callback timeout"));
         setStatus("error");
         setError("Authentication timed out. Please try again.");
       }
     }, timeoutMs);
 
     return () => clearTimeout(timeout);
-  }, [status, timeoutMs]);
+  }, [status, timeoutMs, reportPhase]);
 
   // Track OIDC authentication progression
   useEffect(() => {
@@ -175,6 +211,7 @@ export function useAuthCallback(
 
     // Handle OIDC errors
     if (oidcError) {
+      reportPhase("oidc-error", oidcError);
       setStatus("error");
       setError(oidcError.message || "Authentication failed");
       return;
@@ -208,6 +245,10 @@ export function useAuthCallback(
       // Use a small delay to avoid race condition during OIDC state transitions
       const failureTimeout = setTimeout(() => {
         if (mountedRef.current && !isOidcAuthenticated) {
+          reportPhase(
+            "callback-not-authenticated",
+            new Error("oidc callback completed but not authenticated"),
+          );
           setStatus("error");
           setError("Authentication was cancelled or failed. Please try again.");
         }
@@ -217,7 +258,14 @@ export function useAuthCallback(
     }
 
     return;
-  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, onNoAuthParams]);
+  }, [
+    isAuthLoading,
+    isOidcAuthenticated,
+    oidcError,
+    status,
+    onNoAuthParams,
+    reportPhase,
+  ]);
 
   // Sync with backend once backend is authenticated
   useEffect(() => {
@@ -241,6 +289,8 @@ export function useAuthCallback(
         }
       } catch (err) {
         console.error("Auth callback sync failed:", err);
+
+        reportPhase("backend-sync-failed", err);
 
         if (!mountedRef.current) return;
 
@@ -266,23 +316,44 @@ export function useAuthCallback(
     }
 
     performSync();
-  }, [status, isBackendAuthenticated, onSync]);
+  }, [status, isBackendAuthenticated, onSync, reportPhase]);
 
   // Handle successful completion
   useEffect(() => {
     if (status === "success") {
+      // Burn the correlation id so the next sign-in flow starts fresh.
+      // Failures that happen later in the same tab will still get a new
+      // attempt id from the next startAuthAttempt() call.
+      clearAuthAttemptId();
       onSuccess?.();
     }
   }, [status, onSuccess]);
 
   // Retry handler
   const retry = useCallback(async () => {
+    // Fresh attempt id so the next failure correlates to this retry.
+    startAuthAttempt();
     try {
       await signinRedirect();
     } catch (err) {
       console.error("Failed to restart auth:", err);
+      reportAuthDiagnostic(diagnostics, {
+        phase: "signin-redirect-failed",
+        error: err,
+        authority,
+        clientId,
+        redirectUri,
+        oidcStorageAvailable: storageAvailable,
+      });
     }
-  }, [signinRedirect]);
+  }, [
+    signinRedirect,
+    diagnostics,
+    authority,
+    clientId,
+    redirectUri,
+    storageAvailable,
+  ]);
 
   return {
     status,
