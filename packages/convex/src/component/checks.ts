@@ -5,20 +5,11 @@ import schema from "./schema";
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
-const targetTypeValidator = v.union(
-  v.literal("scope"),
-  v.literal("app"),
-  v.literal("org"),
-  v.literal("resource"),
-);
-
 export const authorize = query({
   args: {
     tokenIdentifier: v.optional(v.string()),
     scopeId: v.optional(v.string()),
     permission: v.optional(v.string()),
-    targetType: v.optional(targetTypeValidator),
-    targetId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!args.tokenIdentifier) {
@@ -78,8 +69,6 @@ export const authorize = query({
       return deny("permission_missing", state.sourceVersion, principal.principalId);
     }
 
-    const targetType = args.targetType ?? "scope";
-    const targetId = args.targetId ?? scope.accessScopeId;
     const principalIds = [principal.principalId];
     const memberships = await ctx.db
       .query("principal_memberships")
@@ -91,20 +80,23 @@ export const authorize = query({
       principalIds.push(membership.groupPrincipalId);
     }
 
+    // V2 grants traversal (DL14.4 step 3, fast path). For this chunk authorize
+    // only exercises principal-subject + scope-object grants; resource-object
+    // and scope-subject grants are stored but not traversed yet (no producer
+    // path emits them today, and no public surface for them).
     const effectiveRoleIds: string[] = [];
     for (const principalId of principalIds) {
-      const assignments = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_principal_target", (q) =>
+      const grants = await ctx.db
+        .query("grants")
+        .withIndex("by_subject_principal_object", (q) =>
           q
-            .eq("accessScopeId", scope.accessScopeId)
-            .eq("principalId", principalId)
-            .eq("targetType", targetType)
-            .eq("targetId", targetId),
+            .eq("subjectPrincipalId", principalId)
+            .eq("objectType", "scope")
+            .eq("objectId", scope.accessScopeId),
         )
         .collect();
-      for (const assignment of assignments) {
-        effectiveRoleIds.push(assignment.roleId);
+      for (const grant of grants) {
+        effectiveRoleIds.push(grant.roleId);
       }
     }
 

@@ -9,19 +9,12 @@
  */
 
 import type { FunctionReference } from "convex/server";
-import type {
-  AccessProjectionSyncPayload,
-  AccessTargetType,
-  ScopeKind,
-  SyncResponse,
-} from "../shared/sync";
+import type { AccessProjectionSyncPayload, ScopeKind, SyncResponse } from "../shared/sync";
 
 type AuthorizationArgs = {
   tokenIdentifier?: string;
   scopeId?: string;
   permission?: string;
-  targetType?: AccessTargetType;
-  targetId?: string;
 };
 
 type AuthorizationDecision = {

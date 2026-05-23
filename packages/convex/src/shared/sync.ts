@@ -2,9 +2,6 @@ import { z } from "zod";
 
 export const ACCESS_CONTROL_SYNC_PATH = "/_hercules/access-control/sync";
 
-export const accessTargetTypeSchema = z.enum(["scope", "app", "org", "resource"]);
-export type AccessTargetType = z.infer<typeof accessTargetTypeSchema>;
-
 export const principalStatusSchema = z.enum(["active", "blocked", "suspended", "pending_approval"]);
 export type PrincipalStatus = z.infer<typeof principalStatusSchema>;
 
@@ -70,12 +67,22 @@ const rolePermissionSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
 });
 
-const roleAssignmentSchema = z.object({
-  assignmentId: z.string().min(1),
-  principalId: z.string().min(1),
+export const grantObjectTypeSchema = z.enum(["scope", "resource"]);
+export type GrantObjectType = z.infer<typeof grantObjectTypeSchema>;
+
+// The producer filters grants by objectScopeId === payload.scope.accessScopeId,
+// so the payload doesn't repeat objectScopeId per-row. The component derives
+// it from payload.scope when storing each grant. Producer must set exactly one
+// of subjectPrincipalId / subjectScopeId (DL14 CHECK on the Hercules side).
+const grantSchema = z.object({
+  grantId: z.string().min(1),
+  subjectPrincipalId: z.string().min(1).optional(),
+  subjectScopeId: z.string().min(1).optional(),
   roleId: z.string().min(1),
-  targetType: accessTargetTypeSchema,
-  targetId: z.string().min(1),
+  objectType: grantObjectTypeSchema,
+  objectId: z.string().min(1),
+  objectResourceType: z.string().min(1).optional(),
+  expiresAt: z.number().int().nonnegative().optional(),
   updatedAt: z.number().int().nonnegative(),
 });
 
@@ -85,7 +92,7 @@ const entitiesSchema = z.object({
   roles: z.array(roleSchema),
   permissions: z.array(permissionSchema),
   rolePermissions: z.array(rolePermissionSchema),
-  roleAssignments: z.array(roleAssignmentSchema),
+  grants: z.array(grantSchema),
 });
 
 export const accessProjectionChangeSchema = z.object({
@@ -95,7 +102,7 @@ export const accessProjectionChangeSchema = z.object({
     "role",
     "permission",
     "role_permission",
-    "role_assignment",
+    "grant",
   ]),
   entityId: z.string().min(1),
   operation: z.enum(["upsert", "delete"]),

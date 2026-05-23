@@ -96,24 +96,24 @@ export default defineSchema({
     .index("by_permission", ["accessScopeId", "permissionId"])
     .index("by_role_permission", ["accessScopeId", "roleId", "permissionId"]),
 
-  role_assignments: defineTable({
-    accessScopeId: v.string(),
-    assignmentId: v.string(),
-    principalId: v.string(),
+  // DL14 unified grants table. Schema accepts every DL14 shape; authorize
+  // traversal in checks.ts currently only exercises principal-subject +
+  // scope-object grants (resource-object and scope-subject are stored but
+  // not traversed yet).
+  grants: defineTable({
+    grantId: v.string(),
+    subjectPrincipalId: v.optional(v.string()),
+    subjectScopeId: v.optional(v.string()),
     roleId: v.string(),
-    targetType: v.union(
-      v.literal("scope"),
-      v.literal("app"),
-      v.literal("org"),
-      v.literal("resource"),
-    ),
-    targetId: v.string(),
+    objectType: v.union(v.literal("scope"), v.literal("resource")),
+    objectId: v.string(),
+    objectScopeId: v.string(),
+    objectResourceType: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
-    .index("by_assignment_id", ["assignmentId"])
-    .index("by_scope", ["accessScopeId"])
-    .index("by_principal", ["accessScopeId", "principalId"])
-    .index("by_role", ["accessScopeId", "roleId"])
-    .index("by_target", ["accessScopeId", "targetType", "targetId"])
-    .index("by_principal_target", ["accessScopeId", "principalId", "targetType", "targetId"]),
+    .index("by_grant_id", ["grantId"])
+    .index("by_object_scope", ["objectScopeId"])
+    .index("by_subject_principal_object", ["subjectPrincipalId", "objectType", "objectId"])
+    .index("by_role", ["roleId"]),
 });

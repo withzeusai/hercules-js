@@ -35,7 +35,7 @@ function emptyEntities() {
     roles: [],
     permissions: [],
     rolePermissions: [],
-    roleAssignments: [],
+    grants: [],
   };
 }
 
@@ -316,5 +316,105 @@ describe("applySync", () => {
         .unique();
       expect(scope!.status).toBe("disabled");
     });
+  });
+
+  test("applies grants with both principal-subject and scope-subject shapes", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        sourceVersion: 1,
+        scope: orgScopeMeta,
+        entities: {
+          ...emptyEntities(),
+          grants: [
+            {
+              grantId: "grant_principal",
+              subjectPrincipalId: "p_alice_acme",
+              roleId: "role_admin",
+              objectType: "scope",
+              objectId: "scope_acme",
+              updatedAt: 100,
+            },
+            {
+              grantId: "grant_scope_subject",
+              subjectScopeId: "scope_other_org",
+              roleId: "role_reader",
+              objectType: "scope",
+              objectId: "scope_acme",
+              updatedAt: 101,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const grants = await ctx.db
+        .query("grants")
+        .withIndex("by_object_scope", (q) => q.eq("objectScopeId", "scope_acme"))
+        .collect();
+      expect(grants).toHaveLength(2);
+      const byGrantId = new Map(grants.map((g) => [g.grantId, g]));
+      const principalGrant = byGrantId.get("grant_principal");
+      expect(principalGrant?.subjectPrincipalId).toBe("p_alice_acme");
+      expect(principalGrant?.subjectScopeId).toBeUndefined();
+      expect(principalGrant?.objectScopeId).toBe("scope_acme");
+      const scopeGrant = byGrantId.get("grant_scope_subject");
+      expect(scopeGrant?.subjectPrincipalId).toBeUndefined();
+      expect(scopeGrant?.subjectScopeId).toBe("scope_other_org");
+      expect(scopeGrant?.objectScopeId).toBe("scope_acme");
+    });
+  });
+
+  test("cross-objectScope rekey on a grant is refused", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        sourceVersion: 1,
+        scope: baseScopeMeta,
+        entities: {
+          ...emptyEntities(),
+          grants: [
+            {
+              grantId: "grant_alice_default",
+              subjectPrincipalId: "p_alice_default",
+              roleId: "role_owner",
+              objectType: "scope",
+              objectId: "scope_default",
+              updatedAt: 1,
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(
+      t.mutation(
+        applySync,
+        event({
+          sourceVersion: 2,
+          eventId: "evt_rekey_grant",
+          scope: orgScopeMeta,
+          changes: [{ entityType: "grant", entityId: "grant_alice_default", operation: "upsert" }],
+          entities: {
+            ...emptyEntities(),
+            grants: [
+              {
+                grantId: "grant_alice_default",
+                subjectPrincipalId: "p_alice_default",
+                roleId: "role_owner",
+                objectType: "scope",
+                objectId: "scope_acme",
+                updatedAt: 2,
+              },
+            ],
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Refusing to rekey grant/);
   });
 });

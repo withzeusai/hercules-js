@@ -26,7 +26,7 @@ const snapshot: AccessProjectionSnapshot = {
     roles: [],
     permissions: [],
     rolePermissions: [],
-    roleAssignments: [],
+    grants: [],
   },
 };
 
@@ -59,7 +59,7 @@ const event: AccessProjectionEvent = {
       },
     ],
     rolePermissions: [],
-    roleAssignments: [],
+    grants: [],
   },
 };
 

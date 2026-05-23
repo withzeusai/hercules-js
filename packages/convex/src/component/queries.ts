@@ -39,21 +39,23 @@ export const listMyMemberships = query({
       if (!scope) continue;
       if (scope.status === "disabled") continue;
 
-      const assignment = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_principal_target", (q) =>
+      // Single principal-subject scope-object grant per (principal, scope)
+      // is the V1 invariant; unique() throws if anything double-writes so
+      // we surface invariant violations loudly rather than picking one.
+      const grant = await ctx.db
+        .query("grants")
+        .withIndex("by_subject_principal_object", (q) =>
           q
-            .eq("accessScopeId", principal.accessScopeId)
-            .eq("principalId", principal.principalId)
-            .eq("targetType", "scope")
-            .eq("targetId", principal.accessScopeId),
+            .eq("subjectPrincipalId", principal.principalId)
+            .eq("objectType", "scope")
+            .eq("objectId", principal.accessScopeId),
         )
         .unique();
-      if (!assignment) continue;
+      if (!grant) continue;
 
       const role = await ctx.db
         .query("roles")
-        .withIndex("by_role_id", (q) => q.eq("roleId", assignment.roleId))
+        .withIndex("by_role_id", (q) => q.eq("roleId", grant.roleId))
         .unique();
       if (!role) continue;
 

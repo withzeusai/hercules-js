@@ -1,8 +1,8 @@
-import { describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
-import schema from "./schema";
+import { describe, expect, test } from "vitest";
 import type { AccessProjectionSnapshot } from "../shared/sync";
+import schema from "./schema";
 
 const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
 
@@ -18,7 +18,7 @@ function emptyEntities() {
     roles: [],
     permissions: [],
     rolePermissions: [],
-    roleAssignments: [],
+    grants: [],
   };
 }
 
@@ -30,7 +30,7 @@ function memberSnapshot(
   options: {
     userPrincipalId: string;
     roleId: string;
-    assignmentId: string;
+    grantId: string;
     sourceVersion: number;
     eventId: string;
   },
@@ -71,13 +71,13 @@ function memberSnapshot(
           updatedAt: 1,
         },
       ],
-      roleAssignments: [
+      grants: [
         {
-          assignmentId: options.assignmentId,
-          principalId: options.userPrincipalId,
+          grantId: options.grantId,
+          subjectPrincipalId: options.userPrincipalId,
           roleId: options.roleId,
-          targetType: "scope",
-          targetId: scopeId,
+          objectType: "scope",
+          objectId: scopeId,
           updatedAt: 1,
         },
       ],
@@ -94,7 +94,7 @@ describe("listMyMemberships", () => {
       memberSnapshot("scope_default", "Default", "default", "active", {
         userPrincipalId: "p_alice_default",
         roleId: "role_owner",
-        assignmentId: "ra_alice_default",
+        grantId: "grant_alice_default",
         sourceVersion: 1,
         eventId: "evt_default",
       }),
@@ -104,7 +104,7 @@ describe("listMyMemberships", () => {
       memberSnapshot("scope_acme", "Acme", "org", "active", {
         userPrincipalId: "p_alice_acme",
         roleId: "role_acme_admin",
-        assignmentId: "ra_alice_acme",
+        grantId: "grant_alice_acme",
         sourceVersion: 2,
         eventId: "evt_acme",
       }),
@@ -132,7 +132,7 @@ describe("listMyMemberships", () => {
       memberSnapshot("scope_default", "Default", "default", "active", {
         userPrincipalId: "p_alice_default",
         roleId: "role_owner",
-        assignmentId: "ra_alice_default",
+        grantId: "grant_alice_default",
         sourceVersion: 1,
         eventId: "evt_default",
       }),
@@ -142,7 +142,7 @@ describe("listMyMemberships", () => {
       memberSnapshot("scope_archived", "Archived", "org", "disabled", {
         userPrincipalId: "p_alice_archived",
         roleId: "role_archived_admin",
-        assignmentId: "ra_alice_archived",
+        grantId: "grant_alice_archived",
         sourceVersion: 2,
         eventId: "evt_archived",
       }),
@@ -164,7 +164,7 @@ describe("listMyMemberships", () => {
       memberSnapshot("scope_default", "Default", "default", "active", {
         userPrincipalId: "p_other",
         roleId: "role_owner",
-        assignmentId: "ra_other",
+        grantId: "grant_other",
         sourceVersion: 1,
         eventId: "evt_default",
       }),
@@ -184,7 +184,7 @@ describe("listMyMemberships", () => {
       memberSnapshot("scope_default", "Default", "default", "active", {
         userPrincipalId: "p_alice_default",
         roleId: "role_owner",
-        assignmentId: "ra_alice_default",
+        grantId: "grant_alice_default",
         sourceVersion: 1,
         eventId: "evt_default",
       }),

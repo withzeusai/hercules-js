@@ -9,12 +9,7 @@ import schema from "./schema";
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 const mutation = mutationGeneric as MutationBuilder<DataModel, "public">;
 
-const targetTypeValidator = v.union(
-  v.literal("scope"),
-  v.literal("app"),
-  v.literal("org"),
-  v.literal("resource"),
-);
+const grantObjectTypeValidator = v.union(v.literal("scope"), v.literal("resource"));
 
 const accountEntryModeValidator = v.union(
   v.literal("open"),
@@ -40,7 +35,7 @@ const projectionEntityTypeValidator = v.union(
   v.literal("role"),
   v.literal("permission"),
   v.literal("role_permission"),
-  v.literal("role_assignment"),
+  v.literal("grant"),
 );
 
 const projectionOperationValidator = v.union(v.literal("upsert"), v.literal("delete"));
@@ -82,12 +77,18 @@ const rolePermissionValidator = v.object({
   updatedAt: v.number(),
 });
 
-const roleAssignmentValidator = v.object({
-  assignmentId: v.string(),
-  principalId: v.string(),
+// objectScopeId is intentionally absent on the wire; the producer filters
+// grants by objectScopeId === payload.scope.accessScopeId so the consumer
+// derives it from the payload tag.
+const grantValidator = v.object({
+  grantId: v.string(),
+  subjectPrincipalId: v.optional(v.string()),
+  subjectScopeId: v.optional(v.string()),
   roleId: v.string(),
-  targetType: targetTypeValidator,
-  targetId: v.string(),
+  objectType: grantObjectTypeValidator,
+  objectId: v.string(),
+  objectResourceType: v.optional(v.string()),
+  expiresAt: v.optional(v.number()),
   updatedAt: v.number(),
 });
 
@@ -123,7 +124,7 @@ const syncPayloadArgs = {
     roles: v.array(roleValidator),
     permissions: v.array(permissionValidator),
     rolePermissions: v.array(rolePermissionValidator),
-    roleAssignments: v.array(roleAssignmentValidator),
+    grants: v.array(grantValidator),
   }),
 };
 
@@ -223,12 +224,12 @@ export const applySync = mutation({
               if (!rolePermission) return null;
               return () => upsertRolePermission(scopeId, rolePermission);
             }
-            case "role_assignment": {
-              const assignment = args.entities.roleAssignments.find(
-                (candidate) => candidate.assignmentId === change.entityId,
+            case "grant": {
+              const grant = args.entities.grants.find(
+                (candidate) => candidate.grantId === change.entityId,
               );
-              if (!assignment) return null;
-              return () => upsertRoleAssignment(scopeId, assignment);
+              if (!grant) return null;
+              return () => upsertGrant(scopeId, grant);
             }
             default:
               return null;
@@ -286,8 +287,8 @@ export const applySync = mutation({
     for (const rolePermission of args.entities.rolePermissions) {
       await upsertRolePermission(scopeId, rolePermission);
     }
-    for (const assignment of args.entities.roleAssignments) {
-      await upsertRoleAssignment(scopeId, assignment);
+    for (const grant of args.entities.grants) {
+      await upsertGrant(scopeId, grant);
     }
 
     const nextSourceVersion = state
@@ -346,12 +347,29 @@ export const applySync = mutation({
       }
     }
 
+    // Producer guarantees one (grantId, objectScopeId) pairing by filtering
+    // grants on objectScopeId === payload.scope.accessScopeId at emission
+    // (backend-shared/access-control/projection-event.ts). If a future
+    // producer change ever emits the same grantId in two scopes, we fail
+    // the mutation rather than silently rekey.
+    function assertSameObjectScope(
+      grantId: string,
+      existing: { objectScopeId: string } | null,
+      incomingObjectScopeId: string,
+    ) {
+      if (existing && existing.objectScopeId !== incomingObjectScopeId) {
+        throw new Error(
+          `Refusing to rekey grant ${grantId} from objectScope ${existing.objectScopeId} to ${incomingObjectScopeId}`,
+        );
+      }
+    }
+
     async function clearScopeEntities(accessScopeId: string) {
-      const assignmentRows = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+      const grantRows = await ctx.db
+        .query("grants")
+        .withIndex("by_object_scope", (q) => q.eq("objectScopeId", accessScopeId))
         .collect();
-      for (const row of assignmentRows) await ctx.db.delete(row._id);
+      for (const row of grantRows) await ctx.db.delete(row._id);
 
       const rolePermissionRows = await ctx.db
         .query("role_permissions")
@@ -528,35 +546,41 @@ export const applySync = mutation({
       }
     }
 
-    async function upsertRoleAssignment(
-      accessScopeId: string,
-      assignment: {
-        assignmentId: string;
-        principalId: string;
+    async function upsertGrant(
+      objectScopeId: string,
+      grant: {
+        grantId: string;
+        subjectPrincipalId?: string;
+        subjectScopeId?: string;
         roleId: string;
-        targetType: "scope" | "app" | "org" | "resource";
-        targetId: string;
+        objectType: "scope" | "resource";
+        objectId: string;
+        objectResourceType?: string;
+        expiresAt?: number;
         updatedAt: number;
       },
     ) {
       const existing = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_assignment_id", (q) => q.eq("assignmentId", assignment.assignmentId))
+        .query("grants")
+        .withIndex("by_grant_id", (q) => q.eq("grantId", grant.grantId))
         .unique();
-      assertSameScope("role_assignment", assignment.assignmentId, existing, accessScopeId);
+      assertSameObjectScope(grant.grantId, existing, objectScopeId);
       const row = {
-        accessScopeId,
-        assignmentId: assignment.assignmentId,
-        principalId: assignment.principalId,
-        roleId: assignment.roleId,
-        targetType: assignment.targetType,
-        targetId: assignment.targetId,
-        updatedAt: assignment.updatedAt,
+        grantId: grant.grantId,
+        subjectPrincipalId: grant.subjectPrincipalId,
+        subjectScopeId: grant.subjectScopeId,
+        roleId: grant.roleId,
+        objectType: grant.objectType,
+        objectId: grant.objectId,
+        objectScopeId,
+        objectResourceType: grant.objectResourceType,
+        expiresAt: grant.expiresAt,
+        updatedAt: grant.updatedAt,
       };
       if (existing) {
         await ctx.db.replace(existing._id, row);
       } else {
-        await ctx.db.insert("role_assignments", row);
+        await ctx.db.insert("grants", row);
       }
     }
 
@@ -577,20 +601,20 @@ export const applySync = mutation({
         case "role_permission":
           await deleteRolePermission(entityId, accessScopeId);
           break;
-        case "role_assignment":
-          await deleteRoleAssignment(entityId);
+        case "grant":
+          await deleteGrant(entityId);
           break;
       }
     }
 
     async function deletePrincipal(principalId: string, accessScopeId: string) {
-      const assignmentRows = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_principal", (q) =>
-          q.eq("accessScopeId", accessScopeId).eq("principalId", principalId),
-        )
+      // Subject-principal grants live keyed by subjectPrincipalId; cascade
+      // them when the principal goes away.
+      const grantRows = await ctx.db
+        .query("grants")
+        .withIndex("by_subject_principal_object", (q) => q.eq("subjectPrincipalId", principalId))
         .collect();
-      for (const row of assignmentRows) await ctx.db.delete(row._id);
+      for (const row of grantRows) await ctx.db.delete(row._id);
 
       const groupRows = await ctx.db
         .query("principal_memberships")
@@ -637,11 +661,12 @@ export const applySync = mutation({
         .collect();
       for (const row of rolePermissions) await ctx.db.delete(row._id);
 
-      const assignments = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_role", (q) => q.eq("accessScopeId", accessScopeId).eq("roleId", roleId))
+      // Grants reference roles directly; cascade across all scopes.
+      const grants = await ctx.db
+        .query("grants")
+        .withIndex("by_role", (q) => q.eq("roleId", roleId))
         .collect();
-      for (const row of assignments) await ctx.db.delete(row._id);
+      for (const row of grants) await ctx.db.delete(row._id);
 
       const role = await ctx.db
         .query("roles")
@@ -681,12 +706,12 @@ export const applySync = mutation({
       if (rolePermission) await ctx.db.delete(rolePermission._id);
     }
 
-    async function deleteRoleAssignment(assignmentId: string) {
-      const assignment = await ctx.db
-        .query("role_assignments")
-        .withIndex("by_assignment_id", (q) => q.eq("assignmentId", assignmentId))
+    async function deleteGrant(grantId: string) {
+      const grant = await ctx.db
+        .query("grants")
+        .withIndex("by_grant_id", (q) => q.eq("grantId", grantId))
         .unique();
-      if (assignment) await ctx.db.delete(assignment._id);
+      if (grant) await ctx.db.delete(grant._id);
     }
   },
 });

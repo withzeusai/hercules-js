@@ -17,7 +17,7 @@ import type {
 } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { GenericValidator, PropertyValidators, Validator } from "convex/values";
-import type { AccessTargetType, ScopeKind } from "../shared/sync";
+import type { ScopeKind } from "../shared/sync";
 
 type AccessMode = "authenticated" | "permission";
 
@@ -33,8 +33,6 @@ type AuthorizationArgs = {
   tokenIdentifier?: string;
   scopeId?: string;
   permission?: string;
-  targetType?: AccessTargetType;
-  targetId?: string;
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };

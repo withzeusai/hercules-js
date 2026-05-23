@@ -1,8 +1,8 @@
-import { describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
-import schema from "./schema";
+import { describe, expect, test } from "vitest";
 import type { AccessProjectionSnapshot } from "../shared/sync";
+import schema from "./schema";
 
 const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
 
@@ -18,7 +18,7 @@ function emptyEntities() {
     roles: [],
     permissions: [],
     rolePermissions: [],
-    roleAssignments: [],
+    grants: [],
   };
 }
 
@@ -50,15 +50,7 @@ function defaultScopeSnapshot(): AccessProjectionSnapshot {
           updatedAt: 100,
         },
       ],
-      roles: [
-        {
-          roleId: "role_admin",
-          key: "admin",
-          kind: "system",
-          name: "Admin",
-          updatedAt: 1,
-        },
-      ],
+      roles: [{ roleId: "role_admin", key: "admin", kind: "system", name: "Admin", updatedAt: 1 }],
       permissions: [
         {
           permissionId: "perm_tasks_create",
@@ -68,20 +60,14 @@ function defaultScopeSnapshot(): AccessProjectionSnapshot {
           updatedAt: 1,
         },
       ],
-      rolePermissions: [
+      rolePermissions: [{ roleId: "role_admin", permissionId: "perm_tasks_create", updatedAt: 1 }],
+      grants: [
         {
+          grantId: "grant_alice_admin",
+          subjectPrincipalId: "p_alice",
           roleId: "role_admin",
-          permissionId: "perm_tasks_create",
-          updatedAt: 1,
-        },
-      ],
-      roleAssignments: [
-        {
-          assignmentId: "ra_alice_admin",
-          principalId: "p_alice",
-          roleId: "role_admin",
-          targetType: "scope",
-          targetId: "scope_default",
+          objectType: "scope",
+          objectId: "scope_default",
           updatedAt: 1,
         },
       ],
@@ -101,9 +87,7 @@ describe("authorize", () => {
 
   test("denies when sync_state is not initialised yet", async () => {
     const t = convexTest(schema, modules);
-    const decision = await t.query(authorize, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-    });
+    const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_alice` });
     expect(decision.allowed).toBe(false);
     expect(decision.reasonCode).toBe("mirror_not_ready");
   });
@@ -123,9 +107,7 @@ describe("authorize", () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
 
-    const decision = await t.query(authorize, {
-      tokenIdentifier: `${ISSUER}|user_anyone`,
-    });
+    const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_anyone` });
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCode).toBe("allowed");
   });
