@@ -227,14 +227,19 @@ export class ComponentTagger {
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
 
-      // First pass: collect drei imports
+      // First pass: collect @react-three/* companion-package imports (drei,
+      // postprocessing, cannon, rapier, xr). Their named exports render into
+      // the R3F reconciler, which trips on injected data-hercules-name.
+      // @react-three/fiber's <Canvas> is excluded since it renders a real
+      // DOM canvas where data-* attributes are valid.
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
             const source = node.source?.value;
             if (
               typeof source === "string" &&
-              source.includes("@react-three/drei")
+              source.startsWith("@react-three/") &&
+              source !== "@react-three/fiber"
             ) {
               node.specifiers.forEach((spec: any) => {
                 if (spec.type === "ImportSpecifier") {

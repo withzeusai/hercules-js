@@ -1,5 +1,20 @@
 # @usehercules/auth
 
+## 1.0.45
+
+### Patch Changes
+
+- [#46](https://github.com/withzeusai/hercules-js/pull/46) [`63e336b`](https://github.com/withzeusai/hercules-js/commit/63e336b7aba615b35fec8ca10247cff37b0f459b) Thanks [@delbyte](https://github.com/delbyte)! - Keep `fetchAccessToken` referentially stable across silent renewals.
+
+  Convex's `ConvexProviderWithAuth` lists `fetchAccessToken` in two `useEffect`
+  dependency arrays. When silent renew lands (`USER_LOADED` updates `user.id_token`),
+  the previous implementation produced a new callback identity each time, which
+  tore down and re-established the Convex auth subscription. During that window
+  `useConvexAuth().isAuthenticated` flipped to `false` and Convex's `<Authenticated>`
+  / `<Unauthenticated>` switch unmounted the authed subtree. Reading the token
+  and `signinSilent` through refs makes the callback stable, so silent renewal
+  no longer remounts the authed subtree.
+
 ## 1.0.44
 
 ### Patch Changes

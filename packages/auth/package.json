@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/auth",
-  "version": "1.0.44",
+  "version": "1.0.45",
   "description": "Authentication utilities for Hercules applications using OIDC",
   "type": "module",
   "sideEffects": false,
@@ -33,7 +33,7 @@
   "dependencies": {
     "jwt-decode": "^4.0.0",
     "oidc-client-ts": "^3.4.1",
-    "react-oidc-context": "^3.3.0",
+    "react-oidc-context": "^3.3.1",
     "zod": "^4.3.6"
   },
   "peerDependencies": {
@@ -45,7 +45,7 @@
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "convex": "^1.32.0",
+    "convex": "^1.38.0",
     "jsdom": "^28.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
