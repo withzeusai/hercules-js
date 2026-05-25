@@ -213,7 +213,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         grantId: v.string(),
       },
       handler: async (_ctx, args) => {
-        const body = { grant_id: args.grantId };
+        const body = { scope_id: args.scopeId, grant_id: args.grantId };
         return await callAccessControlApi(
           "/v1/access-control/resource-grants/revoke",
           body,
@@ -232,6 +232,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
       },
       handler: async (_ctx, args) => {
         const body = {
+          scope_id: args.scopeId,
           grant_id: args.grantId,
           expires_at: args.expiresAt,
         };
@@ -293,7 +294,8 @@ function createSdkClient<DataModel extends GenericDataModel>(
 ): AccessAdminSdkClient {
   const apiKey = options.apiKey ?? process.env[options.apiKeyEnvVar ?? "HERCULES_API_KEY"];
   if (!apiKey) {
-    throw new Error("HERCULES_API_KEY is required for Access Control admin actions.");
+    const envVarName = options.apiKeyEnvVar ?? "HERCULES_API_KEY";
+    throw new Error(`${envVarName} is required for Access Control admin actions.`);
   }
 
   return new Hercules({

@@ -54,6 +54,34 @@ describe("createAccessAdminActions", () => {
       },
     });
   });
+
+  test("sends scope_id for grant revoke and expiry writes", async () => {
+    const revoke = vi.fn().mockResolvedValue({ changed: true });
+    const setExpiry = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          resourceGrants: { revoke },
+          expiries: { set: setExpiry },
+        },
+      },
+    });
+
+    await getHandler(actions.revokeResourceGrant)({}, { scopeId: "scope_1", grantId: "grant_1" });
+    await getHandler(actions.setGrantExpiry)(
+      {},
+      { scopeId: "scope_1", grantId: "grant_1", expiresAt: null },
+    );
+
+    expect(revoke).toHaveBeenCalledWith({ scope_id: "scope_1", grant_id: "grant_1" });
+    expect(setExpiry).toHaveBeenCalledWith({
+      scope_id: "scope_1",
+      grant_id: "grant_1",
+      expires_at: null,
+    });
+  });
 });
 
 function identityBuilder(definition: unknown) {
