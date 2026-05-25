@@ -40,16 +40,49 @@ type AuthorizationArgs = {
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
+type ListMyRolesArgs = { tokenIdentifier?: string; scopeId: string };
+type GetEffectivePermissionsArgs = {
+  tokenIdentifier?: string;
+  scopeId: string;
+  resourceType?: string;
+  resourceId?: string;
+};
+
+export type RoleSummary = {
+  roleId: string;
+  roleKey: string;
+  roleName: string;
+  roleKind: "system" | "custom";
+};
 
 export type Membership = {
   scopeId: string;
   scopeName: string;
   kind: ScopeKind;
+  roleId?: string;
   roleKey: string;
   roleName: string;
+  roles: RoleSummary[];
   joinedAt: number;
   status: "active" | "blocked" | "suspended" | "pending_approval";
 };
+
+export type EffectivePermissionsResult = {
+  allowed: boolean;
+  reasonCode: string;
+  sourceVersion?: number;
+  scopeId?: string;
+  principalId?: string;
+  effectiveRoleIds: string[];
+  permissions: string[];
+};
+
+export type AccessContext =
+  | GenericQueryCtx<GenericDataModel>
+  | GenericMutationCtx<GenericDataModel>
+  | GenericActionCtx<GenericDataModel>;
+
+export type AccessResourceRef = { type: string; id: string };
 
 export type AccessControlComponent = {
   checks: {
@@ -57,6 +90,13 @@ export type AccessControlComponent = {
   };
   queries: {
     listMyMemberships: FunctionReference<"query", "internal", ListMyMembershipsArgs, Membership[]>;
+    listMyRoles: FunctionReference<"query", "internal", ListMyRolesArgs, RoleSummary[]>;
+    getEffectivePermissions: FunctionReference<
+      "query",
+      "internal",
+      GetEffectivePermissionsArgs,
+      EffectivePermissionsResult
+    >;
   };
 };
 
@@ -140,6 +180,24 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
   accessQuery: AccessQueryBuilder<DataModel>;
   accessMutation: AccessMutationBuilder<DataModel>;
   accessAction: AccessActionBuilder<DataModel>;
+  hasPermission: (
+    ctx: AccessContext,
+    args: { scopeId: string; permission: string; resource?: AccessResourceRef },
+  ) => Promise<boolean>;
+  requirePermission: (
+    ctx: AccessContext,
+    args: { scopeId: string; permission: string; resource?: AccessResourceRef },
+  ) => Promise<void>;
+  requireAnyPermission: (
+    ctx: AccessContext,
+    args: { scopeId: string; permissions: string[]; resource?: AccessResourceRef },
+  ) => Promise<void>;
+  getEffectivePermissions: (
+    ctx: AccessContext,
+    args: { scopeId: string; resource?: AccessResourceRef },
+  ) => Promise<string[]>;
+  listMyMemberships: (ctx: AccessContext) => Promise<Membership[]>;
+  listMyRoles: (ctx: AccessContext, args: { scopeId: string }) => Promise<RoleSummary[]>;
 };
 
 type ConvexDefinitionObject<Ctx> = {
@@ -168,6 +226,12 @@ export function createAccessControl<DataModel extends GenericDataModel>(
       component,
     ) as AccessMutationBuilder<DataModel>,
     accessAction: makeAccessBuilder(options.action, component) as AccessActionBuilder<DataModel>,
+    hasPermission: makeHasPermission(component),
+    requirePermission: makeRequirePermission(component),
+    requireAnyPermission: makeRequireAnyPermission(component),
+    getEffectivePermissions: makeGetEffectivePermissions(component),
+    listMyMemberships: makeListMyMemberships(component),
+    listMyRoles: makeListMyRoles(component),
   };
 }
 
@@ -334,6 +398,97 @@ type AuthorizationCtx =
   | GenericQueryCtx<GenericDataModel>
   | GenericMutationCtx<GenericDataModel>
   | GenericActionCtx<GenericDataModel>;
+
+function resourceArgs(resource?: AccessResourceRef) {
+  return {
+    resourceType: resource?.type,
+    resourceId: resource?.id,
+  };
+}
+
+async function getTokenIdentifier(ctx: AccessContext): Promise<string | undefined> {
+  return (await ctx.auth.getUserIdentity())?.tokenIdentifier;
+}
+
+function makeHasPermission(component: AccessControlComponent) {
+  return async (
+    ctx: AccessContext,
+    args: { scopeId: string; permission: string; resource?: AccessResourceRef },
+  ): Promise<boolean> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return false;
+
+    const decision = await ctx.runQuery(component.checks.authorize, {
+      tokenIdentifier,
+      scopeId: args.scopeId,
+      permission: args.permission,
+      ...resourceArgs(args.resource),
+    });
+    return decision.allowed;
+  };
+}
+
+function makeRequirePermission(component: AccessControlComponent) {
+  const hasPermission = makeHasPermission(component);
+  return async (
+    ctx: AccessContext,
+    args: { scopeId: string; permission: string; resource?: AccessResourceRef },
+  ): Promise<void> => {
+    if (await hasPermission(ctx, args)) return;
+    throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
+  };
+}
+
+function makeRequireAnyPermission(component: AccessControlComponent) {
+  const hasPermission = makeHasPermission(component);
+  return async (
+    ctx: AccessContext,
+    args: { scopeId: string; permissions: string[]; resource?: AccessResourceRef },
+  ): Promise<void> => {
+    for (const permission of args.permissions) {
+      if (await hasPermission(ctx, { ...args, permission })) return;
+    }
+    throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
+  };
+}
+
+function makeGetEffectivePermissions(component: AccessControlComponent) {
+  return async (
+    ctx: AccessContext,
+    args: { scopeId: string; resource?: AccessResourceRef },
+  ): Promise<string[]> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return [];
+
+    const result = await ctx.runQuery(component.queries.getEffectivePermissions, {
+      tokenIdentifier,
+      scopeId: args.scopeId,
+      ...resourceArgs(args.resource),
+    });
+    return result.permissions;
+  };
+}
+
+function makeListMyMemberships(component: AccessControlComponent) {
+  return async (ctx: AccessContext): Promise<Membership[]> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return [];
+
+    return await ctx.runQuery(component.queries.listMyMemberships, { tokenIdentifier });
+  };
+}
+
+function makeListMyRoles(component: AccessControlComponent) {
+  return async (ctx: AccessContext, args: { scopeId: string }): Promise<RoleSummary[]> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return [];
+
+    return await ctx.runQuery(component.queries.listMyRoles, {
+      tokenIdentifier,
+      scopeId: args.scopeId,
+    });
+  };
+}
 
 async function ensureAuthorized(
   ctx: AuthorizationCtx,

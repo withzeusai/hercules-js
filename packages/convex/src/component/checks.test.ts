@@ -204,6 +204,33 @@ describe("authorize", () => {
     expect(decision.effectiveRoleIds).toEqual(["role_admin"]);
   });
 
+  test("permission mode ignores deny role grants", async () => {
+    const t = convexTest(schema, modules);
+    const snapshot = defaultScopeSnapshot();
+    snapshot.entities.grants = [
+      {
+        grantId: "grant_alice_admin_deny",
+        subjectPrincipalId: "p_alice",
+        relationKind: "role",
+        roleId: "role_admin",
+        effect: "deny",
+        objectType: "scope",
+        objectId: "scope_default",
+        updatedAt: 1,
+      },
+    ];
+    await t.mutation(applySync, snapshot);
+
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      permission: "tasks:create",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("permission_denied");
+    expect(decision.effectiveRoleIds).toEqual([]);
+  });
+
   test("permission mode denies when permission key is unknown in the scope", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
@@ -259,4 +286,211 @@ describe("authorize", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.reasonCode).toBe("principal_suspended");
   });
+
+  test("role override deny only removes that role contribution and user deny wins globally", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, accessCatalogSnapshot());
+    await t.mutation(applySync, acmeOrgSnapshot());
+
+    const reportDecision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      permission: "reports.export",
+    });
+    expect(reportDecision.allowed).toBe(true);
+    expect(reportDecision.effectiveRoleIds).toEqual([
+      "role_manager",
+      "role_accountant",
+      "role_field_agent",
+    ]);
+
+    const loansDecision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      permission: "loans.read",
+    });
+    expect(loansDecision.allowed).toBe(false);
+    expect(loansDecision.reasonCode).toBe("permission_denied");
+  });
 });
+
+function accessCatalogSnapshot(): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 1,
+    eventId: "evt_access_catalog",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_manager",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      roles: [
+        {
+          roleId: "role_manager",
+          accessScopeId: "scope_default",
+          key: "manager",
+          kind: "system",
+          name: "Manager",
+          updatedAt: 1,
+        },
+        {
+          roleId: "role_accountant",
+          accessScopeId: "scope_default",
+          key: "accountant",
+          kind: "system",
+          name: "Accountant",
+          updatedAt: 1,
+        },
+        {
+          roleId: "role_field_agent",
+          accessScopeId: "scope_default",
+          key: "field_agent",
+          kind: "system",
+          name: "Field Agent",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_reports_export",
+          accessScopeId: "scope_default",
+          key: "reports.export",
+          resourceType: "reports",
+          action: "export",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
+          permissionId: "perm_loans_read",
+          accessScopeId: "scope_default",
+          key: "loans.read",
+          resourceType: "loans",
+          action: "read",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_manager",
+          permissionId: "perm_reports_export",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+        {
+          roleId: "role_manager",
+          permissionId: "perm_loans_read",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+        {
+          roleId: "role_accountant",
+          permissionId: "perm_reports_export",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+        {
+          roleId: "role_field_agent",
+          permissionId: "perm_loans_read",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function acmeOrgSnapshot(): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 1,
+    eventId: "evt_acme_org",
+    sourceVersion: 2,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_acme",
+      name: "Acme",
+      kind: "org",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_manager",
+      updatedAt: 2,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice_acme",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_manager",
+          permissionId: "perm_reports_export",
+          accessScopeId: "scope_acme",
+          effect: "deny",
+          updatedAt: 2,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_manager",
+          subjectPrincipalId: "p_alice_acme",
+          relationKind: "role",
+          roleId: "role_manager",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+        {
+          grantId: "grant_alice_accountant",
+          subjectPrincipalId: "p_alice_acme",
+          relationKind: "role",
+          roleId: "role_accountant",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+        {
+          grantId: "grant_alice_field_agent",
+          subjectPrincipalId: "p_alice_acme",
+          relationKind: "role",
+          roleId: "role_field_agent",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+        {
+          grantId: "grant_alice_loans_read_deny",
+          subjectPrincipalId: "p_alice_acme",
+          relationKind: "direct_permission",
+          permissionId: "perm_loans_read",
+          effect: "deny",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+      ],
+    },
+  };
+}

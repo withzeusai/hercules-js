@@ -9,6 +9,14 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
+    "./access-admin": {
+      "types": "./dist/client/access-admin.d.ts",
+      "default": "./dist/client/access-admin.js"
+    },
+    "./access-admin.js": {
+      "types": "./dist/client/access-admin.d.ts",
+      "default": "./dist/client/access-admin.js"
+    },
     "./http": {
       "types": "./dist/client/http.d.ts",
       "default": "./dist/client/http.js"
@@ -60,6 +68,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@usehercules/sdk": "^1.14.5",
     "standardwebhooks": "^1.0.0",
     "typescript": "^5.9.3",
     "zod": "^4.3.6"

@@ -10,7 +10,11 @@ import {
 
 const component = {
   checks: { authorize: "authorize" },
-  queries: { listMyMemberships: "listMyMemberships" },
+  queries: {
+    listMyMemberships: "listMyMemberships",
+    listMyRoles: "listMyRoles",
+    getEffectivePermissions: "getEffectivePermissions",
+  },
 };
 
 describe("createAccessControl", () => {
@@ -123,6 +127,107 @@ describe("createAccessControl", () => {
       tokenIdentifier: "https://auth.example.com|user_1",
       scopeId: "scope_abc",
       permission: "appointments:create",
+    });
+  });
+
+  test("read helpers use the configured access component", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn(async (ref: string) => {
+        if (ref === "authorize") {
+          return {
+            allowed: true,
+            reasonCode: "allowed",
+            sourceVersion: 1,
+            principalId: "principal_1",
+            effectiveRoleIds: ["role_member"],
+          };
+        }
+        if (ref === "getEffectivePermissions") {
+          return {
+            allowed: true,
+            reasonCode: "allowed",
+            sourceVersion: 1,
+            scopeId: "scope_abc",
+            principalId: "principal_1",
+            effectiveRoleIds: ["role_member"],
+            permissions: ["tasks.read"],
+          };
+        }
+        if (ref === "listMyMemberships") {
+          return [
+            {
+              scopeId: "scope_abc",
+              scopeName: "Acme",
+              kind: "org",
+              roleId: "role_member",
+              roleKey: "member",
+              roleName: "Member",
+              roles: [
+                {
+                  roleId: "role_member",
+                  roleKey: "member",
+                  roleName: "Member",
+                  roleKind: "system",
+                },
+              ],
+              joinedAt: 1,
+              status: "active",
+            },
+          ];
+        }
+        if (ref === "listMyRoles") {
+          return [
+            {
+              roleId: "role_member",
+              roleKey: "member",
+              roleName: "Member",
+              roleKind: "system",
+            },
+          ];
+        }
+        throw new Error(`Unexpected query ref ${ref}`);
+      }),
+    };
+
+    await expect(
+      builders.hasPermission(ctx as never, {
+        scopeId: "scope_abc",
+        permission: "tasks.read",
+        resource: { type: "tasks", id: "task_1" },
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      builders.getEffectivePermissions(ctx as never, {
+        scopeId: "scope_abc",
+      }),
+    ).resolves.toEqual(["tasks.read"]);
+    await expect(builders.listMyMemberships(ctx as never)).resolves.toHaveLength(1);
+    await expect(builders.listMyRoles(ctx as never, { scopeId: "scope_abc" })).resolves.toEqual([
+      {
+        roleId: "role_member",
+        roleKey: "member",
+        roleName: "Member",
+        roleKind: "system",
+      },
+    ]);
+
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_abc",
+      permission: "tasks.read",
+      resourceType: "tasks",
+      resourceId: "task_1",
     });
   });
 

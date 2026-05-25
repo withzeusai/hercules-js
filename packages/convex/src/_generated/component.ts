@@ -31,15 +31,41 @@ type AuthorizationDecision = {
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
+type ListMyRolesArgs = { tokenIdentifier?: string; scopeId: string };
+type GetEffectivePermissionsArgs = {
+  tokenIdentifier?: string;
+  scopeId: string;
+  resourceType?: string;
+  resourceId?: string;
+};
+
+type RoleSummary = {
+  roleId: string;
+  roleKey: string;
+  roleName: string;
+  roleKind: "system" | "custom";
+};
 
 type Membership = {
   scopeId: string;
   scopeName: string;
   kind: ScopeKind;
+  roleId?: string;
   roleKey: string;
   roleName: string;
+  roles: RoleSummary[];
   joinedAt: number;
   status: "active" | "blocked" | "suspended" | "pending_approval";
+};
+
+type EffectivePermissionsResult = {
+  allowed: boolean;
+  reasonCode: string;
+  sourceVersion?: number;
+  scopeId?: string;
+  principalId?: string;
+  effectiveRoleIds: string[];
+  permissions: string[];
 };
 
 /**
@@ -63,6 +89,14 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "internal",
       ListMyMembershipsArgs,
       Membership[],
+      Name
+    >;
+    listMyRoles: FunctionReference<"query", "internal", ListMyRolesArgs, RoleSummary[], Name>;
+    getEffectivePermissions: FunctionReference<
+      "query",
+      "internal",
+      GetEffectivePermissionsArgs,
+      EffectivePermissionsResult,
       Name
     >;
   };
