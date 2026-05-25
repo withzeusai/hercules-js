@@ -33,7 +33,7 @@ type AuthorizationArgs = {
   tokenIdentifier?: string;
   scopeId?: string;
   permission?: string;
-  // DL16 resource grant fallback. Optional; when present, authorize also
+  // DL16 resource grant support. Optional; when present, authorize also
   // walks grants whose object is the specific resource.
   resourceType?: string;
   resourceId?: string;
@@ -108,7 +108,7 @@ export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
 
 // extractScope can return either a bare scope id (the common case) or a
 // richer object that also names a specific resource for DL16 resource
-// grant fallback. scopeFromResource returns the richer shape so the
+// grant support. scopeFromResource returns the richer shape so the
 // authorize call can walk resource-object grants.
 export type ExtractedScope =
   | string

@@ -11,7 +11,7 @@ export const authorize = query({
     tokenIdentifier: v.optional(v.string()),
     scopeId: v.optional(v.string()),
     permission: v.optional(v.string()),
-    // DL16 resource grant fallback. When provided, authorize also walks
+    // DL16 resource grant support. When provided, authorize also walks
     // resource-object grants targeting this resource. App code passes these
     // via extractScope when the permission applies to a specific row.
     resourceType: v.optional(v.string()),
