@@ -6,6 +6,7 @@ describe("createAccessAdminActions", () => {
     const assign = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
+      authenticatedAction: identityBuilder,
       client: {
         post: vi.fn(),
         accessControl: { roles: { assign } },
@@ -29,6 +30,7 @@ describe("createAccessAdminActions", () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
+      authenticatedAction: identityBuilder,
       client: { post },
     });
 
@@ -60,6 +62,7 @@ describe("createAccessAdminActions", () => {
     const setExpiry = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
+      authenticatedAction: identityBuilder,
       client: {
         post: vi.fn(),
         accessControl: {
@@ -81,6 +84,34 @@ describe("createAccessAdminActions", () => {
       grant_id: "grant_1",
       expires_at: null,
     });
+  });
+
+  test("wraps scope lifecycle writes", async () => {
+    const create = vi.fn().mockResolvedValue({ created: true });
+    const archive = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      authenticatedAction: identityBuilder,
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          scopes: { create, archive },
+        },
+      },
+    });
+
+    await getHandler(actions.createScope)(
+      {},
+      { name: "Acme", defaultRoleKey: "member", accountEntryMode: "allowlisted_only" },
+    );
+    await getHandler(actions.archiveScope)({}, { scopeId: "scope_1" });
+
+    expect(create).toHaveBeenCalledWith({
+      name: "Acme",
+      default_role_key: "member",
+      account_entry_mode: "allowlisted_only",
+    });
+    expect(archive).toHaveBeenCalledWith({ scope_id: "scope_1" });
   });
 });
 

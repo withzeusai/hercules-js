@@ -1,7 +1,7 @@
 "use node";
 
 import { Hercules } from "@usehercules/sdk";
-import type { GenericDataModel } from "convex/server";
+import type { ActionBuilder, GenericDataModel } from "convex/server";
 import { v } from "convex/values";
 import type { AccessActionBuilder } from "./index";
 
@@ -12,6 +12,10 @@ type WriteResult = Record<string, unknown>;
 export type AccessAdminSdkClient = {
   post<T>(path: string, options: { body: Record<string, unknown> }): Promise<T>;
   accessControl?: {
+    scopes?: {
+      create?(input: Record<string, unknown>): Promise<WriteResult>;
+      archive?(input: Record<string, unknown>): Promise<WriteResult>;
+    };
     roles?: {
       assign?(input: Record<string, unknown>): Promise<WriteResult>;
       remove?(input: Record<string, unknown>): Promise<WriteResult>;
@@ -36,6 +40,7 @@ export type AccessAdminSdkClient = {
 
 export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> = {
   accessAction: AccessActionBuilder<DataModel>;
+  authenticatedAction: ActionBuilder<DataModel, "public">;
   apiKey?: string;
   apiKeyEnvVar?: string;
   apiVersion?: typeof DEFAULT_API_VERSION;
@@ -56,9 +61,45 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
   options: CreateAccessAdminActionsOptions<DataModel>,
 ) {
   const callAccessControlApi = makeAccessControlApiCaller(options);
-  const { accessAction } = options;
+  const { accessAction, authenticatedAction } = options;
 
   return {
+    createScope: authenticatedAction({
+      args: {
+        name: v.string(),
+        defaultRoleKey: v.optional(v.string()),
+        accountEntryMode: v.optional(v.union(v.literal("open"), v.literal("allowlisted_only"))),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          name: args.name,
+          default_role_key: args.defaultRoleKey,
+          account_entry_mode: args.accountEntryMode,
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/scopes/create",
+          body,
+          (client) => client.scopes?.create?.(body),
+        );
+      },
+    }),
+
+    archiveScope: accessAction({
+      permission: "access.manage",
+      extractScope: (_ctx, args) => args.scopeId,
+      args: {
+        scopeId: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = { scope_id: args.scopeId };
+        return await callAccessControlApi(
+          "/v1/access-control/scopes/archive",
+          body,
+          (client) => client.scopes?.archive?.(body),
+        );
+      },
+    }),
+
     assignRole: accessAction({
       permission: "access.users.manage",
       extractScope: (_ctx, args) => args.scopeId,
