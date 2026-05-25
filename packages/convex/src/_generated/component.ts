@@ -15,6 +15,11 @@ type AuthorizationArgs = {
   tokenIdentifier?: string;
   scopeId?: string;
   permission?: string;
+  // DL16 resource grant fallback. Optional; when present, authorize also
+  // walks grants whose object is the specific resource. scopeFromResource
+  // returns these via ensureAuthorized in the SDK client.
+  resourceType?: string;
+  resourceId?: string;
 };
 
 type AuthorizationDecision = {
