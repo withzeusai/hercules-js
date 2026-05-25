@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, configure } from "@testing-library/react";
 import { useAuth } from "./use-auth.js";
+import {
+  __resetDiagnosticsState,
+  type AuthDiagnosticEvent,
+} from "./diagnostics.js";
 
 configure({ reactStrictMode: true });
 
@@ -10,10 +14,14 @@ const mockSignoutRedirect = vi.fn();
 const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 const mockGetEndSessionEndpoint = vi.fn();
+const mockGetIssuer = vi.fn().mockResolvedValue(undefined);
+const mockGetTokenEndpoint = vi.fn().mockResolvedValue(undefined);
 
 const mockUserManager = {
   metadataService: {
     getEndSessionEndpoint: mockGetEndSessionEndpoint,
+    getIssuer: mockGetIssuer,
+    getTokenEndpoint: mockGetTokenEndpoint,
   },
 };
 
@@ -23,8 +31,20 @@ vi.mock("react-oidc-context", () => ({
   useAuth: () => mockAuthState,
 }));
 
+const defaultProviderContext = {
+  userManager: mockUserManager,
+  authority: "https://issuer.example.com",
+  clientId: "client_xyz",
+  redirectUri: "https://app.example.com/auth/callback",
+  diagnostics: { enabled: false },
+  storageAvailable: true,
+};
+let mockProviderContext: typeof defaultProviderContext & {
+  diagnostics?: unknown;
+} = defaultProviderContext;
+
 vi.mock("./HerculesAuthProvider", () => ({
-  useHerculesAuthProvider: () => ({ userManager: mockUserManager }),
+  useHerculesAuthProvider: () => mockProviderContext,
 }));
 
 // ---- Helpers ----
@@ -48,6 +68,17 @@ beforeEach(() => {
   mockSigninRedirect.mockReset();
   mockRemoveUser.mockReset();
   mockGetEndSessionEndpoint.mockReset();
+  mockGetIssuer.mockResolvedValue("https://issuer.example.com");
+  mockGetTokenEndpoint.mockResolvedValue(
+    "https://issuer.example.com/oauth/token",
+  );
+  mockProviderContext = defaultProviderContext;
+  __resetDiagnosticsState();
+  try {
+    sessionStorage.clear();
+  } catch {
+    // ignore
+  }
 });
 
 describe("useAuth", () => {
@@ -126,6 +157,48 @@ describe("useAuth", () => {
       });
 
       expect(mockSigninRedirect).toHaveBeenCalledOnce();
+    });
+
+    it("reports a diagnostic when signinRedirect throws", async () => {
+      mockSigninRedirect.mockRejectedValue(new TypeError("Failed to fetch"));
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+      };
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await expect(result.current.signin()).rejects.toThrow();
+      });
+
+      expect(onDiagnostic).toHaveBeenCalledTimes(1);
+      const event = onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent;
+      expect(event.phase).toBe("signin-redirect-failed");
+      expect(event.errorClass).toBe("failed_fetch");
+      expect(event.authorityHost).toBe("issuer.example.com");
+      expect(event.clientId).toBe("client_xyz");
+    });
+
+    it("also instruments calls to the spread-through signinRedirect", async () => {
+      mockSigninRedirect.mockRejectedValue(new TypeError("Failed to fetch"));
+      const onDiagnostic = vi.fn();
+      mockProviderContext = {
+        ...defaultProviderContext,
+        diagnostics: { onDiagnostic, reportToHercules: false },
+      };
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await expect(result.current.signinRedirect()).rejects.toThrow();
+      });
+
+      expect(onDiagnostic).toHaveBeenCalledTimes(1);
+      expect(
+        (onDiagnostic.mock.calls[0]![0] as AuthDiagnosticEvent).phase,
+      ).toBe("signin-redirect-failed");
     });
   });
 
