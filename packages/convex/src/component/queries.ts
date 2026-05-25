@@ -41,7 +41,9 @@ export const listMyMemberships = query({
 
       // DL15: a principal can have multiple grants in one scope (one role
       // grant + zero-or-more direct_permission grants). For membership
-      // listing we want the role grant; ignore direct_permission grants.
+      // listing we want the role grant. DL8.1 promises exactly one role
+      // per (principal, scope) — if the producer ever emits multiple, we
+      // throw rather than silently collapsing to one arbitrary pick.
       const grants = await ctx.db
         .query("grants")
         .withIndex("by_subject_principal_object", (q) =>
@@ -51,11 +53,17 @@ export const listMyMemberships = query({
             .eq("objectId", principal.accessScopeId),
         )
         .collect();
-      const roleGrant = grants.find(
+      const roleGrants = grants.filter(
         (g): g is typeof g & { roleId: string } =>
           g.relationKind === "role" && typeof g.roleId === "string",
       );
-      if (!roleGrant) continue;
+      if (roleGrants.length === 0) continue;
+      if (roleGrants.length > 1) {
+        throw new Error(
+          `listMyMemberships invariant: principal ${principal.principalId} has ${roleGrants.length} active role grants in scope ${principal.accessScopeId}; DL8.1 requires exactly one. Producer emitted duplicate role grants.`,
+        );
+      }
+      const roleGrant = roleGrants[0]!;
 
       const role = await ctx.db
         .query("roles")

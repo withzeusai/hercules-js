@@ -171,6 +171,16 @@ export function createAccessControl<DataModel extends GenericDataModel>(
   };
 }
 
+// Single-tenant apps that don't pass a scope arg: every check resolves to
+// the app's default scope. The component query looks up the default scope
+// row from the mirror, so this helper just returns a sentinel string and
+// authorize resolves it. The sentinel is treated as "use the default scope"
+// inside the authorize implementation (component reads the unique row with
+// kind="default").
+export const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
+
+export const defaultScope: ExtractScope<unknown, unknown> = () => DEFAULT_SCOPE_SENTINEL;
+
 export function scopeFromArg<K extends string>(argKey: K) {
   return (_ctx: unknown, args: Record<string, unknown>): string => {
     const value = args?.[argKey];

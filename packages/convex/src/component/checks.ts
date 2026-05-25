@@ -21,43 +21,64 @@ export const authorize = query({
       return deny("missing_identity");
     }
 
+    const token = parseTokenIdentifier(args.tokenIdentifier);
+    if (!token) {
+      return deny("invalid_identity");
+    }
+
     const state = await ctx.db.query("sync_state").unique();
+
+    // Authenticated mode (no permission requested): the SDK already
+    // verified the JWT via Convex's auth provider before reaching us. If
+    // the mirror has not bootstrapped yet (no projection sync delivered),
+    // accept on token presence so cold-start flows like updateCurrentUser
+    // work. The issuer-match sanity check kicks in as soon as the first
+    // projection populates sync_state.
+    if (!args.permission) {
+      if (state && token.issuer !== state.expectedIssuer) {
+        return deny("unexpected_issuer");
+      }
+      return allow(state?.sourceVersion ?? 0, undefined, []);
+    }
+
+    // Permission mode: the mirror must be ready, and the issuer must match.
     if (!state) {
       return deny("mirror_not_ready");
     }
-
-    const token = parseTokenIdentifier(args.tokenIdentifier);
-    if (!token || token.issuer !== state.expectedIssuer) {
+    if (token.issuer !== state.expectedIssuer) {
       return deny("unexpected_issuer");
-    }
-
-    if (!args.permission) {
-      return allow(state.sourceVersion, undefined, []);
     }
 
     if (!args.scopeId) {
       return deny("scope_missing", state.sourceVersion);
     }
 
-    const scope = await ctx.db
-      .query("scopes")
-      .withIndex("by_scope_id", (q) => q.eq("accessScopeId", args.scopeId!))
-      .unique();
-    if (!scope) {
-      return deny("scope_missing", state.sourceVersion);
-    }
-    if (scope.status === "disabled") {
-      return deny("scope_disabled", state.sourceVersion);
-    }
-
     // Default scope is needed to resolve system roles and the app-wide
     // permission catalog under DL15. Looked up once per authorize call.
+    // The SDK's defaultScope helper passes a sentinel string for
+    // single-tenant apps — translate it here to the actual default scope id.
     const defaultScope = await ctx.db
       .query("scopes")
       .withIndex("by_kind", (q) => q.eq("kind", "default"))
       .unique();
     if (!defaultScope) {
       return deny("default_scope_missing", state.sourceVersion);
+    }
+
+    const effectiveScopeId =
+      args.scopeId === "__hercules_default_scope__" ? defaultScope.accessScopeId : args.scopeId;
+    const scope =
+      effectiveScopeId === defaultScope.accessScopeId
+        ? defaultScope
+        : await ctx.db
+            .query("scopes")
+            .withIndex("by_scope_id", (q) => q.eq("accessScopeId", effectiveScopeId))
+            .unique();
+    if (!scope) {
+      return deny("scope_missing", state.sourceVersion);
+    }
+    if (scope.status === "disabled") {
+      return deny("scope_disabled", state.sourceVersion);
     }
 
     const principal = await ctx.db

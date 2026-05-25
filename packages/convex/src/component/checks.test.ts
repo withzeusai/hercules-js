@@ -106,9 +106,23 @@ describe("authorize", () => {
     expect(decision.reasonCode).toBe("missing_identity");
   });
 
-  test("denies when sync_state is not initialised yet", async () => {
+  test("authenticated mode allows before first sync (cold start, CRIT-03)", async () => {
     const t = convexTest(schema, modules);
+    // No mutation: sync_state row does not exist yet. Authenticated mode
+    // (no permission requested) should still allow on token presence so
+    // the user's first updateCurrentUser call can run.
     const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_alice` });
+    expect(decision.allowed).toBe(true);
+    expect(decision.reasonCode).toBe("allowed");
+  });
+
+  test("permission mode denies when sync_state is not initialised yet", async () => {
+    const t = convexTest(schema, modules);
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      permission: "tasks:create",
+    });
     expect(decision.allowed).toBe(false);
     expect(decision.reasonCode).toBe("mirror_not_ready");
   });

@@ -54,9 +54,20 @@ export function registerAccessControlRoutes(
       }
 
       const result = await ctx.runMutation(component.sync.applySync, parsedPayload.data);
-      return jsonResponse(result satisfies SyncResponse, 200);
+      return jsonResponse(result satisfies SyncResponse, syncResponseStatus(result));
     }),
   });
+}
+
+// Map mutation-level outcomes to HTTP statuses so generic webhook tooling
+// (queues, retries, monitoring) does not treat rejected syncs as delivered.
+// 200 -> applied / duplicate; 409 -> version_gap (retry after sync); 400 ->
+// payload-shape problems; 401 -> signature already returned earlier.
+function syncResponseStatus(result: SyncResponse): number {
+  if (result.ok) return 200;
+  if (result.status === "version_gap") return 409;
+  if (result.status === "issuer_mismatch") return 409;
+  return 400;
 }
 
 function resolveSyncComponent(
