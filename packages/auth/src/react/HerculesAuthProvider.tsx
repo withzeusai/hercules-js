@@ -64,18 +64,20 @@ function getSafeWebStorage(kind: "local" | "session"): Storage | null {
   }
 }
 
+function pickSafeStore(): Storage | InMemoryWebStorage {
+  return (
+    getSafeWebStorage("local") ??
+    getSafeWebStorage("session") ??
+    new InMemoryWebStorage()
+  );
+}
+
 export function getSafeUserStore() {
-  const localStore = getSafeWebStorage("local");
-  return localStore
-    ? new WebStorageStateStore({ store: localStore })
-    : new WebStorageStateStore({ store: new InMemoryWebStorage() });
+  return new WebStorageStateStore({ store: pickSafeStore() });
 }
 
 export function getSafeStateStore() {
-  const localStore = getSafeWebStorage("local");
-  return localStore
-    ? new WebStorageStateStore({ store: localStore })
-    : new WebStorageStateStore({ store: new InMemoryWebStorage() });
+  return new WebStorageStateStore({ store: pickSafeStore() });
 }
 
 /**

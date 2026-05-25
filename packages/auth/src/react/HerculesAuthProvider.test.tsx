@@ -44,8 +44,9 @@ afterEach(() => {
 });
 
 describe("HerculesAuthProvider storage fallback", () => {
-  it("falls back to in-memory storage when window.localStorage throws", () => {
+  it("falls back to in-memory storage when both window.localStorage and window.sessionStorage throw", () => {
     throwOnStorageAccess("localStorage");
+    throwOnStorageAccess("sessionStorage");
 
     const userStore = getSafeUserStore();
     const stateStore = getSafeStateStore();
@@ -54,9 +55,27 @@ describe("HerculesAuthProvider storage fallback", () => {
     expect(stateStore).toBeDefined();
   });
 
-  it("uses real localStorage when it is available", () => {
-    const userStore = getSafeUserStore();
-    expect(userStore).toBeDefined();
+  it("prefers sessionStorage when localStorage throws but sessionStorage works", async () => {
+    throwOnStorageAccess("localStorage");
+    window.sessionStorage.clear();
+
+    const stateStore = getSafeStateStore();
+    await stateStore.set("probe-key", "probe-value");
+
+    expect(window.sessionStorage.getItem("oidc.probe-key")).toBe("probe-value");
+
+    window.sessionStorage.clear();
+  });
+
+  it("uses real localStorage when it is available", async () => {
+    window.localStorage.clear();
+
+    const stateStore = getSafeStateStore();
+    await stateStore.set("probe-key", "probe-value");
+
+    expect(window.localStorage.getItem("oidc.probe-key")).toBe("probe-value");
+
+    window.localStorage.clear();
   });
 
   it("mounts HerculesAuthProvider without throwing when storage is blocked", () => {
