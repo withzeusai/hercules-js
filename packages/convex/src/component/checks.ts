@@ -10,6 +10,11 @@ export const authorize = query({
     tokenIdentifier: v.optional(v.string()),
     scopeId: v.optional(v.string()),
     permission: v.optional(v.string()),
+    // DL16 resource grant fallback. When provided, authorize also walks
+    // resource-object grants targeting this resource. App code passes these
+    // via extractScope when the permission applies to a specific row.
+    resourceType: v.optional(v.string()),
+    resourceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!args.tokenIdentifier) {
@@ -45,6 +50,16 @@ export const authorize = query({
       return deny("scope_disabled", state.sourceVersion);
     }
 
+    // Default scope is needed to resolve system roles and the app-wide
+    // permission catalog under DL15. Looked up once per authorize call.
+    const defaultScope = await ctx.db
+      .query("scopes")
+      .withIndex("by_kind", (q) => q.eq("kind", "default"))
+      .unique();
+    if (!defaultScope) {
+      return deny("default_scope_missing", state.sourceVersion);
+    }
+
     const principal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
@@ -59,16 +74,19 @@ export const authorize = query({
       return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
     }
 
+    // Permissions are app-wide; look up in the default scope.
     const permission = await ctx.db
       .query("permissions")
       .withIndex("by_scope_key", (q) =>
-        q.eq("accessScopeId", scope.accessScopeId).eq("key", args.permission!),
+        q.eq("accessScopeId", defaultScope.accessScopeId).eq("key", args.permission!),
       )
       .unique();
     if (!permission) {
       return deny("permission_missing", state.sourceVersion, principal.principalId);
     }
 
+    // Expand the principal set to include any groups this principal belongs
+    // to (group-mediated grants).
     const principalIds = [principal.principalId];
     const memberships = await ctx.db
       .query("principal_memberships")
@@ -80,39 +98,145 @@ export const authorize = query({
       principalIds.push(membership.groupPrincipalId);
     }
 
-    // V2 grants traversal (DL14.4 step 3, fast path). For this chunk authorize
-    // only exercises principal-subject + scope-object grants; resource-object
-    // and scope-subject grants are stored but not traversed yet (no producer
-    // path emits them today, and no public surface for them).
+    const now = Date.now();
+    const isActiveGrant = (g: { expiresAt?: number }) => !g.expiresAt || g.expiresAt > now;
+
+    // Walk active scope-object grants on this scope for the expanded
+    // principal set. Collect role grants (relationKind="role") and direct
+    // permission grants (relationKind="direct_permission") separately.
     const effectiveRoleIds: string[] = [];
-    for (const principalId of principalIds) {
+    const directAllowPermissionIds = new Set<string>();
+    const directDenyPermissionIds = new Set<string>();
+    for (const pid of principalIds) {
       const grants = await ctx.db
         .query("grants")
         .withIndex("by_subject_principal_object", (q) =>
           q
-            .eq("subjectPrincipalId", principalId)
+            .eq("subjectPrincipalId", pid)
             .eq("objectType", "scope")
             .eq("objectId", scope.accessScopeId),
         )
         .collect();
       for (const grant of grants) {
-        effectiveRoleIds.push(grant.roleId);
+        if (!isActiveGrant(grant)) continue;
+        if (grant.relationKind === "role" && grant.roleId) {
+          effectiveRoleIds.push(grant.roleId);
+        } else if (grant.relationKind === "direct_permission" && grant.permissionId) {
+          if (grant.effect === "allow") {
+            directAllowPermissionIds.add(grant.permissionId);
+          } else {
+            directDenyPermissionIds.add(grant.permissionId);
+          }
+        }
       }
     }
 
-    for (const roleId of effectiveRoleIds) {
-      const rolePermissions = await ctx.db
-        .query("role_permissions")
-        .withIndex("by_role_permission", (q) =>
-          q
-            .eq("accessScopeId", scope.accessScopeId)
-            .eq("roleId", roleId)
-            .eq("permissionId", permission.permissionId),
-        )
-        .collect();
-      if (rolePermissions.length > 0) {
-        return allow(state.sourceVersion, principal.principalId, effectiveRoleIds);
+    // DL16 resource grant fallback. When app code passes resourceType +
+    // resourceId, also walk grants whose object is the specific resource.
+    if (args.resourceType && args.resourceId) {
+      for (const pid of principalIds) {
+        const resourceGrants = await ctx.db
+          .query("grants")
+          .withIndex("by_subject_principal_object_resource", (q) =>
+            q
+              .eq("subjectPrincipalId", pid)
+              .eq("objectType", "resource")
+              .eq("objectResourceType", args.resourceType!)
+              .eq("objectId", args.resourceId!),
+          )
+          .collect();
+        for (const grant of resourceGrants) {
+          if (!isActiveGrant(grant)) continue;
+          if (grant.objectScopeId !== scope.accessScopeId) continue;
+          if (grant.relationKind === "role" && grant.roleId) {
+            effectiveRoleIds.push(grant.roleId);
+          } else if (grant.relationKind === "direct_permission" && grant.permissionId) {
+            if (grant.effect === "allow") {
+              directAllowPermissionIds.add(grant.permissionId);
+            } else {
+              directDenyPermissionIds.add(grant.permissionId);
+            }
+          }
+        }
       }
+    }
+
+    // DL15.3 step 3 — resolve each assigned role to its effective permission
+    // set. System role definitions live in the default scope; custom roles
+    // and per-org overrides live in the target scope.
+    let allowedViaRole = false;
+    for (const roleId of effectiveRoleIds) {
+      const roleRow = await ctx.db
+        .query("roles")
+        .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
+        .unique();
+      if (!roleRow) continue;
+
+      // Base mapping: where the role lives, look up role_permissions for
+      // this permission with effect=allow.
+      const baseAllow = await ctx.db
+        .query("role_permissions")
+        .withIndex("by_role_permission_effect", (q) =>
+          q
+            .eq("accessScopeId", roleRow.accessScopeId)
+            .eq("roleId", roleId)
+            .eq("permissionId", permission.permissionId)
+            .eq("effect", "allow"),
+        )
+        .unique();
+
+      // For system roles (role lives in default scope), also apply org
+      // scope's override rows: allow can add, deny can remove.
+      if (roleRow.kind === "system" && scope.accessScopeId !== defaultScope.accessScopeId) {
+        const orgDeny = await ctx.db
+          .query("role_permissions")
+          .withIndex("by_role_permission_effect", (q) =>
+            q
+              .eq("accessScopeId", scope.accessScopeId)
+              .eq("roleId", roleId)
+              .eq("permissionId", permission.permissionId)
+              .eq("effect", "deny"),
+          )
+          .unique();
+        if (orgDeny) continue;
+        const orgAllow = await ctx.db
+          .query("role_permissions")
+          .withIndex("by_role_permission_effect", (q) =>
+            q
+              .eq("accessScopeId", scope.accessScopeId)
+              .eq("roleId", roleId)
+              .eq("permissionId", permission.permissionId)
+              .eq("effect", "allow"),
+          )
+          .unique();
+        if (baseAllow || orgAllow) {
+          allowedViaRole = true;
+          break;
+        }
+      } else if (baseAllow) {
+        allowedViaRole = true;
+        break;
+      }
+    }
+
+    // DL15.3 step 4 — apply per-user direct grants last.
+    // Policy lock (DL15.6a): direct user grants win over role-level overrides.
+    // A direct allow re-enables a permission blocked by an org deny override;
+    // a direct deny removes a permission a role granted.
+    if (directDenyPermissionIds.has(permission.permissionId)) {
+      return deny(
+        "permission_denied",
+        state.sourceVersion,
+        principal.principalId,
+        effectiveRoleIds,
+      );
+    }
+    if (directAllowPermissionIds.has(permission.permissionId)) {
+      return allow(state.sourceVersion, principal.principalId, effectiveRoleIds);
+    }
+
+    if (allowedViaRole) {
+      return allow(state.sourceVersion, principal.principalId, effectiveRoleIds);
     }
 
     return deny("permission_denied", state.sourceVersion, principal.principalId, effectiveRoleIds);

@@ -52,9 +52,11 @@ const event: AccessProjectionEvent = {
     permissions: [
       {
         permissionId: "permission_1",
+        accessScopeId: "scope_default",
         key: "tasks:create",
         resourceType: "tasks",
         action: "create",
+        tenantAssignable: true,
         updatedAt: 1,
       },
     ],

@@ -50,22 +50,43 @@ function defaultScopeSnapshot(): AccessProjectionSnapshot {
           updatedAt: 100,
         },
       ],
-      roles: [{ roleId: "role_admin", key: "admin", kind: "system", name: "Admin", updatedAt: 1 }],
-      permissions: [
+      roles: [
         {
-          permissionId: "perm_tasks_create",
-          key: "tasks:create",
-          resourceType: "tasks",
-          action: "create",
+          roleId: "role_admin",
+          accessScopeId: "scope_default",
+          key: "admin",
+          kind: "system",
+          name: "Admin",
           updatedAt: 1,
         },
       ],
-      rolePermissions: [{ roleId: "role_admin", permissionId: "perm_tasks_create", updatedAt: 1 }],
+      permissions: [
+        {
+          permissionId: "perm_tasks_create",
+          accessScopeId: "scope_default",
+          key: "tasks:create",
+          resourceType: "tasks",
+          action: "create",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_admin",
+          permissionId: "perm_tasks_create",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+      ],
       grants: [
         {
           grantId: "grant_alice_admin",
           subjectPrincipalId: "p_alice",
+          relationKind: "role",
           roleId: "role_admin",
+          effect: "allow",
           objectType: "scope",
           objectId: "scope_default",
           updatedAt: 1,

@@ -232,7 +232,14 @@ describe("applySync", () => {
         entities: {
           ...emptyEntities(),
           roles: [
-            { roleId: "role_admin", key: "admin", kind: "system", name: "Admin", updatedAt: 1 },
+            {
+              roleId: "role_admin",
+              accessScopeId: "scope_acme",
+              key: "admin",
+              kind: "system",
+              name: "Admin",
+              updatedAt: 1,
+            },
           ],
         },
       }),
@@ -332,7 +339,9 @@ describe("applySync", () => {
             {
               grantId: "grant_principal",
               subjectPrincipalId: "p_alice_acme",
+              relationKind: "role",
               roleId: "role_admin",
+              effect: "allow",
               objectType: "scope",
               objectId: "scope_acme",
               updatedAt: 100,
@@ -340,7 +349,9 @@ describe("applySync", () => {
             {
               grantId: "grant_scope_subject",
               subjectScopeId: "scope_other_org",
+              relationKind: "role",
               roleId: "role_reader",
+              effect: "allow",
               objectType: "scope",
               objectId: "scope_acme",
               updatedAt: 101,
@@ -382,7 +393,9 @@ describe("applySync", () => {
             {
               grantId: "grant_alice_default",
               subjectPrincipalId: "p_alice_default",
+              relationKind: "role",
               roleId: "role_owner",
+              effect: "allow",
               objectType: "scope",
               objectId: "scope_default",
               updatedAt: 1,
@@ -406,7 +419,9 @@ describe("applySync", () => {
               {
                 grantId: "grant_alice_default",
                 subjectPrincipalId: "p_alice_default",
+                relationKind: "role",
                 roleId: "role_owner",
+                effect: "allow",
                 objectType: "scope",
                 objectId: "scope_acme",
                 updatedAt: 2,

@@ -39,10 +39,10 @@ export const listMyMemberships = query({
       if (!scope) continue;
       if (scope.status === "disabled") continue;
 
-      // Single principal-subject scope-object grant per (principal, scope)
-      // is the V1 invariant; unique() throws if anything double-writes so
-      // we surface invariant violations loudly rather than picking one.
-      const grant = await ctx.db
+      // DL15: a principal can have multiple grants in one scope (one role
+      // grant + zero-or-more direct_permission grants). For membership
+      // listing we want the role grant; ignore direct_permission grants.
+      const grants = await ctx.db
         .query("grants")
         .withIndex("by_subject_principal_object", (q) =>
           q
@@ -50,12 +50,16 @@ export const listMyMemberships = query({
             .eq("objectType", "scope")
             .eq("objectId", principal.accessScopeId),
         )
-        .unique();
-      if (!grant) continue;
+        .collect();
+      const roleGrant = grants.find(
+        (g): g is typeof g & { roleId: string } =>
+          g.relationKind === "role" && typeof g.roleId === "string",
+      );
+      if (!roleGrant) continue;
 
       const role = await ctx.db
         .query("roles")
-        .withIndex("by_role_id", (q) => q.eq("roleId", grant.roleId))
+        .withIndex("by_role_id", (q) => q.eq("roleId", roleGrant.roleId))
         .unique();
       if (!role) continue;
 

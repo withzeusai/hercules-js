@@ -154,14 +154,28 @@ describe("createAccessControl", () => {
   });
 
   test("scopeFromResource reads the scope field from the loaded row", async () => {
-    const extract = scopeFromResource("loanId");
-    const ctx = { db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_xyz" }) } };
-    await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toBe("scope_xyz");
+    const extract = scopeFromResource("loans", "loanId");
+    const ctx = { db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_xyz" }) } };
+    await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
+      scopeId: "scope_xyz",
+      resourceType: "loans",
+      resourceId: "loan_1",
+    });
     expect(ctx.db.get).toHaveBeenCalledWith("loan_1");
   });
 
+  test("scopeFromResource accepts a custom scopeField", async () => {
+    const extract = scopeFromResource("loans", "loanId", { scopeField: "accessScopeId" });
+    const ctx = { db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_legacy" }) } };
+    await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
+      scopeId: "scope_legacy",
+      resourceType: "loans",
+      resourceId: "loan_1",
+    });
+  });
+
   test("scopeFromResource throws when the row is missing the scope field", async () => {
-    const extract = scopeFromResource("loanId");
+    const extract = scopeFromResource("loans", "loanId");
     const ctx = { db: { get: vi.fn().mockResolvedValue({}) } };
     await expect(extract(ctx as never, { loanId: "loan_1" })).rejects.toBeInstanceOf(ConvexError);
   });

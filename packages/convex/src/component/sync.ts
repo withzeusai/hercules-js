@@ -57,6 +57,9 @@ const principalMembershipValidator = v.object({
 
 const roleValidator = v.object({
   roleId: v.string(),
+  // DL15: each role row's owning scope. Default scope for system roles,
+  // org scope for custom roles.
+  accessScopeId: v.string(),
   key: v.string(),
   kind: v.union(v.literal("system"), v.literal("custom")),
   name: v.string(),
@@ -65,15 +68,21 @@ const roleValidator = v.object({
 
 const permissionValidator = v.object({
   permissionId: v.string(),
+  // Always the default scope under DL15.
+  accessScopeId: v.string(),
   key: v.string(),
   resourceType: v.string(),
   action: v.string(),
+  tenantAssignable: v.boolean(),
   updatedAt: v.number(),
 });
 
 const rolePermissionValidator = v.object({
   roleId: v.string(),
   permissionId: v.string(),
+  // Default scope rows = base; org scope rows = override.
+  accessScopeId: v.string(),
+  effect: v.union(v.literal("allow"), v.literal("deny")),
   updatedAt: v.number(),
 });
 
@@ -84,7 +93,13 @@ const grantValidator = v.object({
   grantId: v.string(),
   subjectPrincipalId: v.optional(v.string()),
   subjectScopeId: v.optional(v.string()),
-  roleId: v.string(),
+  // DL15: relationKind="role" requires roleId; "direct_permission"
+  // requires permissionId. Producer enforces; consumer trusts after
+  // structural validation.
+  relationKind: v.union(v.literal("role"), v.literal("direct_permission")),
+  roleId: v.optional(v.string()),
+  permissionId: v.optional(v.string()),
+  effect: v.union(v.literal("allow"), v.literal("deny")),
   objectType: grantObjectTypeValidator,
   objectId: v.string(),
   objectResourceType: v.optional(v.string()),
@@ -205,24 +220,30 @@ export const applySync = mutation({
                 (candidate) => candidate.roleId === change.entityId,
               );
               if (!role) return null;
-              return () => upsertRole(scopeId, role);
+              // DL15: each role row carries its own scope id (default for
+              // system roles, target scope for custom roles).
+              return () => upsertRole(role.accessScopeId, role);
             }
             case "permission": {
               const permission = args.entities.permissions.find(
                 (candidate) => candidate.permissionId === change.entityId,
               );
               if (!permission) return null;
-              return () => upsertPermission(scopeId, permission);
+              return () => upsertPermission(permission.accessScopeId, permission);
             }
             case "role_permission": {
-              const [roleId, permissionId] = change.entityId.split(":");
-              if (!roleId || !permissionId) return null;
+              const [roleId, permissionId, effect] = change.entityId.split(":");
+              if (!roleId || !permissionId || (effect !== "allow" && effect !== "deny")) {
+                return null;
+              }
               const rolePermission = args.entities.rolePermissions.find(
                 (candidate) =>
-                  candidate.roleId === roleId && candidate.permissionId === permissionId,
+                  candidate.roleId === roleId &&
+                  candidate.permissionId === permissionId &&
+                  candidate.effect === effect,
               );
               if (!rolePermission) return null;
-              return () => upsertRolePermission(scopeId, rolePermission);
+              return () => upsertRolePermission(rolePermission.accessScopeId, rolePermission);
             }
             case "grant": {
               const grant = args.entities.grants.find(
@@ -261,6 +282,14 @@ export const applySync = mutation({
       return { ok: false as const, status: "invalid_payload" as const };
     }
 
+    // MED-03: refuse to silently overwrite expectedIssuer with a different
+    // value once it has been set. A single misconfigured signed snapshot
+    // would otherwise lock every user out at authorize time. Issuer
+    // rotation is an explicit operational flow, not a side effect of sync.
+    if (state && state.expectedIssuer && state.expectedIssuer !== args.expectedIssuer) {
+      return { ok: false as const, status: "issuer_mismatch" as const };
+    }
+
     if (state && args.sourceVersion < state.sourceVersion) {
       return {
         ok: true as const,
@@ -278,14 +307,17 @@ export const applySync = mutation({
     for (const membership of args.entities.principalMemberships) {
       await upsertPrincipalMembership(scopeId, membership);
     }
+    // DL15: catalog entities carry their own accessScopeId — system roles
+    // and permissions live in the default scope, custom roles in their org
+    // scope. Use each row's own scope rather than the payload-level scope.
     for (const role of args.entities.roles) {
-      await upsertRole(scopeId, role);
+      await upsertRole(role.accessScopeId, role);
     }
     for (const permission of args.entities.permissions) {
-      await upsertPermission(scopeId, permission);
+      await upsertPermission(permission.accessScopeId, permission);
     }
     for (const rolePermission of args.entities.rolePermissions) {
-      await upsertRolePermission(scopeId, rolePermission);
+      await upsertRolePermission(rolePermission.accessScopeId, rolePermission);
     }
     for (const grant of args.entities.grants) {
       await upsertGrant(scopeId, grant);
@@ -497,6 +529,7 @@ export const applySync = mutation({
         key: string;
         resourceType: string;
         action: string;
+        tenantAssignable: boolean;
         updatedAt: number;
       },
     ) {
@@ -511,6 +544,7 @@ export const applySync = mutation({
         key: permission.key,
         resourceType: permission.resourceType,
         action: permission.action,
+        tenantAssignable: permission.tenantAssignable,
         updatedAt: permission.updatedAt,
       };
       if (existing) {
@@ -522,21 +556,30 @@ export const applySync = mutation({
 
     async function upsertRolePermission(
       accessScopeId: string,
-      rolePermission: { roleId: string; permissionId: string; updatedAt: number },
+      rolePermission: {
+        roleId: string;
+        permissionId: string;
+        effect: "allow" | "deny";
+        updatedAt: number;
+      },
     ) {
+      // DL15: a single (role, permission) can have both allow and deny
+      // override rows in the same org scope. Unique key includes effect.
       const existing = await ctx.db
         .query("role_permissions")
-        .withIndex("by_role_permission", (q) =>
+        .withIndex("by_role_permission_effect", (q) =>
           q
             .eq("accessScopeId", accessScopeId)
             .eq("roleId", rolePermission.roleId)
-            .eq("permissionId", rolePermission.permissionId),
+            .eq("permissionId", rolePermission.permissionId)
+            .eq("effect", rolePermission.effect),
         )
         .unique();
       const row = {
         accessScopeId,
         roleId: rolePermission.roleId,
         permissionId: rolePermission.permissionId,
+        effect: rolePermission.effect,
         updatedAt: rolePermission.updatedAt,
       };
       if (existing) {
@@ -552,7 +595,10 @@ export const applySync = mutation({
         grantId: string;
         subjectPrincipalId?: string;
         subjectScopeId?: string;
-        roleId: string;
+        relationKind: "role" | "direct_permission";
+        roleId?: string;
+        permissionId?: string;
+        effect: "allow" | "deny";
         objectType: "scope" | "resource";
         objectId: string;
         objectResourceType?: string;
@@ -569,7 +615,10 @@ export const applySync = mutation({
         grantId: grant.grantId,
         subjectPrincipalId: grant.subjectPrincipalId,
         subjectScopeId: grant.subjectScopeId,
+        relationKind: grant.relationKind,
         roleId: grant.roleId,
+        permissionId: grant.permissionId,
+        effect: grant.effect,
         objectType: grant.objectType,
         objectId: grant.objectId,
         objectScopeId,
@@ -692,15 +741,18 @@ export const applySync = mutation({
     }
 
     async function deleteRolePermission(entityId: string, accessScopeId: string) {
-      const [roleId, permissionId] = entityId.split(":");
-      if (!roleId || !permissionId) return;
+      // DL15: entityId is `roleId:permissionId:effect` to disambiguate
+      // allow vs deny override rows.
+      const [roleId, permissionId, effect] = entityId.split(":");
+      if (!roleId || !permissionId || (effect !== "allow" && effect !== "deny")) return;
       const rolePermission = await ctx.db
         .query("role_permissions")
-        .withIndex("by_role_permission", (q) =>
+        .withIndex("by_role_permission_effect", (q) =>
           q
             .eq("accessScopeId", accessScopeId)
             .eq("roleId", roleId)
-            .eq("permissionId", permissionId),
+            .eq("permissionId", permissionId)
+            .eq("effect", effect),
         )
         .unique();
       if (rolePermission) await ctx.db.delete(rolePermission._id);

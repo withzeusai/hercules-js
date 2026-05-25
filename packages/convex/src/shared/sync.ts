@@ -45,25 +45,37 @@ const principalMembershipSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
 });
 
+// DL15: each role row carries its own accessScopeId — default scope for
+// system roles, target org scope for custom roles. Consumer keys lookups
+// on (accessScopeId, key).
 const roleSchema = z.object({
   roleId: z.string().min(1),
+  accessScopeId: z.string().min(1),
   key: z.string().min(1),
   kind: z.enum(["system", "custom"]),
   name: z.string().min(1),
   updatedAt: z.number().int().nonnegative(),
 });
 
+// Permissions are app-wide; accessScopeId always equals the default scope.
+// tenantAssignable=false hides the permission from org-admin role editors.
 const permissionSchema = z.object({
   permissionId: z.string().min(1),
+  accessScopeId: z.string().min(1),
   key: z.string().min(1),
   resourceType: z.string().min(1),
   action: z.string().min(1),
+  tenantAssignable: z.boolean(),
   updatedAt: z.number().int().nonnegative(),
 });
 
+// Default-scope rows are base role -> permission mappings. Org-scope rows
+// are per-org overrides (allow extends, deny removes).
 const rolePermissionSchema = z.object({
   roleId: z.string().min(1),
   permissionId: z.string().min(1),
+  accessScopeId: z.string().min(1),
+  effect: z.enum(["allow", "deny"]),
   updatedAt: z.number().int().nonnegative(),
 });
 
@@ -74,11 +86,16 @@ export type GrantObjectType = z.infer<typeof grantObjectTypeSchema>;
 // so the payload doesn't repeat objectScopeId per-row. The component derives
 // it from payload.scope when storing each grant. Producer must set exactly one
 // of subjectPrincipalId / subjectScopeId (DL14 CHECK on the Hercules side).
+// DL15: relationKind="role" requires roleId; "direct_permission" requires
+// permissionId. Producer's CHECK constraint enforces the XOR.
 const grantSchema = z.object({
   grantId: z.string().min(1),
   subjectPrincipalId: z.string().min(1).optional(),
   subjectScopeId: z.string().min(1).optional(),
-  roleId: z.string().min(1),
+  relationKind: z.enum(["role", "direct_permission"]),
+  roleId: z.string().min(1).optional(),
+  permissionId: z.string().min(1).optional(),
+  effect: z.enum(["allow", "deny"]),
   objectType: grantObjectTypeSchema,
   objectId: z.string().min(1),
   objectResourceType: z.string().min(1).optional(),
@@ -148,4 +165,14 @@ export type SyncResponse =
       expectedVersion: number;
       receivedVersion: number;
     }
-  | { ok: false; status: "invalid_signature" | "invalid_payload" | "unsupported_schema" };
+  | {
+      ok: false;
+      status:
+        | "invalid_signature"
+        | "invalid_payload"
+        | "unsupported_schema"
+        // MED-03: producer-side issuer rotation is an explicit flow, not a
+        // side effect of a signed snapshot. Consumer surfaces this so the
+        // producer can decide whether to retry or surface a fatal alert.
+        | "issuer_mismatch";
+    };

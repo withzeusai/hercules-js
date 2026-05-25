@@ -33,6 +33,10 @@ type AuthorizationArgs = {
   tokenIdentifier?: string;
   scopeId?: string;
   permission?: string;
+  // DL16 resource grant fallback. Optional; when present, authorize also
+  // walks grants whose object is the specific resource.
+  resourceType?: string;
+  resourceId?: string;
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
@@ -65,7 +69,18 @@ export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
   componentName?: string;
 };
 
-export type ExtractScope<Ctx, Args> = (ctx: Ctx, args: Args) => string | Promise<string>;
+// extractScope can return either a bare scope id (the common case) or a
+// richer object that also names a specific resource for DL16 resource
+// grant fallback. scopeFromResource returns the richer shape so the
+// authorize call can walk resource-object grants.
+export type ExtractedScope =
+  | string
+  | { scopeId: string; resourceType?: string; resourceId?: string };
+
+export type ExtractScope<Ctx, Args> = (
+  ctx: Ctx,
+  args: Args,
+) => ExtractedScope | Promise<ExtractedScope>;
 
 export type AccessQueryBuilder<DataModel extends GenericDataModel> = {
   <
@@ -171,30 +186,49 @@ export function scopeFromArg<K extends string>(argKey: K) {
 
 type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
 
-export function scopeFromResource<K extends string>(argKey: K, scopeField = "accessScopeId") {
-  return async (ctx: DbResourceCtx, args: Record<string, unknown>): Promise<string> => {
+// scopeFromResource(tableName, argKey, options?) per DL5.8.
+//
+// - tableName: the resource's table (used for resource-level grant lookup
+//   under DL16; also appears in error messages).
+// - argKey: the field on `args` that holds the row id.
+// - options.scopeField: the column on the row that carries the org scope
+//   id. Defaults to "orgScopeId" per the agent guide convention.
+//
+// Returns { scopeId, resourceType, resourceId } so the access* builder
+// can pass the resource id to authorize, enabling DL16 resource-level
+// grants on top of the scope-level check.
+export function scopeFromResource<T extends string, K extends string>(
+  tableName: T,
+  argKey: K,
+  options: { scopeField?: string } = {},
+) {
+  const scopeField = options.scopeField ?? "orgScopeId";
+  return async (
+    ctx: DbResourceCtx,
+    args: Record<string, unknown>,
+  ): Promise<{ scopeId: string; resourceType: string; resourceId: string }> => {
     const id = args?.[argKey];
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_SCOPE_ARG",
-        message: `scopeFromResource("${argKey}"): args.${argKey} is missing`,
+        message: `scopeFromResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `scopeFromResource("${argKey}"): resource not found`,
+        message: `scopeFromResource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const scopeId = (row as Record<string, unknown>)[scopeField];
     if (typeof scopeId !== "string" || scopeId.length === 0) {
       throw new ConvexError({
         code: "INVALID_RESOURCE_SCOPE",
-        message: `scopeFromResource("${argKey}"): resource is missing "${scopeField}"`,
+        message: `scopeFromResource("${tableName}", "${argKey}"): resource is missing "${scopeField}"`,
       });
     }
-    return scopeId;
+    return { scopeId, resourceType: tableName, resourceId: String(id) };
   };
 }
 
@@ -300,10 +334,30 @@ async function ensureAuthorized(
 ) {
   const identity = await ctx.auth.getUserIdentity();
 
+  // MED-01: short-circuit on missing identity before extractScope so that
+  // unauthenticated callers cannot probe resource existence by observing
+  // INVALID_SCOPE_ARG vs RESOURCE_NOT_FOUND vs INVALID_RESOURCE_SCOPE.
+  if (!identity?.tokenIdentifier) {
+    throw new ConvexError({
+      code: mode === "permission" ? "ACCESS_DENIED" : "UNAUTHENTICATED",
+      message: mode === "permission" ? "Access denied" : "Authentication required",
+      reasonCode: "missing_identity",
+    });
+  }
+
   let scopeId: string | undefined;
+  let resourceType: string | undefined;
+  let resourceId: string | undefined;
   if (mode === "permission" && access?.extractScope) {
     try {
-      scopeId = await access.extractScope(ctx, callerArgs);
+      const extracted = await access.extractScope(ctx, callerArgs);
+      if (typeof extracted === "string") {
+        scopeId = extracted;
+      } else {
+        scopeId = extracted.scopeId;
+        resourceType = extracted.resourceType;
+        resourceId = extracted.resourceId;
+      }
     } catch (error) {
       if (error instanceof ConvexError) throw error;
       throw new ConvexError({
@@ -315,9 +369,11 @@ async function ensureAuthorized(
   }
 
   const decision = await ctx.runQuery(component.checks.authorize, {
-    tokenIdentifier: identity?.tokenIdentifier,
+    tokenIdentifier: identity.tokenIdentifier,
     scopeId,
     permission: mode === "permission" ? access?.permission : undefined,
+    resourceType,
+    resourceId,
   });
 
   if (!decision.allowed) {

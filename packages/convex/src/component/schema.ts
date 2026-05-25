@@ -73,11 +73,16 @@ export default defineSchema({
     .index("by_scope_kind", ["accessScopeId", "kind"]),
 
   permissions: defineTable({
+    // DL15: permissions are app-wide; accessScopeId is always the default
+    // scope. Kept for FK/lookup symmetry with the producer.
     accessScopeId: v.string(),
     permissionId: v.string(),
     key: v.string(),
     resourceType: v.string(),
     action: v.string(),
+    // tenantAssignable=false hides this permission from org-admin role
+    // editors. Vendor-only permissions (billing, system admin) set false.
+    tenantAssignable: v.boolean(),
     updatedAt: v.number(),
   })
     .index("by_permission_id", ["permissionId"])
@@ -86,25 +91,33 @@ export default defineSchema({
     .index("by_scope_resource_action", ["accessScopeId", "resourceType", "action"]),
 
   role_permissions: defineTable({
+    // DL15: default-scope rows are base mappings on system roles;
+    // org-scope rows are per-org overrides (allow adds, deny removes).
     accessScopeId: v.string(),
     roleId: v.string(),
     permissionId: v.string(),
+    effect: v.union(v.literal("allow"), v.literal("deny")),
     updatedAt: v.number(),
   })
     .index("by_scope", ["accessScopeId"])
     .index("by_role", ["accessScopeId", "roleId"])
     .index("by_permission", ["accessScopeId", "permissionId"])
-    .index("by_role_permission", ["accessScopeId", "roleId", "permissionId"]),
+    .index("by_role_permission", ["accessScopeId", "roleId", "permissionId"])
+    .index("by_role_permission_effect", ["accessScopeId", "roleId", "permissionId", "effect"]),
 
-  // DL14 unified grants table. Schema accepts every DL14 shape; authorize
-  // traversal in checks.ts currently only exercises principal-subject +
-  // scope-object grants (resource-object and scope-subject are stored but
-  // not traversed yet).
+  // DL14 + DL15 unified grants table. relationKind="role" -> roleId set;
+  // relationKind="direct_permission" -> permissionId set (per-user delta).
+  // Resource-object grants and scope-subject grants are stored; authorize
+  // exercises principal-subject scope-object grants (role + direct) plus
+  // principal-subject resource-object grants when resource args provided.
   grants: defineTable({
     grantId: v.string(),
     subjectPrincipalId: v.optional(v.string()),
     subjectScopeId: v.optional(v.string()),
-    roleId: v.string(),
+    relationKind: v.union(v.literal("role"), v.literal("direct_permission")),
+    roleId: v.optional(v.string()),
+    permissionId: v.optional(v.string()),
+    effect: v.union(v.literal("allow"), v.literal("deny")),
     objectType: v.union(v.literal("scope"), v.literal("resource")),
     objectId: v.string(),
     objectScopeId: v.string(),
@@ -115,5 +128,12 @@ export default defineSchema({
     .index("by_grant_id", ["grantId"])
     .index("by_object_scope", ["objectScopeId"])
     .index("by_subject_principal_object", ["subjectPrincipalId", "objectType", "objectId"])
-    .index("by_role", ["roleId"]),
+    .index("by_subject_principal_object_resource", [
+      "subjectPrincipalId",
+      "objectType",
+      "objectResourceType",
+      "objectId",
+    ])
+    .index("by_role", ["roleId"])
+    .index("by_permission", ["permissionId"]),
 });

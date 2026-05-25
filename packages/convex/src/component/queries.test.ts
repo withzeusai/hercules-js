@@ -65,6 +65,7 @@ function memberSnapshot(
       roles: [
         {
           roleId: options.roleId,
+          accessScopeId: scopeId,
           key: scopeKind === "default" ? "owner" : "admin",
           kind: "system",
           name: scopeKind === "default" ? "Owner" : "Admin",
@@ -75,7 +76,9 @@ function memberSnapshot(
         {
           grantId: options.grantId,
           subjectPrincipalId: options.userPrincipalId,
+          relationKind: "role",
           roleId: options.roleId,
+          effect: "allow",
           objectType: "scope",
           objectId: scopeId,
           updatedAt: 1,
