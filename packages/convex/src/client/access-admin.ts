@@ -2,7 +2,7 @@
 
 import { Hercules } from "@usehercules/sdk";
 import type { ActionBuilder, GenericDataModel } from "convex/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { AccessActionBuilder } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
@@ -38,14 +38,38 @@ export type AccessAdminSdkClient = {
   };
 };
 
-export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> = {
-  accessAction: AccessActionBuilder<DataModel>;
-  authenticatedAction: ActionBuilder<DataModel, "public">;
+type AccessAdminApiOptions = {
   apiKey?: string;
   apiKeyEnvVar?: string;
   apiVersion?: typeof DEFAULT_API_VERSION;
   client?: AccessAdminSdkClient;
 };
+
+export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> =
+  AccessAdminApiOptions & {
+    accessAction: AccessActionBuilder<DataModel>;
+  };
+
+type CreateScopeArgs = {
+  name: string;
+  defaultRoleKey?: string;
+  accountEntryMode?: "open" | "allowlisted_only";
+};
+
+type CreateScopeAuthorizationContext = {
+  auth: {
+    getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null>;
+  };
+};
+
+export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
+  AccessAdminApiOptions & {
+    authenticatedAction: ActionBuilder<DataModel, "public">;
+    canCreateScope: (
+      ctx: CreateScopeAuthorizationContext,
+      args: CreateScopeArgs,
+    ) => boolean | Promise<boolean>;
+  };
 
 const optionalPrincipalRef = {
   principalId: v.optional(v.string()),
@@ -61,29 +85,9 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
   options: CreateAccessAdminActionsOptions<DataModel>,
 ) {
   const callAccessControlApi = makeAccessControlApiCaller(options);
-  const { accessAction, authenticatedAction } = options;
+  const { accessAction } = options;
 
   return {
-    createScope: authenticatedAction({
-      args: {
-        name: v.string(),
-        defaultRoleKey: v.optional(v.string()),
-        accountEntryMode: v.optional(v.union(v.literal("open"), v.literal("allowlisted_only"))),
-      },
-      handler: async (_ctx, args) => {
-        const body = {
-          name: args.name,
-          default_role_key: args.defaultRoleKey,
-          account_entry_mode: args.accountEntryMode,
-        };
-        return await callAccessControlApi(
-          "/v1/access-control/scopes/create",
-          body,
-          (client) => client.scopes?.create?.(body),
-        );
-      },
-    }),
-
     archiveScope: accessAction({
       permission: "access.manage",
       extractScope: (_ctx, args) => args.scopeId,
@@ -311,9 +315,41 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
   };
 }
 
-function makeAccessControlApiCaller<DataModel extends GenericDataModel>(
-  options: CreateAccessAdminActionsOptions<DataModel>,
+export function createAccessScopeAction<DataModel extends GenericDataModel>(
+  options: CreateAccessScopeActionOptions<DataModel>,
 ) {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+
+  return options.authenticatedAction({
+    args: {
+      name: v.string(),
+      defaultRoleKey: v.optional(v.string()),
+      accountEntryMode: v.optional(v.union(v.literal("open"), v.literal("allowlisted_only"))),
+    },
+    handler: async (ctx, args) => {
+      const allowed = await options.canCreateScope(ctx, args);
+      if (!allowed) {
+        throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
+      }
+
+      const identity = await ctx.auth.getUserIdentity();
+      const actorHerculesAuthUserId = parseTokenIdentifierSubject(identity?.tokenIdentifier);
+      const body = {
+        name: args.name,
+        default_role_key: args.defaultRoleKey,
+        account_entry_mode: args.accountEntryMode,
+        actor_hercules_auth_user_id: actorHerculesAuthUserId,
+      };
+      return await callAccessControlApi(
+        "/v1/access-control/scopes/create",
+        body,
+        (client) => client.scopes?.create?.(body),
+      );
+    },
+  });
+}
+
+function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
   let client: AccessAdminSdkClient | undefined = options.client;
 
   return async (
@@ -330,9 +366,7 @@ function makeAccessControlApiCaller<DataModel extends GenericDataModel>(
   };
 }
 
-function createSdkClient<DataModel extends GenericDataModel>(
-  options: CreateAccessAdminActionsOptions<DataModel>,
-): AccessAdminSdkClient {
+function createSdkClient(options: AccessAdminApiOptions): AccessAdminSdkClient {
   const apiKey = options.apiKey ?? process.env[options.apiKeyEnvVar ?? "HERCULES_API_KEY"];
   if (!apiKey) {
     const envVarName = options.apiKeyEnvVar ?? "HERCULES_API_KEY";
@@ -357,4 +391,15 @@ function roleRef(args: { roleId?: string; roleKey?: string }) {
     role_id: args.roleId,
     role_key: args.roleKey,
   };
+}
+
+function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined): string {
+  if (!tokenIdentifier) {
+    throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
+  }
+  const separatorIndex = tokenIdentifier.lastIndexOf("|");
+  if (separatorIndex <= 0 || separatorIndex === tokenIdentifier.length - 1) {
+    throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
+  }
+  return tokenIdentifier.slice(separatorIndex + 1);
 }

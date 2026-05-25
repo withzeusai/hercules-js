@@ -1,12 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
-import { createAccessAdminActions } from "./access-admin";
+import { createAccessAdminActions, createAccessScopeAction } from "./access-admin";
 
 describe("createAccessAdminActions", () => {
   test("uses generated SDK methods when available", async () => {
     const assign = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
-      authenticatedAction: identityBuilder,
       client: {
         post: vi.fn(),
         accessControl: { roles: { assign } },
@@ -30,7 +29,6 @@ describe("createAccessAdminActions", () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
-      authenticatedAction: identityBuilder,
       client: { post },
     });
 
@@ -62,7 +60,6 @@ describe("createAccessAdminActions", () => {
     const setExpiry = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
-      authenticatedAction: identityBuilder,
       client: {
         post: vi.fn(),
         accessControl: {
@@ -87,31 +84,86 @@ describe("createAccessAdminActions", () => {
   });
 
   test("wraps scope lifecycle writes", async () => {
-    const create = vi.fn().mockResolvedValue({ created: true });
     const archive = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({
       accessAction: identityBuilder,
-      authenticatedAction: identityBuilder,
       client: {
         post: vi.fn(),
         accessControl: {
-          scopes: { create, archive },
+          scopes: { archive },
         },
       },
     });
 
-    await getHandler(actions.createScope)(
-      {},
-      { name: "Acme", defaultRoleKey: "member", accountEntryMode: "allowlisted_only" },
-    );
     await getHandler(actions.archiveScope)({}, { scopeId: "scope_1" });
 
+    expect(archive).toHaveBeenCalledWith({ scope_id: "scope_1" });
+  });
+
+  test("creates scopes through an explicit app policy", async () => {
+    const create = vi.fn().mockResolvedValue({ created: true });
+    const canCreateScope = vi.fn().mockResolvedValue(true);
+    const action = createAccessScopeAction({
+      authenticatedAction: identityBuilder,
+      canCreateScope,
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          scopes: { create },
+        },
+      },
+    });
+
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|auth_user_1" }),
+      },
+    };
+    await expect(
+      getHandler(action)(ctx, {
+        name: "Acme",
+        defaultRoleKey: "member",
+        accountEntryMode: "allowlisted_only",
+      }),
+    ).resolves.toEqual({ created: true });
+
+    expect(canCreateScope).toHaveBeenCalledWith(ctx, {
+      name: "Acme",
+      defaultRoleKey: "member",
+      accountEntryMode: "allowlisted_only",
+    });
     expect(create).toHaveBeenCalledWith({
       name: "Acme",
       default_role_key: "member",
       account_entry_mode: "allowlisted_only",
+      actor_hercules_auth_user_id: "auth_user_1",
     });
-    expect(archive).toHaveBeenCalledWith({ scope_id: "scope_1" });
+  });
+
+  test("does not call the API when scope creation policy denies", async () => {
+    const create = vi.fn();
+    const action = createAccessScopeAction({
+      authenticatedAction: identityBuilder,
+      canCreateScope: vi.fn().mockResolvedValue(false),
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          scopes: { create },
+        },
+      },
+    });
+
+    await expect(
+      getHandler(action)(
+        { auth: { getUserIdentity: vi.fn() } },
+        { name: "Acme", accountEntryMode: "allowlisted_only" },
+      ),
+    ).rejects.toMatchObject({
+      data: { code: "ACCESS_DENIED", message: "Access denied" },
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });
 
