@@ -59,9 +59,6 @@ export type Membership = {
   scopeId: string;
   scopeName: string;
   kind: ScopeKind;
-  roleId?: string;
-  roleKey: string;
-  roleName: string;
   roles: RoleSummary[];
   joinedAt: number;
   status: "active" | "blocked" | "suspended" | "pending_approval";

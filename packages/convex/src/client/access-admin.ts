@@ -6,6 +6,7 @@ import { ConvexError, v } from "convex/values";
 import type { AccessActionBuilder } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
+const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_ACCESS_CONTROL_API_KEY";
 
 type WriteResult = Record<string, unknown>;
 
@@ -367,9 +368,9 @@ function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
 }
 
 function createSdkClient(options: AccessAdminApiOptions): AccessAdminSdkClient {
-  const apiKey = options.apiKey ?? process.env[options.apiKeyEnvVar ?? "HERCULES_API_KEY"];
+  const envVarName = options.apiKeyEnvVar ?? DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR;
+  const apiKey = options.apiKey ?? process.env[envVarName];
   if (!apiKey) {
-    const envVarName = options.apiKeyEnvVar ?? "HERCULES_API_KEY";
     throw new Error(`${envVarName} is required for Access Control admin actions.`);
   }
 

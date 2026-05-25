@@ -123,9 +123,9 @@ describe("listMyMemberships", () => {
 
     expect(memberships).toHaveLength(2);
     const byScope = new Map(memberships.map((m) => [m.scopeId, m]));
-    expect(byScope.get("scope_default")?.roleKey).toBe("owner");
+    expect(byScope.get("scope_default")?.roles[0]?.roleKey).toBe("owner");
     expect(byScope.get("scope_default")?.kind).toBe("default");
-    expect(byScope.get("scope_acme")?.roleKey).toBe("admin");
+    expect(byScope.get("scope_acme")?.roles[0]?.roleKey).toBe("admin");
     expect(byScope.get("scope_acme")?.kind).toBe("org");
     expect(byScope.get("scope_default")?.joinedAt).toBe(1001);
     expect(byScope.get("scope_acme")?.joinedAt).toBe(1002);
@@ -216,7 +216,6 @@ describe("listMyMemberships", () => {
         { roleId: "role_loan_officer", roleKey: "loan_officer", roleName: "Loan Officer" },
       ],
     });
-    expect(memberships[0]?.roleKey).toBe("field_agent");
   });
 
   test("lists roles for one scope", async () => {

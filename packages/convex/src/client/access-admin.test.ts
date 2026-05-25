@@ -55,6 +55,25 @@ describe("createAccessAdminActions", () => {
     });
   });
 
+  test("requires the dedicated Access Control API key by default", async () => {
+    const previous = process.env["HERCULES_ACCESS_CONTROL_API_KEY"];
+    delete process.env["HERCULES_ACCESS_CONTROL_API_KEY"];
+    const actions = createAccessAdminActions({ accessAction: identityBuilder });
+
+    await expect(
+      getHandler(actions.assignRole)(
+        {},
+        { scopeId: "scope_1", herculesAuthUserId: "user_1", roleKey: "admin" },
+      ),
+    ).rejects.toThrow("HERCULES_ACCESS_CONTROL_API_KEY is required");
+
+    if (previous === undefined) {
+      delete process.env["HERCULES_ACCESS_CONTROL_API_KEY"];
+    } else {
+      process.env["HERCULES_ACCESS_CONTROL_API_KEY"] = previous;
+    }
+  });
+
   test("sends scope_id for grant revoke and expiry writes", async () => {
     const revoke = vi.fn().mockResolvedValue({ changed: true });
     const setExpiry = vi.fn().mockResolvedValue({ changed: true });

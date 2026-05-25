@@ -170,9 +170,6 @@ describe("createAccessControl", () => {
               scopeId: "scope_abc",
               scopeName: "Acme",
               kind: "org",
-              roleId: "role_member",
-              roleKey: "member",
-              roleName: "Member",
               roles: [
                 {
                   roleId: "role_member",
@@ -271,9 +268,9 @@ describe("createAccessControl", () => {
 
   test("scopeFromResource accepts a custom scopeField", async () => {
     const extract = scopeFromResource("loans", "loanId", { scopeField: "accessScopeId" });
-    const ctx = { db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_legacy" }) } };
+    const ctx = { db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_custom" }) } };
     await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
-      scopeId: "scope_legacy",
+      scopeId: "scope_custom",
       resourceType: "loans",
       resourceId: "loan_1",
     });

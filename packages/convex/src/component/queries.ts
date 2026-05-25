@@ -22,9 +22,6 @@ type Membership = {
   scopeId: string;
   scopeName: string;
   kind: "default" | "org" | "suite";
-  roleId?: string;
-  roleKey: string;
-  roleName: string;
   roles: RoleSummary[];
   joinedAt: number;
   status: "active" | "blocked" | "suspended" | "pending_approval";
@@ -71,15 +68,11 @@ export const listMyMemberships = query({
         scopeId: principal.accessScopeId,
       });
       if (roles.length === 0) continue;
-      const primaryRole = roles[0]!;
 
       memberships.push({
         scopeId: scope.accessScopeId,
         scopeName: scope.name,
         kind: scope.kind,
-        roleId: primaryRole.roleId,
-        roleKey: primaryRole.roleKey,
-        roleName: primaryRole.roleName,
         roles,
         joinedAt: principal.joinedAt,
         status: principal.status,
