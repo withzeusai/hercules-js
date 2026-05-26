@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import type { ComponentApi } from "../_generated/component";
 import {
+  DEFAULT_SCOPE_SENTINEL,
   createAccessControl,
   scopeFromArg,
   scopeFromResource,
@@ -39,21 +40,39 @@ describe("createAccessControl", () => {
     ).toThrow("access* builders require a non-empty permission.");
   });
 
-  test("requires access builders to declare an extractScope", () => {
+  test("defaults access builders to the app scope", async () => {
     const builders = createAccessControl({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
       component: component as never,
     });
+    const handler = builders.accessMutation({
+      permission: "tasks:create",
+      args: {},
+      handler: async () => "ok",
+    } as never) as unknown as { handler: Function };
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        sourceVersion: 1,
+        principalId: "principal_1",
+        effectiveRoleIds: ["role_member"],
+      }),
+    };
 
-    expect(() =>
-      builders.accessMutation({
-        permission: "tasks:create",
-        args: {},
-        handler: async () => null,
-      } as never),
-    ).toThrow("access* builders require an extractScope function.");
+    await expect(handler.handler(ctx, {})).resolves.toBe("ok");
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      permission: "tasks:create",
+    });
   });
 
   test("authenticated builders fail closed when authorization denies", async () => {
@@ -120,6 +139,42 @@ describe("createAccessControl", () => {
           principalId: "principal_1",
           effectiveRoleIds: ["role_member"],
         }),
+    };
+
+    await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_abc",
+      permission: "appointments:create",
+    });
+  });
+
+  test("access builders accept scope as the preferred scope extractor name", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const handler = builders.accessMutation({
+      permission: "appointments:create",
+      scope: scopeFromArg("orgScopeId"),
+      args: {},
+      handler: async () => "ok",
+    } as never) as unknown as { handler: Function };
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        sourceVersion: 1,
+        principalId: "principal_1",
+        effectiveRoleIds: ["role_member"],
+      }),
     };
 
     await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
@@ -225,6 +280,36 @@ describe("createAccessControl", () => {
       permission: "tasks.read",
       resourceType: "tasks",
       resourceId: "task_1",
+    });
+  });
+
+  test("hasPermission accepts a permission key and defaults to the app scope", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        sourceVersion: 1,
+        principalId: "principal_1",
+        effectiveRoleIds: ["role_member"],
+      }),
+    };
+
+    await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      permission: "tasks.create",
     });
   });
 
