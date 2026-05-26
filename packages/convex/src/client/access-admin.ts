@@ -6,7 +6,7 @@ import { ConvexError, v } from "convex/values";
 import type { AccessActionBuilder } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
-const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_ACCESS_CONTROL_API_KEY";
+const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
 
 type WriteResult = Record<string, unknown>;
 
