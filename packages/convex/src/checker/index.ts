@@ -13,7 +13,14 @@ type RawBuilderCandidate = {
 };
 
 export type AccessControlCheckFinding = {
-  code: "convex_dir_missing" | "raw_exported_convex_builder";
+  code:
+    | "convex_dir_missing"
+    | "raw_exported_convex_builder"
+    | "placeholder_access_scope_id"
+    | "local_org_membership_table"
+    | "optional_org_scope_id"
+    | "org_scoped_global_slug_lookup"
+    | "role_name_permission_gate";
   severity: "error";
   filePath: string;
   line: number;
@@ -75,15 +82,21 @@ export function checkAccessControlSource(
   }
 
   const sourceFiles = collectSourceFiles(convexDir);
+  const appSourceFiles = collectAppSourceFiles(cwd, convexDir);
   const fixedFiles = options.fixAuthenticated
     ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir)).length
     : 0;
-  const findings = sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath));
+  const findings = [
+    ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
+    ...[...sourceFiles, ...appSourceFiles].flatMap((filePath) =>
+      checkAccessControlOrgPatterns(cwd, filePath),
+    ),
+  ];
 
   return {
     ok: findings.length === 0,
     convexDir,
-    filesChecked: sourceFiles.length,
+    filesChecked: sourceFiles.length + appSourceFiles.length,
     fixedFiles,
     findings,
   };
@@ -174,6 +187,13 @@ function collectSourceFiles(directory: string): string[] {
   return sourceFiles.sort((left, right) => left.localeCompare(right));
 }
 
+function collectAppSourceFiles(cwd: string, convexDir: string): string[] {
+  const srcDir = resolve(cwd, "src");
+  if (!existsSync(srcDir) || !statSync(srcDir).isDirectory()) return [];
+  if (srcDir === convexDir) return [];
+  return collectSourceFiles(srcDir);
+}
+
 function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
@@ -188,6 +208,122 @@ function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFindi
     .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
     .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration))
     .map((candidate) => createFinding(cwd, sourceFile, candidate));
+}
+
+function checkAccessControlOrgPatterns(
+  cwd: string,
+  filePath: string,
+): AccessControlCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const findings: AccessControlCheckFinding[] = [];
+
+  addPatternFinding({
+    findings,
+    cwd,
+    filePath,
+    sourceText,
+    code: "placeholder_access_scope_id",
+    pattern: /\b(?:herculesScopeId|accessScopeId|orgScopeId)\s*:\s*["']{2}/,
+    message:
+      "Do not store a blank Hercules Access Control scope id. Create a Hercules Access Control scope first, then persist the returned accessScopeId.",
+    suggestion:
+      "Use createAccessScope from @usehercules/convex/access-admin before inserting org metadata.",
+  });
+
+  addPatternFinding({
+    findings,
+    cwd,
+    filePath,
+    sourceText,
+    code: "local_org_membership_table",
+    pattern: /\b(?:memberships|membership|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
+    message:
+      "Managed Access Control apps should not define app-local org membership tables.",
+    suggestion:
+      "Use Hercules Access Control scopes, principals, and role grants. Store only org metadata in app tables.",
+  });
+
+  addPatternFinding({
+    findings,
+    cwd,
+    filePath,
+    sourceText,
+    code: "optional_org_scope_id",
+    pattern: /\borgScopeId\s*:\s*v\.optional\s*\(\s*v\.string\s*\(\s*\)\s*\)/,
+    message: "Org-owned rows should require orgScopeId.",
+    suggestion:
+      "Backfill existing rows during conversion, then store orgScopeId as v.string() on org-owned tables.",
+  });
+
+  if (
+    /\borgScopeId\b/.test(sourceText) &&
+    /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)
+  ) {
+    addPatternFinding({
+      findings,
+      cwd,
+      filePath,
+      sourceText,
+      code: "org_scoped_global_slug_lookup",
+      pattern: /\.withIndex\s*\(\s*["']by_slug["']/,
+      message: "Org-scoped slug lookups must include the org scope id in the index.",
+      suggestion:
+        "Use an index such as by_org_and_slug on [\"orgScopeId\", \"slug\"] and query both values together.",
+    });
+  }
+
+  addPatternFinding({
+    findings,
+    cwd,
+    filePath,
+    sourceText,
+    code: "role_name_permission_gate",
+    pattern: /\b(?:role|roleKey)\s*(?:===|!==)\s*["'](?:owner|admin|member)["']/,
+    message: "Do not gate app behavior on role names in managed Access Control apps.",
+    suggestion:
+      "Use hasPermission or getEffectivePermissions for UI and backend capability checks. Roles are admin configuration labels.",
+  });
+
+  return findings;
+}
+
+function addPatternFinding(args: {
+  findings: AccessControlCheckFinding[];
+  cwd: string;
+  filePath: string;
+  sourceText: string;
+  code: AccessControlCheckFinding["code"];
+  pattern: RegExp;
+  message: string;
+  suggestion: string;
+}): void {
+  const match = args.pattern.exec(args.sourceText);
+  if (!match?.index && match?.index !== 0) return;
+
+  const position = lineAndColumnAt(args.sourceText, match.index);
+  args.findings.push({
+    code: args.code,
+    severity: "error",
+    filePath: displayPathFor(args.cwd, args.filePath),
+    line: position.line,
+    column: position.column,
+    message: args.message,
+    suggestion: args.suggestion,
+  });
+}
+
+function lineAndColumnAt(sourceText: string, index: number): { line: number; column: number } {
+  let line = 1;
+  let column = 1;
+  for (let offset = 0; offset < index; offset += 1) {
+    if (sourceText[offset] === "\n") {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return { line, column };
 }
 
 function createSourceFile(filePath: string, sourceText: string): ts.SourceFile {

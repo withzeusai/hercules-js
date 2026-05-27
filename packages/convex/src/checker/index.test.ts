@@ -118,6 +118,134 @@ describe("checkAccessControlSource", () => {
     });
   });
 
+  test("reports placeholder Hercules org scope ids", () => {
+    const root = createFixture({
+      "convex/organizations.ts": `
+        import { authenticatedMutation } from "./access";
+
+        export const create = authenticatedMutation({
+          args: {},
+          handler: async (ctx) => {
+            await ctx.db.insert("organizations", {
+              name: "Acme",
+              herculesScopeId: "",
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      {
+        code: "placeholder_access_scope_id",
+        filePath: "convex/organizations.ts",
+      },
+    ]);
+    expect(formatAccessControlCheckResult(result)).toContain(
+      "Create a Hercules Access Control scope first",
+    );
+  });
+
+  test("reports app-local org membership tables in managed Access Control apps", () => {
+    const root = createFixture({
+      "convex/schema.ts": `
+        import { defineSchema, defineTable } from "convex/server";
+        import { v } from "convex/values";
+
+        export default defineSchema({
+          orgMembers: defineTable({
+            orgId: v.id("organizations"),
+            userId: v.id("users"),
+            role: v.string(),
+          }),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      {
+        code: "local_org_membership_table",
+        filePath: "convex/schema.ts",
+      },
+    ]);
+  });
+
+  test("reports optional orgScopeId and global slug lookup on org-scoped rows", () => {
+    const root = createFixture({
+      "convex/schema.ts": `
+        import { defineSchema, defineTable } from "convex/server";
+        import { v } from "convex/values";
+
+        export default defineSchema({
+          posts: defineTable({
+            orgScopeId: v.optional(v.string()),
+            slug: v.string(),
+          }).index("by_slug", ["slug"]),
+        });
+      `,
+      "convex/posts.ts": `
+        import { v } from "convex/values";
+        import { accessQuery, scopeFromArg } from "./access";
+
+        export const getBySlug = accessQuery({
+          permission: "posts.read",
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string(), slug: v.string() },
+          handler: async (ctx, args) => {
+            const post = await ctx.db
+              .query("posts")
+              .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+              .first();
+            return post?.orgScopeId === args.orgScopeId ? post : null;
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "optional_org_scope_id", filePath: "convex/schema.ts" }),
+        expect.objectContaining({
+          code: "org_scoped_global_slug_lookup",
+          filePath: "convex/posts.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("reports frontend role-name permission gates", () => {
+    const root = createFixture({
+      "convex/access.ts": `
+        export const marker = true;
+      `,
+      "src/hooks/use-org.tsx": `
+        export function useOrg() {
+          const activeOrg = { role: "admin" as "admin" | "member" };
+          return { isAdmin: activeOrg.role === "admin" };
+        }
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      {
+        code: "role_name_permission_gate",
+        filePath: "src/hooks/use-org.tsx",
+      },
+    ]);
+  });
+
   test("can rewrite exported raw builders to authenticated builders", () => {
     const root = createFixture({
       "convex/posts.ts": `

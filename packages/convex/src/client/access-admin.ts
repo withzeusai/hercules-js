@@ -10,6 +10,14 @@ const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
 
 type WriteResult = Record<string, unknown>;
 
+export type AccessScopeCreateResult = {
+  accessScopeId: string;
+  accessScopeAppId?: string;
+  created?: boolean;
+  sourceVersion: number;
+  projectionIds: string[];
+};
+
 export type AccessAdminSdkClient = {
   post<T>(path: string, options: { body: Record<string, unknown> }): Promise<T>;
   accessControl?: {
@@ -51,13 +59,13 @@ export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> 
     accessAction: AccessActionBuilder<DataModel>;
   };
 
-type CreateScopeArgs = {
+export type CreateAccessScopeArgs = {
   name: string;
   defaultRoleKey?: string;
   accountEntryMode?: "open" | "allowlisted_only";
 };
 
-type CreateScopeAuthorizationContext = {
+export type CreateAccessScopeContext = {
   auth: {
     getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null>;
   };
@@ -67,8 +75,8 @@ export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
   AccessAdminApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
     canCreateScope: (
-      ctx: CreateScopeAuthorizationContext,
-      args: CreateScopeArgs,
+      ctx: CreateAccessScopeContext,
+      args: CreateAccessScopeArgs,
     ) => boolean | Promise<boolean>;
   };
 
@@ -319,8 +327,6 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
 export function createAccessScopeAction<DataModel extends GenericDataModel>(
   options: CreateAccessScopeActionOptions<DataModel>,
 ) {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
-
   return options.authenticatedAction({
     args: {
       name: v.string(),
@@ -333,21 +339,31 @@ export function createAccessScopeAction<DataModel extends GenericDataModel>(
         throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
       }
 
-      const identity = await ctx.auth.getUserIdentity();
-      const actorHerculesAuthUserId = parseTokenIdentifierSubject(identity?.tokenIdentifier);
-      const body = {
-        name: args.name,
-        default_role_key: args.defaultRoleKey,
-        account_entry_mode: args.accountEntryMode,
-        actor_hercules_auth_user_id: actorHerculesAuthUserId,
-      };
-      return await callAccessControlApi(
-        "/v1/access-control/scopes/create",
-        body,
-        (client) => client.scopes?.create?.(body),
-      );
+      return await createAccessScope(ctx, args, options);
     },
   });
+}
+
+export async function createAccessScope(
+  ctx: CreateAccessScopeContext,
+  args: CreateAccessScopeArgs,
+  options: AccessAdminApiOptions = {},
+): Promise<AccessScopeCreateResult> {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const identity = await ctx.auth.getUserIdentity();
+  const actorHerculesAuthUserId = parseTokenIdentifierSubject(identity?.tokenIdentifier);
+  const body = {
+    name: args.name,
+    default_role_key: args.defaultRoleKey,
+    account_entry_mode: args.accountEntryMode,
+    actor_hercules_auth_user_id: actorHerculesAuthUserId,
+  };
+  const result = await callAccessControlApi(
+    "/v1/access-control/scopes/create",
+    body,
+    (client) => client.scopes?.create?.(body),
+  );
+  return normalizeAccessScopeCreateResult(result);
 }
 
 function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
@@ -403,4 +419,68 @@ function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined)
     throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
   }
   return tokenIdentifier.slice(separatorIndex + 1);
+}
+
+function normalizeAccessScopeCreateResult(result: WriteResult): AccessScopeCreateResult {
+  return {
+    accessScopeId: requiredString(result, "accessScopeId", "access_scope_id"),
+    accessScopeAppId: optionalString(result, "accessScopeAppId", "access_scope_app_id"),
+    created: optionalBoolean(result, "created", "created"),
+    sourceVersion: requiredNumber(result, "sourceVersion", "source_version"),
+    projectionIds: requiredStringArray(result, "projectionIds", "projection_ids"),
+  };
+}
+
+function readField(result: WriteResult, camelKey: string, snakeKey: string): unknown {
+  return result[camelKey] ?? result[snakeKey];
+}
+
+function requiredString(result: WriteResult, camelKey: string, snakeKey: string): string {
+  const value = readField(result, camelKey, snakeKey);
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Access Control API response missing ${camelKey}.`);
+  }
+  return value;
+}
+
+function optionalString(
+  result: WriteResult,
+  camelKey: string,
+  snakeKey: string,
+): string | undefined {
+  const value = readField(result, camelKey, snakeKey);
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Access Control API response has invalid ${camelKey}.`);
+  }
+  return value;
+}
+
+function optionalBoolean(
+  result: WriteResult,
+  camelKey: string,
+  snakeKey: string,
+): boolean | undefined {
+  const value = readField(result, camelKey, snakeKey);
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    throw new Error(`Access Control API response has invalid ${camelKey}.`);
+  }
+  return value;
+}
+
+function requiredNumber(result: WriteResult, camelKey: string, snakeKey: string): number {
+  const value = readField(result, camelKey, snakeKey);
+  if (typeof value !== "number") {
+    throw new Error(`Access Control API response missing ${camelKey}.`);
+  }
+  return value;
+}
+
+function requiredStringArray(result: WriteResult, camelKey: string, snakeKey: string): string[] {
+  const value = readField(result, camelKey, snakeKey);
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`Access Control API response missing ${camelKey}.`);
+  }
+  return value;
 }

@@ -90,6 +90,8 @@ function helpText(): string {
     "",
     "Checks exported Convex functions for raw query(), mutation(), or action()",
     "builders that should use Hercules Access Control builders from convex/access.ts.",
+    "Also checks common managed organization mistakes such as placeholder scope ids,",
+    "app-local org membership tables, role-name permission gates, and unsafe org slug lookups.",
     "",
     "--fix-authenticated rewrites exported raw builders to authenticated* builders",
     "as a conservative migration starting point. Review public and permissioned",

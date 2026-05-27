@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { createAccessAdminActions, createAccessScopeAction } from "./access-admin";
+import {
+  createAccessAdminActions,
+  createAccessScope,
+  createAccessScopeAction,
+} from "./access-admin";
 
 describe("createAccessAdminActions", () => {
   test("uses generated SDK methods when available", async () => {
@@ -119,8 +123,14 @@ describe("createAccessAdminActions", () => {
     expect(archive).toHaveBeenCalledWith({ scope_id: "scope_1" });
   });
 
-  test("creates scopes through an explicit app policy", async () => {
-    const create = vi.fn().mockResolvedValue({ created: true });
+  test("creates scopes through an explicit app policy and normalizes the result", async () => {
+    const create = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      access_scope_app_id: "scope_app_1",
+      created: true,
+      source_version: 7,
+      projection_ids: ["projection_1"],
+    });
     const canCreateScope = vi.fn().mockResolvedValue(true);
     const action = createAccessScopeAction({
       authenticatedAction: identityBuilder,
@@ -146,7 +156,13 @@ describe("createAccessAdminActions", () => {
         defaultRoleKey: "member",
         accountEntryMode: "allowlisted_only",
       }),
-    ).resolves.toEqual({ created: true });
+    ).resolves.toEqual({
+      accessScopeId: "scope_1",
+      accessScopeAppId: "scope_app_1",
+      created: true,
+      sourceVersion: 7,
+      projectionIds: ["projection_1"],
+    });
 
     expect(canCreateScope).toHaveBeenCalledWith(ctx, {
       name: "Acme",
@@ -183,6 +199,42 @@ describe("createAccessAdminActions", () => {
       data: { code: "ACCESS_DENIED", message: "Access denied" },
     });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  test("exposes a composable scope creation helper for app-specific metadata actions", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_2",
+      access_scope_app_id: "scope_app_2",
+      created: true,
+      source_version: 8,
+      projection_ids: ["projection_2"],
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|auth_user_2" }),
+      },
+    };
+
+    await expect(
+      createAccessScope(ctx, { name: "Beta", defaultRoleKey: "member" }, { client: { post } }),
+    ).resolves.toEqual({
+      accessScopeId: "scope_2",
+      accessScopeAppId: "scope_app_2",
+      created: true,
+      sourceVersion: 8,
+      projectionIds: ["projection_2"],
+    });
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/create", {
+      body: {
+        name: "Beta",
+        default_role_key: "member",
+        account_entry_mode: undefined,
+        actor_hercules_auth_user_id: "auth_user_2",
+      },
+    });
   });
 });
 
