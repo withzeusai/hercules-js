@@ -18,12 +18,39 @@ export type AccessScopeCreateResult = {
   projectionIds: string[];
 };
 
+export type AccessInvitationCreateResult = {
+  accessScopeId: string;
+  invitationId: string;
+  email: string;
+  roleIds: string[];
+  token: string;
+  acceptUrl: string;
+  expiresAt: string;
+  sourceVersion: number;
+  projectionIds: string[];
+};
+
+export type AccessInvitationAcceptResult = {
+  accessScopeId: string;
+  invitationId: string;
+  principalId: string;
+  roleIds: string[];
+  changed?: boolean;
+  sourceVersion: number;
+  projectionIds: string[];
+};
+
 export type AccessAdminSdkClient = {
   post<T>(path: string, options: { body: Record<string, unknown> }): Promise<T>;
   accessControl?: {
     scopes?: {
       create?(input: Record<string, unknown>): Promise<WriteResult>;
       archive?(input: Record<string, unknown>): Promise<WriteResult>;
+    };
+    invitations?: {
+      create?(input: Record<string, unknown>): Promise<WriteResult>;
+      accept?(input: Record<string, unknown>): Promise<WriteResult>;
+      revoke?(input: Record<string, unknown>): Promise<WriteResult>;
     };
     roles?: {
       assign?(input: Record<string, unknown>): Promise<WriteResult>;
@@ -64,6 +91,16 @@ export type CreateAccessScopeArgs = {
   defaultRoleKey?: string;
   accountEntryMode?: "open" | "allowlisted_only";
 };
+
+export type CreateAccessInvitationArgs = {
+  scopeId: string;
+  email: string;
+  roleIds?: string[];
+  roleKeys?: string[];
+  expiresInDays?: number;
+};
+
+export type AcceptAccessInvitationArgs = { token: string; idToken: string };
 
 export type CreateAccessScopeContext = {
   auth: {
@@ -109,6 +146,39 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           "/v1/access-control/scopes/archive",
           body,
           (client) => client.scopes?.archive?.(body),
+        );
+      },
+    }),
+
+    createInvitation: accessAction({
+      permission: "access.users.manage",
+      extractScope: (_ctx, args) => args.scopeId,
+      args: {
+        scopeId: v.string(),
+        email: v.string(),
+        roleIds: v.optional(v.array(v.string())),
+        roleKeys: v.optional(v.array(v.string())),
+        expiresInDays: v.optional(v.number()),
+      },
+      handler: async (_ctx, args) => {
+        const result = await createAccessInvitation(args, options);
+        return result;
+      },
+    }),
+
+    revokeInvitation: accessAction({
+      permission: "access.users.manage",
+      extractScope: (_ctx, args) => args.scopeId,
+      args: {
+        scopeId: v.string(),
+        invitationId: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = { scope_id: args.scopeId, invitation_id: args.invitationId };
+        return await callAccessControlApi(
+          "/v1/access-control/invitations/revoke",
+          body,
+          (client) => client.invitations?.revoke?.(body),
         );
       },
     }),
@@ -366,6 +436,46 @@ export async function createAccessScope(
   return normalizeAccessScopeCreateResult(result);
 }
 
+export async function createAccessInvitation(
+  args: CreateAccessInvitationArgs,
+  options: AccessAdminApiOptions = {},
+): Promise<AccessInvitationCreateResult> {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const body = {
+    scope_id: args.scopeId,
+    email: args.email,
+    role_ids: args.roleIds,
+    role_keys: args.roleKeys,
+    expires_in_days: args.expiresInDays,
+  };
+  const result = await callAccessControlApi(
+    "/v1/access-control/invitations/create",
+    body,
+    (client) => client.invitations?.create?.(body),
+  );
+  return normalizeAccessInvitationCreateResult(result);
+}
+
+export async function acceptAccessInvitation(
+  ctx: CreateAccessScopeContext,
+  args: AcceptAccessInvitationArgs,
+  options: AccessAdminApiOptions = {},
+): Promise<AccessInvitationAcceptResult> {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const identity = await ctx.auth.getUserIdentity();
+  requireTokenIdentifier(identity?.tokenIdentifier);
+  const body = {
+    token: args.token,
+    id_token: args.idToken,
+  };
+  const result = await callAccessControlApi(
+    "/v1/access-control/invitations/accept",
+    body,
+    (client) => client.invitations?.accept?.(body),
+  );
+  return normalizeAccessInvitationAcceptResult(result);
+}
+
 function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
   let client: AccessAdminSdkClient | undefined = options.client;
 
@@ -411,6 +521,12 @@ function roleRef(args: { roleId?: string; roleKey?: string }) {
 }
 
 function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined): string {
+  const value = requireTokenIdentifier(tokenIdentifier);
+  const separatorIndex = value.lastIndexOf("|");
+  return value.slice(separatorIndex + 1);
+}
+
+function requireTokenIdentifier(tokenIdentifier: string | null | undefined): string {
   if (!tokenIdentifier) {
     throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
   }
@@ -418,7 +534,7 @@ function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined)
   if (separatorIndex <= 0 || separatorIndex === tokenIdentifier.length - 1) {
     throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
   }
-  return tokenIdentifier.slice(separatorIndex + 1);
+  return tokenIdentifier;
 }
 
 function normalizeAccessScopeCreateResult(result: WriteResult): AccessScopeCreateResult {
@@ -426,6 +542,32 @@ function normalizeAccessScopeCreateResult(result: WriteResult): AccessScopeCreat
     accessScopeId: requiredString(result, "accessScopeId", "access_scope_id"),
     accessScopeAppId: optionalString(result, "accessScopeAppId", "access_scope_app_id"),
     created: optionalBoolean(result, "created", "created"),
+    sourceVersion: requiredNumber(result, "sourceVersion", "source_version"),
+    projectionIds: requiredStringArray(result, "projectionIds", "projection_ids"),
+  };
+}
+
+function normalizeAccessInvitationCreateResult(result: WriteResult): AccessInvitationCreateResult {
+  return {
+    accessScopeId: requiredString(result, "accessScopeId", "access_scope_id"),
+    invitationId: requiredString(result, "invitationId", "invitation_id"),
+    email: requiredString(result, "email", "email"),
+    roleIds: requiredStringArray(result, "roleIds", "role_ids"),
+    token: requiredString(result, "token", "token"),
+    acceptUrl: requiredString(result, "acceptUrl", "accept_url"),
+    expiresAt: requiredString(result, "expiresAt", "expires_at"),
+    sourceVersion: requiredNumber(result, "sourceVersion", "source_version"),
+    projectionIds: requiredStringArray(result, "projectionIds", "projection_ids"),
+  };
+}
+
+function normalizeAccessInvitationAcceptResult(result: WriteResult): AccessInvitationAcceptResult {
+  return {
+    accessScopeId: requiredString(result, "accessScopeId", "access_scope_id"),
+    invitationId: requiredString(result, "invitationId", "invitation_id"),
+    principalId: requiredString(result, "principalId", "principal_id"),
+    roleIds: requiredStringArray(result, "roleIds", "role_ids"),
+    changed: optionalBoolean(result, "changed", "changed"),
     sourceVersion: requiredNumber(result, "sourceVersion", "source_version"),
     projectionIds: requiredStringArray(result, "projectionIds", "projection_ids"),
   };
