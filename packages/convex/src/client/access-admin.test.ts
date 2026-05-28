@@ -1,6 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  acceptAccessInvitation,
   createAccessAdminActions,
+  createAccessInvitation,
   createAccessScope,
   createAccessScopeAction,
 } from "./access-admin";
@@ -123,6 +125,158 @@ describe("createAccessAdminActions", () => {
     expect(archive).toHaveBeenCalledWith({ scope_id: "scope_1" });
   });
 
+  test("creates invitations from an access-admin action and normalizes the result", async () => {
+    const create = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      invitation_id: "invite_1",
+      email: "test@example.com",
+      role_ids: ["role_admin"],
+      token: "token_1",
+      accept_url: "https://app.example.com/invite?token=token_1",
+      expires_at: "2026-06-11T00:00:00.000Z",
+      source_version: 9,
+      projection_ids: [],
+    });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          invitations: { create },
+        },
+      },
+    });
+
+    await expect(
+      getHandler(actions.createInvitation)(
+        {},
+        { scopeId: "scope_1", email: "test@example.com", roleKeys: ["admin"] },
+      ),
+    ).resolves.toEqual({
+      accessScopeId: "scope_1",
+      invitationId: "invite_1",
+      email: "test@example.com",
+      roleIds: ["role_admin"],
+      token: "token_1",
+      acceptUrl: "https://app.example.com/invite?token=token_1",
+      expiresAt: "2026-06-11T00:00:00.000Z",
+      sourceVersion: 9,
+      projectionIds: [],
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      scope_id: "scope_1",
+      email: "test@example.com",
+      role_ids: undefined,
+      role_keys: ["admin"],
+      expires_in_days: undefined,
+    });
+  });
+
+  test("accepts invitations for the signed-in Hercules auth user", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      invitation_id: "invite_1",
+      principal_id: "principal_1",
+      role_ids: ["role_member"],
+      changed: true,
+      source_version: 10,
+      projection_ids: ["projection_1"],
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|auth_user_1" }),
+      },
+    };
+
+    await expect(
+      acceptAccessInvitation(ctx, { token: "token_1", idToken: "id-token" }, { client: { post } }),
+    ).resolves.toEqual({
+      accessScopeId: "scope_1",
+      invitationId: "invite_1",
+      principalId: "principal_1",
+      roleIds: ["role_member"],
+      changed: true,
+      sourceVersion: 10,
+      projectionIds: ["projection_1"],
+    });
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/accept", {
+      body: {
+        token: "token_1",
+        id_token: "id-token",
+      },
+    });
+  });
+
+  test("uses generated SDK methods for invitation accept when available", async () => {
+    const accept = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      invitation_id: "invite_1",
+      principal_id: "principal_1",
+      role_ids: ["role_member"],
+      changed: true,
+      source_version: 10,
+      projection_ids: [],
+    });
+    const post = vi.fn();
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|auth_user_1" }),
+      },
+    };
+
+    await acceptAccessInvitation(
+      ctx,
+      { token: "token_1", idToken: "id-token" },
+      { client: { post, accessControl: { invitations: { accept } } } },
+    );
+
+    expect(accept).toHaveBeenCalledWith({ token: "token_1", id_token: "id-token" });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test("revokes invitations from an access-admin action", async () => {
+    const post = vi.fn().mockResolvedValue({ invitation_id: "invite_1", revoked: true });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      client: { post },
+    });
+
+    await expect(
+      getHandler(actions.revokeInvitation)(
+        {},
+        { scopeId: "scope_1", invitationId: "invite_1" },
+      ),
+    ).resolves.toEqual({ invitation_id: "invite_1", revoked: true });
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/revoke", {
+      body: { scope_id: "scope_1", invitation_id: "invite_1" },
+    });
+  });
+
+  test("uses generated SDK methods for invitation revoke when available", async () => {
+    const revoke = vi.fn().mockResolvedValue({ invitation_id: "invite_1", revoked: true });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      client: {
+        post: vi.fn(),
+        accessControl: { invitations: { revoke } },
+      },
+    });
+
+    await getHandler(actions.revokeInvitation)(
+      {},
+      { scopeId: "scope_1", invitationId: "invite_1" },
+    );
+
+    expect(revoke).toHaveBeenCalledWith({ scope_id: "scope_1", invitation_id: "invite_1" });
+  });
+
   test("creates scopes through an explicit app policy and normalizes the result", async () => {
     const create = vi.fn().mockResolvedValue({
       access_scope_id: "scope_1",
@@ -233,6 +387,47 @@ describe("createAccessAdminActions", () => {
         default_role_key: "member",
         account_entry_mode: undefined,
         actor_hercules_auth_user_id: "auth_user_2",
+      },
+    });
+  });
+
+  test("exposes a composable invitation creation helper", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_2",
+      invitation_id: "invite_2",
+      email: "admin@example.com",
+      role_ids: ["role_admin"],
+      token: "token_2",
+      accept_url: "https://app.example.com/invite?token=token_2",
+      expires_at: "2026-06-12T00:00:00.000Z",
+      source_version: 11,
+      projection_ids: ["projection_2"],
+    });
+
+    await expect(
+      createAccessInvitation(
+        { scopeId: "scope_2", email: "admin@example.com", roleIds: ["role_admin"] },
+        { client: { post } },
+      ),
+    ).resolves.toEqual({
+      accessScopeId: "scope_2",
+      invitationId: "invite_2",
+      email: "admin@example.com",
+      roleIds: ["role_admin"],
+      token: "token_2",
+      acceptUrl: "https://app.example.com/invite?token=token_2",
+      expiresAt: "2026-06-12T00:00:00.000Z",
+      sourceVersion: 11,
+      projectionIds: ["projection_2"],
+    });
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create", {
+      body: {
+        scope_id: "scope_2",
+        email: "admin@example.com",
+        role_ids: ["role_admin"],
+        role_keys: undefined,
+        expires_in_days: undefined,
       },
     });
   });
