@@ -46,6 +46,7 @@ export type AccessAdminSdkClient = {
     scopes?: {
       create?(input: Record<string, unknown>): Promise<WriteResult>;
       archive?(input: Record<string, unknown>): Promise<WriteResult>;
+      setDefaultRole?(input: Record<string, unknown>): Promise<WriteResult>;
     };
     invitations?: {
       create?(input: Record<string, unknown>): Promise<WriteResult>;
@@ -146,6 +147,26 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           "/v1/access-control/scopes/archive",
           body,
           (client) => client.scopes?.archive?.(body),
+        );
+      },
+    }),
+
+    setDefaultRole: accessAction({
+      permission: "access.roles.manage",
+      extractScope: (_ctx, args) => args.scopeId,
+      args: {
+        scopeId: v.string(),
+        ...optionalRoleRef,
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...roleRef(args),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/scopes/set-default-role",
+          body,
+          (client) => client.scopes?.setDefaultRole?.(body),
         );
       },
     }),

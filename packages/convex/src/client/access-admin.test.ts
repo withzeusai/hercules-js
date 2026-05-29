@@ -125,6 +125,27 @@ describe("createAccessAdminActions", () => {
     expect(archive).toHaveBeenCalledWith({ scope_id: "scope_1" });
   });
 
+  test("sets the default role for future members of a scope", async () => {
+    const setDefaultRole = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          scopes: { setDefaultRole },
+        },
+      },
+    });
+
+    await getHandler(actions.setDefaultRole)({}, { scopeId: "scope_1", roleKey: "viewer" });
+
+    expect(setDefaultRole).toHaveBeenCalledWith({
+      scope_id: "scope_1",
+      role_id: undefined,
+      role_key: "viewer",
+    });
+  });
+
   test("creates invitations from an access-admin action and normalizes the result", async () => {
     const create = vi.fn().mockResolvedValue({
       access_scope_id: "scope_1",
