@@ -104,6 +104,42 @@ describe("registerAccessControlRoutes", () => {
     expect(runMutation).toHaveBeenCalledWith("applySync", event);
   });
 
+  test("resolves the Hercules-mounted component by default", async () => {
+    const routes: Array<{ path: string; method: string; handler: Function }> = [];
+    registerAccessControlRoutes(
+      { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
+      {
+        httpAction: (handler) => handler as never,
+        components: { hercules: { sync: { applySync: "herculesApplySync" } } },
+      },
+    );
+    const runMutation = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
+
+    await routes[0]!.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
+
+    expect(runMutation).toHaveBeenCalledWith("herculesApplySync", snapshot);
+  });
+
+  test("continues resolving legacy accessControl mounts", async () => {
+    const routes: Array<{ path: string; method: string; handler: Function }> = [];
+    registerAccessControlRoutes(
+      { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
+      {
+        httpAction: (handler) => handler as never,
+        components: { accessControl: { sync: { applySync: "legacyApplySync" } } },
+      },
+    );
+    const runMutation = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
+
+    await routes[0]!.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
+
+    expect(runMutation).toHaveBeenCalledWith("legacyApplySync", snapshot);
+  });
+
   test("rejects an unsigned snapshot", async () => {
     const route = registerRouteForTest();
     const runMutation = vi.fn();

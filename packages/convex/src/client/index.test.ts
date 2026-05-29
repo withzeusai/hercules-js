@@ -20,7 +20,64 @@ const component = {
 
 describe("createAccessControl", () => {
   test("accepts the generated component API type", () => {
-    expectTypeOf<ComponentApi<"accessControl">>().toMatchTypeOf<AccessControlComponent>();
+    expectTypeOf<ComponentApi<"hercules">>().toMatchTypeOf<AccessControlComponent>();
+  });
+
+  test("resolves the Hercules-mounted component by default", () => {
+    const herculesComponent = {
+      ...component,
+      checks: { authorize: "herculesAuthorize" },
+    };
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      components: { hercules: herculesComponent },
+    });
+    const definition = builders.authenticatedQuery({
+      args: {},
+      handler: async () => "ok",
+    } as never) as unknown as { handler: Function };
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn().mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
+    };
+
+    return definition.handler(ctx).then(() => {
+      expect(ctx.runQuery).toHaveBeenCalledWith("herculesAuthorize", expect.any(Object));
+    });
+  });
+
+  test("continues resolving legacy accessControl mounts", async () => {
+    const legacyComponent = {
+      ...component,
+      checks: { authorize: "legacyAuthorize" },
+    };
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      components: { accessControl: legacyComponent },
+    });
+    const definition = builders.authenticatedQuery({
+      args: {},
+      handler: async () => "ok",
+    } as never) as unknown as { handler: Function };
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn().mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
+    };
+
+    await definition.handler(ctx);
+    expect(ctx.runQuery).toHaveBeenCalledWith("legacyAuthorize", expect.any(Object));
   });
 
   test("requires access builders to declare a permission", () => {

@@ -68,7 +68,7 @@ type EffectivePermissionsResult = {
 /**
  * A utility for referencing the Hercules Access Control component's exposed API.
  *
- * Useful when expecting a parameter like `components.accessControl`.
+ * Useful when expecting a parameter like `components.hercules`.
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> = {
   checks: {

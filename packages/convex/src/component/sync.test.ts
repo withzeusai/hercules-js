@@ -87,6 +87,55 @@ describe("applySync", () => {
     });
   });
 
+  test("materializes an organization row from an org scope snapshot", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(applySync, snapshot({ scope: orgScopeMeta }));
+
+    await t.run(async (ctx) => {
+      const organization = await ctx.db
+        .query("organizations")
+        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", "scope_acme"))
+        .unique();
+      expect(organization).toMatchObject({
+        accessScopeId: "scope_acme",
+        name: "Acme",
+        status: "active",
+      });
+    });
+  });
+
+  test("materializes minimal users from user principals without new payload fields", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          principals: [
+            {
+              principalId: "p_alice",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 101,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      expect(user).toMatchObject({ herculesAuthUserId: "user_alice", updatedAt: 101 });
+    });
+  });
+
   test("snapshot for scope B preserves scope A entities", async () => {
     const t = convexTest(schema, modules);
 

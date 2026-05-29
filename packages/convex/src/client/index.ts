@@ -323,9 +323,10 @@ function resolveComponent<DataModel extends GenericDataModel>(
     return options.component;
   }
 
-  const componentName = options.componentName ?? "accessControl";
+  const componentName = options.componentName ?? "hercules";
   const namedComponent = options.components?.[componentName];
-  const defaultComponent = options.components?.hercules_access_control;
+  const defaultComponent =
+    options.components?.hercules ?? options.components?.accessControl ?? options.components?.hercules_access_control;
   const component = namedComponent ?? defaultComponent;
 
   if (!component) {

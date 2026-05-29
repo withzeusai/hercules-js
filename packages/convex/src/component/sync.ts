@@ -364,6 +364,28 @@ export const applySync = mutation({
       } else {
         await ctx.db.insert("scopes", scope);
       }
+
+      const organization = await ctx.db
+        .query("organizations")
+        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scope.accessScopeId))
+        .unique();
+      if (scope.kind !== "org") {
+        if (organization) await ctx.db.delete(organization._id);
+        return;
+      }
+
+      const organizationRow = {
+        accessScopeId: scope.accessScopeId,
+        name: scope.name,
+        status: scope.status,
+        accountEntryMode: scope.accountEntryMode,
+        updatedAt: scope.updatedAt,
+      };
+      if (organization) {
+        await ctx.db.replace(organization._id, organizationRow);
+      } else {
+        await ctx.db.insert("organizations", organizationRow);
+      }
     }
 
     function assertSameScope(
@@ -463,6 +485,25 @@ export const applySync = mutation({
         await ctx.db.replace(existing._id, row);
       } else {
         await ctx.db.insert("principals", row);
+      }
+
+      if (principal.type === "user" && principal.herculesAuthUserId) {
+        await upsertUser(principal.herculesAuthUserId, principal.updatedAt);
+      }
+    }
+
+    async function upsertUser(herculesAuthUserId: string, updatedAt: number) {
+      const existing = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", herculesAuthUserId))
+        .unique();
+      if (existing && existing.updatedAt >= updatedAt) return;
+
+      const row = { herculesAuthUserId, updatedAt };
+      if (existing) {
+        await ctx.db.replace(existing._id, row);
+      } else {
+        await ctx.db.insert("users", row);
       }
     }
 

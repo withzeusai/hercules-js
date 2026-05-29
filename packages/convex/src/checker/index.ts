@@ -20,6 +20,8 @@ export type AccessControlCheckFinding = {
     | "local_org_membership_table"
     | "optional_org_scope_id"
     | "org_scoped_global_slug_lookup"
+    | "org_row_scope_from_arg"
+    | "authenticated_org_data_read"
     | "role_name_permission_gate";
   severity: "error";
   filePath: string;
@@ -48,7 +50,14 @@ export type CheckAccessControlSourceOptions = {
 const rawBuilderNames = new Set<string>(["query", "mutation", "action"]);
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const ignoredDirectories = new Set(["_generated", "node_modules", "dist", ".git"]);
-const exemptFileNames = new Set(["access.ts", "access.tsx", "http.ts", "convex.config.ts"]);
+const exemptFileNames = new Set([
+  "access.ts",
+  "access.tsx",
+  "hercules.ts",
+  "hercules.tsx",
+  "http.ts",
+  "convex.config.ts",
+]);
 const exemptionMarkers = [
   "hercules-access-control: allow-raw-builder",
   "hercules-access-control: allow-raw-builders",
@@ -83,13 +92,14 @@ export function checkAccessControlSource(
 
   const sourceFiles = collectSourceFiles(convexDir);
   const appSourceFiles = collectAppSourceFiles(cwd, convexDir);
+  const orgOwnedTables = collectOrgOwnedTables(sourceFiles);
   const fixedFiles = options.fixAuthenticated
     ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir)).length
     : 0;
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
     ...[...sourceFiles, ...appSourceFiles].flatMap((filePath) =>
-      checkAccessControlOrgPatterns(cwd, filePath),
+      checkAccessControlOrgPatterns(cwd, filePath, orgOwnedTables),
     ),
   ];
 
@@ -213,8 +223,10 @@ function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFindi
 function checkAccessControlOrgPatterns(
   cwd: string,
   filePath: string,
+  orgOwnedTables: Set<string>,
 ): AccessControlCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
   const findings: AccessControlCheckFinding[] = [];
 
   addPatternFinding({
@@ -272,6 +284,56 @@ function checkAccessControlOrgPatterns(
     });
   }
 
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, [
+    "accessQuery",
+    "accessMutation",
+    "accessAction",
+  ])) {
+    if (
+      /\bscopeFromArg\s*\(\s*["']orgScopeId["']\s*\)/.test(definition.text) &&
+      /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(
+        definition.text,
+      )
+    ) {
+      findings.push(
+        createPatternFindingAtNode({
+          cwd,
+          sourceFile,
+          node: definition.node,
+          code: "org_row_scope_from_arg",
+          message:
+            "Operations on an org-owned row id must authorize against the stored row scope, not a caller supplied scope id.",
+          suggestion:
+            'Use scopeFromResource("tableName", "rowIdArg") for row read, update, publish, moderation, and delete operations.',
+        }),
+      );
+    }
+  }
+
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, ["authenticatedQuery"])) {
+    const readsOrgOwnedTable = [...orgOwnedTables].some((tableName) => {
+      const escapedName = escapeRegExp(tableName);
+      return (
+        new RegExp(`\\.query\\s*\\(\\s*["']${escapedName}["']`).test(definition.text) ||
+        (new RegExp(`v\\.id\\s*\\(\\s*["']${escapedName}["']`).test(definition.text) &&
+          /\bctx\.db\.get\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text))
+      );
+    });
+    if (readsOrgOwnedTable) {
+      findings.push(
+        createPatternFindingAtNode({
+          cwd,
+          sourceFile,
+          node: definition.node,
+          code: "authenticated_org_data_read",
+          message: "Authenticated reads of org-owned data do not prove organization membership.",
+          suggestion:
+            "Use accessQuery for private organization data. Use publicQuery only for explicitly public rows filtered to public state.",
+        }),
+      );
+    }
+  }
+
   addPatternFinding({
     findings,
     cwd,
@@ -285,6 +347,71 @@ function checkAccessControlOrgPatterns(
   });
 
   return findings;
+}
+
+function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
+  const tableNames = new Set<string>();
+  for (const filePath of sourceFiles) {
+    if (!/^schema\.(?:ts|tsx|js|jsx)$/.test(basename(filePath))) continue;
+
+    const sourceText = readFileSync(filePath, "utf8");
+    const tablePattern =
+      /\b([A-Za-z_$][\w$]*)\s*:\s*defineTable\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
+    for (const match of sourceText.matchAll(tablePattern)) {
+      if (/\borgScopeId\s*:/.test(match[2] ?? "")) {
+        tableNames.add(match[1]!);
+      }
+    }
+  }
+  return tableNames;
+}
+
+function collectManagedBuilderDefinitions(
+  sourceFile: ts.SourceFile,
+  builderNames: string[],
+): Array<{ node: ts.Node; text: string }> {
+  const acceptedNames = new Set(builderNames);
+  const definitions: Array<{ node: ts.Node; text: string }> = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const target = unwrapExpression(node.expression);
+      const definition = node.arguments[0];
+      if (ts.isIdentifier(target) && acceptedNames.has(target.text) && definition) {
+        definitions.push({ node, text: definition.getText(sourceFile) });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return definitions;
+}
+
+function createPatternFindingAtNode(args: {
+  cwd: string;
+  sourceFile: ts.SourceFile;
+  node: ts.Node;
+  code: AccessControlCheckFinding["code"];
+  message: string;
+  suggestion: string;
+}): AccessControlCheckFinding {
+  const position = args.sourceFile.getLineAndCharacterOfPosition(
+    args.node.getStart(args.sourceFile),
+  );
+  return {
+    code: args.code,
+    severity: "error",
+    filePath: displayPathFor(args.cwd, args.sourceFile.fileName),
+    line: position.line + 1,
+    column: position.character + 1,
+    message: args.message,
+    suggestion: args.suggestion,
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function addPatternFinding(args: {
@@ -549,7 +676,9 @@ function findAccessImport(sourceFile: ts.SourceFile, convexDir: string):
 }
 
 function buildAccessImportPath(sourceFile: ts.SourceFile, convexDir: string): string {
-  const relativePath = normalizePath(relative(dirname(sourceFile.fileName), join(convexDir, "access")));
+  const relativePath = normalizePath(
+    relative(dirname(sourceFile.fileName), join(convexDir, "hercules")),
+  );
   return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
@@ -560,7 +689,9 @@ function isAccessImport(sourceFile: ts.SourceFile, moduleSpecifier: string, conv
 
   return (
     stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
-    join(convexDir, "access")
+      join(convexDir, "hercules") ||
+    stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
+      join(convexDir, "access")
   );
 }
 
@@ -672,7 +803,7 @@ function createFinding(
     functionName: candidate.functionName,
     builder: candidate.builder,
     message: `Exported Convex function "${candidate.functionName}" uses raw ${candidate.builder}().`,
-    suggestion: `Import from ./access and choose public${builderSuffix}, authenticated${builderSuffix}, or access${builderSuffix}.`,
+    suggestion: `Import from ./hercules and choose public${builderSuffix}, authenticated${builderSuffix}, or access${builderSuffix}.`,
   };
 }
 

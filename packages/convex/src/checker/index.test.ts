@@ -51,7 +51,7 @@ describe("checkAccessControlSource", () => {
       },
     ]);
     expect(formatAccessControlCheckResult(result)).toContain(
-      "Import from ./access and choose publicQuery, authenticatedQuery, or accessQuery.",
+      "Import from ./hercules and choose publicQuery, authenticatedQuery, or accessQuery.",
     );
   });
 
@@ -64,7 +64,7 @@ describe("checkAccessControlSource", () => {
       `,
       "convex/tasks.ts": `
         import { internalAction, mutation } from "./_generated/server";
-        import { accessMutation, authenticatedQuery } from "./access";
+        import { accessMutation, authenticatedQuery } from "./hercules";
 
         export const list = authenticatedQuery({
           args: {},
@@ -222,6 +222,79 @@ describe("checkAccessControlSource", () => {
     );
   });
 
+  test("reports org-owned row mutations authorized from a caller supplied scope", () => {
+    const root = createFixture({
+      "convex/posts.ts": `
+        import { v } from "convex/values";
+        import { accessMutation, scopeFromArg } from "./hercules";
+
+        export const update = accessMutation({
+          permission: "posts.update",
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string(), postId: v.id("posts"), title: v.string() },
+          handler: async (ctx, args) => {
+            await ctx.db.patch(args.postId, { title: args.title });
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "org_row_scope_from_arg",
+          filePath: "convex/posts.ts",
+        }),
+      ]),
+    );
+    expect(formatAccessControlCheckResult(result)).toContain("scopeFromResource");
+  });
+
+  test("reports authenticated reads of org-owned tables", () => {
+    const root = createFixture({
+      "convex/schema.ts": `
+        import { defineSchema, defineTable } from "convex/server";
+        import { v } from "convex/values";
+
+        export default defineSchema({
+          posts: defineTable({
+            orgScopeId: v.string(),
+            title: v.string(),
+          }),
+        });
+      `,
+      "convex/posts.ts": `
+        import { v } from "convex/values";
+        import { authenticatedQuery } from "./hercules";
+
+        export const listDrafts = authenticatedQuery({
+          args: { orgScopeId: v.string() },
+          handler: async (ctx) => ctx.db.query("posts").collect(),
+        });
+
+        export const readDraft = authenticatedQuery({
+          args: { postId: v.id("posts") },
+          handler: async (ctx, args) => ctx.db.get(args.postId),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "authenticated_org_data_read",
+          filePath: "convex/posts.ts",
+        }),
+      ]),
+    );
+  });
+
   test("reports frontend role-name permission gates", () => {
     const root = createFixture({
       "convex/access.ts": `
@@ -274,7 +347,7 @@ describe("checkAccessControlSource", () => {
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
     expect(source).toContain(
-      'import { authenticatedMutation, authenticatedQuery } from "./access";',
+      'import { authenticatedMutation, authenticatedQuery } from "./hercules";',
     );
     expect(source).toContain("export const list = authenticatedQuery({");
     expect(source).toContain("export const create = authenticatedMutation({");
@@ -282,7 +355,7 @@ describe("checkAccessControlSource", () => {
     expect(source).toContain("export const repair = internalMutation({");
   });
 
-  test("rewrites nested files with a relative access import", () => {
+  test("rewrites nested files with a relative Hercules import", () => {
     const root = createFixture({
       "convex/admin/posts.ts": `
         import { query } from "../_generated/server";
@@ -298,7 +371,7 @@ describe("checkAccessControlSource", () => {
     const source = readFileSync(join(root, "convex/admin/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
-    expect(source).toContain('import { authenticatedQuery } from "../access";');
+    expect(source).toContain('import { authenticatedQuery } from "../hercules";');
     expect(source).toContain("export const list = authenticatedQuery({");
   });
 });
