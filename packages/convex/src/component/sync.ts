@@ -29,6 +29,17 @@ const principalStatusValidator = v.union(
   v.literal("pending_approval"),
 );
 
+const userValidator = v.object({
+  herculesAuthUserId: v.string(),
+  name: v.string(),
+  email: v.string(),
+  emailVerified: v.boolean(),
+  image: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  phoneVerified: v.boolean(),
+  updatedAt: v.number(),
+});
+
 const projectionEntityTypeValidator = v.union(
   v.literal("principal"),
   v.literal("principal_membership"),
@@ -134,6 +145,7 @@ const syncPayloadArgs = {
     ),
   ),
   entities: v.object({
+    users: v.array(userValidator),
     principals: v.array(principalValidator),
     principalMemberships: v.array(principalMembershipValidator),
     roles: v.array(roleValidator),
@@ -260,6 +272,9 @@ export const applySync = mutation({
 
       await upsertScope(args.scope);
 
+      for (const user of args.entities.users) {
+        await upsertUser(user);
+      }
       for (const applyChange of applyChanges) {
         await applyChange();
       }
@@ -301,6 +316,9 @@ export const applySync = mutation({
     await clearScopeEntities(scopeId);
     await upsertScope(args.scope);
 
+    for (const user of args.entities.users) {
+      await upsertUser(user);
+    }
     for (const principal of args.entities.principals) {
       await upsertPrincipal(scopeId, principal);
     }
@@ -486,24 +504,28 @@ export const applySync = mutation({
       } else {
         await ctx.db.insert("principals", row);
       }
-
-      if (principal.type === "user" && principal.herculesAuthUserId) {
-        await upsertUser(principal.herculesAuthUserId, principal.updatedAt);
-      }
     }
 
-    async function upsertUser(herculesAuthUserId: string, updatedAt: number) {
+    async function upsertUser(user: {
+      herculesAuthUserId: string;
+      name: string;
+      email: string;
+      emailVerified: boolean;
+      image?: string;
+      phone?: string;
+      phoneVerified: boolean;
+      updatedAt: number;
+    }) {
       const existing = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", herculesAuthUserId))
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", user.herculesAuthUserId))
         .unique();
-      if (existing && existing.updatedAt >= updatedAt) return;
+      if (existing && existing.updatedAt >= user.updatedAt) return;
 
-      const row = { herculesAuthUserId, updatedAt };
       if (existing) {
-        await ctx.db.replace(existing._id, row);
+        await ctx.db.replace(existing._id, user);
       } else {
-        await ctx.db.insert("users", row);
+        await ctx.db.insert("users", user);
       }
     }
 

@@ -30,6 +30,17 @@ export const scopeMetadataSchema = z.object({
 });
 export type ScopeMetadata = z.infer<typeof scopeMetadataSchema>;
 
+const userSchema = z.object({
+  herculesAuthUserId: z.string().min(1),
+  name: z.string(),
+  email: z.string().min(1),
+  emailVerified: z.boolean(),
+  image: z.string().optional(),
+  phone: z.string().optional(),
+  phoneVerified: z.boolean(),
+  updatedAt: z.number().int().nonnegative(),
+});
+
 const principalSchema = z.object({
   principalId: z.string().min(1),
   type: z.enum(["user", "group"]),
@@ -104,6 +115,7 @@ const grantSchema = z.object({
 });
 
 const entitiesSchema = z.object({
+  users: z.array(userSchema),
   principals: z.array(principalSchema),
   principalMemberships: z.array(principalMembershipSchema),
   roles: z.array(roleSchema),

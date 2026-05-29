@@ -21,6 +21,7 @@ const snapshot: AccessProjectionSnapshot = {
     updatedAt: 1,
   },
   entities: {
+    users: [],
     principals: [],
     principalMemberships: [],
     roles: [],
@@ -46,6 +47,7 @@ const event: AccessProjectionEvent = {
   },
   changes: [{ entityType: "permission", entityId: "permission_1", operation: "upsert" }],
   entities: {
+    users: [],
     principals: [],
     principalMemberships: [],
     roles: [],

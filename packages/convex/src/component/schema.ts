@@ -10,10 +10,15 @@ export default defineSchema({
     lastError: v.optional(v.string()),
   }),
 
-  // Minimal managed-user identity mirror. Profile fields require a future
-  // versioned projection payload so existing components keep accepting syncs.
+  // Hercules-managed user identity and profile data for access-control users.
   users: defineTable({
     herculesAuthUserId: v.string(),
+    name: v.string(),
+    email: v.string(),
+    emailVerified: v.boolean(),
+    image: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    phoneVerified: v.boolean(),
     updatedAt: v.number(),
   }).index("by_auth_user_id", ["herculesAuthUserId"]),
 
@@ -34,8 +39,7 @@ export default defineSchema({
     .index("by_scope_id", ["accessScopeId"])
     .index("by_kind", ["kind"]),
 
-  // Product-facing organization rows are derived from org scopes without
-  // adding fields to the deployed projection wire contract.
+  // Product-facing organization rows are derived from authoritative org scopes.
   organizations: defineTable({
     accessScopeId: v.string(),
     name: v.string(),

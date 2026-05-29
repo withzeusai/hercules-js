@@ -30,6 +30,7 @@ const orgScopeMeta = {
 
 function emptyEntities() {
   return {
+    users: [],
     principals: [],
     principalMemberships: [],
     roles: [],
@@ -105,7 +106,7 @@ describe("applySync", () => {
     });
   });
 
-  test("materializes minimal users from user principals without new payload fields", async () => {
+  test("materializes managed users from projection profile data", async () => {
     const t = convexTest(schema, modules);
 
     await t.mutation(
@@ -113,6 +114,18 @@ describe("applySync", () => {
       snapshot({
         entities: {
           ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_alice",
+              name: "Alice Doe",
+              email: "alice@example.com",
+              emailVerified: true,
+              image: "https://example.com/alice.png",
+              phone: "+15551234567",
+              phoneVerified: true,
+              updatedAt: 102,
+            },
+          ],
           principals: [
             {
               principalId: "p_alice",
@@ -132,7 +145,16 @@ describe("applySync", () => {
         .query("users")
         .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
         .unique();
-      expect(user).toMatchObject({ herculesAuthUserId: "user_alice", updatedAt: 101 });
+      expect(user).toMatchObject({
+        herculesAuthUserId: "user_alice",
+        name: "Alice Doe",
+        email: "alice@example.com",
+        emailVerified: true,
+        image: "https://example.com/alice.png",
+        phone: "+15551234567",
+        phoneVerified: true,
+        updatedAt: 102,
+      });
     });
   });
 
@@ -235,6 +257,16 @@ describe("applySync", () => {
         changes: [{ entityType: "principal", entityId: "p_carol", operation: "upsert" }],
         entities: {
           ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_carol",
+              name: "Carol",
+              email: "carol@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 301,
+            },
+          ],
           principals: [
             {
               principalId: "p_carol",
@@ -259,6 +291,11 @@ describe("applySync", () => {
         .unique();
       expect(carol).not.toBeNull();
       expect(carol!.joinedAt).toBe(300);
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_carol"))
+        .unique();
+      expect(user).toMatchObject({ email: "carol@example.com", updatedAt: 301 });
     });
   });
 

@@ -13,6 +13,7 @@ const ISSUER = "https://auth.example.com";
 
 function emptyEntities() {
   return {
+    users: [],
     principals: [],
     principalMemberships: [],
     roles: [],
