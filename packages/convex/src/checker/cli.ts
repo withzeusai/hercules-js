@@ -89,7 +89,7 @@ function helpText(): string {
     "Usage: hercules-convex-access-check [convex-dir] [--json] [--fix-authenticated]",
     "",
     "Checks exported Convex functions for raw query(), mutation(), or action()",
-    "builders that should use Hercules Access Control builders from convex/access.ts.",
+    "builders that should use Hercules Access Control builders from convex/hercules.ts.",
     "Also checks common managed organization mistakes such as placeholder scope ids,",
     "app-local org membership tables, role-name permission gates, and unsafe org slug lookups.",
     "",

@@ -160,6 +160,8 @@ export const applySync = mutation({
   handler: async (ctx, args) => {
     const state = await ctx.db.query("sync_state").unique();
     const scopeId = args.scope.accessScopeId;
+    const deferredUserCleanupIds = new Set<string>();
+    const deferUserCleanup = args.type === "access.projection.event";
 
     if (args.type === "access.projection.event") {
       if (!args.changes) {
@@ -278,6 +280,9 @@ export const applySync = mutation({
       for (const applyChange of applyChanges) {
         await applyChange();
       }
+      for (const herculesAuthUserId of deferredUserCleanupIds) {
+        await deleteUserIfUnreferenced(herculesAuthUserId);
+      }
 
       await ctx.db.replace(state._id, {
         ...state,
@@ -313,7 +318,7 @@ export const applySync = mutation({
       };
     }
 
-    await clearScopeEntities(scopeId);
+    const clearedAuthUserIds = await clearScopeEntities(scopeId);
     await upsertScope(args.scope);
 
     for (const user of args.entities.users) {
@@ -339,6 +344,15 @@ export const applySync = mutation({
     }
     for (const grant of args.entities.grants) {
       await upsertGrant(scopeId, grant);
+    }
+    const incomingAuthUserIds = new Set(
+      args.entities.principals.flatMap((principal) =>
+        principal.herculesAuthUserId ? [principal.herculesAuthUserId] : [],
+      ),
+    );
+    for (const authUserId of clearedAuthUserIds) {
+      if (incomingAuthUserIds.has(authUserId)) continue;
+      await deleteUserIfUnreferenced(authUserId);
     }
 
     const nextSourceVersion = state
@@ -436,7 +450,7 @@ export const applySync = mutation({
       }
     }
 
-    async function clearScopeEntities(accessScopeId: string) {
+    async function clearScopeEntities(accessScopeId: string): Promise<Set<string>> {
       const grantRows = await ctx.db
         .query("grants")
         .withIndex("by_object_scope", (q) => q.eq("objectScopeId", accessScopeId))
@@ -472,6 +486,9 @@ export const applySync = mutation({
         .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
         .collect();
       for (const row of principalRows) await ctx.db.delete(row._id);
+      return new Set(
+        principalRows.flatMap((row) => (row.herculesAuthUserId ? [row.herculesAuthUserId] : [])),
+      );
     }
 
     async function upsertPrincipal(
@@ -501,6 +518,12 @@ export const applySync = mutation({
       };
       if (existing) {
         await ctx.db.replace(existing._id, row);
+        if (
+          existing.herculesAuthUserId &&
+          existing.herculesAuthUserId !== principal.herculesAuthUserId
+        ) {
+          await cleanUpUserIfUnreferenced(existing.herculesAuthUserId);
+        }
       } else {
         await ctx.db.insert("principals", row);
       }
@@ -748,7 +771,34 @@ export const applySync = mutation({
         .query("principals")
         .withIndex("by_principal_id", (q) => q.eq("principalId", principalId))
         .unique();
-      if (principal) await ctx.db.delete(principal._id);
+      if (!principal) return;
+
+      await ctx.db.delete(principal._id);
+      if (principal.herculesAuthUserId) {
+        await cleanUpUserIfUnreferenced(principal.herculesAuthUserId);
+      }
+    }
+
+    async function cleanUpUserIfUnreferenced(herculesAuthUserId: string) {
+      if (deferUserCleanup) {
+        deferredUserCleanupIds.add(herculesAuthUserId);
+        return;
+      }
+      await deleteUserIfUnreferenced(herculesAuthUserId);
+    }
+
+    async function deleteUserIfUnreferenced(herculesAuthUserId: string) {
+      const remainingPrincipal = await ctx.db
+        .query("principals")
+        .withIndex("by_auth_user", (q) => q.eq("herculesAuthUserId", herculesAuthUserId))
+        .first();
+      if (remainingPrincipal) return;
+
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", herculesAuthUserId))
+        .unique();
+      if (user) await ctx.db.delete(user._id);
     }
 
     async function deletePrincipalMembership(entityId: string, accessScopeId: string) {

@@ -299,6 +299,385 @@ describe("applySync", () => {
     });
   });
 
+  test("removes a managed user after deleting their final principal", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_alice",
+              name: "Alice",
+              email: "alice@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 101,
+            },
+          ],
+          principals: [
+            {
+              principalId: "p_alice",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.mutation(
+      applySync,
+      event({
+        changes: [{ entityType: "principal", entityId: "p_alice", operation: "delete" }],
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      expect(user).toBeNull();
+    });
+  });
+
+  test("removes a managed user when a replacement snapshot drops their final principal", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_alice",
+              name: "Alice",
+              email: "alice@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 101,
+            },
+          ],
+          principals: [
+            {
+              principalId: "p_alice",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.mutation(applySync, snapshot({ sourceVersion: 2, eventId: "evt_empty" }));
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      expect(user).toBeNull();
+    });
+  });
+
+  test("does not roll back a managed user profile from an older replacement snapshot", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_alice",
+              name: "Alice Updated",
+              email: "new@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 200,
+            },
+          ],
+          principals: [
+            {
+              principalId: "p_alice",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        sourceVersion: 2,
+        eventId: "evt_stale_profile",
+        entities: {
+          ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_alice",
+              name: "Alice Original",
+              email: "old@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 100,
+            },
+          ],
+          principals: [
+            {
+              principalId: "p_alice",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      expect(user).toMatchObject({
+        name: "Alice Updated",
+        email: "new@example.com",
+        updatedAt: 200,
+      });
+    });
+  });
+
+  test("keeps a managed user while another scope still references them", async () => {
+    const t = convexTest(schema, modules);
+    const alice = {
+      herculesAuthUserId: "user_alice",
+      name: "Alice",
+      email: "alice@example.com",
+      emailVerified: true,
+      phoneVerified: false,
+      updatedAt: 101,
+    };
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          users: [alice],
+          principals: [
+            {
+              principalId: "p_alice_default",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+    await t.mutation(
+      applySync,
+      snapshot({
+        sourceVersion: 2,
+        eventId: "evt_acme",
+        scope: orgScopeMeta,
+        entities: {
+          ...emptyEntities(),
+          users: [alice],
+          principals: [
+            {
+              principalId: "p_alice_acme",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.mutation(
+      applySync,
+      event({
+        sourceVersion: 3,
+        changes: [
+          { entityType: "principal", entityId: "p_alice_default", operation: "delete" },
+        ],
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      expect(user).not.toBeNull();
+    });
+  });
+
+  test("removes the prior managed user after a principal is rebound to a new user", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_alice",
+              name: "Alice",
+              email: "alice@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 101,
+            },
+          ],
+          principals: [
+            {
+              principalId: "p_member",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.mutation(
+      applySync,
+      event({
+        changes: [{ entityType: "principal", entityId: "p_member", operation: "upsert" }],
+        entities: {
+          ...emptyEntities(),
+          users: [
+            {
+              herculesAuthUserId: "user_bob",
+              name: "Bob",
+              email: "bob@example.com",
+              emailVerified: true,
+              phoneVerified: false,
+              updatedAt: 102,
+            },
+          ],
+          principals: [
+            {
+              principalId: "p_member",
+              type: "user",
+              herculesAuthUserId: "user_bob",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 200,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const alice = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      const bob = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_bob"))
+        .unique();
+      expect(alice).toBeNull();
+      expect(bob).not.toBeNull();
+    });
+  });
+
+  test("keeps a managed user re-referenced later in the same event", async () => {
+    const t = convexTest(schema, modules);
+    const alice = {
+      herculesAuthUserId: "user_alice",
+      name: "Alice",
+      email: "alice@example.com",
+      emailVerified: true,
+      phoneVerified: false,
+      updatedAt: 101,
+    };
+
+    await t.mutation(
+      applySync,
+      snapshot({
+        entities: {
+          ...emptyEntities(),
+          users: [alice],
+          principals: [
+            {
+              principalId: "p_old",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.mutation(
+      applySync,
+      event({
+        changes: [
+          { entityType: "principal", entityId: "p_old", operation: "delete" },
+          { entityType: "principal", entityId: "p_new", operation: "upsert" },
+        ],
+        entities: {
+          ...emptyEntities(),
+          users: [alice],
+          principals: [
+            {
+              principalId: "p_new",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 200,
+            },
+          ],
+        },
+      }),
+    );
+
+    await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .unique();
+      expect(user).not.toBeNull();
+    });
+  });
+
   test("event for a different scope upserts in the right scope without touching others", async () => {
     const t = convexTest(schema, modules);
 
