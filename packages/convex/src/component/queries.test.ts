@@ -370,6 +370,28 @@ describe("getEffectivePermissions", () => {
     });
     expect(otherResource.permissions).toEqual([]);
   });
+
+  test("applies a role-wide resource allow with a specific deny exception", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, resourceRoleCatalogSnapshot());
+    await t.mutation(applySync, resourceRoleOrgSnapshot());
+
+    const ordinaryReport = await t.query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      resourceType: "reports",
+      resourceId: "report_123",
+    });
+    expect(ordinaryReport.permissions).toEqual(["reports.read"]);
+
+    const blockedReport = await t.query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      resourceType: "reports",
+      resourceId: "report_private",
+    });
+    expect(blockedReport.permissions).toEqual([]);
+  });
 });
 
 function permissionCatalogSnapshot(): AccessProjectionSnapshot {
@@ -642,6 +664,72 @@ function resourceOrgSnapshot(): AccessProjectionSnapshot {
           effect: "allow",
           objectType: "resource",
           objectId: "report_123",
+          objectResourceType: "reports",
+          updatedAt: 2,
+        },
+      ],
+    },
+  };
+}
+
+function resourceRoleCatalogSnapshot(): AccessProjectionSnapshot {
+  const snapshot = resourceCatalogSnapshot();
+  return {
+    ...snapshot,
+    eventId: "evt_resource_role_catalog",
+    entities: {
+      ...snapshot.entities,
+      roles: [
+        {
+          roleId: "role_viewer",
+          accessScopeId: "scope_default",
+          key: "viewer",
+          kind: "system",
+          name: "Viewer",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function resourceRoleOrgSnapshot(): AccessProjectionSnapshot {
+  const snapshot = resourceOrgSnapshot();
+  return {
+    ...snapshot,
+    eventId: "evt_resource_role_org",
+    entities: {
+      ...snapshot.entities,
+      grants: [
+        {
+          grantId: "grant_alice_viewer",
+          subjectPrincipalId: "p_alice_acme",
+          relationKind: "role",
+          roleId: "role_viewer",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+        {
+          grantId: "grant_viewer_reports_read",
+          subjectRoleId: "role_viewer",
+          relationKind: "direct_permission",
+          permissionId: "perm_reports_read",
+          effect: "allow",
+          objectType: "resource",
+          objectId: "*",
+          objectResourceType: "reports",
+          updatedAt: 2,
+        },
+        {
+          grantId: "grant_viewer_private_report_block",
+          subjectRoleId: "role_viewer",
+          relationKind: "direct_permission",
+          permissionId: "perm_reports_read",
+          effect: "deny",
+          objectType: "resource",
+          objectId: "report_private",
           objectResourceType: "reports",
           updatedAt: 2,
         },

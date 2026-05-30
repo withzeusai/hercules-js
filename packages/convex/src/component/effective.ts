@@ -4,6 +4,7 @@ import schema from "./schema";
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
+const ALL_RESOURCES_OBJECT_ID = "*";
 
 type PermissionSummary = {
   permissionId: string;
@@ -198,17 +199,45 @@ async function collectGrantContributions(
     collect(scopeGrants);
 
     if (args.resourceType && args.resourceId) {
-      const resourceGrants = await ctx.db
-        .query("grants")
-        .withIndex("by_subject_principal_object_resource", (q) =>
-          q
-            .eq("subjectPrincipalId", principalId)
-            .eq("objectType", "resource")
-            .eq("objectResourceType", args.resourceType!)
-            .eq("objectId", args.resourceId!),
-        )
-        .collect();
-      collect(resourceGrants.filter((grant) => grant.objectScopeId === args.scopeId));
+      const objectIds =
+        args.resourceId === ALL_RESOURCES_OBJECT_ID
+          ? [ALL_RESOURCES_OBJECT_ID]
+          : [ALL_RESOURCES_OBJECT_ID, args.resourceId];
+      for (const objectId of objectIds) {
+        const resourceGrants = await ctx.db
+          .query("grants")
+          .withIndex("by_subject_principal_object_resource", (q) =>
+            q
+              .eq("subjectPrincipalId", principalId)
+              .eq("objectType", "resource")
+              .eq("objectResourceType", args.resourceType!)
+              .eq("objectId", objectId),
+          )
+          .collect();
+        collect(resourceGrants.filter((grant) => grant.objectScopeId === args.scopeId));
+      }
+    }
+  }
+
+  if (args.resourceType && args.resourceId) {
+    const objectIds =
+      args.resourceId === ALL_RESOURCES_OBJECT_ID
+        ? [ALL_RESOURCES_OBJECT_ID]
+        : [ALL_RESOURCES_OBJECT_ID, args.resourceId];
+    for (const roleId of roleIds) {
+      for (const objectId of objectIds) {
+        const resourceGrants = await ctx.db
+          .query("grants")
+          .withIndex("by_subject_role_object_resource", (q) =>
+            q
+              .eq("subjectRoleId", roleId)
+              .eq("objectType", "resource")
+              .eq("objectResourceType", args.resourceType!)
+              .eq("objectId", objectId),
+          )
+          .collect();
+        collect(resourceGrants.filter((grant) => grant.objectScopeId === args.scopeId));
+      }
     }
   }
 

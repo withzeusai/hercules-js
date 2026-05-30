@@ -108,6 +108,42 @@ describe("createAccessAdminActions", () => {
     });
   });
 
+  test("sets resource permission rules for a role", async () => {
+    const set = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({
+      accessAction: identityBuilder,
+      client: {
+        post: vi.fn(),
+        accessControl: {
+          resourceRules: { set },
+        },
+      },
+    });
+
+    await getHandler(actions.setResourcePermissionRule)(
+      {},
+      {
+        scopeId: "scope_1",
+        subject: { type: "role", roleKey: "member" },
+        resourceType: "reports",
+        target: { mode: "specific", resourceId: "report_private" },
+        permissionKey: "reports.read",
+        effect: "deny",
+        expiresAt: null,
+      },
+    );
+
+    expect(set).toHaveBeenCalledWith({
+      scope_id: "scope_1",
+      subject: { type: "role", role_key: "member" },
+      resource_type: "reports",
+      target: { mode: "specific", resource_id: "report_private" },
+      permission_key: "reports.read",
+      effect: "deny",
+      expires_at: null,
+    });
+  });
+
   test("wraps scope lifecycle writes", async () => {
     const archive = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({

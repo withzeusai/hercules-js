@@ -104,6 +104,7 @@ const grantValidator = v.object({
   grantId: v.string(),
   subjectPrincipalId: v.optional(v.string()),
   subjectScopeId: v.optional(v.string()),
+  subjectRoleId: v.optional(v.string()),
   // DL15: relationKind="role" requires roleId; "direct_permission"
   // requires permissionId. Producer enforces; consumer trusts after
   // structural validation.
@@ -681,6 +682,7 @@ export const applySync = mutation({
         grantId: string;
         subjectPrincipalId?: string;
         subjectScopeId?: string;
+        subjectRoleId?: string;
         relationKind: "role" | "direct_permission";
         roleId?: string;
         permissionId?: string;
@@ -701,6 +703,7 @@ export const applySync = mutation({
         grantId: grant.grantId,
         subjectPrincipalId: grant.subjectPrincipalId,
         subjectScopeId: grant.subjectScopeId,
+        subjectRoleId: grant.subjectRoleId,
         relationKind: grant.relationKind,
         roleId: grant.roleId,
         permissionId: grant.permissionId,

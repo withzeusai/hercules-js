@@ -135,11 +135,13 @@ export default defineSchema({
   // relationKind="direct_permission" -> permissionId set (per-user delta).
   // Resource-object grants and scope-subject grants are stored; authorize
   // exercises principal-subject scope-object grants (role + direct) plus
-  // principal-subject resource-object grants when resource args provided.
+  // principal- and role-subject resource-object grants when resource args
+  // are provided.
   grants: defineTable({
     grantId: v.string(),
     subjectPrincipalId: v.optional(v.string()),
     subjectScopeId: v.optional(v.string()),
+    subjectRoleId: v.optional(v.string()),
     relationKind: v.union(v.literal("role"), v.literal("direct_permission")),
     roleId: v.optional(v.string()),
     permissionId: v.optional(v.string()),
@@ -156,6 +158,12 @@ export default defineSchema({
     .index("by_subject_principal_object", ["subjectPrincipalId", "objectType", "objectId"])
     .index("by_subject_principal_object_resource", [
       "subjectPrincipalId",
+      "objectType",
+      "objectResourceType",
+      "objectId",
+    ])
+    .index("by_subject_role_object_resource", [
+      "subjectRoleId",
       "objectType",
       "objectResourceType",
       "objectId",

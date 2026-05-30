@@ -96,13 +96,15 @@ export type GrantObjectType = z.infer<typeof grantObjectTypeSchema>;
 // The producer filters grants by objectScopeId === payload.scope.accessScopeId,
 // so the payload doesn't repeat objectScopeId per-row. The component derives
 // it from payload.scope when storing each grant. Producer must set exactly one
-// of subjectPrincipalId / subjectScopeId (DL14 CHECK on the Hercules side).
+// of subjectPrincipalId / subjectScopeId / subjectRoleId (DL14 CHECK on the
+// Hercules side).
 // DL15: relationKind="role" requires roleId; "direct_permission" requires
 // permissionId. Producer's CHECK constraint enforces the XOR.
 const grantSchema = z.object({
   grantId: z.string().min(1),
   subjectPrincipalId: z.string().min(1).optional(),
   subjectScopeId: z.string().min(1).optional(),
+  subjectRoleId: z.string().min(1).optional(),
   relationKind: z.enum(["role", "direct_permission"]),
   roleId: z.string().min(1).optional(),
   permissionId: z.string().min(1).optional(),

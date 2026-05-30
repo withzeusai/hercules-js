@@ -66,6 +66,9 @@ export type AccessAdminSdkClient = {
       create?(input: Record<string, unknown>): Promise<WriteResult>;
       revoke?(input: Record<string, unknown>): Promise<WriteResult>;
     };
+    resourceRules?: {
+      set?(input: Record<string, unknown>): Promise<WriteResult>;
+    };
     expiries?: {
       set?(input: Record<string, unknown>): Promise<WriteResult>;
     };
@@ -346,6 +349,48 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           "/v1/access-control/resource-grants/create",
           body,
           (client) => client.resourceGrants?.create?.(body),
+        );
+      },
+    }),
+
+    setResourcePermissionRule: accessAction({
+      permission: "access.grants.manage",
+      extractScope: (_ctx, args) => args.scopeId,
+      args: {
+        scopeId: v.string(),
+        subject: v.union(
+          v.object({ type: v.literal("principal"), principalId: v.string() }),
+          v.object({ type: v.literal("role"), roleKey: v.string() }),
+        ),
+        resourceType: v.string(),
+        target: v.union(
+          v.object({ mode: v.literal("all") }),
+          v.object({ mode: v.literal("specific"), resourceId: v.string() }),
+        ),
+        permissionKey: v.string(),
+        effect: v.union(v.literal("allow"), v.literal("deny")),
+        expiresAt: v.optional(v.union(v.string(), v.null())),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          subject:
+            args.subject.type === "role"
+              ? { type: "role", role_key: args.subject.roleKey }
+              : { type: "principal", principal_id: args.subject.principalId },
+          resource_type: args.resourceType,
+          target:
+            args.target.mode === "all"
+              ? { mode: "all" }
+              : { mode: "specific", resource_id: args.target.resourceId },
+          permission_key: args.permissionKey,
+          effect: args.effect,
+          expires_at: args.expiresAt,
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/resource-rules/set",
+          body,
+          (client) => client.resourceRules?.set?.(body),
         );
       },
     }),
