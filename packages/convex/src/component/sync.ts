@@ -115,7 +115,6 @@ const grantValidator = v.object({
   objectType: grantObjectTypeValidator,
   objectId: v.string(),
   objectResourceType: v.optional(v.string()),
-  appliesToAllResources: v.optional(v.boolean()),
   expiresAt: v.optional(v.number()),
   updatedAt: v.number(),
 });
@@ -691,7 +690,6 @@ export const applySync = mutation({
         objectType: "scope" | "resource";
         objectId: string;
         objectResourceType?: string;
-        appliesToAllResources?: boolean;
         expiresAt?: number;
         updatedAt: number;
       },
@@ -714,7 +712,6 @@ export const applySync = mutation({
         objectId: grant.objectId,
         objectScopeId,
         objectResourceType: grant.objectResourceType,
-        appliesToAllResources: grant.appliesToAllResources,
         expiresAt: grant.expiresAt,
         updatedAt: grant.updatedAt,
       };

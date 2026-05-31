@@ -112,7 +112,6 @@ const grantSchema = z.object({
   objectType: grantObjectTypeSchema,
   objectId: z.string().min(1),
   objectResourceType: z.string().min(1).optional(),
-  appliesToAllResources: z.boolean().optional(),
   expiresAt: z.number().int().nonnegative().optional(),
   updatedAt: z.number().int().nonnegative(),
 });

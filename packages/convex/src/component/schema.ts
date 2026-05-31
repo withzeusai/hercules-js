@@ -150,7 +150,6 @@ export default defineSchema({
     objectId: v.string(),
     objectScopeId: v.string(),
     objectResourceType: v.optional(v.string()),
-    appliesToAllResources: v.optional(v.boolean()),
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
   })

@@ -407,43 +407,6 @@ describe("getEffectivePermissions", () => {
     expect(result.permissions).toEqual([]);
   });
 
-  test("does not interpret a literal star resource id as broad access", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, resourceCatalogSnapshot());
-    const snapshot = resourceOrgSnapshot();
-    snapshot.entities.grants = snapshot.entities.grants.map((grant) =>
-      grant.grantId === "grant_alice_report_123_read"
-        ? { ...grant, objectId: "*", appliesToAllResources: false }
-        : grant,
-    );
-    await t.mutation(applySync, snapshot);
-
-    const otherReport = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_456",
-    });
-    expect(otherReport.permissions).toEqual([]);
-  });
-
-  test("preserves legacy all-resource wildcard grants during upgrade", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, resourceCatalogSnapshot());
-    const snapshot = resourceOrgSnapshot();
-    snapshot.entities.grants = snapshot.entities.grants.map((grant) =>
-      grant.grantId === "grant_alice_report_123_read" ? { ...grant, objectId: "*" } : grant,
-    );
-    await t.mutation(applySync, snapshot);
-
-    const otherReport = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_456",
-    });
-    expect(otherReport.permissions).toEqual(["reports.read"]);
-  });
 });
 
 function permissionCatalogSnapshot(): AccessProjectionSnapshot {
@@ -772,7 +735,6 @@ function resourceRoleOrgSnapshot(): AccessProjectionSnapshot {
           objectType: "resource",
           objectId: "*",
           objectResourceType: "reports",
-          appliesToAllResources: true,
           updatedAt: 2,
         },
         {

@@ -224,7 +224,7 @@ async function collectGrantContributions(
               .eq("objectId", ALL_RESOURCES_OBJECT_ID),
           )
           .collect();
-        collect(allResourceGrants.filter((grant) => grant.appliesToAllResources !== false));
+        collect(allResourceGrants);
       }
     }
   }
@@ -265,7 +265,7 @@ async function collectGrantContributions(
               .eq("objectId", ALL_RESOURCES_OBJECT_ID),
           )
           .collect();
-        collect(allResourceGrants.filter((grant) => grant.appliesToAllResources !== false));
+        collect(allResourceGrants);
       }
     }
   }
