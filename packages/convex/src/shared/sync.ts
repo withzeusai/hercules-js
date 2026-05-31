@@ -175,7 +175,6 @@ export type SyncResponse =
       ok: true;
       status: "applied" | "duplicate";
       acknowledgedVersion: number;
-      capabilities?: { resourcePermissionRules: boolean };
     }
   | {
       ok: false;

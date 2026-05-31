@@ -13,7 +13,7 @@ export const authorize = query({
     permission: v.optional(v.string()),
     // DL16 resource grant support. When provided, authorize also walks
     // resource-object grants targeting this resource. App code passes these
-    // via extractScope when the permission applies to a specific row.
+    // via a scope extractor when the permission applies to a specific row.
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
   },

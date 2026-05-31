@@ -54,10 +54,7 @@ export function registerAccessControlRoutes(
       }
 
       const result = await ctx.runMutation(component.sync.applySync, parsedPayload.data);
-      const response = result.ok
-        ? { ...result, capabilities: { resourcePermissionRules: true } }
-        : result;
-      return jsonResponse(response satisfies SyncResponse, syncResponseStatus(result));
+      return jsonResponse(result satisfies SyncResponse, syncResponseStatus(result));
     }),
   });
 }
@@ -81,10 +78,7 @@ function resolveSyncComponent(
   }
 
   const componentName = options.componentName ?? "hercules";
-  const namedComponent = options.components?.[componentName];
-  const defaultComponent =
-    options.components?.hercules ?? options.components?.accessControl ?? options.components?.hercules_access_control;
-  const component = namedComponent ?? defaultComponent;
+  const component = options.components?.[componentName];
 
   if (!component) {
     throw new Error(

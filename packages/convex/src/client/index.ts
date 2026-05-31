@@ -106,7 +106,7 @@ export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
   componentName?: string;
 };
 
-// extractScope can return either a bare scope id (the common case) or a
+// A scope extractor can return either a bare scope id (the common case) or a
 // richer object that also names a specific resource for DL16 resource
 // grant support. scopeFromResource returns the richer shape so the
 // authorize call can walk resource-object grants.
@@ -129,7 +129,6 @@ export type AccessQueryBuilder<DataModel extends GenericDataModel> = {
   >(query: {
     permission: string;
     scope?: ExtractScope<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
-    extractScope?: ExtractScope<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericQueryCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -146,7 +145,6 @@ export type AccessMutationBuilder<DataModel extends GenericDataModel> = {
   >(mutation: {
     permission: string;
     scope?: ExtractScope<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
-    extractScope?: ExtractScope<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericMutationCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -163,7 +161,6 @@ export type AccessActionBuilder<DataModel extends GenericDataModel> = {
   >(action: {
     permission: string;
     scope?: ExtractScope<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
-    extractScope?: ExtractScope<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -324,10 +321,7 @@ function resolveComponent<DataModel extends GenericDataModel>(
   }
 
   const componentName = options.componentName ?? "hercules";
-  const namedComponent = options.components?.[componentName];
-  const defaultComponent =
-    options.components?.hercules ?? options.components?.accessControl ?? options.components?.hercules_access_control;
-  const component = namedComponent ?? defaultComponent;
+  const component = options.components?.[componentName];
 
   if (!component) {
     throw new Error(
@@ -359,7 +353,6 @@ function makeAccessBuilder<TBuilder>(
     const accessDefinition = definition as ConvexDefinitionObject<AuthorizationCtx> & {
       permission?: unknown;
       scope?: unknown;
-      extractScope?: unknown;
     };
     if (
       typeof accessDefinition.permission !== "string" ||
@@ -370,15 +363,8 @@ function makeAccessBuilder<TBuilder>(
     if (accessDefinition.scope !== undefined && typeof accessDefinition.scope !== "function") {
       throw new Error("access* builders require scope to be a function.");
     }
-    if (
-      accessDefinition.extractScope !== undefined &&
-      typeof accessDefinition.extractScope !== "function"
-    ) {
-      throw new Error("access* builders require extractScope to be a function.");
-    }
-
-    const { permission, scope, extractScope, ...convexDefinition } = accessDefinition;
-    const scopeExtractor = (scope ?? extractScope ?? defaultScope) as ExtractScope<
+    const { permission, scope, ...convexDefinition } = accessDefinition;
+    const scopeExtractor = (scope ?? defaultScope) as ExtractScope<
       AuthorizationCtx,
       unknown
     >;
@@ -553,7 +539,7 @@ async function ensureAuthorized(
 ) {
   const identity = await ctx.auth.getUserIdentity();
 
-  // MED-01: short-circuit on missing identity before extractScope so that
+  // MED-01: short-circuit on missing identity before scope extraction so that
   // unauthenticated callers cannot probe resource existence by observing
   // INVALID_SCOPE_ARG vs RESOURCE_NOT_FOUND vs INVALID_RESOURCE_SCOPE.
   if (!identity?.tokenIdentifier) {

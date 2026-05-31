@@ -52,34 +52,6 @@ describe("createAccessControl", () => {
     });
   });
 
-  test("continues resolving legacy accessControl mounts", async () => {
-    const legacyComponent = {
-      ...component,
-      checks: { authorize: "legacyAuthorize" },
-    };
-    const builders = createAccessControl({
-      query: identityBuilder,
-      mutation: identityBuilder,
-      action: identityBuilder,
-      components: { accessControl: legacyComponent },
-    });
-    const definition = builders.authenticatedQuery({
-      args: {},
-      handler: async () => "ok",
-    } as never) as unknown as { handler: Function };
-    const ctx = {
-      auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
-      },
-      runQuery: vi.fn().mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
-    };
-
-    await definition.handler(ctx);
-    expect(ctx.runQuery).toHaveBeenCalledWith("legacyAuthorize", expect.any(Object));
-  });
-
   test("requires access builders to declare a permission", () => {
     const builders = createAccessControl({
       query: identityBuilder,
@@ -91,7 +63,7 @@ describe("createAccessControl", () => {
     expect(() =>
       builders.accessMutation({
         args: {},
-        extractScope: scopeFromArg("scopeId"),
+        scope: scopeFromArg("scopeId"),
         handler: async () => null,
       } as never),
     ).toThrow("access* builders require a non-empty permission.");
@@ -176,7 +148,7 @@ describe("createAccessControl", () => {
     });
     const handler = builders.accessMutation({
       permission: "appointments:create",
-      extractScope: scopeFromArg("orgScopeId"),
+      scope: scopeFromArg("orgScopeId"),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as { handler: Function };
@@ -196,42 +168,6 @@ describe("createAccessControl", () => {
           principalId: "principal_1",
           effectiveRoleIds: ["role_member"],
         }),
-    };
-
-    await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
-    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_abc",
-      permission: "appointments:create",
-    });
-  });
-
-  test("access builders accept scope as the preferred scope extractor name", async () => {
-    const builders = createAccessControl({
-      query: identityBuilder,
-      mutation: identityBuilder,
-      action: identityBuilder,
-      component: component as never,
-    });
-    const handler = builders.accessMutation({
-      permission: "appointments:create",
-      scope: scopeFromArg("orgScopeId"),
-      args: {},
-      handler: async () => "ok",
-    } as never) as unknown as { handler: Function };
-    const ctx = {
-      auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
-      },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
     };
 
     await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
@@ -370,7 +306,7 @@ describe("createAccessControl", () => {
     });
   });
 
-  test("access builders surface a ConvexError when extractScope returns no scope", async () => {
+  test("access builders surface a ConvexError when scope extraction returns no scope", async () => {
     const builders = createAccessControl({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -379,7 +315,7 @@ describe("createAccessControl", () => {
     });
     const handler = builders.accessMutation({
       permission: "appointments:create",
-      extractScope: scopeFromArg("orgScopeId"),
+      scope: scopeFromArg("orgScopeId"),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as { handler: Function };

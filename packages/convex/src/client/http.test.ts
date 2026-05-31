@@ -84,7 +84,6 @@ describe("registerAccessControlRoutes", () => {
       ok: true,
       status: "applied",
       acknowledgedVersion: 1,
-      capabilities: { resourcePermissionRules: true },
     });
     expect(response.status).toBe(200);
     expect(runMutation).toHaveBeenCalledWith("applySync", snapshot);
@@ -102,7 +101,6 @@ describe("registerAccessControlRoutes", () => {
       ok: true,
       status: "applied",
       acknowledgedVersion: 2,
-      capabilities: { resourcePermissionRules: true },
     });
     expect(response.status).toBe(200);
     expect(runMutation).toHaveBeenCalledWith("applySync", event);
@@ -124,24 +122,6 @@ describe("registerAccessControlRoutes", () => {
     await routes[0]!.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
 
     expect(runMutation).toHaveBeenCalledWith("herculesApplySync", snapshot);
-  });
-
-  test("continues resolving legacy accessControl mounts", async () => {
-    const routes: Array<{ path: string; method: string; handler: Function }> = [];
-    registerAccessControlRoutes(
-      { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
-      {
-        httpAction: (handler) => handler as never,
-        components: { accessControl: { sync: { applySync: "legacyApplySync" } } },
-      },
-    );
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
-
-    await routes[0]!.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
-
-    expect(runMutation).toHaveBeenCalledWith("legacyApplySync", snapshot);
   });
 
   test("rejects an unsigned snapshot", async () => {
