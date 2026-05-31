@@ -54,7 +54,10 @@ export function registerAccessControlRoutes(
       }
 
       const result = await ctx.runMutation(component.sync.applySync, parsedPayload.data);
-      return jsonResponse(result satisfies SyncResponse, syncResponseStatus(result));
+      const response = result.ok
+        ? { ...result, capabilities: { resourcePermissionRules: true } }
+        : result;
+      return jsonResponse(response satisfies SyncResponse, syncResponseStatus(result));
     }),
   });
 }

@@ -84,6 +84,7 @@ describe("registerAccessControlRoutes", () => {
       ok: true,
       status: "applied",
       acknowledgedVersion: 1,
+      capabilities: { resourcePermissionRules: true },
     });
     expect(response.status).toBe(200);
     expect(runMutation).toHaveBeenCalledWith("applySync", snapshot);
@@ -101,6 +102,7 @@ describe("registerAccessControlRoutes", () => {
       ok: true,
       status: "applied",
       acknowledgedVersion: 2,
+      capabilities: { resourcePermissionRules: true },
     });
     expect(response.status).toBe(200);
     expect(runMutation).toHaveBeenCalledWith("applySync", event);

@@ -199,50 +199,79 @@ async function collectGrantContributions(
     collect(scopeGrants);
 
     if (args.resourceType && args.resourceId) {
-      const objectIds =
-        args.resourceId === ALL_RESOURCES_OBJECT_ID
-          ? [ALL_RESOURCES_OBJECT_ID]
-          : [ALL_RESOURCES_OBJECT_ID, args.resourceId];
-      for (const objectId of objectIds) {
-        const resourceGrants = await ctx.db
+      const specificGrants = await ctx.db
+        .query("grants")
+        .withIndex("by_subject_principal_scope_object_resource", (q) =>
+          q
+            .eq("subjectPrincipalId", principalId)
+            .eq("objectScopeId", args.scopeId)
+            .eq("objectType", "resource")
+            .eq("objectResourceType", args.resourceType!)
+            .eq("objectId", args.resourceId!),
+        )
+        .collect();
+      collect(specificGrants);
+
+      if (args.resourceId !== ALL_RESOURCES_OBJECT_ID) {
+        const allResourceGrants = await ctx.db
           .query("grants")
-          .withIndex("by_subject_principal_object_resource", (q) =>
+          .withIndex("by_subject_principal_scope_object_resource", (q) =>
             q
               .eq("subjectPrincipalId", principalId)
+              .eq("objectScopeId", args.scopeId)
               .eq("objectType", "resource")
               .eq("objectResourceType", args.resourceType!)
-              .eq("objectId", objectId),
+              .eq("objectId", ALL_RESOURCES_OBJECT_ID),
           )
           .collect();
-        collect(resourceGrants.filter((grant) => grant.objectScopeId === args.scopeId));
+        collect(allResourceGrants.filter((grant) => grant.appliesToAllResources !== false));
       }
     }
   }
 
+  const effectiveRoleIds = [];
+  for (const roleId of roleIds) {
+    const role = await ctx.db
+      .query("roles")
+      .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
+      .unique();
+    if (role) effectiveRoleIds.push(roleId);
+  }
+
   if (args.resourceType && args.resourceId) {
-    const objectIds =
-      args.resourceId === ALL_RESOURCES_OBJECT_ID
-        ? [ALL_RESOURCES_OBJECT_ID]
-        : [ALL_RESOURCES_OBJECT_ID, args.resourceId];
-    for (const roleId of roleIds) {
-      for (const objectId of objectIds) {
-        const resourceGrants = await ctx.db
+    for (const roleId of effectiveRoleIds) {
+      const specificGrants = await ctx.db
+        .query("grants")
+        .withIndex("by_subject_role_scope_object_resource", (q) =>
+          q
+            .eq("subjectRoleId", roleId)
+            .eq("objectScopeId", args.scopeId)
+            .eq("objectType", "resource")
+            .eq("objectResourceType", args.resourceType!)
+            .eq("objectId", args.resourceId!),
+        )
+        .collect();
+      collect(specificGrants);
+
+      if (args.resourceId !== ALL_RESOURCES_OBJECT_ID) {
+        const allResourceGrants = await ctx.db
           .query("grants")
-          .withIndex("by_subject_role_object_resource", (q) =>
+          .withIndex("by_subject_role_scope_object_resource", (q) =>
             q
               .eq("subjectRoleId", roleId)
+              .eq("objectScopeId", args.scopeId)
               .eq("objectType", "resource")
               .eq("objectResourceType", args.resourceType!)
-              .eq("objectId", objectId),
+              .eq("objectId", ALL_RESOURCES_OBJECT_ID),
           )
           .collect();
-        collect(resourceGrants.filter((grant) => grant.objectScopeId === args.scopeId));
+        collect(allResourceGrants.filter((grant) => grant.appliesToAllResources !== false));
       }
     }
   }
 
   return {
-    roleIds: [...roleIds],
+    roleIds: effectiveRoleIds,
     directAllowPermissionIds,
     directDenyPermissionIds,
   };

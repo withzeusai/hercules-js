@@ -112,6 +112,7 @@ const grantSchema = z.object({
   objectType: grantObjectTypeSchema,
   objectId: z.string().min(1),
   objectResourceType: z.string().min(1).optional(),
+  appliesToAllResources: z.boolean().optional(),
   expiresAt: z.number().int().nonnegative().optional(),
   updatedAt: z.number().int().nonnegative(),
 });
@@ -171,7 +172,12 @@ export type AccessProjectionEvent = z.infer<typeof accessProjectionEventSchema>;
 export type AccessProjectionSyncPayload = z.infer<typeof accessProjectionSyncPayloadSchema>;
 
 export type SyncResponse =
-  | { ok: true; status: "applied" | "duplicate"; acknowledgedVersion: number }
+  | {
+      ok: true;
+      status: "applied" | "duplicate";
+      acknowledgedVersion: number;
+      capabilities?: { resourcePermissionRules: boolean };
+    }
   | {
       ok: false;
       status: "version_gap";

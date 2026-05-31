@@ -150,20 +150,23 @@ export default defineSchema({
     objectId: v.string(),
     objectScopeId: v.string(),
     objectResourceType: v.optional(v.string()),
+    appliesToAllResources: v.optional(v.boolean()),
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
     .index("by_grant_id", ["grantId"])
     .index("by_object_scope", ["objectScopeId"])
     .index("by_subject_principal_object", ["subjectPrincipalId", "objectType", "objectId"])
-    .index("by_subject_principal_object_resource", [
+    .index("by_subject_principal_scope_object_resource", [
       "subjectPrincipalId",
+      "objectScopeId",
       "objectType",
       "objectResourceType",
       "objectId",
     ])
-    .index("by_subject_role_object_resource", [
+    .index("by_subject_role_scope_object_resource", [
       "subjectRoleId",
+      "objectScopeId",
       "objectType",
       "objectResourceType",
       "objectId",
