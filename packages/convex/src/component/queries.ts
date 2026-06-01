@@ -5,7 +5,7 @@ import {
   type QueryBuilder,
 } from "convex/server";
 import { v } from "convex/values";
-import { evaluateEffectiveAccess } from "./effective";
+import { enumeratePermissions, evaluateEffectiveAccess } from "./effective";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -34,6 +34,13 @@ type EffectivePermissionsResult = {
   scopeId?: string;
   principalId?: string;
   effectiveRoleIds: string[];
+  // §0b: under the wildcard model `permissions` is a projection over the
+  // unbounded catalog (Owner = whole catalog, Admin = catalog minus levers),
+  // so it can drift the instant a new permission is created. `wildcard`
+  // surfaces the principal's resolved mode so callers can tell an enumerated
+  // list ("none") apart from a future-inclusive one ("immutable"/"default")
+  // and avoid treating the materialized list as exhaustive.
+  wildcard: "none" | "immutable" | "default";
   permissions: string[];
 };
 
@@ -127,6 +134,12 @@ export const getEffectivePermissions = query({
   },
   handler: async (ctx, args): Promise<EffectivePermissionsResult> => {
     const evaluation = await evaluateEffectiveAccess(ctx, args);
+    const permissions = enumeratePermissions(
+      evaluation.catalogPermissions,
+      evaluation.wildcard,
+      evaluation.entries,
+      args,
+    );
     return {
       allowed: evaluation.allowed,
       reasonCode: evaluation.reasonCode,
@@ -134,7 +147,8 @@ export const getEffectivePermissions = query({
       scopeId: evaluation.scopeId,
       principalId: evaluation.principalId,
       effectiveRoleIds: evaluation.effectiveRoleIds,
-      permissions: evaluation.permissions.map((permission) => permission.key),
+      wildcard: evaluation.wildcard,
+      permissions: permissions.map((permission) => permission.key),
     };
   },
 });

@@ -7,7 +7,7 @@ const secret = `whsec_${Buffer.from("test-secret").toString("base64")}`;
 
 const snapshot: AccessProjectionSnapshot = {
   type: "access.projection.snapshot",
-  schemaVersion: 1,
+  schemaVersion: 2,
   eventId: "evt_1",
   sourceVersion: 1,
   expectedIssuer: "https://auth.example.com",
@@ -33,7 +33,7 @@ const snapshot: AccessProjectionSnapshot = {
 
 const event: AccessProjectionEvent = {
   type: "access.projection.event",
-  schemaVersion: 1,
+  schemaVersion: 2,
   eventId: "evt_2",
   sourceVersion: 2,
   scope: {

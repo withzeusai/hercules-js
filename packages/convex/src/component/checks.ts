@@ -1,5 +1,11 @@
-import { queryGeneric, type DataModelFromSchemaDefinition, type QueryBuilder } from "convex/server";
+import {
+  queryGeneric,
+  type DataModelFromSchemaDefinition,
+  type GenericQueryCtx,
+  type QueryBuilder,
+} from "convex/server";
 import { v } from "convex/values";
+import { evaluateAccess, MANAGE_ACTION, WILDCARD_ACTION } from "./authz";
 import { evaluateEffectiveAccess } from "./effective";
 import schema from "./schema";
 
@@ -52,7 +58,14 @@ export const authorize = query({
       );
     }
 
-    if (!evaluation.catalogPermissionKeys.has(args.permission)) {
+    // Resolve the requested permission's canonical (resourceType, action) by
+    // catalog lookup rather than parsing the key string. The producer ships
+    // the structured columns verbatim, so this works for canonical
+    // (app.appointments:create), dot-action (reports.export), and namespaced
+    // keys alike without the runtime having to agree on slug grammar.
+    // Catalog permissions always live in the default scope (DL15).
+    const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
+    if (!resolvedPermission) {
       return deny(
         "permission_missing",
         evaluation.sourceVersion,
@@ -61,7 +74,32 @@ export const authorize = query({
       );
     }
 
-    if (evaluation.permissions.some((permission) => permission.key === args.permission)) {
+    // Requests carry concrete verbs only. A catalog permission whose action is
+    // manage/* would map a request onto a superset token, which the algebra
+    // does not special-case on the request side. Reject rather than evaluate.
+    if (
+      resolvedPermission.action === MANAGE_ACTION ||
+      resolvedPermission.action === WILDCARD_ACTION
+    ) {
+      return deny(
+        "invalid_request",
+        evaluation.sourceVersion,
+        evaluation.principalId,
+        evaluation.effectiveRoleIds,
+      );
+    }
+
+    const decision = evaluateAccess({
+      wildcard: evaluation.wildcard,
+      entries: evaluation.entries,
+      request: {
+        resourceType: resolvedPermission.resourceType,
+        action: resolvedPermission.action,
+        objectId: args.resourceId,
+      },
+    });
+
+    if (decision === "allow") {
       return allow(
         evaluation.sourceVersion ?? 0,
         evaluation.principalId,
@@ -77,6 +115,20 @@ export const authorize = query({
     );
   },
 });
+
+async function findCatalogPermissionByKey(ctx: GenericQueryCtx<DataModel>, key: string) {
+  const defaultScope = await ctx.db
+    .query("scopes")
+    .withIndex("by_kind", (q) => q.eq("kind", "default"))
+    .unique();
+  if (!defaultScope) return null;
+  return await ctx.db
+    .query("permissions")
+    .withIndex("by_scope_key", (q) =>
+      q.eq("accessScopeId", defaultScope.accessScopeId).eq("key", key),
+    )
+    .unique();
+}
 
 function parseTokenIdentifier(tokenIdentifier: string) {
   const separatorIndex = tokenIdentifier.lastIndexOf("|");

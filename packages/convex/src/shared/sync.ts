@@ -65,6 +65,14 @@ const roleSchema = z.object({
   key: z.string().min(1),
   kind: z.enum(["system", "custom"]),
   name: z.string().min(1),
+  // §0b wildcard semantic flag (never a materialized list):
+  //   "immutable" — Owner: always-allow, including future permissions.
+  //   "default"   — Admin: allow-all-minus-Owner-levers, until narrowed.
+  //   "none"      — Member/custom/narrowed-Admin: enumerated rows govern.
+  // Required on v2: producers always emit it, and treating it as optional
+  // would silently downgrade Owner/Admin to enumerated semantics on a
+  // malformed payload (the §0b lockout footgun). Reject instead.
+  wildcard: z.enum(["none", "immutable", "default"]),
   updatedAt: z.number().int().nonnegative(),
 });
 
@@ -141,7 +149,9 @@ export const accessProjectionChangeSchema = z.object({
 
 export const accessProjectionSnapshotSchema = z.object({
   type: z.literal("access.projection.snapshot"),
-  schemaVersion: z.literal(1),
+  // v2 adds per-role `wildcard` (see §0b). The monorepo producer emits only
+  // v2; mirror its hard pin rather than a union we would have to branch on.
+  schemaVersion: z.literal(2),
   eventId: z.string().min(1),
   sourceVersion: z.number().int().nonnegative(),
   expectedIssuer: z.string().min(1),
@@ -153,7 +163,7 @@ export type AccessProjectionSnapshot = z.infer<typeof accessProjectionSnapshotSc
 
 export const accessProjectionEventSchema = z.object({
   type: z.literal("access.projection.event"),
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   eventId: z.string().min(1),
   sourceVersion: z.number().int().nonnegative(),
   scope: scopeMetadataSchema,
@@ -188,7 +198,6 @@ export type SyncResponse =
       status:
         | "invalid_signature"
         | "invalid_payload"
-        | "unsupported_schema"
         // MED-03: producer-side issuer rotation is an explicit flow, not a
         // side effect of a signed snapshot. Consumer surfaces this so the
         // producer can decide whether to retry or surface a fatal alert.

@@ -43,7 +43,7 @@ function emptyEntities() {
 function snapshot(overrides: Partial<AccessProjectionSnapshot> = {}): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "evt_seed",
     sourceVersion: 1,
     expectedIssuer: "https://auth.example.com",
@@ -56,7 +56,7 @@ function snapshot(overrides: Partial<AccessProjectionSnapshot> = {}): AccessProj
 function event(overrides: Partial<AccessProjectionEvent> = {}): AccessProjectionEvent {
   return {
     type: "access.projection.event",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "evt_e1",
     sourceVersion: 2,
     scope: baseScopeMeta,
@@ -703,6 +703,7 @@ describe("applySync", () => {
               key: "admin",
               kind: "system",
               name: "Admin",
+              wildcard: "default",
               updatedAt: 1,
             },
           ],

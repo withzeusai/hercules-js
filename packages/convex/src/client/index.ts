@@ -71,6 +71,11 @@ export type EffectivePermissionsResult = {
   scopeId?: string;
   principalId?: string;
   effectiveRoleIds: string[];
+  // §0b: the principal's resolved wildcard mode. Under the wildcard model
+  // `permissions` is a projection over the unbounded catalog (Owner = whole
+  // catalog, Admin = catalog minus Owner-only levers), so callers should treat
+  // a non-"none" mode as future-inclusive rather than exhaustive.
+  wildcard: "none" | "immutable" | "default";
   permissions: string[];
 };
 

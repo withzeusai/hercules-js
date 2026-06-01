@@ -42,7 +42,7 @@ function memberSnapshot(
 ): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: options.eventId,
     sourceVersion: options.sourceVersion,
     expectedIssuer: ISSUER,
@@ -74,6 +74,7 @@ function memberSnapshot(
           key: scopeKind === "default" ? "owner" : "admin",
           kind: "system",
           name: scopeKind === "default" ? "Owner" : "Admin",
+          wildcard: scopeKind === "default" ? "immutable" : "default",
           updatedAt: 1,
         },
       ],
@@ -137,7 +138,7 @@ describe("listMyMemberships", () => {
 
     await t.mutation(applySync, {
       type: "access.projection.snapshot",
-      schemaVersion: 1,
+      schemaVersion: 2,
       eventId: "evt_multi_role",
       sourceVersion: 1,
       expectedIssuer: ISSUER,
@@ -169,6 +170,7 @@ describe("listMyMemberships", () => {
             key: "loan_officer",
             kind: "custom",
             name: "Loan Officer",
+            wildcard: "none",
             updatedAt: 1,
           },
           {
@@ -177,6 +179,7 @@ describe("listMyMemberships", () => {
             key: "field_agent",
             kind: "custom",
             name: "Field Agent",
+            wildcard: "none",
             updatedAt: 1,
           },
         ],
@@ -407,12 +410,153 @@ describe("getEffectivePermissions", () => {
     expect(result.permissions).toEqual([]);
   });
 
+  test("reports a manage-action permission held via a non-wildcard role", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, manageCatalogSnapshot());
+    await t.mutation(applySync, manageOrgSnapshot());
+
+    const result = await t.query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    // A `manage` (and a `*`) catalog permission held via a custom role must be
+    // reported by membership; re-evaluating with the permission's own superset
+    // action would never match and would drop it.
+    expect(result.wildcard).toBe("none");
+    expect(result.permissions).toEqual([
+      "system.access.roles:manage",
+      "system.reports:*",
+    ]);
+  });
 });
+
+function manageCatalogSnapshot(): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_manage_catalog",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_role_admin",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      roles: [
+        {
+          roleId: "role_role_admin",
+          accessScopeId: "scope_default",
+          key: "role_admin",
+          kind: "custom",
+          name: "Role Admin",
+          wildcard: "none",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_roles_manage",
+          accessScopeId: "scope_default",
+          key: "system.access.roles:manage",
+          resourceType: "system.access.roles",
+          action: "manage",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
+          permissionId: "perm_reports_all",
+          accessScopeId: "scope_default",
+          key: "system.reports:*",
+          resourceType: "system.reports",
+          action: "*",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
+          permissionId: "perm_loans_read",
+          accessScopeId: "scope_default",
+          key: "loans.read",
+          resourceType: "loans",
+          action: "read",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_role_admin",
+          permissionId: "perm_roles_manage",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+        {
+          roleId: "role_role_admin",
+          permissionId: "perm_reports_all",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function manageOrgSnapshot(): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_manage_org",
+    sourceVersion: 2,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_acme",
+      name: "Acme",
+      kind: "org",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_role_admin",
+      updatedAt: 2,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice_acme",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_role_admin",
+          subjectPrincipalId: "p_alice_acme",
+          relationKind: "role",
+          roleId: "role_role_admin",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+      ],
+    },
+  };
+}
 
 function permissionCatalogSnapshot(): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "evt_permission_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -434,6 +578,7 @@ function permissionCatalogSnapshot(): AccessProjectionSnapshot {
           key: "manager",
           kind: "system",
           name: "Manager",
+          wildcard: "none",
           updatedAt: 1,
         },
         {
@@ -442,6 +587,7 @@ function permissionCatalogSnapshot(): AccessProjectionSnapshot {
           key: "accountant",
           kind: "system",
           name: "Accountant",
+          wildcard: "none",
           updatedAt: 1,
         },
         {
@@ -450,6 +596,7 @@ function permissionCatalogSnapshot(): AccessProjectionSnapshot {
           key: "field_agent",
           kind: "system",
           name: "Field Agent",
+          wildcard: "none",
           updatedAt: 1,
         },
       ],
@@ -519,7 +666,7 @@ function permissionCatalogSnapshot(): AccessProjectionSnapshot {
 function permissionOrgSnapshot(): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "evt_permission_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -612,7 +759,7 @@ function permissionOrgSnapshot(): AccessProjectionSnapshot {
 function resourceCatalogSnapshot(): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "evt_resource_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -645,7 +792,7 @@ function resourceCatalogSnapshot(): AccessProjectionSnapshot {
 function resourceOrgSnapshot(): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "evt_resource_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -701,6 +848,7 @@ function resourceRoleCatalogSnapshot(): AccessProjectionSnapshot {
           key: "viewer",
           kind: "system",
           name: "Viewer",
+          wildcard: "none",
           updatedAt: 1,
         },
       ],

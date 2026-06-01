@@ -66,6 +66,12 @@ const principalMembershipValidator = v.object({
   updatedAt: v.number(),
 });
 
+const roleWildcardValidator = v.union(
+  v.literal("none"),
+  v.literal("immutable"),
+  v.literal("default"),
+);
+
 const roleValidator = v.object({
   roleId: v.string(),
   // DL15: each role row's owning scope. Default scope for system roles,
@@ -74,6 +80,10 @@ const roleValidator = v.object({
   key: v.string(),
   kind: v.union(v.literal("system"), v.literal("custom")),
   name: v.string(),
+  // §0b wildcard semantic flag: "immutable" (Owner), "default" (Admin),
+  // "none" (Member/custom/narrowed-Admin). The evaluator reads this off the
+  // stored role row to short-circuit Owner/Admin without a materialized list.
+  wildcard: roleWildcardValidator,
   updatedAt: v.number(),
 });
 
@@ -131,7 +141,7 @@ const scopeMetadataValidator = v.object({
 
 const syncPayloadArgs = {
   type: v.union(v.literal("access.projection.snapshot"), v.literal("access.projection.event")),
-  schemaVersion: v.literal(1),
+  schemaVersion: v.literal(2),
   eventId: v.string(),
   sourceVersion: v.number(),
   expectedIssuer: v.optional(v.string()),
@@ -586,6 +596,7 @@ export const applySync = mutation({
         key: string;
         kind: "system" | "custom";
         name: string;
+        wildcard: "none" | "immutable" | "default";
         updatedAt: number;
       },
     ) {
@@ -600,6 +611,7 @@ export const applySync = mutation({
         key: role.key,
         kind: role.kind,
         name: role.name,
+        wildcard: role.wildcard,
         updatedAt: role.updatedAt,
       };
       if (existing) {

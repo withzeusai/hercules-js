@@ -91,6 +91,10 @@ export default defineSchema({
     key: v.string(),
     kind: v.union(v.literal("system"), v.literal("custom")),
     name: v.string(),
+    // §0b wildcard semantic flag. Read off the role row during evaluation to
+    // short-circuit Owner ("immutable") / Admin ("default"); "none" defers to
+    // enumerated rows. Never queried on, so no index is needed.
+    wildcard: v.union(v.literal("none"), v.literal("immutable"), v.literal("default")),
     updatedAt: v.number(),
   })
     .index("by_role_id", ["roleId"])
