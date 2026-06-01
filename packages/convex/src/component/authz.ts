@@ -46,16 +46,21 @@ export function expandAction(action: string): string[] {
 
 /**
  * Does a granted action satisfy a requested action?
- *   `*`      → matches any requested verb.
- *   `manage` → matches any canonical CRUD verb.
- *   else     → matches only the identical verb.
+ *   identical → always matches (incl. `manage` granted for a `manage` request).
+ *   `*`       → matches any requested verb.
+ *   `manage`  → also matches any canonical CRUD verb.
+ *   else      → matches only the identical verb.
  */
 export function actionMatches(grantedAction: string, requestedAction: string): boolean {
+  // Identity first: a grant of an action always satisfies a request for that
+  // same action — including `manage` for a `manage`-action permission, which
+  // the CRUD-only manage branch below would otherwise reject.
+  if (grantedAction === requestedAction) return true;
   if (grantedAction === WILDCARD_ACTION) return true;
   if (grantedAction === MANAGE_ACTION) {
     return (CANONICAL_ACTIONS as readonly string[]).includes(requestedAction);
   }
-  return grantedAction === requestedAction;
+  return false;
 }
 
 // ---------------------------------------------------------------------------

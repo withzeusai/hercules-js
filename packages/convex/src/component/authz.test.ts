@@ -31,10 +31,13 @@ describe("action taxonomy", () => {
     expect(actionMatches(WILDCARD_ACTION, "approve")).toBe(true);
   });
 
-  test("actionMatches: manage matches canonical CRUD only", () => {
+  test("actionMatches: manage matches canonical CRUD and itself", () => {
     for (const verb of CANONICAL_ACTIONS) {
       expect(actionMatches(MANAGE_ACTION, verb)).toBe(true);
     }
+    // identity: a `manage` grant satisfies a `manage` request (a real catalog
+    // action, e.g. system.roles:manage), not just the CRUD it covers.
+    expect(actionMatches(MANAGE_ACTION, MANAGE_ACTION)).toBe(true);
     expect(actionMatches(MANAGE_ACTION, "approve")).toBe(false);
   });
 
