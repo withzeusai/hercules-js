@@ -718,11 +718,18 @@ async function applyRolePermissionRows(
       q.eq("accessScopeId", args.accessScopeId).eq("roleId", args.roleId),
     )
     .collect();
+  // Within a scope, deny wins regardless of row order (the unique key permits
+  // both an allow and a deny row for the same permission): apply the allow rows
+  // first, then let the deny rows override. Cross-scope, the base scope is
+  // folded before the org override (caller order), preserving per-org overrides.
   for (const row of rows) {
     if (row.effect === "allow") {
       args.contribution.allow.add(row.permissionId);
       args.contribution.deny.delete(row.permissionId);
-    } else {
+    }
+  }
+  for (const row of rows) {
+    if (row.effect === "deny") {
       args.contribution.allow.delete(row.permissionId);
       args.contribution.deny.add(row.permissionId);
     }
