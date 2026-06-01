@@ -105,6 +105,32 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     ).toBe("allow");
   });
 
+  test("an explicit allow cannot confer an Owner-only lever (step 5 fence)", () => {
+    // Mirrors the monorepo authz invariant: only the immutable Owner (step 1)
+    // may hold an Owner-only lever; an explicit allow grant must not escalate.
+    expect(
+      evaluateAccess({
+        wildcard: "none",
+        entries: [allow("system.billing", "manage")],
+        request: { resourceType: "system.billing", action: "manage" },
+      }),
+    ).toBe("deny");
+    expect(
+      evaluateAccess({
+        wildcard: "none",
+        entries: [allow("system.billing", "manage")],
+        request: { resourceType: "system.billing", action: "read" },
+      }),
+    ).toBe("deny");
+    expect(
+      evaluateAccess({
+        wildcard: "immutable",
+        entries: [],
+        request: { resourceType: "system.billing", action: "manage" },
+      }),
+    ).toBe("allow");
+  });
+
   test("admin default is fenced from owner-only levers", () => {
     expect(
       evaluateAccess({

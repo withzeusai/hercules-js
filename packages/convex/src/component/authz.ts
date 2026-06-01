@@ -167,7 +167,9 @@ function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean
  *      type-level deny is in the matched set and short-circuits here.)
  *   4. Admin (`default`) and request is NOT an Owner-only lever → ALLOW
  *      (after the deny check, so an explicit narrowing deny still wins).
- *   5. Any matching allow → ALLOW (role + direct grants union on allow).
+ *   5. Any matching allow that is NOT an Owner-only lever → ALLOW (role +
+ *      direct grants union on allow). Owner-only levers are conferrable only by
+ *      the immutable Owner at step 1.
  *   6. Else implicit DENY.
  *
  * `entries` must already be filtered to the principal, scope, and to
@@ -195,8 +197,13 @@ export function evaluateAccess(args: {
     if (!isOwnerOnlyLever(request)) return "allow";
   }
 
-  // 5. Explicit allow.
-  if (matching.some((entry) => entry.effect === "allow")) return "allow";
+  // 5. Explicit allow. Owner-only levers are conferrable ONLY by the immutable
+  // Owner (step 1) — never by an explicit allow grant, mirroring the Admin
+  // wildcard fence in step 4. This keeps the invariant even if such a permission
+  // is somehow created and granted.
+  if (!isOwnerOnlyLever(request) && matching.some((entry) => entry.effect === "allow")) {
+    return "allow";
+  }
 
   // 6. Implicit deny.
   return "deny";
