@@ -48,73 +48,98 @@ export const authorize = query({
       return allow(state?.sourceVersion ?? 0, undefined, []);
     }
 
-    const evaluation = await evaluateEffectiveAccess(ctx, args);
-    if (!evaluation.allowed) {
-      return deny(
-        evaluation.reasonCode,
-        evaluation.sourceVersion,
-        evaluation.principalId,
-        evaluation.effectiveRoleIds,
-      );
-    }
-
-    // Resolve the requested permission's canonical (resourceType, action) by
-    // catalog lookup rather than parsing the key string. The producer ships
-    // the structured columns verbatim, so this works for canonical
-    // (app.appointments:create), dot-action (reports.export), and namespaced
-    // keys alike without the runtime having to agree on slug grammar.
-    // Catalog permissions always live in the default scope (DL15).
-    const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
-    if (!resolvedPermission) {
-      return deny(
-        "permission_missing",
-        evaluation.sourceVersion,
-        evaluation.principalId,
-        evaluation.effectiveRoleIds,
-      );
-    }
-
-    // Requests carry concrete verbs only. A catalog permission whose action is
-    // manage/* would map a request onto a superset token, which the algebra
-    // does not special-case on the request side. Reject rather than evaluate.
-    if (
-      resolvedPermission.action === MANAGE_ACTION ||
-      resolvedPermission.action === WILDCARD_ACTION
-    ) {
-      return deny(
-        "invalid_request",
-        evaluation.sourceVersion,
-        evaluation.principalId,
-        evaluation.effectiveRoleIds,
-      );
-    }
-
-    const decision = evaluateAccess({
-      wildcard: evaluation.wildcard,
-      entries: evaluation.entries,
-      request: {
-        resourceType: resolvedPermission.resourceType,
-        action: resolvedPermission.action,
-        objectId: args.resourceId,
-      },
+    return evaluatePermissionDecision(ctx, {
+      tokenIdentifier: args.tokenIdentifier,
+      scopeId: args.scopeId,
+      permission: args.permission,
+      resourceType: args.resourceType,
+      resourceId: args.resourceId,
     });
+  },
+});
 
-    if (decision === "allow") {
-      return allow(
-        evaluation.sourceVersion ?? 0,
-        evaluation.principalId,
-        evaluation.effectiveRoleIds,
-      );
-    }
-
+/**
+ * Resolve a single permission request to an allow/deny decision. This is the
+ * canonical permission gate, shared by the `authorize` query (the hot can()
+ * path) and the scope-admin list queries, so both apply identical wildcard,
+ * deny-override, and owner-only-lever semantics. Reads only the local mirror.
+ */
+export async function evaluatePermissionDecision(
+  ctx: GenericQueryCtx<DataModel>,
+  args: {
+    tokenIdentifier?: string;
+    scopeId?: string;
+    permission: string;
+    resourceType?: string;
+    resourceId?: string;
+  },
+) {
+  const evaluation = await evaluateEffectiveAccess(ctx, args);
+  if (!evaluation.allowed) {
     return deny(
-      "permission_denied",
+      evaluation.reasonCode,
       evaluation.sourceVersion,
       evaluation.principalId,
       evaluation.effectiveRoleIds,
     );
-  },
-});
+  }
+
+  // Resolve the requested permission's canonical (resourceType, action) by
+  // catalog lookup rather than parsing the key string. The producer ships
+  // the structured columns verbatim, so this works for canonical
+  // (app.appointments:create), dot-action (reports.export), and namespaced
+  // keys alike without the runtime having to agree on slug grammar.
+  // Catalog permissions always live in the default scope (DL15).
+  const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
+  if (!resolvedPermission) {
+    return deny(
+      "permission_missing",
+      evaluation.sourceVersion,
+      evaluation.principalId,
+      evaluation.effectiveRoleIds,
+    );
+  }
+
+  // Requests carry concrete verbs only. A catalog permission whose action is
+  // manage/* would map a request onto a superset token, which the algebra
+  // does not special-case on the request side. Reject rather than evaluate.
+  if (
+    resolvedPermission.action === MANAGE_ACTION ||
+    resolvedPermission.action === WILDCARD_ACTION
+  ) {
+    return deny(
+      "invalid_request",
+      evaluation.sourceVersion,
+      evaluation.principalId,
+      evaluation.effectiveRoleIds,
+    );
+  }
+
+  const decision = evaluateAccess({
+    wildcard: evaluation.wildcard,
+    entries: evaluation.entries,
+    request: {
+      resourceType: resolvedPermission.resourceType,
+      action: resolvedPermission.action,
+      objectId: args.resourceId,
+    },
+  });
+
+  if (decision === "allow") {
+    return allow(
+      evaluation.sourceVersion ?? 0,
+      evaluation.principalId,
+      evaluation.effectiveRoleIds,
+    );
+  }
+
+  return deny(
+    "permission_denied",
+    evaluation.sourceVersion,
+    evaluation.principalId,
+    evaluation.effectiveRoleIds,
+  );
+}
 
 async function findCatalogPermissionByKey(ctx: GenericQueryCtx<DataModel>, key: string) {
   const defaultScope = await ctx.db

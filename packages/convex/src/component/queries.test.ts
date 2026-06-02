@@ -12,6 +12,11 @@ const getEffectivePermissions = makeFunctionReference<"query">(
 );
 const listMyMemberships = makeFunctionReference<"query">("component/queries:listMyMemberships");
 const listMyRoles = makeFunctionReference<"query">("component/queries:listMyRoles");
+const listScopeMembers = makeFunctionReference<"query">("component/queries:listScopeMembers");
+const listScopeRoles = makeFunctionReference<"query">("component/queries:listScopeRoles");
+const listScopePermissions = makeFunctionReference<"query">(
+  "component/queries:listScopePermissions",
+);
 
 const ISSUER = "https://auth.example.com";
 
@@ -242,12 +247,7 @@ describe("listMyMemberships", () => {
     });
 
     expect(roles).toEqual([
-      {
-        roleId: "role_acme_admin",
-        roleKey: "admin",
-        roleName: "Admin",
-        roleKind: "system",
-      },
+      { roleId: "role_acme_admin", roleKey: "admin", roleName: "Admin", roleKind: "system" },
     ]);
   });
 
@@ -424,10 +424,7 @@ describe("getEffectivePermissions", () => {
     // reported by membership; re-evaluating with the permission's own superset
     // action would never match and would drop it.
     expect(result.wildcard).toBe("none");
-    expect(result.permissions).toEqual([
-      "system.access.roles:manage",
-      "system.reports:*",
-    ]);
+    expect(result.permissions).toEqual(["system.access.roles:manage", "system.reports:*"]);
   });
 });
 
@@ -900,3 +897,198 @@ function resourceRoleOrgSnapshot(): AccessProjectionSnapshot {
     },
   };
 }
+
+describe("scope admin reads", () => {
+  // Default scope with the system read permissions in the catalog, an Owner
+  // (immutable wildcard, so it passes any read gate), and a plain Member
+  // (no permissions). The catalog must contain the gated key or the gate
+  // denies, so the read permissions are seeded explicitly.
+  function adminReadSnapshot(): AccessProjectionSnapshot {
+    return {
+      type: "access.projection.snapshot",
+      schemaVersion: 2,
+      eventId: "evt_admin_read",
+      sourceVersion: 1,
+      expectedIssuer: ISSUER,
+      scope: {
+        accessScopeId: "scope_default",
+        name: "Default",
+        kind: "default",
+        status: "active",
+        accountEntryMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 1,
+      },
+      entities: {
+        ...emptyEntities(),
+        users: [
+          {
+            herculesAuthUserId: "user_owner",
+            name: "Olivia Owner",
+            email: "olivia@example.com",
+            emailVerified: true,
+            phoneVerified: false,
+            updatedAt: 1,
+          },
+          {
+            herculesAuthUserId: "user_member",
+            name: "Mia Member",
+            email: "mia@example.com",
+            emailVerified: true,
+            phoneVerified: false,
+            updatedAt: 1,
+          },
+        ],
+        permissions: [
+          {
+            permissionId: "perm_members_read",
+            accessScopeId: "scope_default",
+            key: "system.members:read",
+            resourceType: "system.members",
+            action: "read",
+            tenantAssignable: false,
+            updatedAt: 1,
+          },
+          {
+            permissionId: "perm_roles_read",
+            accessScopeId: "scope_default",
+            key: "system.roles:read",
+            resourceType: "system.roles",
+            action: "read",
+            tenantAssignable: false,
+            updatedAt: 1,
+          },
+          {
+            permissionId: "perm_permissions_read",
+            accessScopeId: "scope_default",
+            key: "system.permissions:read",
+            resourceType: "system.permissions",
+            action: "read",
+            tenantAssignable: false,
+            updatedAt: 1,
+          },
+          {
+            permissionId: "perm_posts_read",
+            accessScopeId: "scope_default",
+            key: "posts:read",
+            resourceType: "posts",
+            action: "read",
+            tenantAssignable: true,
+            updatedAt: 1,
+          },
+        ],
+        roles: [
+          {
+            roleId: "role_owner",
+            accessScopeId: "scope_default",
+            key: "owner",
+            kind: "system",
+            name: "Owner",
+            wildcard: "immutable",
+            updatedAt: 1,
+          },
+          {
+            roleId: "role_member",
+            accessScopeId: "scope_default",
+            key: "member",
+            kind: "system",
+            name: "Member",
+            wildcard: "none",
+            updatedAt: 1,
+          },
+        ],
+        principals: [
+          {
+            principalId: "p_owner",
+            type: "user",
+            herculesAuthUserId: "user_owner",
+            status: "active",
+            joinedAt: 1001,
+            updatedAt: 1001,
+          },
+          {
+            principalId: "p_member",
+            type: "user",
+            herculesAuthUserId: "user_member",
+            status: "active",
+            joinedAt: 1002,
+            updatedAt: 1002,
+          },
+        ],
+        grants: [
+          {
+            grantId: "grant_owner",
+            subjectPrincipalId: "p_owner",
+            relationKind: "role",
+            roleId: "role_owner",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_default",
+            updatedAt: 1,
+          },
+          {
+            grantId: "grant_member",
+            subjectPrincipalId: "p_member",
+            relationKind: "role",
+            roleId: "role_member",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_default",
+            updatedAt: 1,
+          },
+        ],
+      },
+    };
+  }
+
+  test("owner lists members with roles; unprivileged member gets an empty list", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, adminReadSnapshot());
+
+    const asOwner = await t.query(listScopeMembers, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      scopeId: "scope_default",
+    });
+    expect(asOwner.map((m) => m.herculesAuthUserId).sort()).toEqual(["user_member", "user_owner"]);
+    const owner = asOwner.find((m) => m.herculesAuthUserId === "user_owner");
+    expect(owner?.name).toBe("Olivia Owner");
+    expect(owner?.roles[0]?.roleKey).toBe("owner");
+
+    const asMember = await t.query(listScopeMembers, {
+      tokenIdentifier: `${ISSUER}|user_member`,
+      scopeId: "scope_default",
+    });
+    expect(asMember).toEqual([]);
+  });
+
+  test("owner lists roles and the permission catalog; member is denied both", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, adminReadSnapshot());
+
+    const roles = await t.query(listScopeRoles, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      scopeId: "scope_default",
+    });
+    expect(roles.map((r) => r.roleKey).sort()).toEqual(["member", "owner"]);
+
+    const permissions = await t.query(listScopePermissions, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      scopeId: "scope_default",
+    });
+    expect(permissions.map((p) => p.key)).toContain("posts:read");
+    expect(permissions.map((p) => p.key)).toContain("system.members:read");
+
+    expect(
+      await t.query(listScopeRoles, {
+        tokenIdentifier: `${ISSUER}|user_member`,
+        scopeId: "scope_default",
+      }),
+    ).toEqual([]);
+    expect(
+      await t.query(listScopePermissions, {
+        tokenIdentifier: `${ISSUER}|user_member`,
+        scopeId: "scope_default",
+      }),
+    ).toEqual([]);
+  });
+});

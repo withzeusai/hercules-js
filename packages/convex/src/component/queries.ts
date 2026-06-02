@@ -5,8 +5,11 @@ import {
   type QueryBuilder,
 } from "convex/server";
 import { v } from "convex/values";
+import { evaluatePermissionDecision } from "./checks";
 import { enumeratePermissions, evaluateEffectiveAccess } from "./effective";
 import schema from "./schema";
+
+const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
@@ -42,6 +45,31 @@ type EffectivePermissionsResult = {
   // and avoid treating the materialized list as exhaustive.
   wildcard: "none" | "immutable" | "default";
   permissions: string[];
+};
+
+type ScopeMember = {
+  principalId: string;
+  herculesAuthUserId?: string;
+  status: "active" | "blocked" | "suspended" | "pending_approval";
+  joinedAt: number;
+  name?: string;
+  email?: string;
+  image?: string;
+  roles: RoleSummary[];
+};
+
+type ScopeRoleSummary = RoleSummary & {
+  // True when the role is an app-wide shared role (default scope) surfaced as
+  // assignable inside an org scope, rather than a role owned by this scope.
+  shared: boolean;
+};
+
+type ScopePermissionSummary = {
+  permissionId: string;
+  key: string;
+  resourceType: string;
+  action: string;
+  tenantAssignable: boolean;
 };
 
 export const listMyMemberships = query({
@@ -91,10 +119,7 @@ export const listMyMemberships = query({
 });
 
 export const listMyRoles = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    scopeId: v.string(),
-  },
+  args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<RoleSummary[]> => {
     if (!args.tokenIdentifier) return [];
 
@@ -152,6 +177,172 @@ export const getEffectivePermissions = query({
     };
   },
 });
+
+export const listScopeMembers = query({
+  args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
+  handler: async (ctx, args): Promise<ScopeMember[]> => {
+    if (!(await callerHasScopePermission(ctx, args, "system.members:read"))) return [];
+    const scope = await resolveScopeRow(ctx, args.scopeId);
+    if (!scope) return [];
+
+    const principals = await ctx.db
+      .query("principals")
+      .withIndex("by_scope_type", (q) =>
+        q.eq("accessScopeId", scope.accessScopeId).eq("type", "user"),
+      )
+      .collect();
+
+    const members: ScopeMember[] = [];
+    for (const principal of principals) {
+      let name: string | undefined;
+      let email: string | undefined;
+      let image: string | undefined;
+      const authUserId = principal.herculesAuthUserId;
+      if (authUserId) {
+        const user = await ctx.db
+          .query("users")
+          .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
+          .unique();
+        if (user) {
+          name = user.name;
+          email = user.email;
+          image = user.image;
+        }
+      }
+      const roles = await collectPrincipalScopeRoles(ctx, {
+        principalId: principal.principalId,
+        scopeId: scope.accessScopeId,
+      });
+      members.push({
+        principalId: principal.principalId,
+        herculesAuthUserId: authUserId,
+        status: principal.status,
+        joinedAt: principal.joinedAt,
+        name,
+        email,
+        image,
+        roles,
+      });
+    }
+
+    members.sort((a, b) =>
+      (a.name ?? a.email ?? a.principalId).localeCompare(b.name ?? b.email ?? b.principalId),
+    );
+    return members;
+  },
+});
+
+export const listScopeRoles = query({
+  args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
+  handler: async (ctx, args): Promise<ScopeRoleSummary[]> => {
+    if (!(await callerHasScopePermission(ctx, args, "system.roles:read"))) return [];
+    const scope = await resolveScopeRow(ctx, args.scopeId);
+    if (!scope) return [];
+
+    const defaultScope = await ctx.db
+      .query("scopes")
+      .withIndex("by_kind", (q) => q.eq("kind", "default"))
+      .unique();
+    const defaultScopeId = defaultScope?.accessScopeId;
+
+    const scopeRoles = await ctx.db
+      .query("roles")
+      .withIndex("by_scope", (q) => q.eq("accessScopeId", scope.accessScopeId))
+      .collect();
+    // Shared/app-wide roles (default scope) are assignable inside any org scope,
+    // so surface them alongside the scope's own roles when viewing an org.
+    const sharedRoles =
+      defaultScopeId && defaultScopeId !== scope.accessScopeId
+        ? await ctx.db
+            .query("roles")
+            .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScopeId))
+            .collect()
+        : [];
+
+    const seen = new Set<string>();
+    const roles: ScopeRoleSummary[] = [];
+    for (const role of [...scopeRoles, ...sharedRoles]) {
+      if (seen.has(role.roleId)) continue;
+      seen.add(role.roleId);
+      roles.push({
+        roleId: role.roleId,
+        roleKey: role.key,
+        roleName: role.name,
+        roleKind: role.kind,
+        shared:
+          defaultScopeId !== undefined &&
+          role.accessScopeId === defaultScopeId &&
+          defaultScopeId !== scope.accessScopeId,
+      });
+    }
+
+    roles.sort(
+      (a, b) =>
+        a.roleKey.localeCompare(b.roleKey) ||
+        a.roleName.localeCompare(b.roleName) ||
+        a.roleId.localeCompare(b.roleId),
+    );
+    return roles;
+  },
+});
+
+export const listScopePermissions = query({
+  args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
+  handler: async (ctx, args): Promise<ScopePermissionSummary[]> => {
+    if (!(await callerHasScopePermission(ctx, args, "system.permissions:read"))) return [];
+    // The permission catalog is app-wide and always lives in the default scope (DL15).
+    const defaultScope = await ctx.db
+      .query("scopes")
+      .withIndex("by_kind", (q) => q.eq("kind", "default"))
+      .unique();
+    if (!defaultScope) return [];
+
+    const permissions = await ctx.db
+      .query("permissions")
+      .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
+      .collect();
+
+    return permissions
+      .map((permission) => ({
+        permissionId: permission.permissionId,
+        key: permission.key,
+        resourceType: permission.resourceType,
+        action: permission.action,
+        tenantAssignable: permission.tenantAssignable,
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key) || a.permissionId.localeCompare(b.permissionId));
+  },
+});
+
+// Scope-admin reads share the canonical permission gate with authorize(), so an
+// in-app admin screen and a can() check resolve identically (wildcard,
+// deny-override, owner-only levers). Returns false when not allowed, and the
+// queries above then return an empty list.
+async function callerHasScopePermission(
+  ctx: GenericQueryCtx<DataModel>,
+  args: { tokenIdentifier?: string; scopeId: string },
+  permission: string,
+): Promise<boolean> {
+  const decision = await evaluatePermissionDecision(ctx, {
+    tokenIdentifier: args.tokenIdentifier,
+    scopeId: args.scopeId,
+    permission,
+  });
+  return decision.allowed;
+}
+
+async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, scopeId: string) {
+  if (scopeId === DEFAULT_SCOPE_SENTINEL) {
+    return await ctx.db
+      .query("scopes")
+      .withIndex("by_kind", (q) => q.eq("kind", "default"))
+      .unique();
+  }
+  return await ctx.db
+    .query("scopes")
+    .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scopeId))
+    .unique();
+}
 
 function parseTokenIdentifier(tokenIdentifier: string) {
   const separatorIndex = tokenIdentifier.lastIndexOf("|");
