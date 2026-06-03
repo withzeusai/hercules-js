@@ -411,6 +411,130 @@ export async function acceptAccessInvitation(
   return normalizeAccessInvitationAcceptResult(result);
 }
 
+export type DelegatedResourceGrantResult = {
+  accessScopeId: string;
+  grantId?: string;
+  changed?: boolean;
+  sourceVersion: number;
+  projectionIds: string[];
+};
+
+export type DelegatedResourceGrantArgs = {
+  scopeId: string;
+  resourceType: string;
+  resourceId: string;
+  /** A per-resource app permission (e.g. `app.project:manage_members`) the
+   * end-user must hold on this exact resource to delegate. Not `manage`/`*`. */
+  gatingPermissionKey: string;
+  /** The signed-in end-user's Hercules Auth ID token (the grantor). */
+  idToken: string;
+  /** Target principal — exactly one of these. */
+  principalId?: string;
+  herculesAuthUserId?: string;
+  /** Conferred grant — exactly one of these. A custom role or a single permission. */
+  roleKey?: string;
+  permissionKey?: string;
+  expiresAt?: string | null;
+};
+
+/**
+ * Delegate a custom role or a single permission on ONE resource, on behalf of
+ * the signed-in end-user, bounded by what they themselves hold on that resource
+ * (no escalation). Unlike the scope-wide admin actions, this is gated by a
+ * per-resource permission the end-user holds — so a project manager can manage
+ * their own project's membership without being an org admin. The end-user's ID
+ * token is the grantor (not the API key); the control plane verifies it and
+ * enforces the no-escalation subset check. Call from an authenticated context;
+ * the frontend must pass the raw `idToken`.
+ */
+export async function delegatedResourceGrant(
+  ctx: CreateAccessScopeContext,
+  args: DelegatedResourceGrantArgs,
+  options: AccessAdminApiOptions = {},
+): Promise<DelegatedResourceGrantResult> {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const identity = await ctx.auth.getUserIdentity();
+  requireTokenIdentifier(identity?.tokenIdentifier);
+  const body = {
+    id_token: args.idToken,
+    scope_id: args.scopeId,
+    resource_type: args.resourceType,
+    resource_id: args.resourceId,
+    gating_permission_key: args.gatingPermissionKey,
+    principal_id: args.principalId,
+    hercules_auth_user_id: args.herculesAuthUserId,
+    role_key: args.roleKey,
+    permission_key: args.permissionKey,
+    expires_at: args.expiresAt,
+  };
+  const result = await callAccessControlApi(
+    "/v1/access-control/resource-grants/delegated-create",
+    body,
+  );
+  return normalizeDelegatedResourceGrantResult(result);
+}
+
+export type DelegatedRevokeResourceGrantArgs = {
+  scopeId: string;
+  grantId: string;
+  idToken: string;
+};
+
+/** Revoke a resource grant on behalf of the end-user, re-checking they still
+ * hold the gating permission on that resource. */
+export async function delegatedRevokeResourceGrant(
+  ctx: CreateAccessScopeContext,
+  args: DelegatedRevokeResourceGrantArgs,
+  options: AccessAdminApiOptions = {},
+): Promise<DelegatedResourceGrantResult> {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const identity = await ctx.auth.getUserIdentity();
+  requireTokenIdentifier(identity?.tokenIdentifier);
+  const body = { id_token: args.idToken, scope_id: args.scopeId, grant_id: args.grantId };
+  const result = await callAccessControlApi(
+    "/v1/access-control/resource-grants/delegated-revoke",
+    body,
+  );
+  return normalizeDelegatedResourceGrantResult(result);
+}
+
+export type DelegatedSetGrantExpiryArgs = {
+  scopeId: string;
+  grantId: string;
+  expiresAt: string | null;
+  idToken: string;
+};
+
+/** Set/clear the expiry of a resource grant on behalf of the end-user,
+ * re-checking they still hold the gating permission on that resource. */
+export async function delegatedSetGrantExpiry(
+  ctx: CreateAccessScopeContext,
+  args: DelegatedSetGrantExpiryArgs,
+  options: AccessAdminApiOptions = {},
+): Promise<DelegatedResourceGrantResult> {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const identity = await ctx.auth.getUserIdentity();
+  requireTokenIdentifier(identity?.tokenIdentifier);
+  const body = {
+    id_token: args.idToken,
+    scope_id: args.scopeId,
+    grant_id: args.grantId,
+    expires_at: args.expiresAt,
+  };
+  const result = await callAccessControlApi("/v1/access-control/expiries/delegated-set", body);
+  return normalizeDelegatedResourceGrantResult(result);
+}
+
+function normalizeDelegatedResourceGrantResult(result: WriteResult): DelegatedResourceGrantResult {
+  return {
+    accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
+    grantId: optionalString(result, "grant_id", "grantId"),
+    changed: optionalBoolean(result, "changed", "changed"),
+    sourceVersion: requiredNumber(result, "source_version", "sourceVersion"),
+    projectionIds: requiredStringArray(result, "projection_ids", "projectionIds"),
+  };
+}
+
 function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
   let client: AccessAdminSdkClient | undefined = options.client;
 
