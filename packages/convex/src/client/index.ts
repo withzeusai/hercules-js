@@ -264,6 +264,29 @@ type ConvexDefinitionObject<Ctx> = {
 
 type BuilderCaller = (definition: unknown) => unknown;
 
+/**
+ * Wires Hercules managed Access Control into a Convex app. Call once in
+ * `convex/hercules.ts`, passing the generated `query`/`mutation`/`action`
+ * builders and `components`, then re-export the returned builders.
+ *
+ * Returned builders:
+ * - `publicQuery`/`publicMutation`/`publicAction`: no auth.
+ * - `authenticatedQuery`/`...Mutation`/`...Action`: require sign-in only.
+ * - `accessQuery`/`accessMutation`/`accessAction`: enforce a permission in a
+ *   scope. Pass `{ permission, scope }`; resolve `scope` with `scopeFromArg`
+ *   or `scopeFromResource`. Use these for all org-owned reads and writes.
+ * - `hasPermission`/`requirePermission`/`requireAnyPermission`/
+ *   `getEffectivePermissions`: in-handler checks. `getEffectivePermissions`
+ *   and `hasPermission` accept an optional `{ resource }` ref for per-resource
+ *   (e.g. per-project) checks.
+ * - `listMyMemberships`/`listMyRoles`: the caller's own scopes/roles.
+ * - `listScopeMembers`/`listScopeRoles`/`listScopePermissions`: admin reads
+ *   for an in-app management screen. Each self-gates on the matching
+ *   `system.*:read` permission and returns `[]` when the caller lacks it.
+ *
+ * Reads resolve against the app's local Access Control mirror, which lags the
+ * control plane by a short projection-sync window after any change.
+ */
 export function createAccessControl<DataModel extends GenericDataModel>(
   options: CreateAccessControlOptions<DataModel>,
 ): AccessControlBuilders<DataModel> {
@@ -304,6 +327,15 @@ export const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
 
 export const defaultScope: ExtractScope<unknown, unknown> = () => DEFAULT_SCOPE_SENTINEL;
 
+/**
+ * Resolves the scope for an `access*` builder from a string arg the caller
+ * passes (e.g. the active org id). Use for list/create handlers where the
+ * frontend already knows the scope. Throws if the arg is missing or empty.
+ *
+ * Do not use this for an operation that receives an org-owned row id (read,
+ * update, delete): a caller could pair their own scope id with another org's
+ * row. Use `scopeFromResource` there so the scope is read from the row.
+ */
 export function scopeFromArg<K extends string>(argKey: K) {
   return (_ctx: unknown, args: Record<string, unknown>): string => {
     const value = args?.[argKey];
@@ -319,17 +351,24 @@ export function scopeFromArg<K extends string>(argKey: K) {
 
 type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
 
-// scopeFromResource(tableName, argKey, options?) per DL5.8.
-//
-// - tableName: the resource's table (used for resource-level grant lookup
-//   under DL16; also appears in error messages).
-// - argKey: the field on `args` that holds the row id.
-// - options.scopeField: the column on the row that carries the org scope
-//   id. Defaults to "orgScopeId" per the agent guide convention.
-//
-// Returns { scopeId, resourceType, resourceId } so the access* builder
-// can pass the resource id to authorize, enabling DL16 resource-level
-// grants on top of the scope-level check.
+/**
+ * Resolves the scope from a referenced row for an `access*` builder. Reads
+ * the row named by `argKey`, returns `{ scopeId, resourceType, resourceId }`,
+ * and lets `authorize` apply resource-level grants on top of the scope check.
+ * Use for any read/update/delete that receives an org-owned row id.
+ *
+ * Params:
+ * - `tableName`: the row's table. NOTE: this becomes the `resourceType`.
+ * - `argKey`: the field on `args` holding the row id.
+ * - `options.scopeField`: column carrying the org scope id (default
+ *   `"orgScopeId"`).
+ *
+ * Gotcha: a resource grant only applies if its `resourceType` matches the
+ * `resourceType` returned here. By default that is the table name. If your
+ * resource permissions use a different resource type (e.g. `app.project`
+ * rather than the `projects` table), resolve the scope so `resourceType`
+ * matches the permission's resource type, or the grant will not be found.
+ */
 export function scopeFromResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,

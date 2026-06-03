@@ -52,9 +52,7 @@ type AccessAdminApiOptions = {
 };
 
 export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & {
-    accessAction: AccessActionBuilder<DataModel>;
-  };
+  AccessAdminApiOptions & { accessAction: AccessActionBuilder<DataModel> };
 
 export type CreateAccessScopeArgs = {
   name: string;
@@ -73,9 +71,7 @@ export type CreateAccessInvitationArgs = {
 export type AcceptAccessInvitationArgs = { token: string; idToken: string };
 
 export type CreateAccessScopeContext = {
-  auth: {
-    getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null>;
-  };
+  auth: { getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null> };
 };
 
 export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
@@ -92,11 +88,27 @@ const optionalPrincipalRef = {
   herculesAuthUserId: v.optional(v.string()),
 };
 
-const optionalRoleRef = {
-  roleId: v.optional(v.string()),
-  roleKey: v.optional(v.string()),
-};
+const optionalRoleRef = { roleId: v.optional(v.string()), roleKey: v.optional(v.string()) };
 
+/**
+ * Builds the managed Access Control write actions (assign/remove roles,
+ * invite, create org custom roles, resource grants, overrides, expiries).
+ * Each one calls the Hercules control plane, so it needs the `HERCULES_API_KEY`
+ * secret. Wire it once in `convex/accessAdmin.ts` and re-export the actions
+ * you use.
+ *
+ * Important: every action here enforces a SCOPE-WIDE system permission, so
+ * only org admins/owners can call them:
+ * - role assignment / invitations / user exceptions -> `access.users.manage`
+ * - role create / update / overrides / default role -> `access.roles.manage`
+ * - resource grants / rules / expiries -> `access.grants.manage`
+ *
+ * These are NOT for delegated, per-resource management. To let a non-admin
+ * (e.g. a project manager) manage membership on a single resource they own,
+ * gate your own `accessAction` on a per-resource app permission via
+ * `scopeFromResource`, and have it perform the change. See the access-control
+ * guides.
+ */
 export function createAccessAdminActions<DataModel extends GenericDataModel>(
   options: CreateAccessAdminActionsOptions<DataModel>,
 ) {
@@ -107,9 +119,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     archiveScope: accessAction({
       permission: "access.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-      },
+      args: { scopeId: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId };
         return await callAccessControlApi("/v1/access-control/scopes/archive", body);
@@ -119,15 +129,9 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     setDefaultRole: accessAction({
       permission: "access.roles.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        ...optionalRoleRef,
-      },
+      args: { scopeId: v.string(), ...optionalRoleRef },
       handler: async (_ctx, args) => {
-        const body = {
-          scope_id: args.scopeId,
-          ...roleRef(args),
-        };
+        const body = { scope_id: args.scopeId, ...roleRef(args) };
         return await callAccessControlApi("/v1/access-control/scopes/set-default-role", body);
       },
     }),
@@ -151,10 +155,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     revokeInvitation: accessAction({
       permission: "access.users.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        invitationId: v.string(),
-      },
+      args: { scopeId: v.string(), invitationId: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId, invitation_id: args.invitationId };
         return await callAccessControlApi("/v1/access-control/invitations/revoke", body);
@@ -164,17 +165,9 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     assignRole: accessAction({
       permission: "access.users.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        ...optionalPrincipalRef,
-        ...optionalRoleRef,
-      },
+      args: { scopeId: v.string(), ...optionalPrincipalRef, ...optionalRoleRef },
       handler: async (_ctx, args) => {
-        const body = {
-          scope_id: args.scopeId,
-          ...principalRef(args),
-          ...roleRef(args),
-        };
+        const body = { scope_id: args.scopeId, ...principalRef(args), ...roleRef(args) };
         return await callAccessControlApi("/v1/access-control/roles/assign", body);
       },
     }),
@@ -182,17 +175,9 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     removeRole: accessAction({
       permission: "access.users.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        ...optionalPrincipalRef,
-        ...optionalRoleRef,
-      },
+      args: { scopeId: v.string(), ...optionalPrincipalRef, ...optionalRoleRef },
       handler: async (_ctx, args) => {
-        const body = {
-          scope_id: args.scopeId,
-          ...principalRef(args),
-          ...roleRef(args),
-        };
+        const body = { scope_id: args.scopeId, ...principalRef(args), ...roleRef(args) };
         return await callAccessControlApi("/v1/access-control/roles/remove", body);
       },
     }),
@@ -222,11 +207,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     updateRolePermissions: accessAction({
       permission: "access.roles.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        ...optionalRoleRef,
-        permissionKeys: v.array(v.string()),
-      },
+      args: { scopeId: v.string(), ...optionalRoleRef, permissionKeys: v.array(v.string()) },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
@@ -324,10 +305,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     revokeResourceGrant: accessAction({
       permission: "access.grants.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        grantId: v.string(),
-      },
+      args: { scopeId: v.string(), grantId: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId, grant_id: args.grantId };
         return await callAccessControlApi("/v1/access-control/resource-grants/revoke", body);
@@ -337,17 +315,9 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     setGrantExpiry: accessAction({
       permission: "access.grants.manage",
       scope: (_ctx, args) => args.scopeId,
-      args: {
-        scopeId: v.string(),
-        grantId: v.string(),
-        expiresAt: v.union(v.string(), v.null()),
-      },
+      args: { scopeId: v.string(), grantId: v.string(), expiresAt: v.union(v.string(), v.null()) },
       handler: async (_ctx, args) => {
-        const body = {
-          scope_id: args.scopeId,
-          grant_id: args.grantId,
-          expires_at: args.expiresAt,
-        };
+        const body = { scope_id: args.scopeId, grant_id: args.grantId, expires_at: args.expiresAt };
         return await callAccessControlApi("/v1/access-control/expiries/set", body);
       },
     }),
@@ -436,10 +406,7 @@ export async function acceptAccessInvitation(
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
   requireTokenIdentifier(identity?.tokenIdentifier);
-  const body = {
-    token: args.token,
-    id_token: args.idToken,
-  };
+  const body = { token: args.token, id_token: args.idToken };
   const result = await callAccessControlApi("/v1/access-control/invitations/accept", body);
   return normalizeAccessInvitationAcceptResult(result);
 }
@@ -467,17 +434,11 @@ function createSdkClient(options: AccessAdminApiOptions): AccessAdminSdkClient {
 }
 
 function principalRef(args: { principalId?: string; herculesAuthUserId?: string }) {
-  return {
-    principal_id: args.principalId,
-    hercules_auth_user_id: args.herculesAuthUserId,
-  };
+  return { principal_id: args.principalId, hercules_auth_user_id: args.herculesAuthUserId };
 }
 
 function roleRef(args: { roleId?: string; roleKey?: string }) {
-  return {
-    role_id: args.roleId,
-    role_key: args.roleKey,
-  };
+  return { role_id: args.roleId, role_key: args.roleKey };
 }
 
 function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined): string {

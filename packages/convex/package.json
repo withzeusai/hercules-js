@@ -54,10 +54,7 @@
     "directory": "packages/convex"
   },
   "files": [
-    "dist",
-    "src",
-    "tsconfig.json",
-    "tsconfig.build.json"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
