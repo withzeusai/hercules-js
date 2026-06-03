@@ -148,6 +148,38 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
     configure({ reactStrictMode: false });
   });
 
+  it("falls back to the outer timeout under StrictMode when signinSilent hangs", async () => {
+    configure({ reactStrictMode: true });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockSigninSilent.mockImplementation(() => new Promise<void>(() => {}));
+    setAuthState({ user: { expired: true, id_token: "stale" } });
+    renderProvider(<div data-testid="loading">loading</div>);
+    expect(screen.getByTestId("loading")).toBeDefined();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => {
+      expect(screen.getByTestId("app")).toBeDefined();
+    });
+    vi.useRealTimers();
+    configure({ reactStrictMode: false });
+  });
+
+  it("releases the refresh lock at the safety deadline when signinSilent never settles", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockSigninSilent.mockImplementation(() => new Promise<void>(() => {}));
+    setAuthState({ user: { expired: true, id_token: "stale" } });
+    renderProvider(<div data-testid="loading">loading</div>);
+    expect(screen.getByTestId("loading")).toBeDefined();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => {
+      expect(screen.getByTestId("app")).toBeDefined();
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitFor(() => {
+      expect(screen.getByTestId("app")).toBeDefined();
+    });
+    vi.useRealTimers();
+  });
+
   it("renders children immediately when user is null", async () => {
     setAuthState({ user: null });
     renderProvider();

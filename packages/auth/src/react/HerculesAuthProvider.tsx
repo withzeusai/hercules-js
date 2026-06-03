@@ -21,6 +21,7 @@ import {
 import { withRefreshLock } from "../internal/refresh-lock";
 
 const RECOVERY_TIMEOUT_MS = 10_000;
+const LOCK_GRACE_MS = 5_000;
 
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
@@ -90,22 +91,16 @@ function AuthRecoveryGate({
       setRecovering(false);
       setRecoveryDone(true);
     };
-    const outerTimeoutId = setTimeout(finish, RECOVERY_TIMEOUT_MS);
+    setTimeout(finish, RECOVERY_TIMEOUT_MS);
 
     void withRefreshLock(async () => {
-      try {
-        await signinSilentRef.current();
-      } catch {
-        return;
-      }
-    }).finally(() => {
-      clearTimeout(outerTimeoutId);
-      finish();
-    });
-
-    return () => {
-      clearTimeout(outerTimeoutId);
-    };
+      await Promise.race([
+        signinSilentRef.current().catch(() => undefined),
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, RECOVERY_TIMEOUT_MS + LOCK_GRACE_MS),
+        ),
+      ]);
+    }).finally(finish);
   }, [isLoading, userExpired]);
 
   const shouldBlock =
