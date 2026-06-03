@@ -163,19 +163,20 @@ export function HerculesAuthProvider({
     const events = userManager.events as unknown as {
       _raiseSilentRenewError?: (e: Error) => void;
     };
-    const tryRenew = (isRetry: boolean) => {
+    const tryRenew = () => {
       if (stopped) return;
       void withRefreshLock(async () => {
         if (stopped) return;
         try {
           await userManager.signinSilent();
         } catch (err) {
+          if (stopped) return;
           const isTimeout =
             err instanceof Error && err.name === "ErrorTimeout";
-          if (isTimeout && !isRetry && !stopped) {
+          if (isTimeout) {
             retryTimerId = setTimeout(() => {
               retryTimerId = null;
-              tryRenew(true);
+              tryRenew();
             }, 5000);
           } else {
             events._raiseSilentRenewError?.(err as Error);
@@ -183,7 +184,7 @@ export function HerculesAuthProvider({
         }
       });
     };
-    const onExpiring = () => tryRenew(false);
+    const onExpiring = () => tryRenew();
     userManager.events.addAccessTokenExpiring(onExpiring);
     return () => {
       stopped = true;
