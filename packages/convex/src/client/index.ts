@@ -176,14 +176,30 @@ export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
 // richer object that also names a specific resource for DL16 resource
 // grant support. scopeFromResource returns the richer shape so the
 // authorize call can walk resource-object grants.
+export type AuthorizeAncestor = { resourceType: string; resourceId: string };
+
 export type ExtractedScope =
   | string
-  | { scopeId: string; resourceType?: string; resourceId?: string };
+  | {
+      scopeId: string;
+      resourceType?: string;
+      resourceId?: string;
+      // Ordered ancestor resources to ALSO check (union): the request is
+      // allowed if the resource itself OR any ancestor grants the permission.
+      // Used for resource hierarchy (e.g. a task inheriting its project's
+      // access). Consumed client-side; never forwarded to the authorize query.
+      authorizeChain?: AuthorizeAncestor[];
+    };
 
 export type ExtractScope<Ctx, Args> = (
   ctx: Ctx,
   args: Args,
 ) => ExtractedScope | Promise<ExtractedScope>;
+
+// Hard cap on resource-hierarchy depth: a request authorizes against the
+// resource plus at most this many ancestors. Generous for real nesting
+// (folder/file, project/task/comment) while bounding the per-call check count.
+const MAX_AUTHORIZE_CHAIN = 10;
 
 export type AccessQueryBuilder<DataModel extends GenericDataModel> = {
   <
@@ -424,17 +440,33 @@ type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
  * resource permissions use a different resource type (e.g. `app.project`
  * rather than the `projects` table), resolve the scope so `resourceType`
  * matches the permission's resource type, or the grant will not be found.
+ *
+ * Hierarchy: pass `options.authorizeAgainst` to ALSO authorize against ancestor
+ * resources (union). It receives the loaded row and returns the ordered
+ * ancestors to check (e.g. a task returns its parent project). The request is
+ * allowed if the resource itself OR any ancestor grants the permission, so a
+ * grant on the parent flows down without copying it onto every child, while a
+ * grant placed directly on the child still works. The app owns these
+ * parent/child relationships; the chain is bounded (max 10 ancestors).
  */
 export function scopeFromResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
-  options: { scopeField?: string } = {},
+  options: {
+    scopeField?: string;
+    authorizeAgainst?: (row: Record<string, unknown>) => AuthorizeAncestor[];
+  } = {},
 ) {
   const scopeField = options.scopeField ?? "orgScopeId";
   return async (
     ctx: DbResourceCtx,
     args: Record<string, unknown>,
-  ): Promise<{ scopeId: string; resourceType: string; resourceId: string }> => {
+  ): Promise<{
+    scopeId: string;
+    resourceType: string;
+    resourceId: string;
+    authorizeChain?: AuthorizeAncestor[];
+  }> => {
     const id = args?.[argKey];
     if (id == null) {
       throw new ConvexError({
@@ -456,7 +488,16 @@ export function scopeFromResource<T extends string, K extends string>(
         message: `scopeFromResource("${tableName}", "${argKey}"): resource is missing "${scopeField}"`,
       });
     }
-    return { scopeId, resourceType: tableName, resourceId: String(id) };
+    const authorizeChain = options.authorizeAgainst
+      ? options.authorizeAgainst(row as Record<string, unknown>)
+      : undefined;
+    if (authorizeChain && authorizeChain.length > MAX_AUTHORIZE_CHAIN) {
+      throw new ConvexError({
+        code: "INVALID_SCOPE_ARG",
+        message: `scopeFromResource("${tableName}", "${argKey}"): authorizeAgainst returned more than ${MAX_AUTHORIZE_CHAIN} ancestors`,
+      });
+    }
+    return { scopeId, resourceType: tableName, resourceId: String(id), authorizeChain };
   };
 }
 
@@ -769,6 +810,7 @@ async function ensureAuthorized(
   let scopeId: string | undefined;
   let resourceType: string | undefined;
   let resourceId: string | undefined;
+  let authorizeChain: AuthorizeAncestor[] | undefined;
   if (mode === "permission") {
     try {
       const extracted = await (access?.scope ?? defaultScope)(ctx, callerArgs);
@@ -778,6 +820,7 @@ async function ensureAuthorized(
         scopeId = extracted.scopeId;
         resourceType = extracted.resourceType;
         resourceId = extracted.resourceId;
+        authorizeChain = extracted.authorizeChain;
       }
     } catch (error) {
       if (error instanceof ConvexError) throw error;
@@ -796,6 +839,23 @@ async function ensureAuthorized(
     resourceType,
     resourceId,
   });
+
+  // Resource hierarchy (union): only when the direct check denied AND the scope
+  // resolver supplied ancestors. The default path (no chain) is unchanged and
+  // makes exactly one authorize call. `authorizeChain` is consumed here and
+  // never forwarded to the authorize query.
+  if (!decision.allowed && mode === "permission" && authorizeChain && authorizeChain.length > 0) {
+    for (const ancestor of authorizeChain) {
+      const ancestorDecision = await ctx.runQuery(component.checks.authorize, {
+        tokenIdentifier: identity.tokenIdentifier,
+        scopeId,
+        permission: access?.permission,
+        resourceType: ancestor.resourceType,
+        resourceId: ancestor.resourceId,
+      });
+      if (ancestorDecision.allowed) return;
+    }
+  }
 
   if (!decision.allowed) {
     throw new ConvexError({
