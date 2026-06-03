@@ -17,6 +17,9 @@ const listScopeRoles = makeFunctionReference<"query">("component/queries:listSco
 const listScopePermissions = makeFunctionReference<"query">(
   "component/queries:listScopePermissions",
 );
+const listDirectSubjectsForResource = makeFunctionReference<"query">(
+  "component/queries:listDirectSubjectsForResource",
+);
 
 const ISSUER = "https://auth.example.com";
 
@@ -1090,5 +1093,45 @@ describe("scope admin reads", () => {
         scopeId: "scope_default",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("listDirectSubjectsForResource", () => {
+  test("lists direct grantees on the resource for an authorized caller", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, resourceCatalogSnapshot());
+    await t.mutation(applySync, resourceOrgSnapshot());
+
+    const subjects = await t.query(listDirectSubjectsForResource, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      resourceType: "reports",
+      resourceId: "report_123",
+      permission: "reports.read",
+    });
+
+    expect(subjects).toEqual([
+      expect.objectContaining({
+        principalId: "p_alice_acme",
+        permissionKey: "reports.read",
+        effect: "allow",
+      }),
+    ]);
+  });
+
+  test("returns [] when the caller lacks the permission on that resource", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, resourceCatalogSnapshot());
+    await t.mutation(applySync, resourceOrgSnapshot());
+
+    // alice holds reports.read on report_123, but not on report_456.
+    const subjects = await t.query(listDirectSubjectsForResource, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      resourceType: "reports",
+      resourceId: "report_456",
+      permission: "reports.read",
+    });
+    expect(subjects).toEqual([]);
   });
 });

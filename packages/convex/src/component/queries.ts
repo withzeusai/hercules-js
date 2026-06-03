@@ -314,6 +314,133 @@ export const listScopePermissions = query({
   },
 });
 
+type DirectResourceSubject = {
+  principalId: string;
+  herculesAuthUserId?: string;
+  name?: string;
+  email?: string;
+  image?: string;
+  status: "active" | "blocked" | "suspended" | "pending_approval";
+  effect: "allow" | "deny";
+  expiresAt?: number;
+  roleId?: string;
+  roleKey?: string;
+  roleName?: string;
+  permissionId?: string;
+  permissionKey?: string;
+};
+
+// "Who has a DIRECT grant on this resource" — for an in-app membership panel
+// (e.g. "people on this project"). DIRECT grants only: this intentionally does
+// NOT include principals who reach the resource via a scope-wide role/wildcard
+// or a parent resource. Self-gates resource-aware on `permission` against THIS
+// resource (so a per-resource manager, not only a scope admin, can see it), via
+// the same evaluator as a real can() check; returns [] when the caller is not
+// allowed. `permission`'s resourceType should match `resourceType`.
+export const listDirectSubjectsForResource = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    scopeId: v.string(),
+    resourceType: v.string(),
+    resourceId: v.string(),
+    permission: v.string(),
+  },
+  handler: async (ctx, args): Promise<DirectResourceSubject[]> => {
+    const decision = await evaluatePermissionDecision(ctx, {
+      tokenIdentifier: args.tokenIdentifier,
+      scopeId: args.scopeId,
+      permission: args.permission,
+      resourceType: args.resourceType,
+      resourceId: args.resourceId,
+    });
+    if (!decision.allowed) return [];
+    const scope = await resolveScopeRow(ctx, args.scopeId);
+    if (!scope) return [];
+
+    const grants = await ctx.db
+      .query("grants")
+      .withIndex("by_object_resource", (q) =>
+        q
+          .eq("objectScopeId", scope.accessScopeId)
+          .eq("objectType", "resource")
+          .eq("objectResourceType", args.resourceType)
+          .eq("objectId", args.resourceId),
+      )
+      .collect();
+
+    const now = Date.now();
+    const results: DirectResourceSubject[] = [];
+    for (const grant of grants) {
+      const subjectPrincipalId = grant.subjectPrincipalId;
+      if (!subjectPrincipalId) continue;
+      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) continue;
+
+      const principal = await ctx.db
+        .query("principals")
+        .withIndex("by_principal_id", (q) => q.eq("principalId", subjectPrincipalId))
+        .unique();
+      if (!principal || principal.type !== "user") continue;
+
+      let name: string | undefined;
+      let email: string | undefined;
+      let image: string | undefined;
+      const authUserId = principal.herculesAuthUserId;
+      if (authUserId) {
+        const user = await ctx.db
+          .query("users")
+          .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
+          .unique();
+        if (user) {
+          name = user.name;
+          email = user.email;
+          image = user.image;
+        }
+      }
+
+      let roleKey: string | undefined;
+      let roleName: string | undefined;
+      let permissionKey: string | undefined;
+      if (grant.relationKind === "role" && grant.roleId) {
+        const role = await ctx.db
+          .query("roles")
+          .withIndex("by_role_id", (q) => q.eq("roleId", grant.roleId!))
+          .unique();
+        if (role) {
+          roleKey = role.key;
+          roleName = role.name;
+        }
+      } else if (grant.relationKind === "direct_permission" && grant.permissionId) {
+        const permission = await ctx.db
+          .query("permissions")
+          .withIndex("by_permission_id", (q) => q.eq("permissionId", grant.permissionId!))
+          .unique();
+        if (permission) permissionKey = permission.key;
+      }
+
+      results.push({
+        principalId: principal.principalId,
+        herculesAuthUserId: authUserId,
+        name,
+        email,
+        image,
+        status: principal.status,
+        effect: grant.effect,
+        expiresAt: grant.expiresAt,
+        roleId: grant.roleId,
+        roleKey,
+        roleName,
+        permissionId: grant.permissionId,
+        permissionKey,
+      });
+    }
+
+    results.sort((a, b) =>
+      (a.name ?? a.email ?? a.principalId).localeCompare(b.name ?? b.email ?? b.principalId),
+    );
+    return results;
+  },
+});
+
 // Scope-admin reads share the canonical permission gate with authorize(), so an
 // in-app admin screen and a can() check resolve identically (wildcard,
 // deny-override, owner-only levers). Returns false when not allowed, and the

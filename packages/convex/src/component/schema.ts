@@ -174,6 +174,8 @@ export default defineSchema({
       "objectResourceType",
       "objectId",
     ])
+    // Reverse lookup: "who has a direct grant on this resource" (membership UIs).
+    .index("by_object_resource", ["objectScopeId", "objectType", "objectResourceType", "objectId"])
     .index("by_role", ["roleId"])
     .index("by_permission", ["permissionId"]),
 });

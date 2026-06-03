@@ -102,6 +102,30 @@ export type ScopePermissionSummary = {
   tenantAssignable: boolean;
 };
 
+export type DirectResourceSubject = {
+  principalId: string;
+  herculesAuthUserId?: string;
+  status: "active" | "blocked" | "suspended" | "pending_approval";
+  name?: string;
+  email?: string;
+  image?: string;
+  effect: "allow" | "deny";
+  expiresAt?: number;
+  roleId?: string;
+  roleKey?: string;
+  roleName?: string;
+  permissionId?: string;
+  permissionKey?: string;
+};
+
+type ListDirectSubjectsArgs = {
+  tokenIdentifier?: string;
+  scopeId: string;
+  resourceType: string;
+  resourceId: string;
+  permission: string;
+};
+
 export type AccessContext<DataModel extends GenericDataModel = any> =
   | Pick<GenericQueryCtx<DataModel>, "auth" | "runQuery">
   | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery">
@@ -129,6 +153,12 @@ export type AccessControlComponent = {
       "internal",
       ListScopeArgs,
       ScopePermissionSummary[]
+    >;
+    listDirectSubjectsForResource: FunctionReference<
+      "query",
+      "internal",
+      ListDirectSubjectsArgs,
+      DirectResourceSubject[]
     >;
   };
 };
@@ -258,6 +288,16 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     ctx: AccessContext<DataModel>,
     args?: { scopeId?: string },
   ) => Promise<ScopePermissionSummary[]>;
+  // "Who has a DIRECT grant on this resource" for an in-app membership panel.
+  // DIRECT grants only (excludes scope-wide role/wildcard and parent-inherited
+  // access). Self-gates resource-aware on `permission` against this resource, so
+  // a per-resource manager (not only a scope admin) can list it; returns [] when
+  // the caller is not allowed. `permission`'s resourceType should match
+  // `resourceType`.
+  listDirectSubjectsForResource: (
+    ctx: AccessContext<DataModel>,
+    args: { scopeId?: string; resourceType: string; resourceId: string; permission: string },
+  ) => Promise<DirectResourceSubject[]>;
 };
 
 export type PermissionCheckArgs =
@@ -329,6 +369,7 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     listScopeMembers: makeListScopeMembers(component),
     listScopeRoles: makeListScopeRoles(component),
     listScopePermissions: makeListScopePermissions(component),
+    listDirectSubjectsForResource: makeListDirectSubjectsForResource(component),
   };
 }
 
@@ -683,6 +724,24 @@ function makeListScopePermissions(component: AccessControlComponent) {
     return await ctx.runQuery(component.queries.listScopePermissions, {
       tokenIdentifier,
       scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
+    });
+  };
+}
+
+function makeListDirectSubjectsForResource(component: AccessControlComponent) {
+  return async (
+    ctx: AccessContext,
+    args: { scopeId?: string; resourceType: string; resourceId: string; permission: string },
+  ): Promise<DirectResourceSubject[]> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return [];
+
+    return await ctx.runQuery(component.queries.listDirectSubjectsForResource, {
+      tokenIdentifier,
+      scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
+      resourceType: args.resourceType,
+      resourceId: args.resourceId,
+      permission: args.permission,
     });
   };
 }
