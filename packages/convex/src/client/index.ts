@@ -223,6 +223,20 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     ctx: AccessContext<DataModel>,
     args?: EffectivePermissionsArgs,
   ) => Promise<string[]>;
+  // Filter a page of the APP's own resource rows down to the ones the caller is
+  // allowed to access, by running the same per-resource permission check as a
+  // real `accessQuery`. Use this for "list my projects" style lists: the app
+  // owns and paginates its rows, Hercules never enumerates them. Pass a bounded
+  // page, not an entire table (it runs one check per item).
+  filterAuthorizedResources: <T>(
+    ctx: AccessContext<DataModel>,
+    args: {
+      resources: T[];
+      permission: string;
+      scopeId?: string;
+      resource: (item: T) => AccessResourceRef;
+    },
+  ) => Promise<T[]>;
   listMyMemberships: (ctx: AccessContext<DataModel>) => Promise<Membership[]>;
   listMyRoles: (
     ctx: AccessContext<DataModel>,
@@ -309,6 +323,7 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     requirePermission: makeRequirePermission(component),
     requireAnyPermission: makeRequireAnyPermission(component),
     getEffectivePermissions: makeGetEffectivePermissions(component),
+    filterAuthorizedResources: makeFilterAuthorizedResources(component),
     listMyMemberships: makeListMyMemberships(component),
     listMyRoles: makeListMyRoles(component),
     listScopeMembers: makeListScopeMembers(component),
@@ -576,6 +591,36 @@ function makeGetEffectivePermissions(component: AccessControlComponent) {
       ...resourceArgs(normalized.resource),
     });
     return result.permissions;
+  };
+}
+
+function makeFilterAuthorizedResources(component: AccessControlComponent) {
+  return async <T>(
+    ctx: AccessContext,
+    args: {
+      resources: T[];
+      permission: string;
+      scopeId?: string;
+      resource: (item: T) => AccessResourceRef;
+    },
+  ): Promise<T[]> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return [];
+    const scopeId = args.scopeId ?? DEFAULT_SCOPE_SENTINEL;
+
+    const allowed: T[] = [];
+    for (const item of args.resources) {
+      const ref = args.resource(item);
+      const decision = await ctx.runQuery(component.checks.authorize, {
+        tokenIdentifier,
+        scopeId,
+        permission: args.permission,
+        resourceType: ref.type,
+        resourceId: ref.id,
+      });
+      if (decision.allowed) allowed.push(item);
+    }
+    return allowed;
   };
 }
 

@@ -24,10 +24,7 @@ describe("createAccessControl", () => {
   });
 
   test("resolves the Hercules-mounted component by default", () => {
-    const herculesComponent = {
-      ...component,
-      checks: { authorize: "herculesAuthorize" },
-    };
+    const herculesComponent = { ...component, checks: { authorize: "herculesAuthorize" } };
     const builders = createAccessControl({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -44,7 +41,9 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
     };
 
     return definition.handler(ctx).then(() => {
@@ -87,13 +86,15 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: true,
+          reasonCode: "allowed",
+          sourceVersion: 1,
+          principalId: "principal_1",
+          effectiveRoleIds: ["role_member"],
+        }),
     };
 
     await expect(handler.handler(ctx, {})).resolves.toBe("ok");
@@ -233,12 +234,7 @@ describe("createAccessControl", () => {
         }
         if (ref === "listMyRoles") {
           return [
-            {
-              roleId: "role_member",
-              roleKey: "member",
-              roleName: "Member",
-              roleKind: "system",
-            },
+            { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
           ];
         }
         throw new Error(`Unexpected query ref ${ref}`);
@@ -253,18 +249,11 @@ describe("createAccessControl", () => {
       }),
     ).resolves.toBe(true);
     await expect(
-      builders.getEffectivePermissions(ctx as never, {
-        scopeId: "scope_abc",
-      }),
+      builders.getEffectivePermissions(ctx as never, { scopeId: "scope_abc" }),
     ).resolves.toEqual(["tasks.read"]);
     await expect(builders.listMyMemberships(ctx as never)).resolves.toHaveLength(1);
     await expect(builders.listMyRoles(ctx as never, { scopeId: "scope_abc" })).resolves.toEqual([
-      {
-        roleId: "role_member",
-        roleKey: "member",
-        roleName: "Member",
-        roleKind: "system",
-      },
+      { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
     ]);
 
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
@@ -289,13 +278,15 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: true,
+          reasonCode: "allowed",
+          sourceVersion: 1,
+          principalId: "principal_1",
+          effectiveRoleIds: ["role_member"],
+        }),
     };
 
     await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
@@ -304,6 +295,65 @@ describe("createAccessControl", () => {
       scopeId: DEFAULT_SCOPE_SENTINEL,
       permission: "tasks.create",
     });
+  });
+
+  test("filterAuthorizedResources keeps only the rows the caller can access", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn(async (_ref: string, args: { resourceId: string }) => ({
+        allowed: args.resourceId === "p1",
+        reasonCode: "allowed",
+        effectiveRoleIds: [],
+      })),
+    };
+
+    const rows = [
+      { _id: "p1", title: "A" },
+      { _id: "p2", title: "B" },
+    ];
+    const result = await builders.filterAuthorizedResources(ctx as never, {
+      resources: rows,
+      permission: "app.project:view",
+      scopeId: "scope_1",
+      resource: (row) => ({ type: "app.project", id: row._id }),
+    });
+
+    expect(result).toEqual([{ _id: "p1", title: "A" }]);
+    expect(ctx.runQuery).toHaveBeenCalledTimes(2);
+    expect(ctx.runQuery).toHaveBeenNthCalledWith(1, "authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_1",
+      permission: "app.project:view",
+      resourceType: "app.project",
+      resourceId: "p1",
+    });
+  });
+
+  test("filterAuthorizedResources returns [] when the caller is unauthenticated", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = { auth: { getUserIdentity: vi.fn().mockResolvedValue(null) }, runQuery: vi.fn() };
+    const result = await builders.filterAuthorizedResources(ctx as never, {
+      resources: [{ _id: "p1" }],
+      permission: "app.project:view",
+      resource: (row) => ({ type: "app.project", id: row._id }),
+    });
+    expect(result).toEqual([]);
+    expect(ctx.runQuery).not.toHaveBeenCalled();
   });
 
   test("access builders surface a ConvexError when scope extraction returns no scope", async () => {
