@@ -159,6 +159,7 @@ export function HerculesAuthProvider({
   useEffect(() => {
     if (automaticSilentRenewExplicit) return;
     let retryTimerId: ReturnType<typeof setTimeout> | null = null;
+    let timeoutRetryCount = 0;
     let stopped = false;
     const events = userManager.events as unknown as {
       _raiseSilentRenewError?: (e: Error) => void;
@@ -169,16 +170,29 @@ export function HerculesAuthProvider({
         if (stopped) return;
         try {
           await userManager.signinSilent();
+          timeoutRetryCount = 0;
         } catch (err) {
           if (stopped) return;
           const isTimeout =
             err instanceof Error && err.name === "ErrorTimeout";
           if (isTimeout) {
+            timeoutRetryCount++;
+            const maxRetries = (
+              userManager.settings as {
+                maxSilentRenewTimeoutRetries?: number;
+              }
+            ).maxSilentRenewTimeoutRetries;
+            if (maxRetries !== undefined && timeoutRetryCount > maxRetries) {
+              timeoutRetryCount = 0;
+              events._raiseSilentRenewError?.(err as Error);
+              return;
+            }
             retryTimerId = setTimeout(() => {
               retryTimerId = null;
               tryRenew();
             }, 5000);
           } else {
+            timeoutRetryCount = 0;
             events._raiseSilentRenewError?.(err as Error);
           }
         }
