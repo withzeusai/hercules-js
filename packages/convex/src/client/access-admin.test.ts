@@ -5,9 +5,7 @@ import {
   createAccessInvitation,
   createAccessScope,
   createAccessScopeAction,
-  delegatedResourceGrant,
-  delegatedRevokeResourceGrant,
-  delegatedSetGrantExpiry,
+  createResourceInvitation,
 } from "./access-admin";
 
 describe("createAccessAdminActions", () => {
@@ -26,6 +24,7 @@ describe("createAccessAdminActions", () => {
         hercules_auth_user_id: undefined,
         role_id: undefined,
         role_key: "admin",
+        actor_mode: "service",
       },
     });
   });
@@ -48,6 +47,7 @@ describe("createAccessAdminActions", () => {
         hercules_auth_user_id: "user_1",
         allow: ["reports.export"],
         deny: [],
+        actor_mode: "service",
       },
     });
   });
@@ -82,10 +82,10 @@ describe("createAccessAdminActions", () => {
     );
 
     expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
-      body: { scope_id: "scope_1", grant_id: "grant_1" },
+      body: { scope_id: "scope_1", grant_id: "grant_1", actor_mode: "service" },
     });
     expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
-      body: { scope_id: "scope_1", grant_id: "grant_1", expires_at: null },
+      body: { scope_id: "scope_1", grant_id: "grant_1", expires_at: null, actor_mode: "service" },
     });
   });
 
@@ -115,6 +115,7 @@ describe("createAccessAdminActions", () => {
         permission_key: "reports.read",
         effect: "deny",
         expires_at: null,
+        actor_mode: "service",
       },
     });
   });
@@ -137,7 +138,7 @@ describe("createAccessAdminActions", () => {
     await getHandler(actions.setDefaultRole)({}, { scopeId: "scope_1", roleKey: "viewer" });
 
     expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/set-default-role", {
-      body: { scope_id: "scope_1", role_id: undefined, role_key: "viewer" },
+      body: { scope_id: "scope_1", role_id: undefined, role_key: "viewer", actor_mode: "service" },
     });
   });
 
@@ -181,6 +182,7 @@ describe("createAccessAdminActions", () => {
         role_ids: undefined,
         role_keys: ["admin"],
         expires_in_days: undefined,
+        actor_mode: "service",
       },
     });
   });
@@ -231,7 +233,7 @@ describe("createAccessAdminActions", () => {
     ).resolves.toEqual({ invitation_id: "invite_1", revoked: true });
 
     expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/revoke", {
-      body: { scope_id: "scope_1", invitation_id: "invite_1" },
+      body: { scope_id: "scope_1", invitation_id: "invite_1", actor_mode: "service" },
     });
   });
 
@@ -382,6 +384,7 @@ describe("createAccessAdminActions", () => {
         role_ids: ["role_admin"],
         role_keys: undefined,
         expires_in_days: undefined,
+        actor_mode: "service",
       },
     });
   });
@@ -395,113 +398,217 @@ function getHandler(value: unknown) {
   return (value as { handler: (ctx: unknown, args: Record<string, unknown>) => unknown }).handler;
 }
 
-describe("delegated resource grants", () => {
-  const authedCtx = () => ({
-    auth: {
-      getUserIdentity: vi
-        .fn()
-        .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|auth_user_1" }),
-    },
-  });
+describe("actor_mode on resource-grant writes", () => {
+  test("createResourceGrant defaults to service mode without an id_token", async () => {
+    const post = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({ accessAction: identityBuilder, client: { post } });
 
-  test("delegatedResourceGrant forwards the end-user token + body and normalizes the result", async () => {
-    const post = vi.fn().mockResolvedValue({
-      access_scope_id: "scope_1",
-      grant_id: "grant_1",
-      changed: true,
-      source_version: 7,
-      projection_ids: ["projection_1"],
-    });
+    await getHandler(actions.createResourceGrant)(
+      {},
+      {
+        scopeId: "scope_1",
+        herculesAuthUserId: "auth_user_2",
+        resourceType: "app.project",
+        resourceId: "project_1",
+        roleKey: "project_contributor",
+      },
+    );
 
-    await expect(
-      delegatedResourceGrant(
-        authedCtx(),
-        {
-          scopeId: "scope_1",
-          resourceType: "app.project",
-          resourceId: "project_1",
-          gatingPermissionKey: "app.project:manage_members",
-          idToken: "id-token",
-          herculesAuthUserId: "auth_user_2",
-          roleKey: "project_contributor",
-        },
-        { client: { post } },
-      ),
-    ).resolves.toEqual({
-      accessScopeId: "scope_1",
-      grantId: "grant_1",
-      changed: true,
-      sourceVersion: 7,
-      projectionIds: ["projection_1"],
-    });
-
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/delegated-create", {
+    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
       body: {
-        id_token: "id-token",
         scope_id: "scope_1",
-        resource_type: "app.project",
-        resource_id: "project_1",
-        gating_permission_key: "app.project:manage_members",
         principal_id: undefined,
         hercules_auth_user_id: "auth_user_2",
+        resource_type: "app.project",
+        resource_id: "project_1",
         role_key: "project_contributor",
         permission_key: undefined,
         expires_at: undefined,
+        actor_mode: "service",
+      },
+    });
+    const [, sent] = post.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(sent.body).not.toHaveProperty("id_token");
+  });
+
+  test("createResourceGrant delegates as app_user when an id_token is passed", async () => {
+    const post = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({ accessAction: identityBuilder, client: { post } });
+
+    await getHandler(actions.createResourceGrant)(
+      {},
+      {
+        scopeId: "scope_1",
+        herculesAuthUserId: "auth_user_2",
+        resourceType: "app.project",
+        resourceId: "project_1",
+        roleKey: "project_contributor",
+        idToken: "id-token",
+      },
+    );
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
+      body: {
+        scope_id: "scope_1",
+        principal_id: undefined,
+        hercules_auth_user_id: "auth_user_2",
+        resource_type: "app.project",
+        resource_id: "project_1",
+        role_key: "project_contributor",
+        permission_key: undefined,
+        expires_at: undefined,
+        actor_mode: "app_user",
+        id_token: "id-token",
       },
     });
   });
 
-  test("delegatedResourceGrant rejects an unauthenticated caller before any request", async () => {
-    const post = vi.fn();
-    const ctx = { auth: { getUserIdentity: vi.fn().mockResolvedValue(null) } };
+  test("revokeResourceGrant and setGrantExpiry forward the app_user id_token when delegated", async () => {
+    const post = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({ accessAction: identityBuilder, client: { post } });
+
+    await getHandler(actions.revokeResourceGrant)(
+      {},
+      { scopeId: "scope_1", grantId: "grant_1", idToken: "id-token" },
+    );
+    await getHandler(actions.setGrantExpiry)(
+      {},
+      { scopeId: "scope_1", grantId: "grant_1", expiresAt: null, idToken: "id-token" },
+    );
+
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
+      body: {
+        scope_id: "scope_1",
+        grant_id: "grant_1",
+        actor_mode: "app_user",
+        id_token: "id-token",
+      },
+    });
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
+      body: {
+        scope_id: "scope_1",
+        grant_id: "grant_1",
+        expires_at: null,
+        actor_mode: "app_user",
+        id_token: "id-token",
+      },
+    });
+  });
+});
+
+describe("createResourceInvitation", () => {
+  const writeResult = {
+    access_scope_id: "scope_1",
+    invitation_id: "invite_1",
+    email: "pm@example.com",
+    role_ids: ["role_contributor"],
+    token: "token_1",
+    accept_url: "https://app.example.com/invite?token=token_1",
+    expires_at: "2026-06-11T00:00:00.000Z",
+    source_version: 12,
+    projection_ids: ["projection_1"],
+  };
+  const parsedResult = {
+    accessScopeId: "scope_1",
+    invitationId: "invite_1",
+    email: "pm@example.com",
+    roleIds: ["role_contributor"],
+    token: "token_1",
+    acceptUrl: "https://app.example.com/invite?token=token_1",
+    expiresAt: "2026-06-11T00:00:00.000Z",
+    sourceVersion: 12,
+    projectionIds: ["projection_1"],
+  };
+
+  test("posts to invitations/create-resource as service and parses the write result", async () => {
+    const post = vi.fn().mockResolvedValue(writeResult);
+
     await expect(
-      delegatedResourceGrant(
-        ctx,
+      createResourceInvitation(
         {
           scopeId: "scope_1",
+          email: "pm@example.com",
           resourceType: "app.project",
           resourceId: "project_1",
-          gatingPermissionKey: "app.project:manage_members",
-          idToken: "id-token",
-          permissionKey: "app.project:edit",
+          roleKey: "project_contributor",
+          expiresInDays: 7,
         },
         { client: { post } },
       ),
-    ).rejects.toThrow();
-    expect(post).not.toHaveBeenCalled();
-  });
+    ).resolves.toEqual(parsedResult);
 
-  test("delegatedRevokeResourceGrant posts to the delegated-revoke route", async () => {
-    const post = vi.fn().mockResolvedValue({
-      access_scope_id: "scope_1",
-      changed: true,
-      source_version: 8,
-      projection_ids: [],
-    });
-    await delegatedRevokeResourceGrant(
-      authedCtx(),
-      { scopeId: "scope_1", grantId: "grant_1", idToken: "id-token" },
-      { client: { post } },
-    );
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/delegated-revoke", {
-      body: { id_token: "id-token", scope_id: "scope_1", grant_id: "grant_1" },
+    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
+      body: {
+        scope_id: "scope_1",
+        email: "pm@example.com",
+        resource_type: "app.project",
+        resource_id: "project_1",
+        role_key: "project_contributor",
+        permission_key: undefined,
+        expires_in_days: 7,
+        actor_mode: "service",
+      },
     });
   });
 
-  test("delegatedSetGrantExpiry posts to the delegated-set route", async () => {
-    const post = vi.fn().mockResolvedValue({
-      access_scope_id: "scope_1",
-      changed: true,
-      source_version: 9,
-      projection_ids: [],
-    });
-    await delegatedSetGrantExpiry(
-      authedCtx(),
-      { scopeId: "scope_1", grantId: "grant_1", expiresAt: null, idToken: "id-token" },
+  test("delegates as app_user with an id_token and a single permission_key", async () => {
+    const post = vi.fn().mockResolvedValue(writeResult);
+
+    await createResourceInvitation(
+      {
+        scopeId: "scope_1",
+        email: "pm@example.com",
+        resourceType: "app.project",
+        resourceId: "project_1",
+        permissionKey: "app.project:edit",
+        idToken: "id-token",
+      },
       { client: { post } },
     );
-    expect(post).toHaveBeenCalledWith("/v1/access-control/expiries/delegated-set", {
-      body: { id_token: "id-token", scope_id: "scope_1", grant_id: "grant_1", expires_at: null },
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
+      body: {
+        scope_id: "scope_1",
+        email: "pm@example.com",
+        resource_type: "app.project",
+        resource_id: "project_1",
+        role_key: undefined,
+        permission_key: "app.project:edit",
+        expires_in_days: undefined,
+        actor_mode: "app_user",
+        id_token: "id-token",
+      },
+    });
+  });
+
+  test("is exposed as an access-admin action", async () => {
+    const post = vi.fn().mockResolvedValue(writeResult);
+    const actions = createAccessAdminActions({ accessAction: identityBuilder, client: { post } });
+
+    await expect(
+      getHandler(actions.createResourceInvitation)(
+        {},
+        {
+          scopeId: "scope_1",
+          email: "pm@example.com",
+          resourceType: "app.project",
+          resourceId: "project_1",
+          roleKey: "project_contributor",
+        },
+      ),
+    ).resolves.toEqual(parsedResult);
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
+      body: {
+        scope_id: "scope_1",
+        email: "pm@example.com",
+        resource_type: "app.project",
+        resource_id: "project_1",
+        role_key: "project_contributor",
+        permission_key: undefined,
+        expires_in_days: undefined,
+        actor_mode: "service",
+      },
     });
   });
 });

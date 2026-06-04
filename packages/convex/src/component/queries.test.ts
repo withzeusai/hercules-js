@@ -901,6 +901,234 @@ function resourceRoleOrgSnapshot(): AccessProjectionSnapshot {
   };
 }
 
+// A resource share grant as the producer projects it — IDENTICAL in shape
+// whether it originated from an accepted resource invitation or an immediate
+// resource grant (both resolve to one principal-subject, resource-object,
+// direct_permission grant). The component only sees the projected row, so
+// getEffectivePermissions must enumerate the same permission set for both.
+type ResourceShareGrant = {
+  grantId: string;
+  effect: "allow" | "deny";
+  objectId: string;
+  objectResourceType?: string;
+};
+
+// The permission catalog is app-wide and always lives in the DEFAULT scope
+// (effective.ts fetches catalogPermissions there). Seed the permission, the
+// principal, the Viewer role membership, and the resource grants all in the
+// default scope so getEffectivePermissions can enumerate over the catalog.
+function resourceShareEnumSnapshot(grants: ResourceShareGrant[]): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_resource_share_enum",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_viewer",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      roles: [
+        {
+          roleId: "role_viewer",
+          accessScopeId: "scope_default",
+          key: "viewer",
+          kind: "system",
+          name: "Viewer",
+          wildcard: "none",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_reports_read",
+          accessScopeId: "scope_default",
+          key: "reports.read",
+          resourceType: "reports",
+          action: "read",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_viewer",
+          subjectPrincipalId: "p_alice",
+          relationKind: "role",
+          roleId: "role_viewer",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_default",
+          updatedAt: 1,
+        },
+        ...grants.map((grant) => ({
+          grantId: grant.grantId,
+          subjectPrincipalId: "p_alice",
+          relationKind: "direct_permission" as const,
+          permissionId: "perm_reports_read",
+          effect: grant.effect,
+          objectType: "resource" as const,
+          objectId: grant.objectId,
+          objectResourceType: grant.objectResourceType,
+          updatedAt: 1,
+        })),
+      ],
+    },
+  };
+}
+
+function effectiveReportPermissions(
+  t: ReturnType<typeof convexTest>,
+  resourceId: string,
+): Promise<string[]> {
+  return t
+    .query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      resourceType: "reports",
+      resourceId,
+    })
+    .then((result) => result.permissions);
+}
+
+// getEffectivePermissions must enumerate IDENTICALLY for a permission reached
+// via an accepted resource invitation vs an equivalent immediate resource
+// grant: same projected row, same enumerated set.
+describe("getEffectivePermissions — resource invitation / immediate grant parity", () => {
+  test("ordinary resource share allow enumerates identically for both origins", async () => {
+    const immediate = convexTest(schema, modules);
+    await immediate.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        {
+          grantId: "grant_immediate",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+    const invitation = convexTest(schema, modules);
+    await invitation.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        {
+          grantId: "grant_invitation",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+
+    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
+    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
+    expect(fromImmediate).toEqual(["reports.read"]);
+    expect(fromInvitation).toEqual(fromImmediate);
+  });
+
+  test("an inherited deny overrides the resource share identically for both origins", async () => {
+    // A scope-wide all-instances ("*") deny overrides the instance allow.
+    const immediate = convexTest(schema, modules);
+    await immediate.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        {
+          grantId: "grant_immediate",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+        {
+          grantId: "grant_inherited_deny",
+          effect: "deny",
+          objectId: "*",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+    const invitation = convexTest(schema, modules);
+    await invitation.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        {
+          grantId: "grant_invitation",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+        {
+          grantId: "grant_inherited_deny",
+          effect: "deny",
+          objectId: "*",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+
+    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
+    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
+    expect(fromImmediate).toEqual([]);
+    expect(fromInvitation).toEqual(fromImmediate);
+  });
+
+  test("a malformed-resourceType grant enumerates nothing for both origins", async () => {
+    const immediate = convexTest(schema, modules);
+    await immediate.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        { grantId: "grant_immediate", effect: "allow", objectId: "report_1" },
+      ]),
+    );
+    const invitation = convexTest(schema, modules);
+    await invitation.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        { grantId: "grant_invitation", effect: "allow", objectId: "report_1" },
+      ]),
+    );
+
+    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
+    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
+    expect(fromImmediate).toEqual([]);
+    expect(fromInvitation).toEqual(fromImmediate);
+
+    // Positive control: same shape with a well-formed resourceType enumerates
+    // the permission, so the empty sets above are attributable to the malformed
+    // type alone.
+    const wellFormed = convexTest(schema, modules);
+    await wellFormed.mutation(
+      applySync,
+      resourceShareEnumSnapshot([
+        {
+          grantId: "grant_well_formed",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+    expect(await effectiveReportPermissions(wellFormed, "report_1")).toEqual(["reports.read"]);
+  });
+});
+
 describe("scope admin reads", () => {
   // Default scope with the system read permissions in the catalog, an Owner
   // (immutable wildcard, so it passes any read gate), and a plain Member

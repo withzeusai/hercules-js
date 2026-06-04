@@ -62,12 +62,7 @@ export type EffectiveAccessEvaluation = {
 
 export async function evaluateEffectiveAccess(
   ctx: GenericQueryCtx<DataModel>,
-  args: {
-    tokenIdentifier?: string;
-    scopeId?: string;
-    resourceType?: string;
-    resourceId?: string;
-  },
+  args: { tokenIdentifier?: string; scopeId?: string; resourceType?: string; resourceId?: string },
 ): Promise<EffectiveAccessEvaluation> {
   if (!args.tokenIdentifier) {
     return deny("missing_identity");
@@ -417,11 +412,7 @@ async function collectGrantContributions(
     }
   }
 
-  return {
-    roleIds: effectiveRoleIds,
-    entries,
-    resourceRoleGrants,
-  };
+  return { roleIds: effectiveRoleIds, entries, resourceRoleGrants };
 
   // Translate raw grant rows into canonical entries. Scope-object role grants
   // only register the effective role for role-permission expansion. A
@@ -470,6 +461,13 @@ async function collectGrantContributions(
       if (typeof grant.permissionId !== "string") continue;
       const permission = args.permissionById.get(grant.permissionId);
       if (!permission) continue;
+      // Fail closed: a resource-object grant MUST carry its own
+      // objectResourceType. A malformed grant (missing type) confers NOTHING —
+      // never fall back to the permission's resourceType, which would silently
+      // grant the permission onto a foreign/garbage resource type. (Today the
+      // collection index also filters on objectResourceType; this is the
+      // second, defense-in-depth layer so the invariant holds if that changes.)
+      if (grant.objectType === "resource" && !grant.objectResourceType) continue;
       // An all-instances resource grant (objectId "*") matches every instance
       // of its resourceType, so it is a TYPE-level entry. Only a concrete
       // objectId stays instance-level. A scope-object grant is always

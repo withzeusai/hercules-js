@@ -582,6 +582,317 @@ describe("authorize — wildcard roles", () => {
   }
 });
 
+// A grant row as the producer projects it for a resource share — IDENTICAL in
+// shape whether it originated from an immediate resource grant or from an
+// accepted resource invitation. Both flows resolve to one principal-subject,
+// resource-object, direct_permission grant carrying (objectResourceType,
+// objectId, permissionId, effect). The component only ever sees this projected
+// row, so the evaluator must yield the same decision for both origins; the
+// parity tests below drive the SAME builder for an "immediate" and an
+// "invitation-accepted" grant and assert identical allow/deny.
+type ResourceShareGrant = {
+  grantId: string;
+  effect: "allow" | "deny";
+  objectId: string;
+  // Optional so a malformed grant (missing resourceType) can be modeled.
+  objectResourceType?: string;
+};
+
+// Default scope: a single `reports.read` catalog permission, an enumerated
+// Viewer role (wildcard "none") that confers NOTHING by itself, alice holding
+// Viewer at the scope, and a set of resource grants under test. With no
+// resource grant, alice cannot read any report — so any allow below is
+// attributable solely to the resource grant being evaluated.
+function resourceShareSnapshot(grants: ResourceShareGrant[]): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_resource_share",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_viewer",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      roles: [
+        {
+          roleId: "role_viewer",
+          accessScopeId: "scope_default",
+          key: "viewer",
+          kind: "system",
+          name: "Viewer",
+          wildcard: "none",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_reports_read",
+          accessScopeId: "scope_default",
+          key: "reports.read",
+          resourceType: "reports",
+          action: "read",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_viewer",
+          subjectPrincipalId: "p_alice",
+          relationKind: "role",
+          roleId: "role_viewer",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_default",
+          updatedAt: 1,
+        },
+        ...grants.map((grant) => ({
+          grantId: grant.grantId,
+          subjectPrincipalId: "p_alice",
+          relationKind: "direct_permission" as const,
+          permissionId: "perm_reports_read",
+          effect: grant.effect,
+          objectType: "resource" as const,
+          objectId: grant.objectId,
+          objectResourceType: grant.objectResourceType,
+          updatedAt: 1,
+        })),
+      ],
+    },
+  };
+}
+
+function readReport(
+  t: ReturnType<typeof convexTest>,
+  resourceId: string,
+  resourceType = "reports",
+) {
+  return t.query(authorize, {
+    tokenIdentifier: `${ISSUER}|user_alice`,
+    scopeId: "scope_default",
+    permission: "reports.read",
+    resourceType,
+    resourceId,
+  });
+}
+
+// An accepted RESOURCE INVITATION's grant and an equivalent IMMEDIATE resource
+// grant project to the SAME row, so the evaluator must decide both identically.
+// Each case drives the identical grant shape under two grantIds standing in for
+// the two origins and asserts byte-identical decisions.
+describe("authorize — resource invitation / immediate grant parity", () => {
+  test("ordinary resource share allow is identical for both origins", async () => {
+    const immediate = convexTest(schema, modules);
+    await immediate.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_immediate",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+    const invitation = convexTest(schema, modules);
+    await invitation.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_invitation",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+
+    const fromImmediate = await readReport(immediate, "report_1");
+    const fromInvitation = await readReport(invitation, "report_1");
+    expect(fromImmediate.allowed).toBe(true);
+    expect(fromInvitation.allowed).toBe(true);
+    expect(fromInvitation.allowed).toBe(fromImmediate.allowed);
+    expect(fromInvitation.reasonCode).toBe(fromImmediate.reasonCode);
+
+    // And neither grant leaks onto a different instance.
+    expect((await readReport(immediate, "report_2")).allowed).toBe(false);
+    expect((await readReport(invitation, "report_2")).allowed).toBe(false);
+  });
+
+  test("an inherited deny overrides the resource share identically for both origins", async () => {
+    // A scope-wide (all-instances "*") deny is the inherited/parent-level deny;
+    // it must override the instance allow for both origins (deny-overrides).
+    const immediate = convexTest(schema, modules);
+    await immediate.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_immediate",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+        {
+          grantId: "grant_inherited_deny",
+          effect: "deny",
+          objectId: "*",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+    const invitation = convexTest(schema, modules);
+    await invitation.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_invitation",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+        {
+          grantId: "grant_inherited_deny",
+          effect: "deny",
+          objectId: "*",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+
+    const fromImmediate = await readReport(immediate, "report_1");
+    const fromInvitation = await readReport(invitation, "report_1");
+    expect(fromImmediate.allowed).toBe(false);
+    expect(fromImmediate.reasonCode).toBe("permission_denied");
+    expect(fromInvitation.allowed).toBe(fromImmediate.allowed);
+    expect(fromInvitation.reasonCode).toBe(fromImmediate.reasonCode);
+  });
+
+  test("a malformed-resourceType grant is denied identically for both origins", async () => {
+    // objectResourceType missing => the grant confers nothing (fail closed). A
+    // fail-open fallback to the permission's own resourceType would silently
+    // allow here. Same outcome for invitation-origin and immediate-origin rows.
+    const immediate = convexTest(schema, modules);
+    await immediate.mutation(
+      applySync,
+      resourceShareSnapshot([
+        { grantId: "grant_immediate", effect: "allow", objectId: "report_1" },
+      ]),
+    );
+    const invitation = convexTest(schema, modules);
+    await invitation.mutation(
+      applySync,
+      resourceShareSnapshot([
+        { grantId: "grant_invitation", effect: "allow", objectId: "report_1" },
+      ]),
+    );
+
+    const fromImmediate = await readReport(immediate, "report_1");
+    const fromInvitation = await readReport(invitation, "report_1");
+    expect(fromImmediate.allowed).toBe(false);
+    expect(fromImmediate.reasonCode).toBe("permission_denied");
+    expect(fromInvitation.allowed).toBe(fromImmediate.allowed);
+    expect(fromInvitation.reasonCode).toBe(fromImmediate.reasonCode);
+  });
+});
+
+// Fail-closed guarantees on the resource-share path, independent of origin.
+describe("authorize — resource grant fail-closed", () => {
+  test("an instance allow plus an instance deny on the same object denies", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_allow",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+        {
+          grantId: "grant_deny",
+          effect: "deny",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+
+    const decision = await readReport(t, "report_1");
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("permission_denied");
+  });
+
+  test("a grant whose resourceType does not match the request confers nothing", async () => {
+    const t = convexTest(schema, modules);
+    // Grant is on resourceType "folders" but the request targets "reports".
+    await t.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_foreign",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "folders",
+        },
+      ]),
+    );
+
+    const decision = await readReport(t, "report_1");
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("permission_denied");
+  });
+
+  test("a malformed (missing-resourceType) grant never confers the permission", async () => {
+    const malformed = convexTest(schema, modules);
+    await malformed.mutation(
+      applySync,
+      resourceShareSnapshot([
+        { grantId: "grant_malformed", effect: "allow", objectId: "report_1" },
+      ]),
+    );
+    const denied = await readReport(malformed, "report_1");
+    expect(denied.allowed).toBe(false);
+    expect(denied.reasonCode).toBe("permission_denied");
+
+    // Positive control: the SAME grant shape with a well-formed resourceType
+    // DOES confer the permission. The only difference between this and the
+    // malformed grant above is objectResourceType, so the denial there is
+    // attributable solely to the malformed type — not a vacuous setup.
+    const wellFormed = convexTest(schema, modules);
+    await wellFormed.mutation(
+      applySync,
+      resourceShareSnapshot([
+        {
+          grantId: "grant_well_formed",
+          effect: "allow",
+          objectId: "report_1",
+          objectResourceType: "reports",
+        },
+      ]),
+    );
+    const allowed = await readReport(wellFormed, "report_1");
+    expect(allowed.allowed).toBe(true);
+  });
+});
+
 describe("schema gating", () => {
   test("rejects a v1 payload at the mutation validator", async () => {
     const t = convexTest(schema, modules);
