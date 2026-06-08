@@ -1,12 +1,18 @@
-import { convexTest } from "convex-test";
+import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
-import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
+import type {
+  AccessProjectionEvent,
+  AccessProjectionSnapshot,
+} from "../shared/sync";
+import { withV3SyncFixtures } from "../../test/legacy-sync";
 import schema from "./schema";
 
 const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
 
 const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
+const convexTest = (...args: Parameters<typeof baseConvexTest>) =>
+  withV3SyncFixtures(baseConvexTest(...args));
 
 const baseScopeMeta = {
   accessScopeId: "scope_default",
@@ -40,7 +46,9 @@ function emptyEntities() {
   };
 }
 
-function snapshot(overrides: Partial<AccessProjectionSnapshot> = {}): AccessProjectionSnapshot {
+function snapshot(
+  overrides: Partial<AccessProjectionSnapshot> = {},
+): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
     schemaVersion: 2,
@@ -53,7 +61,9 @@ function snapshot(overrides: Partial<AccessProjectionSnapshot> = {}): AccessProj
   };
 }
 
-function event(overrides: Partial<AccessProjectionEvent> = {}): AccessProjectionEvent {
+function event(
+  overrides: Partial<AccessProjectionEvent> = {},
+): AccessProjectionEvent {
   return {
     type: "access.projection.event",
     schemaVersion: 2,
@@ -71,7 +81,11 @@ describe("applySync", () => {
     const t = convexTest(schema, modules);
 
     const result = await t.mutation(applySync, snapshot());
-    expect(result).toEqual({ ok: true, status: "applied", acknowledgedVersion: 1 });
+    expect(result).toEqual({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
 
     await t.run(async (ctx) => {
       const state = await ctx.db.query("sync_state").unique();
@@ -143,7 +157,9 @@ describe("applySync", () => {
     await t.run(async (ctx) => {
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       expect(user).toMatchObject({
         herculesAuthUserId: "user_alice",
@@ -235,13 +251,19 @@ describe("applySync", () => {
     });
   });
 
-  test("event rejected as duplicate when sourceVersion not advanced", async () => {
+  test("event rejected with a version gap when sourceVersion is stale", async () => {
     const t = convexTest(schema, modules);
 
     await t.mutation(applySync, snapshot({ sourceVersion: 5 }));
 
     const result = await t.mutation(applySync, event({ sourceVersion: 5 }));
-    expect(result).toEqual({ ok: true, status: "duplicate", acknowledgedVersion: 5 });
+    expect(result).toEqual({
+      ok: false,
+      status: "version_gap",
+      currentVersion: 5,
+      expectedVersion: 6,
+      receivedVersion: 5,
+    });
   });
 
   test("event applies a principal upsert and bumps per-app version", async () => {
@@ -254,7 +276,9 @@ describe("applySync", () => {
       event({
         sourceVersion: 6,
         eventId: "evt_p1",
-        changes: [{ entityType: "principal", entityId: "p_carol", operation: "upsert" }],
+        changes: [
+          { entityType: "principal", entityId: "p_carol", operation: "upsert" },
+        ],
         entities: {
           ...emptyEntities(),
           users: [
@@ -280,7 +304,11 @@ describe("applySync", () => {
         },
       }),
     );
-    expect(result).toEqual({ ok: true, status: "applied", acknowledgedVersion: 6 });
+    expect(result).toEqual({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 6,
+    });
 
     await t.run(async (ctx) => {
       const state = await ctx.db.query("sync_state").unique();
@@ -293,9 +321,14 @@ describe("applySync", () => {
       expect(carol!.joinedAt).toBe(300);
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_carol"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_carol"),
+        )
         .unique();
-      expect(user).toMatchObject({ email: "carol@example.com", updatedAt: 301 });
+      expect(user).toMatchObject({
+        email: "carol@example.com",
+        updatedAt: 301,
+      });
     });
   });
 
@@ -334,14 +367,18 @@ describe("applySync", () => {
     await t.mutation(
       applySync,
       event({
-        changes: [{ entityType: "principal", entityId: "p_alice", operation: "delete" }],
+        changes: [
+          { entityType: "principal", entityId: "p_alice", operation: "delete" },
+        ],
       }),
     );
 
     await t.run(async (ctx) => {
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       expect(user).toBeNull();
     });
@@ -379,18 +416,23 @@ describe("applySync", () => {
       }),
     );
 
-    await t.mutation(applySync, snapshot({ sourceVersion: 2, eventId: "evt_empty" }));
+    await t.mutation(
+      applySync,
+      snapshot({ sourceVersion: 2, eventId: "evt_empty" }),
+    );
 
     await t.run(async (ctx) => {
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       expect(user).toBeNull();
     });
   });
 
-  test("does not roll back a managed user profile from an older replacement snapshot", async () => {
+  test("treats a reset snapshot as authoritative for managed user profiles", async () => {
     const t = convexTest(schema, modules);
 
     await t.mutation(
@@ -456,12 +498,14 @@ describe("applySync", () => {
     await t.run(async (ctx) => {
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       expect(user).toMatchObject({
-        name: "Alice Updated",
-        email: "new@example.com",
-        updatedAt: 200,
+        name: "Alice Original",
+        email: "old@example.com",
+        updatedAt: 100,
       });
     });
   });
@@ -524,7 +568,11 @@ describe("applySync", () => {
       event({
         sourceVersion: 3,
         changes: [
-          { entityType: "principal", entityId: "p_alice_default", operation: "delete" },
+          {
+            entityType: "principal",
+            entityId: "p_alice_default",
+            operation: "delete",
+          },
         ],
       }),
     );
@@ -532,7 +580,9 @@ describe("applySync", () => {
     await t.run(async (ctx) => {
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       expect(user).not.toBeNull();
     });
@@ -573,7 +623,13 @@ describe("applySync", () => {
     await t.mutation(
       applySync,
       event({
-        changes: [{ entityType: "principal", entityId: "p_member", operation: "upsert" }],
+        changes: [
+          {
+            entityType: "principal",
+            entityId: "p_member",
+            operation: "upsert",
+          },
+        ],
         entities: {
           ...emptyEntities(),
           users: [
@@ -603,11 +659,15 @@ describe("applySync", () => {
     await t.run(async (ctx) => {
       const alice = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       const bob = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_bob"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_bob"),
+        )
         .unique();
       expect(alice).toBeNull();
       expect(bob).not.toBeNull();
@@ -672,7 +732,9 @@ describe("applySync", () => {
     await t.run(async (ctx) => {
       const user = await ctx.db
         .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "user_alice"))
+        .withIndex("by_auth_user_id", (q) =>
+          q.eq("herculesAuthUserId", "user_alice"),
+        )
         .unique();
       expect(user).not.toBeNull();
     });
@@ -693,24 +755,30 @@ describe("applySync", () => {
         sourceVersion: 3,
         eventId: "evt_acme_role",
         scope: orgScopeMeta,
-        changes: [{ entityType: "role", entityId: "role_admin", operation: "upsert" }],
+        changes: [
+          { entityType: "role", entityId: "role_admin", operation: "upsert" },
+        ],
         entities: {
           ...emptyEntities(),
           roles: [
             {
               roleId: "role_admin",
               accessScopeId: "scope_acme",
-              key: "admin",
-              kind: "system",
-              name: "Admin",
-              wildcard: "default",
+              key: "project_admin",
+              kind: "custom",
+              name: "Project Admin",
+              wildcard: "none",
               updatedAt: 1,
             },
           ],
         },
       }),
     );
-    expect(result).toEqual({ ok: true, status: "applied", acknowledgedVersion: 3 });
+    expect(result).toEqual({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 3,
+    });
 
     await t.run(async (ctx) => {
       const roles = await ctx.db.query("roles").collect();
@@ -749,7 +817,13 @@ describe("applySync", () => {
           sourceVersion: 2,
           eventId: "evt_rekey",
           scope: orgScopeMeta,
-          changes: [{ entityType: "principal", entityId: "p_alice", operation: "upsert" }],
+          changes: [
+            {
+              entityType: "principal",
+              entityId: "p_alice",
+              operation: "upsert",
+            },
+          ],
           entities: {
             ...emptyEntities(),
             principals: [
@@ -765,13 +839,16 @@ describe("applySync", () => {
           },
         }),
       ),
-    ).rejects.toThrow(/Refusing to rekey/);
+    ).resolves.toEqual({ ok: false, status: "invalid_payload" });
   });
 
   test("scope status update flips status from active to disabled", async () => {
     const t = convexTest(schema, modules);
 
-    await t.mutation(applySync, snapshot({ sourceVersion: 1, scope: orgScopeMeta }));
+    await t.mutation(
+      applySync,
+      snapshot({ sourceVersion: 1, scope: orgScopeMeta }),
+    );
 
     await t.mutation(
       applySync,
@@ -801,6 +878,36 @@ describe("applySync", () => {
         scope: orgScopeMeta,
         entities: {
           ...emptyEntities(),
+          principals: [
+            {
+              principalId: "p_alice_acme",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 100,
+              updatedAt: 100,
+            },
+          ],
+          roles: [
+            {
+              roleId: "role_admin",
+              accessScopeId: "scope_acme",
+              key: "project_admin",
+              kind: "custom",
+              name: "Project Admin",
+              wildcard: "none",
+              updatedAt: 100,
+            },
+            {
+              roleId: "role_reader",
+              accessScopeId: "scope_acme",
+              key: "project_reader",
+              kind: "custom",
+              name: "Project Reader",
+              wildcard: "none",
+              updatedAt: 100,
+            },
+          ],
           grants: [
             {
               grantId: "grant_principal",
@@ -814,7 +921,7 @@ describe("applySync", () => {
             },
             {
               grantId: "grant_scope_subject",
-              subjectScopeId: "scope_other_org",
+              subjectScopeId: "scope_acme",
               relationKind: "role",
               roleId: "role_reader",
               effect: "allow",
@@ -830,7 +937,9 @@ describe("applySync", () => {
     await t.run(async (ctx) => {
       const grants = await ctx.db
         .query("grants")
-        .withIndex("by_object_scope", (q) => q.eq("objectScopeId", "scope_acme"))
+        .withIndex("by_object_scope", (q) =>
+          q.eq("objectScopeId", "scope_acme"),
+        )
         .collect();
       expect(grants).toHaveLength(2);
       const byGrantId = new Map(grants.map((g) => [g.grantId, g]));
@@ -840,7 +949,7 @@ describe("applySync", () => {
       expect(principalGrant?.objectScopeId).toBe("scope_acme");
       const scopeGrant = byGrantId.get("grant_scope_subject");
       expect(scopeGrant?.subjectPrincipalId).toBeUndefined();
-      expect(scopeGrant?.subjectScopeId).toBe("scope_other_org");
+      expect(scopeGrant?.subjectScopeId).toBe("scope_acme");
       expect(scopeGrant?.objectScopeId).toBe("scope_acme");
     });
   });
@@ -855,6 +964,27 @@ describe("applySync", () => {
         scope: baseScopeMeta,
         entities: {
           ...emptyEntities(),
+          principals: [
+            {
+              principalId: "p_alice_default",
+              type: "user",
+              herculesAuthUserId: "user_alice",
+              status: "active",
+              joinedAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          roles: [
+            {
+              roleId: "role_owner",
+              accessScopeId: "scope_default",
+              key: "owner",
+              kind: "system",
+              name: "Owner",
+              wildcard: "immutable",
+              updatedAt: 1,
+            },
+          ],
           grants: [
             {
               grantId: "grant_alice_default",
@@ -878,7 +1008,13 @@ describe("applySync", () => {
           sourceVersion: 2,
           eventId: "evt_rekey_grant",
           scope: orgScopeMeta,
-          changes: [{ entityType: "grant", entityId: "grant_alice_default", operation: "upsert" }],
+          changes: [
+            {
+              entityType: "grant",
+              entityId: "grant_alice_default",
+              operation: "upsert",
+            },
+          ],
           entities: {
             ...emptyEntities(),
             grants: [
@@ -896,6 +1032,6 @@ describe("applySync", () => {
           },
         }),
       ),
-    ).rejects.toThrow(/Refusing to rekey grant/);
+    ).resolves.toEqual({ ok: false, status: "invalid_payload" });
   });
 });

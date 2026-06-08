@@ -1,70 +1,77 @@
 import { Webhook } from "standardwebhooks";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
+import {
+  emptyAccessProjectionEntities,
+  type AccessProjectionEvent,
+  type AccessProjectionSnapshot,
+} from "../shared/sync";
 import { registerAccessControlRoutes } from "./http";
 
 const secret = `whsec_${Buffer.from("test-secret").toString("base64")}`;
 
 const snapshot: AccessProjectionSnapshot = {
   type: "access.projection.snapshot",
-  schemaVersion: 2,
+  schemaVersion: 3,
   eventId: "evt_1",
+  mode: "initialize",
   sourceVersion: 1,
   expectedIssuer: "https://auth.example.com",
-  scope: {
-    accessScopeId: "scope_1",
-    name: "Default",
-    kind: "default",
-    status: "active",
-    accountEntryMode: "open",
-    defaultRoleId: "role_member",
-    updatedAt: 1,
-  },
-  entities: {
-    users: [],
-    principals: [],
-    principalMemberships: [],
-    roles: [],
-    permissions: [],
-    rolePermissions: [],
-    grants: [],
-  },
+  scopes: [
+    {
+      scope: {
+        accessScopeId: "scope_1",
+        name: "Default",
+        kind: "default",
+        status: "active",
+        accountEntryMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 1,
+      },
+      entities: emptyAccessProjectionEntities(),
+    },
+  ],
 };
 
 const event: AccessProjectionEvent = {
   type: "access.projection.event",
-  schemaVersion: 2,
+  schemaVersion: 3,
   eventId: "evt_2",
   sourceVersion: 2,
-  scope: {
-    accessScopeId: "scope_1",
-    name: "Default",
-    kind: "default",
-    status: "active",
-    accountEntryMode: "open",
-    defaultRoleId: "role_member",
-    updatedAt: 2,
-  },
-  changes: [{ entityType: "permission", entityId: "permission_1", operation: "upsert" }],
-  entities: {
-    users: [],
-    principals: [],
-    principalMemberships: [],
-    roles: [],
-    permissions: [
-      {
-        permissionId: "permission_1",
-        accessScopeId: "scope_default",
-        key: "tasks:create",
-        resourceType: "tasks",
-        action: "create",
-        tenantAssignable: true,
-        updatedAt: 1,
+  scopes: [
+    {
+      scope: {
+        accessScopeId: "scope_1",
+        name: "Default",
+        kind: "default",
+        status: "active",
+        accountEntryMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 2,
       },
-    ],
-    rolePermissions: [],
-    grants: [],
-  },
+      changes: [
+        {
+          entityType: "permission",
+          entityId: "permission_1",
+          operation: "upsert",
+        },
+      ],
+      entities: {
+        ...emptyAccessProjectionEntities(),
+        permissions: [
+          {
+            permissionId: "permission_1",
+            accessScopeId: "scope_1",
+            key: "tasks:create",
+            resourceType: "tasks",
+            action: "create",
+            classification: "delegable",
+            tenantAssignable: true,
+            updatedAt: 1,
+          },
+        ],
+      },
+    },
+  ],
 };
 
 describe("registerAccessControlRoutes", () => {
@@ -74,11 +81,16 @@ describe("registerAccessControlRoutes", () => {
 
   test("applies a signed snapshot", async () => {
     const route = registerRouteForTest();
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
 
-    const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
+    const response = await route.handler(
+      { runMutation },
+      signedRequest(JSON.stringify(snapshot)),
+    );
 
     await expect(response.json()).resolves.toEqual({
       ok: true,
@@ -91,11 +103,16 @@ describe("registerAccessControlRoutes", () => {
 
   test("applies a signed incremental event", async () => {
     const route = registerRouteForTest();
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 2 });
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 2,
+    });
 
-    const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(event)));
+    const response = await route.handler(
+      { runMutation },
+      signedRequest(JSON.stringify(event)),
+    );
 
     await expect(response.json()).resolves.toEqual({
       ok: true,
@@ -107,19 +124,28 @@ describe("registerAccessControlRoutes", () => {
   });
 
   test("resolves the Hercules-mounted component by default", async () => {
-    const routes: Array<{ path: string; method: string; handler: Function }> = [];
+    const routes: Array<{ path: string; method: string; handler: Function }> =
+      [];
     registerAccessControlRoutes(
-      { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
+      {
+        route: (route: { path: string; method: string; handler: Function }) =>
+          routes.push(route),
+      },
       {
         httpAction: (handler) => handler as never,
         components: { hercules: { sync: { applySync: "herculesApplySync" } } },
       },
     );
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
 
-    await routes[0]!.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
+    await routes[0]!.handler(
+      { runMutation },
+      signedRequest(JSON.stringify(snapshot)),
+    );
 
     expect(runMutation).toHaveBeenCalledWith("herculesApplySync", snapshot);
   });
@@ -130,10 +156,16 @@ describe("registerAccessControlRoutes", () => {
 
     const response = await route.handler(
       { runMutation },
-      new Request("https://example.com", { method: "POST", body: JSON.stringify(snapshot) }),
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify(snapshot),
+      }),
     );
 
-    await expect(response.json()).resolves.toEqual({ ok: false, status: "invalid_signature" });
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      status: "invalid_signature",
+    });
     expect(response.status).toBe(401);
     expect(runMutation).not.toHaveBeenCalled();
   });
@@ -147,16 +179,49 @@ describe("registerAccessControlRoutes", () => {
       signedRequest(JSON.stringify({ type: "unexpected" })),
     );
 
-    await expect(response.json()).resolves.toEqual({ ok: false, status: "invalid_payload" });
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      status: "invalid_payload",
+    });
     expect(response.status).toBe(400);
     expect(runMutation).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [{ ok: false, status: "not_ready", currentVersion: 0 }, 409],
+    [{ ok: false, status: "reset_required", currentVersion: 4 }, 409],
+    [
+      {
+        ok: false,
+        status: "version_gap",
+        currentVersion: 4,
+        expectedVersion: 5,
+        receivedVersion: 6,
+      },
+      409,
+    ],
+    [{ ok: false, status: "issuer_mismatch" }, 409],
+    [{ ok: false, status: "default_scope_required" }, 400],
+    [{ ok: false, status: "invalid_payload" }, 400],
+  ] as const)("maps %s to HTTP %i", async (result, expectedStatus) => {
+    const route = registerRouteForTest();
+    const response = await route.handler(
+      { runMutation: vi.fn().mockResolvedValue(result) },
+      signedRequest(JSON.stringify(snapshot)),
+    );
+
+    expect(response.status).toBe(expectedStatus);
+    await expect(response.json()).resolves.toEqual(result);
   });
 });
 
 function registerRouteForTest() {
   const routes: Array<{ path: string; method: string; handler: Function }> = [];
   registerAccessControlRoutes(
-    { route: (route: { path: string; method: string; handler: Function }) => routes.push(route) },
+    {
+      route: (route: { path: string; method: string; handler: Function }) =>
+        routes.push(route),
+    },
     {
       httpAction: (handler) => handler as never,
       component: { sync: { applySync: "applySync" as never } },

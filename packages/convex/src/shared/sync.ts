@@ -2,7 +2,12 @@ import { z } from "zod";
 
 export const ACCESS_CONTROL_SYNC_PATH = "/_hercules/access-control/sync";
 
-export const principalStatusSchema = z.enum(["active", "blocked", "suspended", "pending_approval"]);
+export const principalStatusSchema = z.enum([
+  "active",
+  "blocked",
+  "suspended",
+  "pending_approval",
+]);
 export type PrincipalStatus = z.infer<typeof principalStatusSchema>;
 
 export const accountEntryModeSchema = z.enum([
@@ -19,7 +24,7 @@ export type ScopeKind = z.infer<typeof scopeKindSchema>;
 export const scopeStatusSchema = z.enum(["active", "disabled"]);
 export type ScopeStatus = z.infer<typeof scopeStatusSchema>;
 
-export const scopeMetadataSchema = z.object({
+export const scopeMetadataSchema = z.strictObject({
   accessScopeId: z.string().min(1),
   name: z.string().min(1),
   kind: scopeKindSchema,
@@ -30,7 +35,7 @@ export const scopeMetadataSchema = z.object({
 });
 export type ScopeMetadata = z.infer<typeof scopeMetadataSchema>;
 
-const userSchema = z.object({
+const userSchema = z.strictObject({
   herculesAuthUserId: z.string().min(1),
   name: z.string(),
   email: z.string().min(1),
@@ -41,7 +46,7 @@ const userSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
 });
 
-const principalSchema = z.object({
+const principalSchema = z.strictObject({
   principalId: z.string().min(1),
   type: z.enum(["user", "group"]),
   herculesAuthUserId: z.string().min(1).optional(),
@@ -50,47 +55,42 @@ const principalSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
 });
 
-const principalMembershipSchema = z.object({
+const principalMembershipSchema = z.strictObject({
   groupPrincipalId: z.string().min(1),
   memberPrincipalId: z.string().min(1),
   updatedAt: z.number().int().nonnegative(),
 });
 
-// DL15: each role row carries its own accessScopeId — default scope for
-// system roles, target org scope for custom roles. Consumer keys lookups
-// on (accessScopeId, key).
-const roleSchema = z.object({
+const roleSchema = z.strictObject({
   roleId: z.string().min(1),
   accessScopeId: z.string().min(1),
   key: z.string().min(1),
   kind: z.enum(["system", "custom"]),
   name: z.string().min(1),
-  // §0b wildcard semantic flag (never a materialized list):
-  //   "immutable" — Owner: always-allow, including future permissions.
-  //   "default"   — Admin: allow-all-minus-Owner-levers, until narrowed.
-  //   "none"      — Member/custom/narrowed-Admin: enumerated rows govern.
-  // Required on v2: producers always emit it, and treating it as optional
-  // would silently downgrade Owner/Admin to enumerated semantics on a
-  // malformed payload (the §0b lockout footgun). Reject instead.
   wildcard: z.enum(["none", "immutable", "default"]),
   updatedAt: z.number().int().nonnegative(),
 });
 
-// Permissions are app-wide; accessScopeId always equals the default scope.
-// tenantAssignable=false hides the permission from org-admin role editors.
-const permissionSchema = z.object({
+export const permissionClassificationSchema = z.enum([
+  "delegable",
+  "owner_only",
+]);
+export type PermissionClassification = z.infer<
+  typeof permissionClassificationSchema
+>;
+
+const permissionSchema = z.strictObject({
   permissionId: z.string().min(1),
   accessScopeId: z.string().min(1),
   key: z.string().min(1),
   resourceType: z.string().min(1),
   action: z.string().min(1),
+  classification: permissionClassificationSchema,
   tenantAssignable: z.boolean(),
   updatedAt: z.number().int().nonnegative(),
 });
 
-// Default-scope rows are base role -> permission mappings. Org-scope rows
-// are per-org overrides (allow extends, deny removes).
-const rolePermissionSchema = z.object({
+const rolePermissionSchema = z.strictObject({
   roleId: z.string().min(1),
   permissionId: z.string().min(1),
   accessScopeId: z.string().min(1),
@@ -101,30 +101,63 @@ const rolePermissionSchema = z.object({
 export const grantObjectTypeSchema = z.enum(["scope", "resource"]);
 export type GrantObjectType = z.infer<typeof grantObjectTypeSchema>;
 
-// The producer filters grants by objectScopeId === payload.scope.accessScopeId,
-// so the payload doesn't repeat objectScopeId per-row. The component derives
-// it from payload.scope when storing each grant. Producer must set exactly one
-// of subjectPrincipalId / subjectScopeId / subjectRoleId (DL14 CHECK on the
-// Hercules side).
-// DL15: relationKind="role" requires roleId; "direct_permission" requires
-// permissionId. Producer's CHECK constraint enforces the XOR.
-const grantSchema = z.object({
-  grantId: z.string().min(1),
-  subjectPrincipalId: z.string().min(1).optional(),
-  subjectScopeId: z.string().min(1).optional(),
-  subjectRoleId: z.string().min(1).optional(),
-  relationKind: z.enum(["role", "direct_permission"]),
-  roleId: z.string().min(1).optional(),
-  permissionId: z.string().min(1).optional(),
-  effect: z.enum(["allow", "deny"]),
-  objectType: grantObjectTypeSchema,
-  objectId: z.string().min(1),
-  objectResourceType: z.string().min(1).optional(),
-  expiresAt: z.number().int().nonnegative().optional(),
-  updatedAt: z.number().int().nonnegative(),
-});
+const grantSchema = z
+  .strictObject({
+    grantId: z.string().min(1),
+    subjectPrincipalId: z.string().min(1).optional(),
+    subjectScopeId: z.string().min(1).optional(),
+    subjectRoleId: z.string().min(1).optional(),
+    relationKind: z.enum(["role", "direct_permission"]),
+    roleId: z.string().min(1).optional(),
+    permissionId: z.string().min(1).optional(),
+    effect: z.enum(["allow", "deny"]),
+    objectType: grantObjectTypeSchema,
+    objectId: z.string().min(1),
+    objectResourceType: z.string().min(1).optional(),
+    expiresAt: z.number().int().nonnegative().optional(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .superRefine((grant, ctx) => {
+    const subjectCount = [
+      grant.subjectPrincipalId,
+      grant.subjectScopeId,
+      grant.subjectRoleId,
+    ].filter((value) => value !== undefined).length;
+    if (subjectCount !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Exactly one grant subject is required",
+      });
+    }
 
-const entitiesSchema = z.object({
+    const relationMatches =
+      (grant.relationKind === "role" &&
+        grant.roleId !== undefined &&
+        grant.permissionId === undefined) ||
+      (grant.relationKind === "direct_permission" &&
+        grant.permissionId !== undefined &&
+        grant.roleId === undefined);
+    if (!relationMatches) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Grant relation and referenced entity must match",
+      });
+    }
+
+    const targetMatches =
+      (grant.objectType === "scope" &&
+        grant.objectResourceType === undefined) ||
+      (grant.objectType === "resource" &&
+        grant.objectResourceType !== undefined);
+    if (!targetMatches) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Grant resource target shape is invalid",
+      });
+    }
+  });
+
+export const accessProjectionEntitiesSchema = z.strictObject({
   users: z.array(userSchema),
   principals: z.array(principalSchema),
   principalMemberships: z.array(principalMembershipSchema),
@@ -133,8 +166,11 @@ const entitiesSchema = z.object({
   rolePermissions: z.array(rolePermissionSchema),
   grants: z.array(grantSchema),
 });
+export type AccessProjectionEntities = z.infer<
+  typeof accessProjectionEntitiesSchema
+>;
 
-export const accessProjectionChangeSchema = z.object({
+export const accessProjectionChangeSchema = z.strictObject({
   entityType: z.enum([
     "principal",
     "principal_membership",
@@ -146,39 +182,132 @@ export const accessProjectionChangeSchema = z.object({
   entityId: z.string().min(1),
   operation: z.enum(["upsert", "delete"]),
 });
+export type AccessProjectionChange = z.infer<
+  typeof accessProjectionChangeSchema
+>;
 
-export const accessProjectionSnapshotSchema = z.object({
-  type: z.literal("access.projection.snapshot"),
-  // v2 adds per-role `wildcard` (see §0b). The monorepo producer emits only
-  // v2; mirror its hard pin rather than a union we would have to branch on.
-  schemaVersion: z.literal(2),
-  eventId: z.string().min(1),
-  sourceVersion: z.number().int().nonnegative(),
-  expectedIssuer: z.string().min(1),
-  scope: scopeMetadataSchema,
-  entities: entitiesSchema,
-});
+export const accessProjectionSnapshotScopeSchema = z
+  .strictObject({
+    scope: scopeMetadataSchema,
+    entities: accessProjectionEntitiesSchema,
+  })
+  .superRefine((payload, ctx) => {
+    validateGrantScopes(
+      payload.scope.accessScopeId,
+      payload.entities.grants,
+      ctx,
+    );
+  });
+export type AccessProjectionSnapshotScope = z.infer<
+  typeof accessProjectionSnapshotScopeSchema
+>;
 
-export type AccessProjectionSnapshot = z.infer<typeof accessProjectionSnapshotSchema>;
+export const accessProjectionSnapshotSchema = z
+  .strictObject({
+    type: z.literal("access.projection.snapshot"),
+    schemaVersion: z.literal(3),
+    eventId: z.string().min(1),
+    mode: z.enum(["initialize", "reset"]),
+    sourceVersion: z.number().int().positive(),
+    expectedIssuer: z.string().min(1),
+    scopes: z.array(accessProjectionSnapshotScopeSchema).min(1),
+  })
+  .superRefine((payload, ctx) => {
+    const scopeIds = new Set<string>();
+    let defaultScopeCount = 0;
+    for (const [index, entry] of payload.scopes.entries()) {
+      const scopeId = entry.scope.accessScopeId;
+      if (scopeIds.has(scopeId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["scopes", index, "scope", "accessScopeId"],
+          message: "Projection snapshot scopes must be unique",
+        });
+      }
+      scopeIds.add(scopeId);
+      if (entry.scope.kind === "default") {
+        defaultScopeCount += 1;
+        if (index !== 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["scopes", index, "scope", "kind"],
+            message: "The default scope must be first",
+          });
+        }
+      }
+    }
+    if (defaultScopeCount !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["scopes"],
+        message: "Exactly one default scope is required",
+      });
+    }
+  });
+export type AccessProjectionSnapshot = z.infer<
+  typeof accessProjectionSnapshotSchema
+>;
 
-export const accessProjectionEventSchema = z.object({
-  type: z.literal("access.projection.event"),
-  schemaVersion: z.literal(2),
-  eventId: z.string().min(1),
-  sourceVersion: z.number().int().nonnegative(),
-  scope: scopeMetadataSchema,
-  changes: z.array(accessProjectionChangeSchema),
-  entities: entitiesSchema,
-});
+export const accessProjectionScopeEventSchema = z
+  .strictObject({
+    scope: scopeMetadataSchema,
+    changes: z.array(accessProjectionChangeSchema),
+    entities: accessProjectionEntitiesSchema,
+  })
+  .superRefine((payload, ctx) => {
+    validateGrantScopes(
+      payload.scope.accessScopeId,
+      payload.entities.grants,
+      ctx,
+    );
+  });
+export type AccessProjectionScopeEvent = z.infer<
+  typeof accessProjectionScopeEventSchema
+>;
+
+export const accessProjectionEventSchema = z
+  .strictObject({
+    type: z.literal("access.projection.event"),
+    schemaVersion: z.literal(3),
+    eventId: z.string().min(1),
+    sourceVersion: z.number().int().positive(),
+    scopes: z.array(accessProjectionScopeEventSchema).min(1),
+  })
+  .superRefine((payload, ctx) => {
+    const scopeIds = new Set<string>();
+    for (const [index, entry] of payload.scopes.entries()) {
+      const scopeId = entry.scope.accessScopeId;
+      if (scopeIds.has(scopeId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["scopes", index, "scope", "accessScopeId"],
+          message: "Projection event scopes must be unique",
+        });
+      }
+      scopeIds.add(scopeId);
+    }
+  });
+export type AccessProjectionEvent = z.infer<typeof accessProjectionEventSchema>;
 
 export const accessProjectionSyncPayloadSchema = z.union([
   accessProjectionSnapshotSchema,
   accessProjectionEventSchema,
 ]);
+export type AccessProjectionSyncPayload = z.infer<
+  typeof accessProjectionSyncPayloadSchema
+>;
 
-export type AccessProjectionChange = z.infer<typeof accessProjectionChangeSchema>;
-export type AccessProjectionEvent = z.infer<typeof accessProjectionEventSchema>;
-export type AccessProjectionSyncPayload = z.infer<typeof accessProjectionSyncPayloadSchema>;
+export function emptyAccessProjectionEntities(): AccessProjectionEntities {
+  return {
+    users: [],
+    principals: [],
+    principalMemberships: [],
+    roles: [],
+    permissions: [],
+    rolePermissions: [],
+    grants: [],
+  };
+}
 
 export type SyncResponse =
   | {
@@ -198,8 +327,31 @@ export type SyncResponse =
       status:
         | "invalid_signature"
         | "invalid_payload"
-        // MED-03: producer-side issuer rotation is an explicit flow, not a
-        // side effect of a signed snapshot. Consumer surfaces this so the
-        // producer can decide whether to retry or surface a fatal alert.
-        | "issuer_mismatch";
+        | "issuer_mismatch"
+        | "default_scope_required";
+    }
+  | {
+      ok: false;
+      status: "not_ready" | "reset_required";
+      currentVersion: number;
     };
+
+function validateGrantScopes(
+  accessScopeId: string,
+  grants: AccessProjectionEntities["grants"],
+  ctx: z.RefinementCtx,
+): void {
+  for (const [index, grant] of grants.entries()) {
+    if (
+      (grant.objectType === "scope" && grant.objectId !== accessScopeId) ||
+      (grant.subjectScopeId !== undefined &&
+        grant.subjectScopeId !== accessScopeId)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["entities", "grants", index],
+        message: "Grant scope target does not match the payload scope",
+      });
+    }
+  }
+}

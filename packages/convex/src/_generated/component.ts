@@ -25,6 +25,7 @@ type AuthorizationArgs = {
 type AuthorizationDecision = {
   allowed: boolean;
   reasonCode: string;
+  explicitDeny: boolean;
   sourceVersion?: number;
   principalId?: string;
   effectiveRoleIds: string[];

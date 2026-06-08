@@ -1,7 +1,8 @@
-import { convexTest } from "convex-test";
+import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
 import type { AccessProjectionSnapshot } from "../shared/sync";
+import { withV3SyncFixtures } from "../../test/legacy-sync";
 import schema from "./schema";
 
 const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
@@ -10,10 +11,18 @@ const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
 const getEffectivePermissions = makeFunctionReference<"query">(
   "component/queries:getEffectivePermissions",
 );
-const listMyMemberships = makeFunctionReference<"query">("component/queries:listMyMemberships");
-const listMyRoles = makeFunctionReference<"query">("component/queries:listMyRoles");
-const listScopeMembers = makeFunctionReference<"query">("component/queries:listScopeMembers");
-const listScopeRoles = makeFunctionReference<"query">("component/queries:listScopeRoles");
+const listMyMemberships = makeFunctionReference<"query">(
+  "component/queries:listMyMemberships",
+);
+const listMyRoles = makeFunctionReference<"query">(
+  "component/queries:listMyRoles",
+);
+const listScopeMembers = makeFunctionReference<"query">(
+  "component/queries:listScopeMembers",
+);
+const listScopeRoles = makeFunctionReference<"query">(
+  "component/queries:listScopeRoles",
+);
 const listScopePermissions = makeFunctionReference<"query">(
   "component/queries:listScopePermissions",
 );
@@ -22,6 +31,8 @@ const listDirectSubjectsForResource = makeFunctionReference<"query">(
 );
 
 const ISSUER = "https://auth.example.com";
+const convexTest = (...args: Parameters<typeof baseConvexTest>) =>
+  withV3SyncFixtures(baseConvexTest(...args));
 
 function emptyEntities() {
   return {
@@ -98,6 +109,57 @@ function memberSnapshot(
           updatedAt: 1,
         },
       ],
+    },
+  };
+}
+
+function effectiveRoleReadSnapshot(options: {
+  grants: AccessProjectionSnapshot["entities"]["grants"];
+  roles: AccessProjectionSnapshot["entities"]["roles"];
+}): AccessProjectionSnapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_effective_role_reads",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_acme",
+      name: "Acme",
+      kind: "org",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_member",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 1001,
+          updatedAt: 1,
+        },
+        {
+          principalId: "p_engineering",
+          type: "group",
+          status: "active",
+          joinedAt: 1000,
+          updatedAt: 1,
+        },
+      ],
+      principalMemberships: [
+        {
+          groupPrincipalId: "p_engineering",
+          memberPrincipalId: "p_alice",
+          updatedAt: 1,
+        },
+      ],
+      roles: options.roles,
+      grants: options.grants,
     },
   };
 }
@@ -224,8 +286,16 @@ describe("listMyMemberships", () => {
     expect(memberships[0]).toMatchObject({
       scopeId: "scope_acme",
       roles: [
-        { roleId: "role_field_agent", roleKey: "field_agent", roleName: "Field Agent" },
-        { roleId: "role_loan_officer", roleKey: "loan_officer", roleName: "Loan Officer" },
+        {
+          roleId: "role_field_agent",
+          roleKey: "field_agent",
+          roleName: "Field Agent",
+        },
+        {
+          roleId: "role_loan_officer",
+          roleKey: "loan_officer",
+          roleName: "Loan Officer",
+        },
       ],
     });
   });
@@ -250,8 +320,152 @@ describe("listMyMemberships", () => {
     });
 
     expect(roles).toEqual([
-      { roleId: "role_acme_admin", roleKey: "admin", roleName: "Admin", roleKind: "system" },
+      {
+        roleId: "role_acme_admin",
+        roleKey: "admin",
+        roleName: "Admin",
+        roleKind: "system",
+      },
     ]);
+  });
+
+  test("lists roles inherited through direct group membership", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      applySync,
+      effectiveRoleReadSnapshot({
+        roles: [
+          {
+            roleId: "role_engineer",
+            accessScopeId: "scope_acme",
+            key: "engineer",
+            kind: "custom",
+            name: "Engineer",
+            wildcard: "none",
+            updatedAt: 1,
+          },
+        ],
+        grants: [
+          {
+            grantId: "grant_engineering_engineer",
+            subjectPrincipalId: "p_engineering",
+            relationKind: "role",
+            roleId: "role_engineer",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_acme",
+            updatedAt: 1,
+          },
+        ],
+      }),
+    );
+
+    const memberships = await t.query(listMyMemberships, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+    });
+    const roles = await t.query(listMyRoles, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    expect(memberships[0]?.roles).toEqual([
+      {
+        roleId: "role_engineer",
+        roleKey: "engineer",
+        roleName: "Engineer",
+        roleKind: "custom",
+      },
+    ]);
+    expect(roles).toEqual(memberships[0]?.roles);
+  });
+
+  test("role deny overrides direct and group role allows", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      applySync,
+      effectiveRoleReadSnapshot({
+        roles: [
+          {
+            roleId: "role_engineer",
+            accessScopeId: "scope_acme",
+            key: "engineer",
+            kind: "custom",
+            name: "Engineer",
+            wildcard: "none",
+            updatedAt: 1,
+          },
+          {
+            roleId: "role_viewer",
+            accessScopeId: "scope_acme",
+            key: "viewer",
+            kind: "custom",
+            name: "Viewer",
+            wildcard: "none",
+            updatedAt: 1,
+          },
+        ],
+        grants: [
+          {
+            grantId: "grant_alice_engineer",
+            subjectPrincipalId: "p_alice",
+            relationKind: "role",
+            roleId: "role_engineer",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_acme",
+            updatedAt: 1,
+          },
+          {
+            grantId: "grant_engineering_engineer",
+            subjectPrincipalId: "p_engineering",
+            relationKind: "role",
+            roleId: "role_engineer",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_acme",
+            updatedAt: 1,
+          },
+          {
+            grantId: "grant_engineering_viewer",
+            subjectPrincipalId: "p_engineering",
+            relationKind: "role",
+            roleId: "role_viewer",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_acme",
+            updatedAt: 1,
+          },
+          {
+            grantId: "deny_engineering_engineer",
+            subjectPrincipalId: "p_engineering",
+            relationKind: "role",
+            roleId: "role_engineer",
+            effect: "deny",
+            objectType: "scope",
+            objectId: "scope_acme",
+            updatedAt: 2,
+          },
+        ],
+      }),
+    );
+
+    const memberships = await t.query(listMyMemberships, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+    });
+    const roles = await t.query(listMyRoles, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    expect(memberships[0]?.roles).toEqual([
+      {
+        roleId: "role_viewer",
+        roleKey: "viewer",
+        roleName: "Viewer",
+        roleKind: "custom",
+      },
+    ]);
+    expect(roles).toEqual(memberships[0]?.roles);
   });
 
   test("skips disabled scopes", async () => {
@@ -328,7 +542,7 @@ describe("listMyMemberships", () => {
 });
 
 describe("getEffectivePermissions", () => {
-  test("returns additive role permissions with contribution-level overrides and user exceptions", async () => {
+  test("applies explicit role denies across all assigned roles", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, permissionCatalogSnapshot());
     await t.mutation(applySync, permissionOrgSnapshot());
@@ -345,7 +559,7 @@ describe("getEffectivePermissions", () => {
       principalId: "p_alice_acme",
       scopeId: "scope_acme",
       effectiveRoleIds: ["role_manager", "role_accountant", "role_field_agent"],
-      permissions: ["borrowers.create", "reports.export"],
+      permissions: ["borrowers.create"],
     });
   });
 
@@ -427,7 +641,12 @@ describe("getEffectivePermissions", () => {
     // reported by membership; re-evaluating with the permission's own superset
     // action would never match and would drop it.
     expect(result.wildcard).toBe("none");
-    expect(result.permissions).toEqual(["system.access.roles:manage", "system.reports:*"]);
+    expect(result.permissions).toEqual([
+      "system.access.roles:manage",
+      "system.access.roles:read",
+      "system.reports:*",
+      "system.reports:export",
+    ]);
   });
 });
 
@@ -444,22 +663,11 @@ function manageCatalogSnapshot(): AccessProjectionSnapshot {
       kind: "default",
       status: "active",
       accountEntryMode: "open",
-      defaultRoleId: "role_role_admin",
+      defaultRoleId: "role_member",
       updatedAt: 1,
     },
     entities: {
       ...emptyEntities(),
-      roles: [
-        {
-          roleId: "role_role_admin",
-          accessScopeId: "scope_default",
-          key: "role_admin",
-          kind: "custom",
-          name: "Role Admin",
-          wildcard: "none",
-          updatedAt: 1,
-        },
-      ],
       permissions: [
         {
           permissionId: "perm_roles_manage",
@@ -467,6 +675,15 @@ function manageCatalogSnapshot(): AccessProjectionSnapshot {
           key: "system.access.roles:manage",
           resourceType: "system.access.roles",
           action: "manage",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
+          permissionId: "perm_roles_read",
+          accessScopeId: "scope_default",
+          key: "system.access.roles:read",
+          resourceType: "system.access.roles",
+          action: "read",
           tenantAssignable: true,
           updatedAt: 1,
         },
@@ -480,28 +697,21 @@ function manageCatalogSnapshot(): AccessProjectionSnapshot {
           updatedAt: 1,
         },
         {
+          permissionId: "perm_reports_export",
+          accessScopeId: "scope_default",
+          key: "system.reports:export",
+          resourceType: "system.reports",
+          action: "export",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
           permissionId: "perm_loans_read",
           accessScopeId: "scope_default",
           key: "loans.read",
           resourceType: "loans",
           action: "read",
           tenantAssignable: true,
-          updatedAt: 1,
-        },
-      ],
-      rolePermissions: [
-        {
-          roleId: "role_role_admin",
-          permissionId: "perm_roles_manage",
-          accessScopeId: "scope_default",
-          effect: "allow",
-          updatedAt: 1,
-        },
-        {
-          roleId: "role_role_admin",
-          permissionId: "perm_reports_all",
-          accessScopeId: "scope_default",
-          effect: "allow",
           updatedAt: 1,
         },
       ],
@@ -535,6 +745,33 @@ function manageOrgSnapshot(): AccessProjectionSnapshot {
           status: "active",
           joinedAt: 100,
           updatedAt: 100,
+        },
+      ],
+      roles: [
+        {
+          roleId: "role_role_admin",
+          accessScopeId: "scope_acme",
+          key: "role_admin",
+          kind: "custom",
+          name: "Role Admin",
+          wildcard: "none",
+          updatedAt: 2,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_role_admin",
+          permissionId: "perm_roles_manage",
+          accessScopeId: "scope_acme",
+          effect: "allow",
+          updatedAt: 2,
+        },
+        {
+          roleId: "role_role_admin",
+          permissionId: "perm_reports_all",
+          accessScopeId: "scope_acme",
+          effect: "allow",
+          updatedAt: 2,
         },
       ],
       grants: [
@@ -917,7 +1154,9 @@ type ResourceShareGrant = {
 // (effective.ts fetches catalogPermissions there). Seed the permission, the
 // principal, the Viewer role membership, and the resource grants all in the
 // default scope so getEffectivePermissions can enumerate over the catalog.
-function resourceShareEnumSnapshot(grants: ResourceShareGrant[]): AccessProjectionSnapshot {
+function resourceShareEnumSnapshot(
+  grants: ResourceShareGrant[],
+): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
     schemaVersion: 2,
@@ -1038,8 +1277,14 @@ describe("getEffectivePermissions — resource invitation / immediate grant pari
       ]),
     );
 
-    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
-    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
+    const fromImmediate = await effectiveReportPermissions(
+      immediate,
+      "report_1",
+    );
+    const fromInvitation = await effectiveReportPermissions(
+      invitation,
+      "report_1",
+    );
     expect(fromImmediate).toEqual(["reports.read"]);
     expect(fromInvitation).toEqual(fromImmediate);
   });
@@ -1083,8 +1328,14 @@ describe("getEffectivePermissions — resource invitation / immediate grant pari
       ]),
     );
 
-    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
-    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
+    const fromImmediate = await effectiveReportPermissions(
+      immediate,
+      "report_1",
+    );
+    const fromInvitation = await effectiveReportPermissions(
+      invitation,
+      "report_1",
+    );
     expect(fromImmediate).toEqual([]);
     expect(fromInvitation).toEqual(fromImmediate);
   });
@@ -1105,8 +1356,14 @@ describe("getEffectivePermissions — resource invitation / immediate grant pari
       ]),
     );
 
-    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
-    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
+    const fromImmediate = await effectiveReportPermissions(
+      immediate,
+      "report_1",
+    );
+    const fromInvitation = await effectiveReportPermissions(
+      invitation,
+      "report_1",
+    );
     expect(fromImmediate).toEqual([]);
     expect(fromInvitation).toEqual(fromImmediate);
 
@@ -1125,7 +1382,9 @@ describe("getEffectivePermissions — resource invitation / immediate grant pari
         },
       ]),
     );
-    expect(await effectiveReportPermissions(wellFormed, "report_1")).toEqual(["reports.read"]);
+    expect(await effectiveReportPermissions(wellFormed, "report_1")).toEqual([
+      "reports.read",
+    ]);
   });
 });
 
@@ -1280,7 +1539,10 @@ describe("scope admin reads", () => {
       tokenIdentifier: `${ISSUER}|user_owner`,
       scopeId: "scope_default",
     });
-    expect(asOwner.map((m) => m.herculesAuthUserId).sort()).toEqual(["user_member", "user_owner"]);
+    expect(asOwner.map((m) => m.herculesAuthUserId).sort()).toEqual([
+      "user_member",
+      "user_owner",
+    ]);
     const owner = asOwner.find((m) => m.herculesAuthUserId === "user_owner");
     expect(owner?.name).toBe("Olivia Owner");
     expect(owner?.roles[0]?.roleKey).toBe("owner");

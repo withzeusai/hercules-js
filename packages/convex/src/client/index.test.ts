@@ -420,6 +420,7 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     authorizeAgainst?: (row: Record<string, unknown>) => Array<{
       resourceType: string;
       resourceId: string;
+      permission?: string;
     }>,
   ) {
     const builders = createAccessControl({
@@ -451,13 +452,18 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     };
   }
 
-  test("allows via an ancestor when the resource itself denies (union)", async () => {
+  test("allows via an ancestor when the resource itself is implicitly denied", async () => {
     const handler = makeTaskMutation((task) => [
-      { resourceType: "app.project", resourceId: String(task.projectId) },
+      {
+        resourceType: "app.project",
+        resourceId: String(task.projectId),
+        permission: "app.project:edit",
+      },
     ]);
     const runQuery = vi.fn(async (_ref: string, a: { resourceType?: string }) => ({
       allowed: a.resourceType === "app.project",
       reasonCode: a.resourceType === "app.project" ? "allowed" : "denied",
+      explicitDeny: false,
       effectiveRoleIds: [],
     }));
     await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).resolves.toBe("ok");
@@ -473,9 +479,78 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
       expect.objectContaining({
         resourceType: "app.project",
         resourceId: "proj_1",
-        permission: "app.task:edit",
+        permission: "app.project:edit",
       }),
     );
+  });
+
+  test("does not let an ancestor allow override an explicit child deny", async () => {
+    const handler = makeTaskMutation((task) => [
+      {
+        resourceType: "app.project",
+        resourceId: String(task.projectId),
+        permission: "app.project:edit",
+      },
+    ]);
+    const runQuery = vi
+      .fn()
+      .mockResolvedValueOnce({
+        allowed: false,
+        reasonCode: "permission_denied",
+        explicitDeny: true,
+        effectiveRoleIds: [],
+      })
+      .mockResolvedValueOnce({
+        allowed: true,
+        reasonCode: "allowed",
+        explicitDeny: false,
+        effectiveRoleIds: [],
+      });
+
+    await expect(
+      handler.handler(makeCtx(runQuery), { taskId: "task_1" }),
+    ).rejects.toBeInstanceOf(ConvexError);
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not let a later ancestor override an earlier explicit deny", async () => {
+    const handler = makeTaskMutation((task) => [
+      {
+        resourceType: "app.project",
+        resourceId: String(task.projectId),
+        permission: "app.project:edit",
+      },
+      {
+        resourceType: "app.workspace",
+        resourceId: "workspace_1",
+        permission: "app.workspace:edit",
+      },
+    ]);
+    const runQuery = vi
+      .fn()
+      .mockResolvedValueOnce({
+        allowed: false,
+        reasonCode: "permission_denied",
+        explicitDeny: false,
+        effectiveRoleIds: [],
+      })
+      .mockResolvedValueOnce({
+        allowed: false,
+        reasonCode: "permission_denied",
+        explicitDeny: true,
+        effectiveRoleIds: [],
+      })
+      .mockResolvedValueOnce({
+        allowed: true,
+        reasonCode: "allowed",
+        explicitDeny: false,
+        effectiveRoleIds: [],
+      });
+
+    await expect(
+      handler.handler(makeCtx(runQuery), { taskId: "task_1" }),
+    ).rejects.toBeInstanceOf(ConvexError);
+    expect(runQuery).toHaveBeenCalledTimes(2);
   });
 
   test("does not check ancestors when the resource itself allows", async () => {

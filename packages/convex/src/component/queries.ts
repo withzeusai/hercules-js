@@ -1,5 +1,5 @@
 import {
-  queryGeneric,
+  internalQueryGeneric,
   type DataModelFromSchemaDefinition,
   type GenericQueryCtx,
   type QueryBuilder,
@@ -12,7 +12,7 @@ import schema from "./schema";
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
-const query = queryGeneric as QueryBuilder<DataModel, "public">;
+const query = internalQueryGeneric as QueryBuilder<DataModel, "internal">;
 
 type RoleSummary = {
   roleId: string;
@@ -69,6 +69,7 @@ type ScopePermissionSummary = {
   key: string;
   resourceType: string;
   action: string;
+  classification: "delegable" | "owner_only";
   tenantAssignable: boolean;
 };
 
@@ -85,7 +86,9 @@ export const listMyMemberships = query({
 
     const principals = await ctx.db
       .query("principals")
-      .withIndex("by_auth_user", (q) => q.eq("herculesAuthUserId", token.subject))
+      .withIndex("by_auth_user", (q) =>
+        q.eq("herculesAuthUserId", token.subject),
+      )
       .collect();
 
     const memberships: Membership[] = [];
@@ -93,7 +96,9 @@ export const listMyMemberships = query({
     for (const principal of principals) {
       const scope = await ctx.db
         .query("scopes")
-        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", principal.accessScopeId))
+        .withIndex("by_scope_id", (q) =>
+          q.eq("accessScopeId", principal.accessScopeId),
+        )
         .unique();
       if (!scope) continue;
       if (scope.status === "disabled") continue;
@@ -138,7 +143,9 @@ export const listMyRoles = query({
     const principal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
-        q.eq("accessScopeId", args.scopeId).eq("herculesAuthUserId", token.subject),
+        q
+          .eq("accessScopeId", args.scopeId)
+          .eq("herculesAuthUserId", token.subject),
       )
       .unique();
     if (!principal) return [];
@@ -181,7 +188,8 @@ export const getEffectivePermissions = query({
 export const listScopeMembers = query({
   args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<ScopeMember[]> => {
-    if (!(await callerHasScopePermission(ctx, args, "system.members:read"))) return [];
+    if (!(await callerHasScopePermission(ctx, args, "system.members:read")))
+      return [];
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return [];
 
@@ -201,7 +209,9 @@ export const listScopeMembers = query({
       if (authUserId) {
         const user = await ctx.db
           .query("users")
-          .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
+          .withIndex("by_auth_user_id", (q) =>
+            q.eq("herculesAuthUserId", authUserId),
+          )
           .unique();
         if (user) {
           name = user.name;
@@ -226,7 +236,9 @@ export const listScopeMembers = query({
     }
 
     members.sort((a, b) =>
-      (a.name ?? a.email ?? a.principalId).localeCompare(b.name ?? b.email ?? b.principalId),
+      (a.name ?? a.email ?? a.principalId).localeCompare(
+        b.name ?? b.email ?? b.principalId,
+      ),
     );
     return members;
   },
@@ -235,7 +247,8 @@ export const listScopeMembers = query({
 export const listScopeRoles = query({
   args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<ScopeRoleSummary[]> => {
-    if (!(await callerHasScopePermission(ctx, args, "system.roles:read"))) return [];
+    if (!(await callerHasScopePermission(ctx, args, "system.roles:read")))
+      return [];
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return [];
 
@@ -289,7 +302,8 @@ export const listScopeRoles = query({
 export const listScopePermissions = query({
   args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<ScopePermissionSummary[]> => {
-    if (!(await callerHasScopePermission(ctx, args, "system.permissions:read"))) return [];
+    if (!(await callerHasScopePermission(ctx, args, "system.permissions:read")))
+      return [];
     // The permission catalog is app-wide and always lives in the default scope (DL15).
     const defaultScope = await ctx.db
       .query("scopes")
@@ -299,7 +313,9 @@ export const listScopePermissions = query({
 
     const permissions = await ctx.db
       .query("permissions")
-      .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
+      .withIndex("by_scope", (q) =>
+        q.eq("accessScopeId", defaultScope.accessScopeId),
+      )
       .collect();
 
     return permissions
@@ -308,9 +324,14 @@ export const listScopePermissions = query({
         key: permission.key,
         resourceType: permission.resourceType,
         action: permission.action,
+        classification: permission.classification,
         tenantAssignable: permission.tenantAssignable,
       }))
-      .sort((a, b) => a.key.localeCompare(b.key) || a.permissionId.localeCompare(b.permissionId));
+      .sort(
+        (a, b) =>
+          a.key.localeCompare(b.key) ||
+          a.permissionId.localeCompare(b.permissionId),
+      );
   },
 });
 
@@ -373,11 +394,14 @@ export const listDirectSubjectsForResource = query({
     for (const grant of grants) {
       const subjectPrincipalId = grant.subjectPrincipalId;
       if (!subjectPrincipalId) continue;
-      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) continue;
+      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now)
+        continue;
 
       const principal = await ctx.db
         .query("principals")
-        .withIndex("by_principal_id", (q) => q.eq("principalId", subjectPrincipalId))
+        .withIndex("by_principal_id", (q) =>
+          q.eq("principalId", subjectPrincipalId),
+        )
         .unique();
       if (!principal || principal.type !== "user") continue;
 
@@ -388,7 +412,9 @@ export const listDirectSubjectsForResource = query({
       if (authUserId) {
         const user = await ctx.db
           .query("users")
-          .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
+          .withIndex("by_auth_user_id", (q) =>
+            q.eq("herculesAuthUserId", authUserId),
+          )
           .unique();
         if (user) {
           name = user.name;
@@ -409,10 +435,15 @@ export const listDirectSubjectsForResource = query({
           roleKey = role.key;
           roleName = role.name;
         }
-      } else if (grant.relationKind === "direct_permission" && grant.permissionId) {
+      } else if (
+        grant.relationKind === "direct_permission" &&
+        grant.permissionId
+      ) {
         const permission = await ctx.db
           .query("permissions")
-          .withIndex("by_permission_id", (q) => q.eq("permissionId", grant.permissionId!))
+          .withIndex("by_permission_id", (q) =>
+            q.eq("permissionId", grant.permissionId!),
+          )
           .unique();
         if (permission) permissionKey = permission.key;
       }
@@ -435,7 +466,9 @@ export const listDirectSubjectsForResource = query({
     }
 
     results.sort((a, b) =>
-      (a.name ?? a.email ?? a.principalId).localeCompare(b.name ?? b.email ?? b.principalId),
+      (a.name ?? a.email ?? a.principalId).localeCompare(
+        b.name ?? b.email ?? b.principalId,
+      ),
     );
     return results;
   },
@@ -458,7 +491,10 @@ async function callerHasScopePermission(
   return decision.allowed;
 }
 
-async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, scopeId: string) {
+async function resolveScopeRow(
+  ctx: GenericQueryCtx<DataModel>,
+  scopeId: string,
+) {
   if (scopeId === DEFAULT_SCOPE_SENTINEL) {
     return await ctx.db
       .query("scopes")
@@ -486,28 +522,53 @@ async function collectPrincipalScopeRoles(
   ctx: GenericQueryCtx<DataModel>,
   args: { principalId: string; scopeId: string },
 ): Promise<RoleSummary[]> {
-  const grants = await ctx.db
-    .query("grants")
-    .withIndex("by_subject_principal_object", (q) =>
+  // Authorization treats the user and each directly joined group as subjects.
+  const subjectPrincipalIds = new Set([args.principalId]);
+  const memberships = await ctx.db
+    .query("principal_memberships")
+    .withIndex("by_member", (q) =>
       q
-        .eq("subjectPrincipalId", args.principalId)
-        .eq("objectType", "scope")
-        .eq("objectId", args.scopeId),
+        .eq("accessScopeId", args.scopeId)
+        .eq("memberPrincipalId", args.principalId),
     )
     .collect();
+  for (const membership of memberships) {
+    subjectPrincipalIds.add(membership.groupPrincipalId);
+  }
 
   const now = Date.now();
-  const roleIds = new Set<string>();
-  for (const grant of grants) {
-    if (grant.relationKind !== "role") continue;
-    if (typeof grant.roleId !== "string") continue;
-    if (grant.effect !== "allow") continue;
-    if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) continue;
-    roleIds.add(grant.roleId);
+  const allowedRoleIds = new Set<string>();
+  const deniedRoleIds = new Set<string>();
+
+  for (const subjectPrincipalId of subjectPrincipalIds) {
+    const grants = await ctx.db
+      .query("grants")
+      .withIndex("by_subject_principal_object", (q) =>
+        q
+          .eq("subjectPrincipalId", subjectPrincipalId)
+          .eq("objectType", "scope")
+          .eq("objectId", args.scopeId),
+      )
+      .collect();
+
+    for (const grant of grants) {
+      if (grant.relationKind !== "role") continue;
+      if (typeof grant.roleId !== "string") continue;
+      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) {
+        continue;
+      }
+      // A deny from any direct/group subject overrides every allow for the role.
+      if (grant.effect === "deny") {
+        deniedRoleIds.add(grant.roleId);
+        allowedRoleIds.delete(grant.roleId);
+      } else if (!deniedRoleIds.has(grant.roleId)) {
+        allowedRoleIds.add(grant.roleId);
+      }
+    }
   }
 
   const roles: RoleSummary[] = [];
-  for (const roleId of roleIds) {
+  for (const roleId of allowedRoleIds) {
     const role = await ctx.db
       .query("roles")
       .withIndex("by_role_id", (q) => q.eq("roleId", roleId))

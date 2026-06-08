@@ -25,7 +25,13 @@
 // ---------------------------------------------------------------------------
 
 /** The canonical CRUD-ish core. `list` is intentionally distinct from `read`. */
-export const CANONICAL_ACTIONS = ["read", "create", "update", "delete", "list"] as const;
+export const CANONICAL_ACTIONS = [
+  "read",
+  "create",
+  "update",
+  "delete",
+  "list",
+] as const;
 export type CanonicalAction = (typeof CANONICAL_ACTIONS)[number];
 
 /** `manage` is the formal CRUD superset, expanded at eval time — never stored. */
@@ -33,6 +39,12 @@ export const MANAGE_ACTION = "manage";
 
 /** `*` is all verbs (canonical + custom) on the resource type. */
 export const WILDCARD_ACTION = "*";
+
+/** Access-administration actions that product wildcards must never confer. */
+export const RESERVED_ACCESS_CONTROL_ACTIONS: ReadonlySet<string> = new Set([
+  "manage_members",
+  "manage_access",
+]);
 
 /**
  * Expand a granted action token into the verbs it covers. `manage` expands to
@@ -47,16 +59,21 @@ export function expandAction(action: string): string[] {
 /**
  * Does a granted action satisfy a requested action?
  *   identical → always matches (incl. `manage` granted for a `manage` request).
- *   `*`       → matches any requested verb.
+ *   `*`       → matches any non-reserved requested verb.
  *   `manage`  → also matches any canonical CRUD verb.
  *   else      → matches only the identical verb.
  */
-export function actionMatches(grantedAction: string, requestedAction: string): boolean {
+export function actionMatches(
+  grantedAction: string,
+  requestedAction: string,
+): boolean {
   // Identity first: a grant of an action always satisfies a request for that
   // same action — including `manage` for a `manage`-action permission, which
   // the CRUD-only manage branch below would otherwise reject.
   if (grantedAction === requestedAction) return true;
-  if (grantedAction === WILDCARD_ACTION) return true;
+  if (grantedAction === WILDCARD_ACTION) {
+    return !RESERVED_ACCESS_CONTROL_ACTIONS.has(requestedAction);
+  }
   if (grantedAction === MANAGE_ACTION) {
     return (CANONICAL_ACTIONS as readonly string[]).includes(requestedAction);
   }
@@ -93,7 +110,10 @@ export type WildcardMode = "none" | "immutable" | "default";
  * `manage` so every operation on them is fenced; the two single-verb levers
  * (delete app, transfer ownership) use their concrete verb.
  */
-export const OWNER_ONLY_LEVERS: ReadonlyArray<{ resourceType: string; action: string }> = [
+export const OWNER_ONLY_LEVERS: ReadonlyArray<{
+  resourceType: string;
+  action: string;
+}> = [
   { resourceType: "system.app", action: "delete" }, // delete app
   { resourceType: "system.ownership", action: "transfer" }, // transfer ownership
   { resourceType: "system.billing", action: MANAGE_ACTION }, // billing (all operations)
@@ -107,10 +127,18 @@ export const OWNER_ONLY_LEVERS: ReadonlyArray<{ resourceType: string; action: st
  * verb. This is what makes the billing / owner-management fences effective for
  * the real CRUD requests that reach the evaluator.
  */
-export function isOwnerOnlyLever(request: { resourceType: string; action: string }): boolean {
-  return OWNER_ONLY_LEVERS.some(
-    (lever) =>
-      lever.resourceType === request.resourceType && actionMatches(lever.action, request.action),
+export function isOwnerOnlyLever(request: {
+  resourceType: string;
+  action: string;
+  classification?: "delegable" | "owner_only";
+}): boolean {
+  return (
+    request.classification === "owner_only" ||
+    OWNER_ONLY_LEVERS.some(
+      (lever) =>
+        lever.resourceType === request.resourceType &&
+        actionMatches(lever.action, request.action),
+    )
   );
 }
 
@@ -125,6 +153,8 @@ export type RequestedAccess = {
   resourceType: string;
   /** Requested verb (canonical or custom), e.g. `disburse`. Not `manage`/`*`. */
   action: string;
+  /** Whether the catalog permits this permission to be delegated. */
+  classification?: "delegable" | "owner_only";
   /** Specific instance id, when the request targets a single resource. */
   objectId?: string;
 };
@@ -143,9 +173,15 @@ export type ApplicableEntry = {
   objectId?: string;
 };
 
-function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean {
+function entryMatches(
+  entry: ApplicableEntry,
+  request: RequestedAccess,
+): boolean {
   // resourceType: exact match or wildcard resourceType.
-  if (entry.resourceType !== WILDCARD_ACTION && entry.resourceType !== request.resourceType) {
+  if (
+    entry.resourceType !== WILDCARD_ACTION &&
+    entry.resourceType !== request.resourceType
+  ) {
     return false;
   }
   // action: after manage/wildcard expansion.
@@ -156,6 +192,15 @@ function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean
     return entry.objectId !== undefined && entry.objectId === request.objectId;
   }
   return true;
+}
+
+export function hasExplicitDeny(
+  entries: ApplicableEntry[],
+  request: RequestedAccess,
+): boolean {
+  return entries.some(
+    (entry) => entry.effect === "deny" && entryMatches(entry, request),
+  );
 }
 
 /**
@@ -201,7 +246,10 @@ export function evaluateAccess(args: {
   // Owner (step 1) — never by an explicit allow grant, mirroring the Admin
   // wildcard fence in step 4. This keeps the invariant even if such a permission
   // is somehow created and granted.
-  if (!isOwnerOnlyLever(request) && matching.some((entry) => entry.effect === "allow")) {
+  if (
+    !isOwnerOnlyLever(request) &&
+    matching.some((entry) => entry.effect === "allow")
+  ) {
     return "allow";
   }
 

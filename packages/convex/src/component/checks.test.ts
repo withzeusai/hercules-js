@@ -1,7 +1,8 @@
-import { convexTest } from "convex-test";
+import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
 import type { AccessProjectionSnapshot } from "../shared/sync";
+import { withV3SyncFixtures } from "../../test/legacy-sync";
 import schema from "./schema";
 
 const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
@@ -10,6 +11,8 @@ const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
 const authorize = makeFunctionReference<"query">("component/checks:authorize");
 
 const ISSUER = "https://auth.example.com";
+const convexTest = (...args: Parameters<typeof baseConvexTest>) =>
+  withV3SyncFixtures(baseConvexTest(...args));
 
 function emptyEntities() {
   return {
@@ -117,7 +120,9 @@ describe("authorize", () => {
     // No mutation: sync_state row does not exist yet. Authenticated mode
     // (no permission requested) should still allow on token presence so
     // the user's first updateCurrentUser call can run.
-    const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_alice` });
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+    });
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCode).toBe("allowed");
   });
@@ -148,7 +153,9 @@ describe("authorize", () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
 
-    const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_anyone` });
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_anyone`,
+    });
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCode).toBe("allowed");
   });
@@ -237,6 +244,31 @@ describe("authorize", () => {
     expect(decision.effectiveRoleIds).toEqual([]);
   });
 
+  test("scope role deny overrides a simultaneous allow", async () => {
+    const t = convexTest(schema, modules);
+    const snapshot = defaultScopeSnapshot();
+    snapshot.entities.grants.push({
+      grantId: "grant_alice_admin_deny",
+      subjectPrincipalId: "p_alice",
+      relationKind: "role",
+      roleId: "role_admin",
+      effect: "deny",
+      objectType: "scope",
+      objectId: "scope_default",
+      updatedAt: 2,
+    });
+    await t.mutation(applySync, snapshot);
+
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      permission: "tasks:create",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("permission_denied");
+    expect(decision.effectiveRoleIds).toEqual([]);
+  });
+
   test("permission mode denies when permission key is unknown in the scope", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
@@ -248,6 +280,21 @@ describe("authorize", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reasonCode).toBe("permission_missing");
+  });
+
+  test("rejects a resource type that disagrees with the catalog permission", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, defaultScopeSnapshot());
+
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      permission: "tasks:create",
+      resourceType: "folders",
+      resourceId: "folder_1",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("invalid_request");
   });
 
   test("permission mode denies a suspended principal", async () => {
@@ -268,7 +315,9 @@ describe("authorize", () => {
         defaultRoleId: "role_member",
         updatedAt: 2,
       },
-      changes: [{ entityType: "principal", entityId: "p_alice", operation: "upsert" }],
+      changes: [
+        { entityType: "principal", entityId: "p_alice", operation: "upsert" },
+      ],
       entities: {
         ...emptyEntities(),
         principals: [
@@ -296,6 +345,9 @@ describe("authorize", () => {
   test("per-instance role grant grants the role's permissions on that instance only", async () => {
     const t = convexTest(schema, modules);
     const snapshot = defaultScopeSnapshot();
+    snapshot.entities.roles[0]!.kind = "custom";
+    snapshot.entities.roles[0]!.key = "task_admin";
+    snapshot.entities.roles[0]!.name = "Task Admin";
     // Replace the scope-level role grant with a role granted on a single
     // resource instance (relationKind="role" + objectType="resource"), the
     // shape the producer emits for grantResourceAccess(role).
@@ -312,7 +364,11 @@ describe("authorize", () => {
         updatedAt: 1,
       },
     ];
-    await t.mutation(applySync, snapshot);
+    await expect(t.mutation(applySync, snapshot)).resolves.toEqual({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
 
     const onInstance = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
@@ -346,7 +402,59 @@ describe("authorize", () => {
     expect(typeLevel.reasonCode).toBe("permission_denied");
   });
 
-  test("role override deny only removes that role contribution and user deny wins globally", async () => {
+  test("resource role deny overrides another allow on the same instance", async () => {
+    const t = convexTest(schema, modules);
+    const snapshot = defaultScopeSnapshot();
+    snapshot.entities.roles[0]!.kind = "custom";
+    snapshot.entities.roles[0]!.key = "task_restricted";
+    snapshot.entities.roles[0]!.name = "Task Restricted";
+    snapshot.entities.rolePermissions = [
+      {
+        roleId: "role_admin",
+        permissionId: "perm_tasks_create",
+        accessScopeId: "scope_default",
+        effect: "deny",
+        updatedAt: 1,
+      },
+    ];
+    snapshot.entities.grants = [
+      {
+        grantId: "grant_alice_task_restricted",
+        subjectPrincipalId: "p_alice",
+        relationKind: "role",
+        roleId: "role_admin",
+        effect: "allow",
+        objectType: "resource",
+        objectId: "task_1",
+        objectResourceType: "tasks",
+        updatedAt: 1,
+      },
+      {
+        grantId: "grant_alice_task_create",
+        subjectPrincipalId: "p_alice",
+        relationKind: "direct_permission",
+        permissionId: "perm_tasks_create",
+        effect: "allow",
+        objectType: "resource",
+        objectId: "task_1",
+        objectResourceType: "tasks",
+        updatedAt: 1,
+      },
+    ];
+    await t.mutation(applySync, snapshot);
+
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      permission: "tasks:create",
+      resourceType: "tasks",
+      resourceId: "task_1",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("permission_denied");
+  });
+
+  test("role and user denies both win globally", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, accessCatalogSnapshot());
     await t.mutation(applySync, acmeOrgSnapshot());
@@ -356,7 +464,8 @@ describe("authorize", () => {
       scopeId: "scope_acme",
       permission: "reports.export",
     });
-    expect(reportDecision.allowed).toBe(true);
+    expect(reportDecision.allowed).toBe(false);
+    expect(reportDecision.reasonCode).toBe("permission_denied");
     expect(reportDecision.effectiveRoleIds).toEqual([
       "role_manager",
       "role_accountant",
@@ -375,6 +484,29 @@ describe("authorize", () => {
 
 // §0b wildcard-role model end-to-end through the authorize entrypoint.
 describe("authorize — wildcard roles", () => {
+  test("catalog owner_only classification is enforced end to end", async () => {
+    const t = convexTest(schema, modules);
+    const snapshot = wildcardSnapshot();
+    Object.assign(snapshot.entities.permissions[0]!, {
+      classification: "owner_only",
+    });
+    await t.mutation(applySync, snapshot);
+
+    const admin = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_admin`,
+      scopeId: "scope_default",
+      permission: "app.loans:read",
+    });
+    const owner = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      scopeId: "scope_default",
+      permission: "app.loans:read",
+    });
+
+    expect(admin.allowed).toBe(false);
+    expect(owner.allowed).toBe(true);
+  });
+
   test("owner is allowed for a permission with no role_permission row", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, wildcardSnapshot());
@@ -451,7 +583,10 @@ describe("authorize — wildcard roles", () => {
     // even though neither has a deny row — proving the superset (not
     // literal-key) match. The seeded catalog rows are system.billing:update
     // and system.access.owner:delete.
-    for (const lever of ["system.billing:update", "system.access.owner:delete"]) {
+    for (const lever of [
+      "system.billing:update",
+      "system.access.owner:delete",
+    ]) {
       const decision = await t.query(authorize, {
         tokenIdentifier: `${ISSUER}|user_admin`,
         scopeId: "scope_default",
@@ -465,7 +600,9 @@ describe("authorize — wildcard roles", () => {
   test("narrowed admin (wildcard none) falls back to enumerated rows", async () => {
     const t = convexTest(schema, modules);
     const snapshot = wildcardSnapshot();
-    const adminRole = snapshot.entities.roles.find((role) => role.roleId === "role_admin")!;
+    const adminRole = snapshot.entities.roles.find(
+      (role) => role.roleId === "role_admin",
+    )!;
     adminRole.wildcard = "none";
     await t.mutation(applySync, snapshot);
 
@@ -477,6 +614,79 @@ describe("authorize — wildcard roles", () => {
     });
     expect(denied.allowed).toBe(false);
     expect(denied.reasonCode).toBe("permission_denied");
+  });
+
+  test("an org-specific Admin allow-list removes wildcard authority in that org", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, wildcardSnapshot());
+    await t.mutation(applySync, {
+      type: "access.projection.snapshot",
+      schemaVersion: 2,
+      eventId: "evt_org_admin_override",
+      sourceVersion: 2,
+      expectedIssuer: ISSUER,
+      scope: {
+        accessScopeId: "scope_org",
+        name: "Acme",
+        kind: "org",
+        status: "active",
+        accountEntryMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 2,
+      },
+      entities: {
+        ...emptyEntities(),
+        principals: [
+          {
+            principalId: "p_org_admin",
+            type: "user",
+            herculesAuthUserId: "user_admin",
+            status: "active",
+            joinedAt: 2,
+            updatedAt: 2,
+          },
+        ],
+        rolePermissions: [
+          {
+            roleId: "role_admin",
+            permissionId: "perm_docs_read",
+            accessScopeId: "scope_org",
+            effect: "allow",
+            updatedAt: 2,
+          },
+        ],
+        grants: [
+          {
+            grantId: "grant_org_admin",
+            subjectPrincipalId: "p_org_admin",
+            relationKind: "role",
+            roleId: "role_admin",
+            effect: "allow",
+            objectType: "scope",
+            objectId: "scope_org",
+            updatedAt: 2,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      t.query(authorize, {
+        tokenIdentifier: `${ISSUER}|user_admin`,
+        scopeId: "scope_org",
+        permission: "app.docs:read",
+      }),
+    ).resolves.toMatchObject({ allowed: true });
+    await expect(
+      t.query(authorize, {
+        tokenIdentifier: `${ISSUER}|user_admin`,
+        scopeId: "scope_org",
+        permission: "app.loans:read",
+      }),
+    ).resolves.toMatchObject({
+      allowed: false,
+      reasonCode: "permission_denied",
+    });
   });
 
   test("manage role row expands to every canonical CRUD verb, not custom verbs", async () => {
@@ -514,20 +724,16 @@ describe("authorize — wildcard roles", () => {
     expect(decision.reasonCode).toBe("invalid_request");
   });
 
-  // A wildcard role (Owner/Admin) carries no enumerated role_permission rows,
-  // so a per-instance grant of it must still confer full access on that object
-  // (action "*") rather than silently granting nothing.
   for (const role of [
     { user: "user_owner", roleId: "role_owner", label: "owner immutable" },
     { user: "user_admin", roleId: "role_admin", label: "admin default" },
   ]) {
-    test(`per-instance ${role.label} role grant confers full access on that instance only`, async () => {
+    test(`rejects a per-instance ${role.label} role grant`, async () => {
       const t = convexTest(schema, modules);
       const snapshot = wildcardSnapshot();
-      // Drop the scope-level grant for this user so only the per-instance grant
-      // governs (otherwise the principal-level wildcard would allow everything).
       snapshot.entities.grants = snapshot.entities.grants.filter(
-        (grant) => grant.subjectPrincipalId !== `p_${role.user.replace("user_", "")}`,
+        (grant) =>
+          grant.subjectPrincipalId !== `p_${role.user.replace("user_", "")}`,
       );
       snapshot.entities.grants.push({
         grantId: `grant_${role.roleId}_loan_1`,
@@ -540,44 +746,10 @@ describe("authorize — wildcard roles", () => {
         objectResourceType: "app.loans",
         updatedAt: 1,
       });
-      await t.mutation(applySync, snapshot);
-
-      // Full access on the granted instance: a canonical verb AND a custom
-      // verb, proving the `*` entry covers ANY verb (not just an enumerated
-      // set).
-      for (const permission of ["app.loans:read", "app.loans:approve"]) {
-        const onInstance = await t.query(authorize, {
-          tokenIdentifier: `${ISSUER}|${role.user}`,
-          scopeId: "scope_default",
-          permission,
-          resourceType: "app.loans",
-          resourceId: "loan_1",
-        });
-        expect(onInstance.allowed, `${role.label} ${permission}`).toBe(true);
-      }
-
-      // A different instance of the same type is not covered, for canonical or
-      // custom verbs.
-      for (const permission of ["app.loans:read", "app.loans:approve"]) {
-        const otherInstance = await t.query(authorize, {
-          tokenIdentifier: `${ISSUER}|${role.user}`,
-          scopeId: "scope_default",
-          permission,
-          resourceType: "app.loans",
-          resourceId: "loan_2",
-        });
-        expect(otherInstance.allowed, `${role.label} ${permission}`).toBe(false);
-        expect(otherInstance.reasonCode).toBe("permission_denied");
-      }
-
-      // A type-level request (no instance) is not covered by the instance grant.
-      const typeLevel = await t.query(authorize, {
-        tokenIdentifier: `${ISSUER}|${role.user}`,
-        scopeId: "scope_default",
-        permission: "app.loans:read",
+      await expect(t.mutation(applySync, snapshot)).resolves.toEqual({
+        ok: false,
+        status: "invalid_payload",
       });
-      expect(typeLevel.allowed).toBe(false);
-      expect(typeLevel.reasonCode).toBe("permission_denied");
     });
   }
 });
@@ -603,7 +775,9 @@ type ResourceShareGrant = {
 // Viewer at the scope, and a set of resource grants under test. With no
 // resource grant, alice cannot read any report — so any allow below is
 // attributable solely to the resource grant being evaluated.
-function resourceShareSnapshot(grants: ResourceShareGrant[]): AccessProjectionSnapshot {
+function resourceShareSnapshot(
+  grants: ResourceShareGrant[],
+): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
     schemaVersion: 2,
@@ -790,26 +964,22 @@ describe("authorize — resource invitation / immediate grant parity", () => {
     // fail-open fallback to the permission's own resourceType would silently
     // allow here. Same outcome for invitation-origin and immediate-origin rows.
     const immediate = convexTest(schema, modules);
-    await immediate.mutation(
+    const immediateResult = await immediate.mutation(
       applySync,
       resourceShareSnapshot([
         { grantId: "grant_immediate", effect: "allow", objectId: "report_1" },
       ]),
     );
     const invitation = convexTest(schema, modules);
-    await invitation.mutation(
+    const invitationResult = await invitation.mutation(
       applySync,
       resourceShareSnapshot([
         { grantId: "grant_invitation", effect: "allow", objectId: "report_1" },
       ]),
     );
 
-    const fromImmediate = await readReport(immediate, "report_1");
-    const fromInvitation = await readReport(invitation, "report_1");
-    expect(fromImmediate.allowed).toBe(false);
-    expect(fromImmediate.reasonCode).toBe("permission_denied");
-    expect(fromInvitation.allowed).toBe(fromImmediate.allowed);
-    expect(fromInvitation.reasonCode).toBe(fromImmediate.reasonCode);
+    expect(immediateResult).toEqual({ ok: false, status: "invalid_payload" });
+    expect(invitationResult).toEqual(immediateResult);
   });
 });
 
@@ -838,39 +1008,37 @@ describe("authorize — resource grant fail-closed", () => {
     const decision = await readReport(t, "report_1");
     expect(decision.allowed).toBe(false);
     expect(decision.reasonCode).toBe("permission_denied");
+    expect(decision.explicitDeny).toBe(true);
   });
 
   test("a grant whose resourceType does not match the request confers nothing", async () => {
     const t = convexTest(schema, modules);
     // Grant is on resourceType "folders" but the request targets "reports".
-    await t.mutation(
-      applySync,
-      resourceShareSnapshot([
-        {
-          grantId: "grant_foreign",
-          effect: "allow",
-          objectId: "report_1",
-          objectResourceType: "folders",
-        },
-      ]),
-    );
-
-    const decision = await readReport(t, "report_1");
-    expect(decision.allowed).toBe(false);
-    expect(decision.reasonCode).toBe("permission_denied");
+    await expect(
+      t.mutation(
+        applySync,
+        resourceShareSnapshot([
+          {
+            grantId: "grant_foreign",
+            effect: "allow",
+            objectId: "report_1",
+            objectResourceType: "folders",
+          },
+        ]),
+      ),
+    ).resolves.toEqual({ ok: false, status: "invalid_payload" });
   });
 
   test("a malformed (missing-resourceType) grant never confers the permission", async () => {
     const malformed = convexTest(schema, modules);
-    await malformed.mutation(
-      applySync,
-      resourceShareSnapshot([
-        { grantId: "grant_malformed", effect: "allow", objectId: "report_1" },
-      ]),
-    );
-    const denied = await readReport(malformed, "report_1");
-    expect(denied.allowed).toBe(false);
-    expect(denied.reasonCode).toBe("permission_denied");
+    await expect(
+      malformed.mutation(
+        applySync,
+        resourceShareSnapshot([
+          { grantId: "grant_malformed", effect: "allow", objectId: "report_1" },
+        ]),
+      ),
+    ).resolves.toEqual({ ok: false, status: "invalid_payload" });
 
     // Positive control: the SAME grant shape with a well-formed resourceType
     // DOES confer the permission. The only difference between this and the
@@ -913,7 +1081,10 @@ describe("schema gating", () => {
         }),
       },
     };
-    await expect(t.mutation(applySync, broken as never)).rejects.toThrow();
+    await expect(t.mutation(applySync, broken as never)).resolves.toEqual({
+      ok: false,
+      status: "invalid_payload",
+    });
   });
 });
 

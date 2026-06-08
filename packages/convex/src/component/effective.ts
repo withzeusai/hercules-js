@@ -18,6 +18,7 @@ type PermissionSummary = {
   key: string;
   resourceType: string;
   action: string;
+  classification: "delegable" | "owner_only";
 };
 
 type CatalogPermission = {
@@ -25,6 +26,7 @@ type CatalogPermission = {
   key: string;
   resourceType: string;
   action: string;
+  classification: "delegable" | "owner_only";
 };
 
 // A canonical entry that also carries the catalog permissionId it was derived
@@ -150,7 +152,11 @@ export async function evaluateEffectiveAccess(
 
   // §0b: resolve the principal's wildcard mode from its effective roles.
   // immutable (Owner) dominates default (Admin) dominates none.
-  const wildcard = await resolvePrincipalWildcard(ctx, grantContributions.roleIds);
+  const wildcard = await resolvePrincipalWildcard(ctx, {
+    roleIds: grantContributions.roleIds,
+    targetScopeId: scope.accessScopeId,
+    defaultScopeId: defaultScope.accessScopeId,
+  });
 
   // Role-permission rows resolve to a net {allow, deny} contribution per role
   // (allow adds / deny removes, org-scope override layered on top). The net
@@ -200,6 +206,7 @@ export async function evaluateEffectiveAccess(
       key: permission.key,
       resourceType: permission.resourceType,
       action: permission.action,
+      classification: permission.classification,
     })),
     wildcard,
     entries,
@@ -215,14 +222,8 @@ export async function evaluateEffectiveAccess(
  *   - Admin (default)   → unless it is an Owner-only lever or is denied by a
  *     matching deny entry (a narrowing role-permission deny or a direct/resource
  *     deny).
- *   - else / additionally → there is an allow entry carrying this permissionId
- *     that matches the request scope (instance objectId when resource args are
- *     supplied) and no matching deny entry overrides it.
- *
- * Reporting by permissionId rather than re-running the evaluator with the
- * permission's own action is required so a manage/`*` permission held via a
- * role or direct grant is reported (the evaluator never matches a manage/`*`
- * request, since requests carry only concrete verbs).
+ *   - else / additionally → there is a matching allow entry whose action
+ *     covers the catalog permission, and no matching deny entry overrides it.
  */
 export function enumeratePermissions(
   catalogPermissions: CatalogPermission[],
@@ -230,48 +231,53 @@ export function enumeratePermissions(
   entries: RuntimeEntry[],
   args: { resourceId?: string },
 ): PermissionSummary[] {
-  // A deny overrides an allow for the same catalog permission (deny-overrides
-  // per §0.4), matching the canonical permissionId-based subtraction. The only
-  // deny without a permissionId is the all-actions (`*`) deny emitted for a
-  // wildcard role granted on a single resource instance; it overrides by
-  // resourceType + action-superset at its own objectId.
-  const denies = entries.filter((entry) => entry.effect === "deny");
-  const isDenied = (permission: CatalogPermission): boolean =>
-    denies.some((entry) => {
-      if (entry.objectType === "resource" && entry.objectId !== args.resourceId) return false;
-      if (entry.permissionId !== undefined) return entry.permissionId === permission.permissionId;
-      return (
-        (entry.resourceType === WILDCARD_ACTION ||
-          entry.resourceType === permission.resourceType) &&
-        actionMatches(entry.action, permission.action)
-      );
-    });
+  const entryMatchesPermission = (
+    entry: RuntimeEntry,
+    permission: CatalogPermission,
+  ): boolean => {
+    if (entry.objectType === "resource" && entry.objectId !== args.resourceId) {
+      return false;
+    }
+    return (
+      (entry.resourceType === WILDCARD_ACTION ||
+        entry.resourceType === permission.resourceType) &&
+      actionMatches(entry.action, permission.action)
+    );
+  };
 
-  // permissionIds backed by a matching allow entry at the request scope.
-  const allowedIds = new Set<string>();
-  for (const entry of entries) {
-    if (entry.effect !== "allow" || entry.permissionId === undefined) continue;
-    if (entry.objectType === "resource" && entry.objectId !== args.resourceId) continue;
-    allowedIds.add(entry.permissionId);
-  }
+  const isDenied = (permission: CatalogPermission): boolean =>
+    entries.some(
+      (entry) =>
+        entry.effect === "deny" && entryMatchesPermission(entry, permission),
+    );
+
+  const isAllowed = (permission: CatalogPermission): boolean =>
+    entries.some(
+      (entry) =>
+        entry.effect === "allow" && entryMatchesPermission(entry, permission),
+    );
 
   return catalogPermissions
     .filter((permission) => {
-      if (isDenied(permission)) return false;
       if (wildcard === "immutable") return true;
-      if (
-        wildcard === "default" &&
-        !isOwnerOnlyLever({ resourceType: permission.resourceType, action: permission.action })
-      ) {
+      if (isDenied(permission)) return false;
+      const ownerOnly = isOwnerOnlyLever({
+        resourceType: permission.resourceType,
+        action: permission.action,
+        classification: permission.classification,
+      });
+      if (wildcard === "default" && !ownerOnly) {
         return true;
       }
-      return allowedIds.has(permission.permissionId);
+      if (ownerOnly) return false;
+      return isAllowed(permission);
     })
     .map((permission) => ({
       permissionId: permission.permissionId,
       key: permission.key,
       resourceType: permission.resourceType,
       action: permission.action,
+      classification: permission.classification,
     }))
     .sort((a, b) => a.key.localeCompare(b.key) || a.permissionId.localeCompare(b.permissionId));
 }
@@ -323,8 +329,12 @@ async function collectGrantContributions(
     permissionById: PermissionLookup;
   },
 ) {
+  // sync.ts schedules an exact-identity grant deletion at expiresAt so this
+  // query is reactively invalidated. Keep the timestamp check as a fail-closed
+  // fallback if the scheduled mutation is delayed.
   const now = Date.now();
   const roleIds = new Set<string>();
+  const deniedRoleIds = new Set<string>();
   const entries: RuntimeEntry[] = [];
   const resourceRoleGrants: ResourceRoleGrant[] = [];
 
@@ -442,7 +452,12 @@ async function collectGrantContributions(
         // allow grants register the role (a deny role grant removes the
         // membership it would otherwise add).
         if (grant.objectType === "scope") {
-          if (grant.effect === "allow") roleIds.add(grant.roleId);
+          if (grant.effect === "deny") {
+            deniedRoleIds.add(grant.roleId);
+            roleIds.delete(grant.roleId);
+          } else if (!deniedRoleIds.has(grant.roleId)) {
+            roleIds.add(grant.roleId);
+          }
           continue;
         }
         // A role granted on a resource object (per-instance role scoping, see
@@ -468,6 +483,12 @@ async function collectGrantContributions(
       // collection index also filters on objectResourceType; this is the
       // second, defense-in-depth layer so the invariant holds if that changes.)
       if (grant.objectType === "resource" && !grant.objectResourceType) continue;
+      if (
+        grant.objectType === "resource" &&
+        grant.objectResourceType !== permission.resourceType
+      ) {
+        continue;
+      }
       // An all-instances resource grant (objectId "*") matches every instance
       // of its resourceType, so it is a TYPE-level entry. Only a concrete
       // objectId stays instance-level. A scope-object grant is always
@@ -497,17 +518,30 @@ async function collectGrantContributions(
  */
 async function resolvePrincipalWildcard(
   ctx: GenericQueryCtx<DataModel>,
-  roleIds: string[],
+  args: {
+    roleIds: string[];
+    targetScopeId: string;
+    defaultScopeId: string;
+  },
 ): Promise<WildcardMode> {
   let mode: WildcardMode = "none";
-  for (const roleId of roleIds) {
+  for (const roleId of args.roleIds) {
     const role = await ctx.db
       .query("roles")
       .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
       .unique();
     if (!role) continue;
     if (role.wildcard === "immutable") return "immutable";
-    if (role.wildcard === "default") mode = "default";
+    if (role.wildcard === "default") {
+      const contribution = await resolveRoleNetPermissionIds(ctx, {
+        roleId,
+        targetScopeId: args.targetScopeId,
+        defaultScopeId: args.defaultScopeId,
+      });
+      if (!contribution || contribution.rawAllow.size === 0) {
+        mode = "default";
+      }
+    }
   }
   return mode;
 }
@@ -549,23 +583,19 @@ async function collectRolePermissionEntries(
       });
     }
 
-    // An un-narrowed Admin keeps wildcard "default" even with deny rows
-    // (deny-only does not narrow Admin per canonical isAdminNarrowed). Emit its
-    // net deny set as type-level deny entries so the narrowing deny short-
-    // circuits at evaluateAccess step 3 before the Admin default-allow at step
-    // 4 — matching the canonical query.ts deny subtraction.
-    if (role.wildcard === "default") {
-      for (const permissionId of contribution.deny) {
-        const permission = args.permissionById.get(permissionId);
-        if (!permission) continue;
-        entries.push({
-          effect: "deny",
-          resourceType: permission.resourceType,
-          action: permission.action,
-          objectType: "scope",
-          permissionId,
-        });
-      }
+    // Explicit deny wins across all role contributions. This mirrors the
+    // control-plane evaluator, where a deny from one role subtracts an allow
+    // from another role or a direct grant.
+    for (const permissionId of contribution.deny) {
+      const permission = args.permissionById.get(permissionId);
+      if (!permission) continue;
+      entries.push({
+        effect: "deny",
+        resourceType: permission.resourceType,
+        action: permission.action,
+        objectType: "scope",
+        permissionId,
+      });
     }
   }
 
@@ -579,19 +609,9 @@ async function collectRolePermissionEntries(
  * deny role grant lands as a deny entry (and short-circuits in the
  * deny-override algebra).
  *
- * Wildcard roles (Owner `immutable`, un-narrowed Admin `default`) carry NO
- * enumerated role_permission rows — their power is the wildcard mode, which the
- * canonical evaluator only honors at the principal level. A per-instance grant
- * of such a role would therefore expand to an empty set and silently confer
- * nothing. Instead, emit a single all-actions entry (action "*") on the grant's
- * resourceType, scoped to the instance, so the grant means "full access to this
- * object" — exactly what granting Owner/Admin on a resource implies. The
- * Owner-only-lever fence is moot at the instance level: levers are operations
- * on distinct system resourceTypes (system.app, system.billing, …) and an
- * instance-scoped entry only matches requests carrying this object's id, so it
- * can never reach a lever (levers are scope-level operations, never granted as
- * a single app resource row). Non-wildcard roles fall through to their
- * enumerated net permission set, re-targeted to the instance.
+ * Only custom, non-wildcard roles can be granted on resources. System roles
+ * (including Owner/Admin) are scope memberships and must never be re-targeted
+ * to a resource instance.
  */
 async function collectResourceRoleEntries(
   ctx: GenericQueryCtx<DataModel>,
@@ -619,19 +639,7 @@ async function collectResourceRoleEntries(
     // global all-access.
     if (!grant.objectResourceType) continue;
 
-    // Wildcard role granted on an instance → all-actions allow/deny on that
-    // object's resourceType. A wildcard role has no enumerated rows to expand,
-    // so without this the grant would be a silent no-op.
-    if (role.wildcard === "immutable" || role.wildcard === "default") {
-      entries.push({
-        effect: grant.effect,
-        resourceType: grant.objectResourceType,
-        action: WILDCARD_ACTION,
-        objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? grant.objectId : undefined,
-      });
-      continue;
-    }
+    if (role.kind === "system" || role.wildcard !== "none") continue;
 
     const contribution = await resolveRoleNetPermissionIds(ctx, {
       roleId: grant.roleId,
@@ -657,6 +665,20 @@ async function collectResourceRoleEntries(
         permissionId,
       });
     }
+    for (const permissionId of contribution.deny) {
+      const permission = args.permissionById.get(permissionId);
+      if (!permission || permission.resourceType !== grant.objectResourceType) {
+        continue;
+      }
+      entries.push({
+        effect: "deny",
+        resourceType: permission.resourceType,
+        action: permission.action,
+        objectType: isInstanceLevel ? "resource" : "scope",
+        objectId: isInstanceLevel ? grant.objectId : undefined,
+        permissionId,
+      });
+    }
   }
 
   return entries;
@@ -665,7 +687,11 @@ async function collectResourceRoleEntries(
 // A role's net permission contribution: the permission ids that end up allowed
 // vs denied after applying deny-overrides-allow within the role. Mirrors the
 // canonical RolePermissionContribution {allow, deny} model (query.ts).
-type RoleContribution = { allow: Set<string>; deny: Set<string> };
+type RoleContribution = {
+  allow: Set<string>;
+  deny: Set<string>;
+  rawAllow: Set<string>;
+};
 
 /**
  * Resolve a role's net permission contribution: the role's own-scope
@@ -683,7 +709,11 @@ async function resolveRoleNetPermissionIds(
     .unique();
   if (!role) return null;
 
-  const contribution: RoleContribution = { allow: new Set(), deny: new Set() };
+  const contribution: RoleContribution = {
+    allow: new Set(),
+    deny: new Set(),
+    rawAllow: new Set(),
+  };
   await applyRolePermissionRows(ctx, {
     accessScopeId: role.accessScopeId,
     roleId: args.roleId,
@@ -722,6 +752,7 @@ async function applyRolePermissionRows(
   // folded before the org override (caller order), preserving per-org overrides.
   for (const row of rows) {
     if (row.effect === "allow") {
+      args.contribution.rawAllow.add(row.permissionId);
       args.contribution.allow.add(row.permissionId);
       args.contribution.deny.delete(row.permissionId);
     }

@@ -90,23 +90,33 @@ export const teamMembers = authenticatedQuery({
 });
 ```
 
-Changing access (assign/remove roles, invite, custom roles, resource grants)
-uses `createAccessAdminActions` from `@usehercules/convex/access-admin`. These
-need the `HERCULES_API_KEY` secret and enforce **scope-wide** permissions
-(`access.users.manage`, `access.roles.manage`, `access.grants.manage`), so only
-org admins/owners can call them.
+Service-authority access changes use `createAccessAdminActions` from
+`@usehercules/convex/access-admin`. These actions need the `HERCULES_API_KEY`
+secret and must remain internal.
 
 ```ts
 "use node";
 import { createAccessAdminActions } from "@usehercules/convex/access-admin";
-import { accessAction } from "./hercules";
+import { internalAction } from "./_generated/server";
 
-export const { assignRole, removeRole, createInvitation } = createAccessAdminActions({ accessAction });
+export const { assignRole, removeRole, createInvitation } =
+  createAccessAdminActions({ internalAction });
 ```
 
-To delegate per-resource management to a non-admin (e.g. a project manager
-managing their own project), wrap your own `accessAction` gated on a
-per-resource app permission rather than using the scope-wide admin actions.
+For public organization or resource administration, use
+`createAccessUserActions`. Every call requires the signed-in user's nonempty
+Hercules ID token and sends `actor_mode: "app_user"`. The control plane applies
+the operation's scope, Owner, or resource-level RBAC gate; for example, a
+resource manager can share that resource without scope-wide admin authority.
+
+```ts
+"use node";
+import { createAccessUserActions } from "@usehercules/convex/access-admin";
+import { authenticatedAction } from "./hercules";
+
+export const { assignRole, createInvitation, createResourceGrant, createResourceInvitation } =
+  createAccessUserActions({ authenticatedAction });
+```
 
 ## Notes
 

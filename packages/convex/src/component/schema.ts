@@ -110,6 +110,7 @@ export default defineSchema({
     key: v.string(),
     resourceType: v.string(),
     action: v.string(),
+    classification: v.union(v.literal("delegable"), v.literal("owner_only")),
     // tenantAssignable=false hides this permission from org-admin role
     // editors. Vendor-only permissions (billing, system admin) set false.
     tenantAssignable: v.boolean(),

@@ -24,6 +24,7 @@ type AccessMode = "authenticated" | "permission";
 type AuthorizationDecision = {
   allowed: boolean;
   reasonCode: string;
+  explicitDeny?: boolean;
   sourceVersion?: number;
   principalId?: string;
   effectiveRoleIds: string[];
@@ -99,6 +100,7 @@ export type ScopePermissionSummary = {
   key: string;
   resourceType: string;
   action: string;
+  classification: "delegable" | "owner_only";
   tenantAssignable: boolean;
 };
 
@@ -176,7 +178,15 @@ export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
 // richer object that also names a specific resource for DL16 resource
 // grant support. scopeFromResource returns the richer shape so the
 // authorize call can walk resource-object grants.
-export type AuthorizeAncestor = { resourceType: string; resourceId: string };
+export type AuthorizeAncestor = {
+  resourceType: string;
+  resourceId: string;
+  /**
+   * Permission to check on this ancestor. Required when the ancestor uses a
+   * different resource type from the requested child permission.
+   */
+  permission?: string;
+};
 
 export type ExtractedScope =
   | string
@@ -443,11 +453,12 @@ type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
  *
  * Hierarchy: pass `options.authorizeAgainst` to ALSO authorize against ancestor
  * resources (union). It receives the loaded row and returns the ordered
- * ancestors to check (e.g. a task returns its parent project). The request is
- * allowed if the resource itself OR any ancestor grants the permission, so a
- * grant on the parent flows down without copying it onto every child, while a
- * grant placed directly on the child still works. The app owns these
- * parent/child relationships; the chain is bounded (max 10 ancestors).
+ * ancestors to check (e.g. a task returns its parent project). When an ancestor
+ * has a different resource type, include that ancestor's permission key.
+ * Explicit denies on the child stop inheritance; otherwise the request is
+ * allowed if the resource itself OR an ancestor grants the applicable
+ * permission. The app owns these parent/child relationships; the chain is
+ * bounded (max 10 ancestors).
  */
 export function scopeFromResource<T extends string, K extends string>(
   tableName: T,
@@ -844,16 +855,40 @@ async function ensureAuthorized(
   // resolver supplied ancestors. The default path (no chain) is unchanged and
   // makes exactly one authorize call. `authorizeChain` is consumed here and
   // never forwarded to the authorize query.
-  if (!decision.allowed && mode === "permission" && authorizeChain && authorizeChain.length > 0) {
+  if (
+    !decision.allowed &&
+    !decision.explicitDeny &&
+    mode === "permission" &&
+    authorizeChain &&
+    authorizeChain.length > 0
+  ) {
+    let explicitAncestorDeny:
+      | {
+          reasonCode: string;
+          sourceVersion?: number;
+        }
+      | undefined;
     for (const ancestor of authorizeChain) {
       const ancestorDecision = await ctx.runQuery(component.checks.authorize, {
         tokenIdentifier: identity.tokenIdentifier,
         scopeId,
-        permission: access?.permission,
+        permission: ancestor.permission ?? access?.permission,
         resourceType: ancestor.resourceType,
         resourceId: ancestor.resourceId,
       });
       if (ancestorDecision.allowed) return;
+      if (ancestorDecision.explicitDeny) {
+        explicitAncestorDeny = ancestorDecision;
+        break;
+      }
+    }
+    if (explicitAncestorDeny) {
+      throw new ConvexError({
+        code: "ACCESS_DENIED",
+        message: "Access denied",
+        reasonCode: explicitAncestorDeny.reasonCode,
+        sourceVersion: explicitAncestorDeny.sourceVersion,
+      });
     }
   }
 

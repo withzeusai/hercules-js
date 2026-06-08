@@ -9,7 +9,7 @@ import {
 
 type ApplySyncReference = FunctionReference<
   "mutation",
-  "public",
+  "internal",
   AccessProjectionSyncPayload,
   SyncResponse
 >;
@@ -61,12 +61,18 @@ export function registerAccessControlRoutes(
 
 // Map mutation-level outcomes to HTTP statuses so generic webhook tooling
 // (queues, retries, monitoring) does not treat rejected syncs as delivered.
-// 200 -> applied / duplicate; 409 -> version_gap (retry after sync); 400 ->
-// payload-shape problems; 401 -> signature already returned earlier.
+// 200 -> applied / duplicate; 409 -> recoverable projection-state conflicts;
+// 400 -> payload-shape problems; 401 -> signature already returned earlier.
 function syncResponseStatus(result: SyncResponse): number {
   if (result.ok) return 200;
-  if (result.status === "version_gap") return 409;
-  if (result.status === "issuer_mismatch") return 409;
+  if (
+    result.status === "version_gap" ||
+    result.status === "issuer_mismatch" ||
+    result.status === "not_ready" ||
+    result.status === "reset_required"
+  ) {
+    return 409;
+  }
   return 400;
 }
 

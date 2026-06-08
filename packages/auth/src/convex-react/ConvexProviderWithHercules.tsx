@@ -7,7 +7,7 @@ import { useCallback, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
-const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+const REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
 const LOCK_KEY = "__herculesAuthRefresh";
 
 function tokenExpiresWithin(token: string, ms: number): boolean {

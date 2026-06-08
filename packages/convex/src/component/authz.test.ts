@@ -7,6 +7,7 @@ import {
   isOwnerOnlyLever,
   MANAGE_ACTION,
   OWNER_ONLY_LEVERS,
+  RESERVED_ACCESS_CONTROL_ACTIONS,
   WILDCARD_ACTION,
   type ApplicableEntry,
 } from "./authz";
@@ -26,9 +27,29 @@ describe("action taxonomy", () => {
     expect(expandAction(WILDCARD_ACTION)).toEqual([WILDCARD_ACTION]);
   });
 
-  test("actionMatches: wildcard matches everything", () => {
+  test("the reserved Access Control action set is centralized", () => {
+    expect([...RESERVED_ACCESS_CONTROL_ACTIONS]).toEqual([
+      "manage_members",
+      "manage_access",
+    ]);
+  });
+
+  test("actionMatches: wildcard matches current and future product actions", () => {
     expect(actionMatches(WILDCARD_ACTION, "read")).toBe(true);
     expect(actionMatches(WILDCARD_ACTION, "approve")).toBe(true);
+    expect(actionMatches(WILDCARD_ACTION, "future_product_action")).toBe(true);
+  });
+
+  test("actionMatches: wildcard excludes reserved Access Control actions", () => {
+    for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
+      expect(actionMatches(WILDCARD_ACTION, action)).toBe(false);
+    }
+  });
+
+  test("actionMatches: explicit reserved actions still match themselves", () => {
+    for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
+      expect(actionMatches(action, action)).toBe(true);
+    }
   });
 
   test("actionMatches: manage matches canonical CRUD and itself", () => {
@@ -58,16 +79,26 @@ describe("owner-only levers (cross-repo invariant)", () => {
   });
 
   test("concrete-verb levers fence only that verb", () => {
-    expect(isOwnerOnlyLever({ resourceType: "system.app", action: "delete" })).toBe(true);
-    expect(isOwnerOnlyLever({ resourceType: "system.app", action: "read" })).toBe(false);
+    expect(
+      isOwnerOnlyLever({ resourceType: "system.app", action: "delete" }),
+    ).toBe(true);
+    expect(
+      isOwnerOnlyLever({ resourceType: "system.app", action: "read" }),
+    ).toBe(false);
   });
 
   test("manage levers fence ALL canonical CRUD on the resourceType, not just :manage", () => {
     for (const verb of CANONICAL_ACTIONS) {
-      expect(isOwnerOnlyLever({ resourceType: "system.billing", action: verb })).toBe(true);
-      expect(isOwnerOnlyLever({ resourceType: "system.access.owner", action: verb })).toBe(true);
+      expect(
+        isOwnerOnlyLever({ resourceType: "system.billing", action: verb }),
+      ).toBe(true);
+      expect(
+        isOwnerOnlyLever({ resourceType: "system.access.owner", action: verb }),
+      ).toBe(true);
     }
-    expect(isOwnerOnlyLever({ resourceType: "system.billing", action: "export" })).toBe(false);
+    expect(
+      isOwnerOnlyLever({ resourceType: "system.billing", action: "export" }),
+    ).toBe(false);
   });
 });
 
@@ -77,13 +108,25 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     action: string,
     objectType: "scope" | "resource" = "scope",
     objectId?: string,
-  ): ApplicableEntry => ({ effect: "allow", resourceType, action, objectType, objectId });
+  ): ApplicableEntry => ({
+    effect: "allow",
+    resourceType,
+    action,
+    objectType,
+    objectId,
+  });
   const denyEntry = (
     resourceType: string,
     action: string,
     objectType: "scope" | "resource" = "scope",
     objectId?: string,
-  ): ApplicableEntry => ({ effect: "deny", resourceType, action, objectType, objectId });
+  ): ApplicableEntry => ({
+    effect: "deny",
+    resourceType,
+    action,
+    objectType,
+    objectId,
+  });
 
   test("owner immutable short-circuits allow before any entry scan", () => {
     expect(
@@ -103,6 +146,20 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
         request: { resourceType: "app.loans", action: "read" },
       }),
     ).toBe("allow");
+  });
+
+  test("owner and admin wildcard modes retain reserved Access Control authority", () => {
+    for (const wildcard of ["immutable", "default"] as const) {
+      for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
+        expect(
+          evaluateAccess({
+            wildcard,
+            entries: [],
+            request: { resourceType: "app.loans", action },
+          }),
+        ).toBe("allow");
+      }
+    }
   });
 
   test("an explicit allow cannot confer an Owner-only lever (step 5 fence)", () => {
@@ -149,6 +206,47 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     ).toBe("deny");
   });
 
+  test("catalog owner_only classification fences admin and explicit allows", () => {
+    const request = {
+      resourceType: "system.access",
+      action: "manage",
+      classification: "owner_only" as const,
+    };
+
+    expect(evaluateAccess({ wildcard: "default", entries: [], request })).toBe(
+      "deny",
+    );
+    expect(
+      evaluateAccess({
+        wildcard: "none",
+        entries: [allow("system.access", "manage")],
+        request,
+      }),
+    ).toBe("deny");
+    expect(
+      evaluateAccess({ wildcard: "immutable", entries: [], request }),
+    ).toBe("allow");
+  });
+
+  test("catalog delegable classification remains conferrable", () => {
+    const request = {
+      resourceType: "system.members",
+      action: "read",
+      classification: "delegable" as const,
+    };
+
+    expect(evaluateAccess({ wildcard: "default", entries: [], request })).toBe(
+      "allow",
+    );
+    expect(
+      evaluateAccess({
+        wildcard: "none",
+        entries: [allow("system.members", "read")],
+        request,
+      }),
+    ).toBe("allow");
+  });
+
   test("an explicit narrowing deny beats the admin default", () => {
     expect(
       evaluateAccess({
@@ -180,7 +278,11 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     const entries = [allow("app.loans", MANAGE_ACTION)];
     for (const verb of CANONICAL_ACTIONS) {
       expect(
-        evaluateAccess({ wildcard: "none", entries, request: { resourceType: "app.loans", action: verb } }),
+        evaluateAccess({
+          wildcard: "none",
+          entries,
+          request: { resourceType: "app.loans", action: verb },
+        }),
       ).toBe("allow");
     }
     expect(
@@ -190,6 +292,18 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
         request: { resourceType: "app.loans", action: "approve" },
       }),
     ).toBe("deny");
+  });
+
+  test("explicit reserved allows confer reserved Access Control authority", () => {
+    for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
+      expect(
+        evaluateAccess({
+          wildcard: "none",
+          entries: [allow("app.loans", action)],
+          request: { resourceType: "app.loans", action },
+        }),
+      ).toBe("allow");
+    }
   });
 
   test("`*` action allows a custom verb; `*` resourceType matches any type", () => {
@@ -227,7 +341,11 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
           allow("app.loans", "read", "resource", "loan_x"),
           denyEntry("app.loans", "read", "scope"),
         ],
-        request: { resourceType: "app.loans", action: "read", objectId: "loan_x" },
+        request: {
+          resourceType: "app.loans",
+          action: "read",
+          objectId: "loan_x",
+        },
       }),
     ).toBe("deny");
   });
@@ -235,10 +353,18 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
   test("union on allow: distinct verbs from different layers both allowed", () => {
     const entries = [allow("app.loans", "read"), allow("app.loans", "create")];
     expect(
-      evaluateAccess({ wildcard: "none", entries, request: { resourceType: "app.loans", action: "read" } }),
+      evaluateAccess({
+        wildcard: "none",
+        entries,
+        request: { resourceType: "app.loans", action: "read" },
+      }),
     ).toBe("allow");
     expect(
-      evaluateAccess({ wildcard: "none", entries, request: { resourceType: "app.loans", action: "create" } }),
+      evaluateAccess({
+        wildcard: "none",
+        entries,
+        request: { resourceType: "app.loans", action: "create" },
+      }),
     ).toBe("allow");
   });
 

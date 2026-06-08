@@ -3,7 +3,6 @@
 import { Hercules } from "@usehercules/sdk";
 import type { ActionBuilder, GenericDataModel } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import type { AccessActionBuilder } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
 const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
@@ -12,7 +11,6 @@ type WriteResult = Record<string, unknown>;
 
 export type AccessScopeCreateResult = {
   accessScopeId: string;
-  accessScopeAppId?: string;
   created?: boolean;
   sourceVersion: number;
   projectionIds: string[];
@@ -51,8 +49,16 @@ type AccessAdminApiOptions = {
   client?: AccessAdminSdkClient;
 };
 
-export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & { accessAction: AccessActionBuilder<DataModel> };
+export type CreateAccessAdminActionsOptions<
+  DataModel extends GenericDataModel,
+> = AccessAdminApiOptions & {
+  internalAction: ActionBuilder<DataModel, "internal">;
+};
+
+export type CreateAccessUserActionsOptions<DataModel extends GenericDataModel> =
+  AccessAdminApiOptions & {
+    authenticatedAction: ActionBuilder<DataModel, "public">;
+  };
 
 export type CreateAccessScopeArgs = {
   name: string;
@@ -66,9 +72,6 @@ export type CreateAccessInvitationArgs = {
   roleIds?: string[];
   roleKeys?: string[];
   expiresInDays?: number;
-  /** When set, the call acts on behalf of this signed-in end-user
-   * (`actor_mode: "app_user"`); otherwise it acts as the app backend. */
-  idToken?: string;
 };
 
 export type CreateResourceInvitationArgs = {
@@ -80,32 +83,16 @@ export type CreateResourceInvitationArgs = {
   roleKey?: string;
   permissionKey?: string;
   expiresInDays?: number;
-  /** When set, the call acts on behalf of this signed-in end-user
-   * (`actor_mode: "app_user"`); otherwise it acts as the app backend. */
-  idToken?: string;
 };
 
 export type AcceptAccessInvitationArgs = { token: string; idToken: string };
 
-/**
- * The control plane requires an explicit actor mode on every privileged write.
- * The admin wrapper is the app's own backend, so it acts as `"service"` (no
- * `id_token`). When a method performs a delegated, end-user action it forwards
- * the signed-in user's ID token and acts as `"app_user"` instead.
- */
-type ActorMode = "service" | "app_user";
-
-/**
- * Builds the `actor_mode` (+ `id_token` for app_user) fields the control plane
- * requires. Pass the end-user's raw `idToken` for a delegated action; omit it to
- * act as the app's own backend.
- */
-function actorMode(idToken?: string): { actor_mode: ActorMode; id_token?: string } {
-  return idToken ? { actor_mode: "app_user", id_token: idToken } : { actor_mode: "service" };
-}
+const serviceActor = { actor_mode: "service" as const };
 
 export type CreateAccessScopeContext = {
-  auth: { getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null> };
+  auth: {
+    getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null>;
+  };
 };
 
 export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
@@ -122,7 +109,10 @@ const optionalPrincipalRef = {
   herculesAuthUserId: v.optional(v.string()),
 };
 
-const optionalRoleRef = { roleId: v.optional(v.string()), roleKey: v.optional(v.string()) };
+const optionalRoleRef = {
+  roleId: v.optional(v.string()),
+  roleKey: v.optional(v.string()),
+};
 
 /**
  * Builds the managed Access Control write actions (assign/remove roles,
@@ -131,49 +121,44 @@ const optionalRoleRef = { roleId: v.optional(v.string()), roleKey: v.optional(v.
  * secret. Wire it once in `convex/accessAdmin.ts` and re-export the actions
  * you use.
  *
- * Important: every action here enforces a SCOPE-WIDE system permission, so
- * only org admins/owners can call them:
- * - role assignment / invitations / user exceptions -> `access.users.manage`
- * - role create / update / overrides / default role -> `access.roles.manage`
- * - resource grants / rules / expiries -> `access.grants.manage`
- *
- * Each call acts as the app's own backend (`actor_mode: "service"`). For
- * delegated, per-resource management — letting a non-admin (e.g. a project
- * manager) grant access on a single resource they own — pass the signed-in
- * end-user's `idToken`; the call then acts as `actor_mode: "app_user"` and the
- * control plane enforces the no-escalation subset check against what that user
- * holds. See the access-control guides.
+ * These are internal service-authority actions. Do not re-export them as public
+ * Convex actions. Use {@link createAccessUserActions} for public resource
+ * management by signed-in app users.
  */
 export function createAccessAdminActions<DataModel extends GenericDataModel>(
   options: CreateAccessAdminActionsOptions<DataModel>,
 ) {
   const callAccessControlApi = makeAccessControlApiCaller(options);
-  const { accessAction } = options;
+  const { internalAction } = options;
 
   return {
-    archiveScope: accessAction({
-      permission: "access.manage",
-      scope: (_ctx, args) => args.scopeId,
+    archiveScope: internalAction({
       args: { scopeId: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId };
-        return await callAccessControlApi("/v1/access-control/scopes/archive", body);
+        return await callAccessControlApi(
+          "/v1/access-control/scopes/archive",
+          body,
+        );
       },
     }),
 
-    setDefaultRole: accessAction({
-      permission: "access.roles.manage",
-      scope: (_ctx, args) => args.scopeId,
+    setDefaultRole: internalAction({
       args: { scopeId: v.string(), ...optionalRoleRef },
       handler: async (_ctx, args) => {
-        const body = { scope_id: args.scopeId, ...roleRef(args), ...actorMode() };
-        return await callAccessControlApi("/v1/access-control/scopes/set-default-role", body);
+        const body = {
+          scope_id: args.scopeId,
+          ...roleRef(args),
+          ...serviceActor,
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/scopes/set-default-role",
+          body,
+        );
       },
     }),
 
-    createInvitation: accessAction({
-      permission: "access.users.manage",
-      scope: (_ctx, args) => args.scopeId,
+    createInvitation: internalAction({
       args: {
         scopeId: v.string(),
         email: v.string(),
@@ -187,49 +172,62 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
       },
     }),
 
-    revokeInvitation: accessAction({
-      permission: "access.users.manage",
-      scope: (_ctx, args) => args.scopeId,
+    revokeInvitation: internalAction({
       args: { scopeId: v.string(), invitationId: v.string() },
       handler: async (_ctx, args) => {
-        const body = { scope_id: args.scopeId, invitation_id: args.invitationId, ...actorMode() };
-        return await callAccessControlApi("/v1/access-control/invitations/revoke", body);
+        const body = {
+          scope_id: args.scopeId,
+          invitation_id: args.invitationId,
+          ...serviceActor,
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/invitations/revoke",
+          body,
+        );
       },
     }),
 
-    assignRole: accessAction({
-      permission: "access.users.manage",
-      scope: (_ctx, args) => args.scopeId,
-      args: { scopeId: v.string(), ...optionalPrincipalRef, ...optionalRoleRef },
+    assignRole: internalAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalPrincipalRef,
+        ...optionalRoleRef,
+      },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
           ...principalRef(args),
           ...roleRef(args),
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/assign", body);
+        return await callAccessControlApi(
+          "/v1/access-control/roles/assign",
+          body,
+        );
       },
     }),
 
-    removeRole: accessAction({
-      permission: "access.users.manage",
-      scope: (_ctx, args) => args.scopeId,
-      args: { scopeId: v.string(), ...optionalPrincipalRef, ...optionalRoleRef },
+    removeRole: internalAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalPrincipalRef,
+        ...optionalRoleRef,
+      },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
           ...principalRef(args),
           ...roleRef(args),
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/remove", body);
+        return await callAccessControlApi(
+          "/v1/access-control/roles/remove",
+          body,
+        );
       },
     }),
 
-    createOrgCustomRole: accessAction({
-      permission: "access.roles.manage",
-      scope: (_ctx, args) => args.scopeId,
+    createOrgCustomRole: internalAction({
       args: {
         scopeId: v.string(),
         key: v.optional(v.string()),
@@ -244,30 +242,36 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           name: args.name,
           description: args.description,
           permission_keys: args.permissionKeys,
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/create-org-custom", body);
+        return await callAccessControlApi(
+          "/v1/access-control/roles/create-org-custom",
+          body,
+        );
       },
     }),
 
-    updateRolePermissions: accessAction({
-      permission: "access.roles.manage",
-      scope: (_ctx, args) => args.scopeId,
-      args: { scopeId: v.string(), ...optionalRoleRef, permissionKeys: v.array(v.string()) },
+    updateRolePermissions: internalAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalRoleRef,
+        permissionKeys: v.array(v.string()),
+      },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
           ...roleRef(args),
           permission_keys: args.permissionKeys,
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/update-permissions", body);
+        return await callAccessControlApi(
+          "/v1/access-control/roles/update-permissions",
+          body,
+        );
       },
     }),
 
-    setUserExceptions: accessAction({
-      permission: "access.users.manage",
-      scope: (_ctx, args) => args.scopeId,
+    setUserExceptions: internalAction({
       args: {
         scopeId: v.string(),
         ...optionalPrincipalRef,
@@ -280,43 +284,44 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           ...principalRef(args),
           allow: args.allow,
           deny: args.deny,
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/user-exceptions/set", body);
+        return await callAccessControlApi(
+          "/v1/access-control/user-exceptions/set",
+          body,
+        );
       },
     }),
 
-    createResourceGrant: accessAction({
-      permission: "access.grants.manage",
-      scope: (_ctx, args) => args.scopeId,
+    createResourceGrant: internalAction({
       args: {
         scopeId: v.string(),
         ...optionalPrincipalRef,
         resourceType: v.string(),
-        resourceId: v.string(),
+        resourceId: v.optional(v.union(v.string(), v.null())),
         roleKey: v.optional(v.string()),
         permissionKey: v.optional(v.string()),
         expiresAt: v.optional(v.union(v.string(), v.null())),
-        idToken: v.optional(v.string()),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
           ...principalRef(args),
           resource_type: args.resourceType,
-          resource_id: args.resourceId,
+          resource_id: args.resourceId ?? null,
           role_key: args.roleKey,
           permission_key: args.permissionKey,
           expires_at: args.expiresAt,
-          ...actorMode(args.idToken),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/resource-grants/create", body);
+        return await callAccessControlApi(
+          "/v1/access-control/resource-grants/create",
+          body,
+        );
       },
     }),
 
-    createResourceInvitation: accessAction({
-      permission: "access.grants.manage",
-      scope: (_ctx, args) => args.scopeId,
+    createResourceInvitation: internalAction({
       args: {
         scopeId: v.string(),
         email: v.string(),
@@ -325,16 +330,13 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         roleKey: v.optional(v.string()),
         permissionKey: v.optional(v.string()),
         expiresInDays: v.optional(v.number()),
-        idToken: v.optional(v.string()),
       },
       handler: async (_ctx, args) => {
         return await createResourceInvitation(args, options);
       },
     }),
 
-    setResourcePermissionRule: accessAction({
-      permission: "access.grants.manage",
-      scope: (_ctx, args) => args.scopeId,
+    setResourcePermissionRule: internalAction({
       args: {
         scopeId: v.string(),
         subject: v.union(
@@ -365,45 +367,51 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           permission_key: args.permissionKey,
           effect: args.effect,
           expires_at: args.expiresAt,
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/resource-rules/set", body);
+        return await callAccessControlApi(
+          "/v1/access-control/resource-rules/set",
+          body,
+        );
       },
     }),
 
-    revokeResourceGrant: accessAction({
-      permission: "access.grants.manage",
-      scope: (_ctx, args) => args.scopeId,
-      args: { scopeId: v.string(), grantId: v.string(), idToken: v.optional(v.string()) },
+    revokeResourceGrant: internalAction({
+      args: { scopeId: v.string(), grantId: v.string() },
       handler: async (_ctx, args) => {
-        const body = { scope_id: args.scopeId, grant_id: args.grantId, ...actorMode(args.idToken) };
-        return await callAccessControlApi("/v1/access-control/resource-grants/revoke", body);
+        const body = {
+          scope_id: args.scopeId,
+          grant_id: args.grantId,
+          ...serviceActor,
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/resource-grants/revoke",
+          body,
+        );
       },
     }),
 
-    setGrantExpiry: accessAction({
-      permission: "access.grants.manage",
-      scope: (_ctx, args) => args.scopeId,
+    setGrantExpiry: internalAction({
       args: {
         scopeId: v.string(),
         grantId: v.string(),
         expiresAt: v.union(v.string(), v.null()),
-        idToken: v.optional(v.string()),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
           grant_id: args.grantId,
           expires_at: args.expiresAt,
-          ...actorMode(args.idToken),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/expiries/set", body);
+        return await callAccessControlApi(
+          "/v1/access-control/expiries/set",
+          body,
+        );
       },
     }),
 
-    setRoleOverride: accessAction({
-      permission: "access.roles.manage",
-      scope: (_ctx, args) => args.scopeId,
+    setRoleOverride: internalAction({
       args: {
         scopeId: v.string(),
         roleKey: v.string(),
@@ -416,9 +424,360 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           role_key: args.roleKey,
           allow: args.allow,
           deny: args.deny,
-          ...actorMode(),
+          ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/role-overrides/set", body);
+        return await callAccessControlApi(
+          "/v1/access-control/role-overrides/set",
+          body,
+        );
+      },
+    }),
+  };
+}
+
+/**
+ * Builds authenticated public actions for end-user access management. The
+ * control plane verifies the supplied ID token and applies the operation's
+ * scope, Owner, or resource-level RBAC gate.
+ */
+export function createAccessUserActions<DataModel extends GenericDataModel>(
+  options: CreateAccessUserActionsOptions<DataModel>,
+) {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const { authenticatedAction } = options;
+
+  return {
+    setDefaultRole: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalRoleRef,
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...roleRef(args),
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/scopes/set-default-role",
+          body,
+        );
+      },
+    }),
+
+    createInvitation: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        email: v.string(),
+        roleIds: v.optional(v.array(v.string())),
+        roleKeys: v.optional(v.array(v.string())),
+        expiresInDays: v.optional(v.number()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          email: args.email,
+          role_ids: args.roleIds,
+          role_keys: args.roleKeys,
+          expires_in_days: args.expiresInDays,
+          ...appUserActor(args.idToken),
+        };
+        const result = await callAccessControlApi(
+          "/v1/access-control/invitations/create",
+          body,
+        );
+        return normalizeAccessInvitationCreateResult(result);
+      },
+    }),
+
+    revokeInvitation: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        invitationId: v.string(),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          invitation_id: args.invitationId,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/invitations/revoke",
+          body,
+        );
+      },
+    }),
+
+    assignRole: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalPrincipalRef,
+        ...optionalRoleRef,
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...principalRef(args),
+          ...roleRef(args),
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/roles/assign",
+          body,
+        );
+      },
+    }),
+
+    removeRole: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalPrincipalRef,
+        ...optionalRoleRef,
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...principalRef(args),
+          ...roleRef(args),
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/roles/remove",
+          body,
+        );
+      },
+    }),
+
+    createOrgCustomRole: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        key: v.optional(v.string()),
+        name: v.string(),
+        description: v.optional(v.string()),
+        permissionKeys: v.array(v.string()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          key: args.key,
+          name: args.name,
+          description: args.description,
+          permission_keys: args.permissionKeys,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/roles/create-org-custom",
+          body,
+        );
+      },
+    }),
+
+    updateRolePermissions: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalRoleRef,
+        permissionKeys: v.array(v.string()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...roleRef(args),
+          permission_keys: args.permissionKeys,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/roles/update-permissions",
+          body,
+        );
+      },
+    }),
+
+    setUserExceptions: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalPrincipalRef,
+        allow: v.array(v.string()),
+        deny: v.array(v.string()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...principalRef(args),
+          allow: args.allow,
+          deny: args.deny,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/user-exceptions/set",
+          body,
+        );
+      },
+    }),
+
+    createResourceGrant: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        ...optionalPrincipalRef,
+        resourceType: v.string(),
+        resourceId: v.optional(v.union(v.string(), v.null())),
+        roleKey: v.optional(v.string()),
+        permissionKey: v.optional(v.string()),
+        expiresAt: v.optional(v.union(v.string(), v.null())),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          ...principalRef(args),
+          resource_type: args.resourceType,
+          resource_id: args.resourceId ?? null,
+          role_key: args.roleKey,
+          permission_key: args.permissionKey,
+          expires_at: args.expiresAt,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/resource-grants/create",
+          body,
+        );
+      },
+    }),
+
+    createResourceInvitation: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        email: v.string(),
+        resourceType: v.string(),
+        resourceId: v.string(),
+        roleKey: v.optional(v.string()),
+        permissionKey: v.optional(v.string()),
+        expiresInDays: v.optional(v.number()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          email: args.email,
+          resource_type: args.resourceType,
+          resource_id: args.resourceId,
+          role_key: args.roleKey,
+          permission_key: args.permissionKey,
+          expires_in_days: args.expiresInDays,
+          ...appUserActor(args.idToken),
+        };
+        const result = await callAccessControlApi(
+          "/v1/access-control/invitations/create-resource",
+          body,
+        );
+        return normalizeAccessInvitationCreateResult(result);
+      },
+    }),
+
+    setResourcePermissionRule: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        subject: v.union(
+          v.object({ type: v.literal("principal"), principalId: v.string() }),
+          v.object({ type: v.literal("role"), roleKey: v.string() }),
+        ),
+        resourceType: v.string(),
+        target: v.union(
+          v.object({ mode: v.literal("all") }),
+          v.object({ mode: v.literal("specific"), resourceId: v.string() }),
+        ),
+        permissionKey: v.string(),
+        effect: v.union(v.literal("allow"), v.literal("deny")),
+        expiresAt: v.optional(v.union(v.string(), v.null())),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          subject:
+            args.subject.type === "role"
+              ? { type: "role", role_key: args.subject.roleKey }
+              : { type: "principal", principal_id: args.subject.principalId },
+          resource_type: args.resourceType,
+          target:
+            args.target.mode === "all"
+              ? { mode: "all" }
+              : { mode: "specific", resource_id: args.target.resourceId },
+          permission_key: args.permissionKey,
+          effect: args.effect,
+          expires_at: args.expiresAt,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/resource-rules/set",
+          body,
+        );
+      },
+    }),
+
+    revokeResourceGrant: authenticatedAction({
+      args: { scopeId: v.string(), grantId: v.string(), idToken: v.string() },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          grant_id: args.grantId,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/resource-grants/revoke",
+          body,
+        );
+      },
+    }),
+
+    setGrantExpiry: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        grantId: v.string(),
+        expiresAt: v.union(v.string(), v.null()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          grant_id: args.grantId,
+          expires_at: args.expiresAt,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/expiries/set",
+          body,
+        );
+      },
+    }),
+
+    setRoleOverride: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        roleKey: v.string(),
+        allow: v.array(v.string()),
+        deny: v.array(v.string()),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          role_key: args.roleKey,
+          allow: args.allow,
+          deny: args.deny,
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi(
+          "/v1/access-control/role-overrides/set",
+          body,
+        );
       },
     }),
   };
@@ -431,12 +790,17 @@ export function createAccessScopeAction<DataModel extends GenericDataModel>(
     args: {
       name: v.string(),
       defaultRoleKey: v.optional(v.string()),
-      accountEntryMode: v.optional(v.union(v.literal("open"), v.literal("allowlisted_only"))),
+      accountEntryMode: v.optional(
+        v.union(v.literal("open"), v.literal("allowlisted_only")),
+      ),
     },
     handler: async (ctx, args) => {
       const allowed = await options.canCreateScope(ctx, args);
       if (!allowed) {
-        throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
+        throw new ConvexError({
+          code: "ACCESS_DENIED",
+          message: "Access denied",
+        });
       }
 
       return await createAccessScope(ctx, args, options);
@@ -451,14 +815,19 @@ export async function createAccessScope(
 ): Promise<AccessScopeCreateResult> {
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
-  const actorHerculesAuthUserId = parseTokenIdentifierSubject(identity?.tokenIdentifier);
+  const actorHerculesAuthUserId = parseTokenIdentifierSubject(
+    identity?.tokenIdentifier,
+  );
   const body = {
     name: args.name,
     default_role_key: args.defaultRoleKey,
     account_entry_mode: args.accountEntryMode,
-    actor_hercules_auth_user_id: actorHerculesAuthUserId,
+    owner_hercules_auth_user_id: actorHerculesAuthUserId,
   };
-  const result = await callAccessControlApi("/v1/access-control/scopes/create", body);
+  const result = await callAccessControlApi(
+    "/v1/access-control/scopes/create",
+    body,
+  );
   return normalizeAccessScopeCreateResult(result);
 }
 
@@ -473,19 +842,20 @@ export async function createAccessInvitation(
     role_ids: args.roleIds,
     role_keys: args.roleKeys,
     expires_in_days: args.expiresInDays,
-    ...actorMode(args.idToken),
+    ...serviceActor,
   };
-  const result = await callAccessControlApi("/v1/access-control/invitations/create", body);
+  const result = await callAccessControlApi(
+    "/v1/access-control/invitations/create",
+    body,
+  );
   return normalizeAccessInvitationCreateResult(result);
 }
 
 /**
  * Invite an email to a single resource, conferring a custom role or a single
  * permission scoped to that resource (not the whole scope). Pass exactly one of
- * `roleKey` / `permissionKey`. Acts as the app backend by default; pass the
- * signed-in end-user's `idToken` to delegate on their behalf (the control plane
- * enforces the no-escalation subset check). Returns the same write result as
- * `createAccessInvitation`.
+ * `roleKey` / `permissionKey`. This helper always acts as the internal service.
+ * Public app-user invitations are exposed by {@link createAccessUserActions}.
  */
 export async function createResourceInvitation(
   args: CreateResourceInvitationArgs,
@@ -500,9 +870,12 @@ export async function createResourceInvitation(
     role_key: args.roleKey,
     permission_key: args.permissionKey,
     expires_in_days: args.expiresInDays,
-    ...actorMode(args.idToken),
+    ...serviceActor,
   };
-  const result = await callAccessControlApi("/v1/access-control/invitations/create-resource", body);
+  const result = await callAccessControlApi(
+    "/v1/access-control/invitations/create-resource",
+    body,
+  );
   return normalizeAccessInvitationCreateResult(result);
 }
 
@@ -515,24 +888,33 @@ export async function acceptAccessInvitation(
   const identity = await ctx.auth.getUserIdentity();
   requireTokenIdentifier(identity?.tokenIdentifier);
   const body = { token: args.token, id_token: args.idToken };
-  const result = await callAccessControlApi("/v1/access-control/invitations/accept", body);
+  const result = await callAccessControlApi(
+    "/v1/access-control/invitations/accept",
+    body,
+  );
   return normalizeAccessInvitationAcceptResult(result);
 }
 
 function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
   let client: AccessAdminSdkClient | undefined = options.client;
 
-  return async (path: string, body: Record<string, unknown>): Promise<WriteResult> => {
+  return async (
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<WriteResult> => {
     client ??= createSdkClient(options);
     return await client.post<WriteResult>(path, { body });
   };
 }
 
 function createSdkClient(options: AccessAdminApiOptions): AccessAdminSdkClient {
-  const envVarName = options.apiKeyEnvVar ?? DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR;
+  const envVarName =
+    options.apiKeyEnvVar ?? DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR;
   const apiKey = options.apiKey ?? process.env[envVarName];
   if (!apiKey) {
-    throw new Error(`${envVarName} is required for Access Control admin actions.`);
+    throw new Error(
+      `${envVarName} is required for Access Control admin actions.`,
+    );
   }
 
   return new Hercules({
@@ -541,42 +923,76 @@ function createSdkClient(options: AccessAdminApiOptions): AccessAdminSdkClient {
   }) as unknown as AccessAdminSdkClient;
 }
 
-function principalRef(args: { principalId?: string; herculesAuthUserId?: string }) {
-  return { principal_id: args.principalId, hercules_auth_user_id: args.herculesAuthUserId };
+function appUserActor(idToken: string) {
+  const normalizedIdToken = idToken.trim();
+  if (!normalizedIdToken) {
+    throw new ConvexError({
+      code: "INVALID_ID_TOKEN",
+      message: "idToken is required",
+    });
+  }
+  return { actor_mode: "app_user" as const, id_token: normalizedIdToken };
+}
+
+function principalRef(args: {
+  principalId?: string;
+  herculesAuthUserId?: string;
+}) {
+  return {
+    principal_id: args.principalId,
+    hercules_auth_user_id: args.herculesAuthUserId,
+  };
 }
 
 function roleRef(args: { roleId?: string; roleKey?: string }) {
   return { role_id: args.roleId, role_key: args.roleKey };
 }
 
-function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined): string {
+function parseTokenIdentifierSubject(
+  tokenIdentifier: string | null | undefined,
+): string {
   const value = requireTokenIdentifier(tokenIdentifier);
   const separatorIndex = value.lastIndexOf("|");
   return value.slice(separatorIndex + 1);
 }
 
-function requireTokenIdentifier(tokenIdentifier: string | null | undefined): string {
+function requireTokenIdentifier(
+  tokenIdentifier: string | null | undefined,
+): string {
   if (!tokenIdentifier) {
-    throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
+    throw new ConvexError({
+      code: "UNAUTHENTICATED",
+      message: "Authentication required",
+    });
   }
   const separatorIndex = tokenIdentifier.lastIndexOf("|");
   if (separatorIndex <= 0 || separatorIndex === tokenIdentifier.length - 1) {
-    throw new ConvexError({ code: "UNAUTHENTICATED", message: "Authentication required" });
+    throw new ConvexError({
+      code: "UNAUTHENTICATED",
+      message: "Authentication required",
+    });
   }
   return tokenIdentifier;
 }
 
-function normalizeAccessScopeCreateResult(result: WriteResult): AccessScopeCreateResult {
+function normalizeAccessScopeCreateResult(
+  result: WriteResult,
+): AccessScopeCreateResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
-    accessScopeAppId: optionalString(result, "access_scope_app_id", "accessScopeAppId"),
     created: optionalBoolean(result, "created", "created"),
     sourceVersion: requiredNumber(result, "source_version", "sourceVersion"),
-    projectionIds: requiredStringArray(result, "projection_ids", "projectionIds"),
+    projectionIds: requiredStringArray(
+      result,
+      "projection_ids",
+      "projectionIds",
+    ),
   };
 }
 
-function normalizeAccessInvitationCreateResult(result: WriteResult): AccessInvitationCreateResult {
+function normalizeAccessInvitationCreateResult(
+  result: WriteResult,
+): AccessInvitationCreateResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     invitationId: requiredString(result, "invitation_id", "invitationId"),
@@ -586,11 +1002,17 @@ function normalizeAccessInvitationCreateResult(result: WriteResult): AccessInvit
     acceptUrl: requiredString(result, "accept_url", "acceptUrl"),
     expiresAt: requiredString(result, "expires_at", "expiresAt"),
     sourceVersion: requiredNumber(result, "source_version", "sourceVersion"),
-    projectionIds: requiredStringArray(result, "projection_ids", "projectionIds"),
+    projectionIds: requiredStringArray(
+      result,
+      "projection_ids",
+      "projectionIds",
+    ),
   };
 }
 
-function normalizeAccessInvitationAcceptResult(result: WriteResult): AccessInvitationAcceptResult {
+function normalizeAccessInvitationAcceptResult(
+  result: WriteResult,
+): AccessInvitationAcceptResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     invitationId: requiredString(result, "invitation_id", "invitationId"),
@@ -598,27 +1020,22 @@ function normalizeAccessInvitationAcceptResult(result: WriteResult): AccessInvit
     roleIds: requiredStringArray(result, "role_ids", "roleIds"),
     changed: optionalBoolean(result, "changed", "changed"),
     sourceVersion: requiredNumber(result, "source_version", "sourceVersion"),
-    projectionIds: requiredStringArray(result, "projection_ids", "projectionIds"),
+    projectionIds: requiredStringArray(
+      result,
+      "projection_ids",
+      "projectionIds",
+    ),
   };
 }
 
-function requiredString(result: WriteResult, apiKey: string, resultName: string): string {
-  const value = result[apiKey];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Access Control API response missing ${resultName}.`);
-  }
-  return value;
-}
-
-function optionalString(
+function requiredString(
   result: WriteResult,
   apiKey: string,
   resultName: string,
-): string | undefined {
+): string {
   const value = result[apiKey];
-  if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Access Control API response has invalid ${resultName}.`);
+    throw new Error(`Access Control API response missing ${resultName}.`);
   }
   return value;
 }
@@ -636,7 +1053,11 @@ function optionalBoolean(
   return value;
 }
 
-function requiredNumber(result: WriteResult, apiKey: string, resultName: string): number {
+function requiredNumber(
+  result: WriteResult,
+  apiKey: string,
+  resultName: string,
+): number {
   const value = result[apiKey];
   if (typeof value !== "number") {
     throw new Error(`Access Control API response missing ${resultName}.`);
@@ -644,7 +1065,11 @@ function requiredNumber(result: WriteResult, apiKey: string, resultName: string)
   return value;
 }
 
-function requiredStringArray(result: WriteResult, apiKey: string, resultName: string): string[] {
+function requiredStringArray(
+  result: WriteResult,
+  apiKey: string,
+  resultName: string,
+): string[] {
   const value = result[apiKey];
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
     throw new Error(`Access Control API response missing ${resultName}.`);

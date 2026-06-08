@@ -1,16 +1,21 @@
 import {
-  queryGeneric,
+  internalQueryGeneric,
   type DataModelFromSchemaDefinition,
   type GenericQueryCtx,
   type QueryBuilder,
 } from "convex/server";
 import { v } from "convex/values";
-import { evaluateAccess, MANAGE_ACTION, WILDCARD_ACTION } from "./authz";
+import {
+  evaluateAccess,
+  hasExplicitDeny,
+  MANAGE_ACTION,
+  WILDCARD_ACTION,
+} from "./authz";
 import { evaluateEffectiveAccess } from "./effective";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
-const query = queryGeneric as QueryBuilder<DataModel, "public">;
+const query = internalQueryGeneric as QueryBuilder<DataModel, "internal">;
 
 export const authorize = query({
   args: {
@@ -105,7 +110,9 @@ export async function evaluatePermissionDecision(
   // does not special-case on the request side. Reject rather than evaluate.
   if (
     resolvedPermission.action === MANAGE_ACTION ||
-    resolvedPermission.action === WILDCARD_ACTION
+    resolvedPermission.action === WILDCARD_ACTION ||
+    (args.resourceType !== undefined &&
+      args.resourceType !== resolvedPermission.resourceType)
   ) {
     return deny(
       "invalid_request",
@@ -115,14 +122,16 @@ export async function evaluatePermissionDecision(
     );
   }
 
+  const request = {
+    resourceType: resolvedPermission.resourceType,
+    action: resolvedPermission.action,
+    classification: resolvedPermission.classification,
+    objectId: args.resourceId,
+  };
   const decision = evaluateAccess({
     wildcard: evaluation.wildcard,
     entries: evaluation.entries,
-    request: {
-      resourceType: resolvedPermission.resourceType,
-      action: resolvedPermission.action,
-      objectId: args.resourceId,
-    },
+    request,
   });
 
   if (decision === "allow") {
@@ -138,6 +147,7 @@ export async function evaluatePermissionDecision(
     evaluation.sourceVersion,
     evaluation.principalId,
     evaluation.effectiveRoleIds,
+    hasExplicitDeny(evaluation.entries, request),
   );
 }
 
@@ -170,6 +180,7 @@ function allow(sourceVersion: number, principalId: string | undefined, effective
   return {
     allowed: true as const,
     reasonCode: "allowed",
+    explicitDeny: false,
     sourceVersion,
     principalId,
     effectiveRoleIds,
@@ -181,10 +192,12 @@ function deny(
   sourceVersion?: number,
   principalId?: string,
   effectiveRoleIds?: string[],
+  explicitDeny = false,
 ) {
   return {
     allowed: false as const,
     reasonCode,
+    explicitDeny,
     sourceVersion,
     principalId,
     effectiveRoleIds: effectiveRoleIds ?? [],
