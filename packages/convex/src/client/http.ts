@@ -9,7 +9,7 @@ import {
 
 type ApplySyncReference = FunctionReference<
   "mutation",
-  "internal",
+  "public",
   AccessProjectionSyncPayload,
   SyncResponse
 >;

@@ -137,28 +137,28 @@ export type AccessResourceRef = { type: string; id: string };
 
 export type AccessControlComponent = {
   checks: {
-    authorize: FunctionReference<"query", "internal", AuthorizationArgs, AuthorizationDecision>;
+    authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision>;
   };
   queries: {
-    listMyMemberships: FunctionReference<"query", "internal", ListMyMembershipsArgs, Membership[]>;
-    listMyRoles: FunctionReference<"query", "internal", ListMyRolesArgs, RoleSummary[]>;
+    listMyMemberships: FunctionReference<"query", "public", ListMyMembershipsArgs, Membership[]>;
+    listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[]>;
     getEffectivePermissions: FunctionReference<
       "query",
-      "internal",
+      "public",
       GetEffectivePermissionsArgs,
       EffectivePermissionsResult
     >;
-    listScopeMembers: FunctionReference<"query", "internal", ListScopeArgs, ScopeMember[]>;
-    listScopeRoles: FunctionReference<"query", "internal", ListScopeArgs, ScopeRoleSummary[]>;
+    listScopeMembers: FunctionReference<"query", "public", ListScopeArgs, ScopeMember[]>;
+    listScopeRoles: FunctionReference<"query", "public", ListScopeArgs, ScopeRoleSummary[]>;
     listScopePermissions: FunctionReference<
       "query",
-      "internal",
+      "public",
       ListScopeArgs,
       ScopePermissionSummary[]
     >;
     listDirectSubjectsForResource: FunctionReference<
       "query",
-      "internal",
+      "public",
       ListDirectSubjectsArgs,
       DirectResourceSubject[]
     >;

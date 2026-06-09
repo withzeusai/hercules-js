@@ -1,6 +1,7 @@
 import {
   internalMutationGeneric,
   makeFunctionReference,
+  mutationGeneric,
   type DataModelFromSchemaDefinition,
   type MutationBuilder,
 } from "convex/server";
@@ -18,6 +19,11 @@ import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 const internalMutation = internalMutationGeneric as MutationBuilder<DataModel, "internal">;
+// applySync is the parent-facing entry point (the app's HTTP sync route calls
+// it via runMutation); it must be public-in-component to be exported to the
+// parent. The expiry mutations below stay internal: they are scheduled and run
+// entirely inside the component.
+const mutation = mutationGeneric as MutationBuilder<DataModel, "public">;
 
 // Exact-identity expiry mutations: scheduled at expiresAt so the reactive query
 // is invalidated when a time-bound binding lapses. The runtime readers also
@@ -49,7 +55,7 @@ const syncPayloadArgs = {
   scopes: v.optional(v.array(v.any())),
 };
 
-export const applySync = internalMutation({
+export const applySync = mutation({
   args: syncPayloadArgs,
   handler: async (ctx, rawArgs) => {
     if (rawArgs.schemaVersion !== 3) {

@@ -126,7 +126,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
   checks: {
     authorize: FunctionReference<
       "query",
-      "internal",
+      "public",
       AuthorizationArgs,
       AuthorizationDecision,
       Name
@@ -135,31 +135,31 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
   queries: {
     listMyMemberships: FunctionReference<
       "query",
-      "internal",
+      "public",
       ListMyMembershipsArgs,
       Membership[],
       Name
     >;
-    listMyRoles: FunctionReference<"query", "internal", ListMyRolesArgs, RoleSummary[], Name>;
+    listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[], Name>;
     getEffectivePermissions: FunctionReference<
       "query",
-      "internal",
+      "public",
       GetEffectivePermissionsArgs,
       EffectivePermissionsResult,
       Name
     >;
-    listScopeMembers: FunctionReference<"query", "internal", ListScopeArgs, ScopeMember[], Name>;
-    listScopeRoles: FunctionReference<"query", "internal", ListScopeArgs, ScopeRoleSummary[], Name>;
+    listScopeMembers: FunctionReference<"query", "public", ListScopeArgs, ScopeMember[], Name>;
+    listScopeRoles: FunctionReference<"query", "public", ListScopeArgs, ScopeRoleSummary[], Name>;
     listScopePermissions: FunctionReference<
       "query",
-      "internal",
+      "public",
       ListScopeArgs,
       ScopePermissionSummary[],
       Name
     >;
     listDirectSubjectsForResource: FunctionReference<
       "query",
-      "internal",
+      "public",
       ListDirectSubjectsArgs,
       DirectResourceSubject[],
       Name
@@ -168,7 +168,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
   sync: {
     applySync: FunctionReference<
       "mutation",
-      "internal",
+      "public",
       AccessProjectionSyncPayload,
       SyncResponse,
       Name

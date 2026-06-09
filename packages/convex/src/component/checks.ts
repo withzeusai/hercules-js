@@ -1,5 +1,5 @@
 import {
-  internalQueryGeneric,
+  queryGeneric,
   type DataModelFromSchemaDefinition,
   type GenericQueryCtx,
   type QueryBuilder,
@@ -15,7 +15,11 @@ import { evaluateEffectiveAccess } from "./effective";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
-const query = internalQueryGeneric as QueryBuilder<DataModel, "internal">;
+// Public WITHIN the component boundary: a component's functions are never
+// client-callable; only public functions are exported to the parent app, and
+// these checks are exactly the parent-facing API (internal builders are NOT
+// exported, so the SDK's runQuery would fail with "does not export").
+const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
 export const authorize = query({
   args: {

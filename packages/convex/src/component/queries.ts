@@ -1,5 +1,5 @@
 import {
-  internalQueryGeneric,
+  queryGeneric,
   type DataModelFromSchemaDefinition,
   type GenericQueryCtx,
   type QueryBuilder,
@@ -12,7 +12,8 @@ import schema from "./schema";
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
-const query = internalQueryGeneric as QueryBuilder<DataModel, "internal">;
+// Public within the component boundary (parent-facing API; see checks.ts).
+const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
 type RoleSummary = {
   roleId: string;
