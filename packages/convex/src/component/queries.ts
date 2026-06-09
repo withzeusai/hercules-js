@@ -21,6 +21,14 @@ type RoleSummary = {
   roleKind: "system" | "custom";
 };
 
+// The external RoleSummary surface still reports `roleKind: "system" | "custom"`
+// (client/index.ts + the generated component shape). v3 roles carry `source`
+// (system | iam | tenant) instead of the old `kind`. A tenant (org-authored)
+// role is "custom"; reusable catalog roles (system or iam) are "system".
+function roleKindFromSource(source: "system" | "iam" | "tenant"): "system" | "custom" {
+  return source === "tenant" ? "custom" : "system";
+}
+
 type Membership = {
   scopeId: string;
   scopeName: string;
@@ -86,9 +94,7 @@ export const listMyMemberships = query({
 
     const principals = await ctx.db
       .query("principals")
-      .withIndex("by_auth_user", (q) =>
-        q.eq("herculesAuthUserId", token.subject),
-      )
+      .withIndex("by_auth_user", (q) => q.eq("herculesAuthUserId", token.subject))
       .collect();
 
     const memberships: Membership[] = [];
@@ -96,9 +102,7 @@ export const listMyMemberships = query({
     for (const principal of principals) {
       const scope = await ctx.db
         .query("scopes")
-        .withIndex("by_scope_id", (q) =>
-          q.eq("accessScopeId", principal.accessScopeId),
-        )
+        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", principal.accessScopeId))
         .unique();
       if (!scope) continue;
       if (scope.status === "disabled") continue;
@@ -143,9 +147,7 @@ export const listMyRoles = query({
     const principal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
-        q
-          .eq("accessScopeId", args.scopeId)
-          .eq("herculesAuthUserId", token.subject),
+        q.eq("accessScopeId", args.scopeId).eq("herculesAuthUserId", token.subject),
       )
       .unique();
     if (!principal) return [];
@@ -188,8 +190,7 @@ export const getEffectivePermissions = query({
 export const listScopeMembers = query({
   args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<ScopeMember[]> => {
-    if (!(await callerHasScopePermission(ctx, args, "system.members:read")))
-      return [];
+    if (!(await callerHasScopePermission(ctx, args, "system.members:read"))) return [];
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return [];
 
@@ -209,9 +210,7 @@ export const listScopeMembers = query({
       if (authUserId) {
         const user = await ctx.db
           .query("users")
-          .withIndex("by_auth_user_id", (q) =>
-            q.eq("herculesAuthUserId", authUserId),
-          )
+          .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
           .unique();
         if (user) {
           name = user.name;
@@ -236,9 +235,7 @@ export const listScopeMembers = query({
     }
 
     members.sort((a, b) =>
-      (a.name ?? a.email ?? a.principalId).localeCompare(
-        b.name ?? b.email ?? b.principalId,
-      ),
+      (a.name ?? a.email ?? a.principalId).localeCompare(b.name ?? b.email ?? b.principalId),
     );
     return members;
   },
@@ -247,8 +244,7 @@ export const listScopeMembers = query({
 export const listScopeRoles = query({
   args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<ScopeRoleSummary[]> => {
-    if (!(await callerHasScopePermission(ctx, args, "system.roles:read")))
-      return [];
+    if (!(await callerHasScopePermission(ctx, args, "system.roles:read"))) return [];
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return [];
 
@@ -258,34 +254,35 @@ export const listScopeRoles = query({
       .unique();
     const defaultScopeId = defaultScope?.accessScopeId;
 
+    // Tenant roles owned by THIS scope (source=tenant, accessScopeId=scope).
     const scopeRoles = await ctx.db
       .query("roles")
       .withIndex("by_scope", (q) => q.eq("accessScopeId", scope.accessScopeId))
       .collect();
-    // Shared/app-wide roles (default scope) are assignable inside any org scope,
-    // so surface them alongside the scope's own roles when viewing an org.
-    const sharedRoles =
-      defaultScopeId && defaultScopeId !== scope.accessScopeId
-        ? await ctx.db
-            .query("roles")
-            .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScopeId))
-            .collect()
-        : [];
+    // Deployment-wide reusable catalog roles (source system|iam) carry NO
+    // accessScopeId in v3. They are app-wide and assignable inside any scope, so
+    // surface them alongside the scope's own roles. When viewing the default
+    // scope they are the scope's "own" roles (shared=false); inside an org they
+    // are shared.
+    const isDefaultScope = defaultScopeId !== undefined && defaultScopeId === scope.accessScopeId;
+    const catalogRoles = await ctx.db
+      .query("roles")
+      .withIndex("by_scope", (q) => q.eq("accessScopeId", undefined))
+      .collect();
 
     const seen = new Set<string>();
     const roles: ScopeRoleSummary[] = [];
-    for (const role of [...scopeRoles, ...sharedRoles]) {
+    for (const role of [...scopeRoles, ...catalogRoles]) {
       if (seen.has(role.roleId)) continue;
       seen.add(role.roleId);
       roles.push({
         roleId: role.roleId,
         roleKey: role.key,
         roleName: role.name,
-        roleKind: role.kind,
-        shared:
-          defaultScopeId !== undefined &&
-          role.accessScopeId === defaultScopeId &&
-          defaultScopeId !== scope.accessScopeId,
+        roleKind: roleKindFromSource(role.source),
+        // A reusable catalog role (no accessScopeId) is "shared" when surfaced
+        // inside a non-default scope; a scope's own tenant role is never shared.
+        shared: role.accessScopeId === undefined && !isDefaultScope,
       });
     }
 
@@ -302,8 +299,7 @@ export const listScopeRoles = query({
 export const listScopePermissions = query({
   args: { tokenIdentifier: v.optional(v.string()), scopeId: v.string() },
   handler: async (ctx, args): Promise<ScopePermissionSummary[]> => {
-    if (!(await callerHasScopePermission(ctx, args, "system.permissions:read")))
-      return [];
+    if (!(await callerHasScopePermission(ctx, args, "system.permissions:read"))) return [];
     // The permission catalog is app-wide and always lives in the default scope (DL15).
     const defaultScope = await ctx.db
       .query("scopes")
@@ -313,9 +309,7 @@ export const listScopePermissions = query({
 
     const permissions = await ctx.db
       .query("permissions")
-      .withIndex("by_scope", (q) =>
-        q.eq("accessScopeId", defaultScope.accessScopeId),
-      )
+      .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
       .collect();
 
     return permissions
@@ -327,11 +321,7 @@ export const listScopePermissions = query({
         classification: permission.classification,
         tenantAssignable: permission.tenantAssignable,
       }))
-      .sort(
-        (a, b) =>
-          a.key.localeCompare(b.key) ||
-          a.permissionId.localeCompare(b.permissionId),
-      );
+      .sort((a, b) => a.key.localeCompare(b.key) || a.permissionId.localeCompare(b.permissionId));
   },
 });
 
@@ -378,30 +368,76 @@ export const listDirectSubjectsForResource = query({
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return [];
 
-    const grants = await ctx.db
-      .query("grants")
-      .withIndex("by_object_resource", (q) =>
+    // "Who has a DIRECT binding on this exact resource" = the union of role
+    // bindings and direct-permission bindings whose (resourceType, resourceId)
+    // target is this exact resource. Type-wide bindings (resourceId undefined)
+    // are intentionally excluded — this panel lists direct-on-this-resource
+    // subjects only, mirroring the old exact-objectId `by_object_resource` read.
+    const resourceRoleBindings = await ctx.db
+      .query("role_bindings")
+      .withIndex("by_scope_resource", (q) =>
         q
-          .eq("objectScopeId", scope.accessScopeId)
-          .eq("objectType", "resource")
-          .eq("objectResourceType", args.resourceType)
-          .eq("objectId", args.resourceId),
+          .eq("accessScopeId", scope.accessScopeId)
+          .eq("resourceType", args.resourceType)
+          .eq("resourceId", args.resourceId),
       )
       .collect();
+    const resourcePermissionBindings = await ctx.db
+      .query("permission_bindings")
+      .withIndex("by_scope_resource", (q) =>
+        q
+          .eq("accessScopeId", scope.accessScopeId)
+          .eq("resourceType", args.resourceType)
+          .eq("resourceId", args.resourceId),
+      )
+      .collect();
+
+    // Normalize both binding kinds to a common shape. A role binding has no
+    // effect (membership is additive) — report it as an "allow". A
+    // direct-permission binding carries its own effect. Only principal-subject
+    // bindings are reported (a role-subject permission binding has no
+    // subjectPrincipalId), matching the old `if (!subjectPrincipalId) continue`.
+    type ResourceBinding = {
+      subjectPrincipalId: string;
+      relationKind: "role" | "direct_permission";
+      roleId?: string;
+      permissionId?: string;
+      effect: "allow" | "deny";
+      expiresAt?: number;
+    };
+    const grants: ResourceBinding[] = [
+      ...resourceRoleBindings.map((binding) => ({
+        subjectPrincipalId: binding.subjectPrincipalId,
+        relationKind: "role" as const,
+        roleId: binding.roleId,
+        effect: "allow" as const,
+        expiresAt: binding.expiresAt,
+      })),
+      ...resourcePermissionBindings.flatMap((binding) =>
+        binding.subjectPrincipalId
+          ? [
+              {
+                subjectPrincipalId: binding.subjectPrincipalId,
+                relationKind: "direct_permission" as const,
+                permissionId: binding.permissionId,
+                effect: binding.effect,
+                expiresAt: binding.expiresAt,
+              },
+            ]
+          : [],
+      ),
+    ];
 
     const now = Date.now();
     const results: DirectResourceSubject[] = [];
     for (const grant of grants) {
       const subjectPrincipalId = grant.subjectPrincipalId;
       if (!subjectPrincipalId) continue;
-      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now)
-        continue;
+      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) continue;
 
       const principal = await ctx.db
         .query("principals")
-        .withIndex("by_principal_id", (q) =>
-          q.eq("principalId", subjectPrincipalId),
-        )
+        .withIndex("by_principal_id", (q) => q.eq("principalId", subjectPrincipalId))
         .unique();
       if (!principal || principal.type !== "user") continue;
 
@@ -412,9 +448,7 @@ export const listDirectSubjectsForResource = query({
       if (authUserId) {
         const user = await ctx.db
           .query("users")
-          .withIndex("by_auth_user_id", (q) =>
-            q.eq("herculesAuthUserId", authUserId),
-          )
+          .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
           .unique();
         if (user) {
           name = user.name;
@@ -435,15 +469,10 @@ export const listDirectSubjectsForResource = query({
           roleKey = role.key;
           roleName = role.name;
         }
-      } else if (
-        grant.relationKind === "direct_permission" &&
-        grant.permissionId
-      ) {
+      } else if (grant.relationKind === "direct_permission" && grant.permissionId) {
         const permission = await ctx.db
           .query("permissions")
-          .withIndex("by_permission_id", (q) =>
-            q.eq("permissionId", grant.permissionId!),
-          )
+          .withIndex("by_permission_id", (q) => q.eq("permissionId", grant.permissionId!))
           .unique();
         if (permission) permissionKey = permission.key;
       }
@@ -466,9 +495,7 @@ export const listDirectSubjectsForResource = query({
     }
 
     results.sort((a, b) =>
-      (a.name ?? a.email ?? a.principalId).localeCompare(
-        b.name ?? b.email ?? b.principalId,
-      ),
+      (a.name ?? a.email ?? a.principalId).localeCompare(b.name ?? b.email ?? b.principalId),
     );
     return results;
   },
@@ -491,10 +518,7 @@ async function callerHasScopePermission(
   return decision.allowed;
 }
 
-async function resolveScopeRow(
-  ctx: GenericQueryCtx<DataModel>,
-  scopeId: string,
-) {
+async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, scopeId: string) {
   if (scopeId === DEFAULT_SCOPE_SENTINEL) {
     return await ctx.db
       .query("scopes")
@@ -527,9 +551,7 @@ async function collectPrincipalScopeRoles(
   const memberships = await ctx.db
     .query("principal_memberships")
     .withIndex("by_member", (q) =>
-      q
-        .eq("accessScopeId", args.scopeId)
-        .eq("memberPrincipalId", args.principalId),
+      q.eq("accessScopeId", args.scopeId).eq("memberPrincipalId", args.principalId),
     )
     .collect();
   for (const membership of memberships) {
@@ -538,32 +560,27 @@ async function collectPrincipalScopeRoles(
 
   const now = Date.now();
   const allowedRoleIds = new Set<string>();
-  const deniedRoleIds = new Set<string>();
 
   for (const subjectPrincipalId of subjectPrincipalIds) {
-    const grants = await ctx.db
-      .query("grants")
-      .withIndex("by_subject_principal_object", (q) =>
+    // Scope-object role bindings (resourceType/resourceId undefined): who holds
+    // which role on this scope. Role bindings are purely additive membership —
+    // the wire carries no deny role binding (a removed membership is a delete).
+    const roleBindings = await ctx.db
+      .query("role_bindings")
+      .withIndex("by_subject_scope_resource", (q) =>
         q
           .eq("subjectPrincipalId", subjectPrincipalId)
-          .eq("objectType", "scope")
-          .eq("objectId", args.scopeId),
+          .eq("accessScopeId", args.scopeId)
+          .eq("resourceType", undefined)
+          .eq("resourceId", undefined),
       )
       .collect();
 
-    for (const grant of grants) {
-      if (grant.relationKind !== "role") continue;
-      if (typeof grant.roleId !== "string") continue;
-      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) {
+    for (const binding of roleBindings) {
+      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) {
         continue;
       }
-      // A deny from any direct/group subject overrides every allow for the role.
-      if (grant.effect === "deny") {
-        deniedRoleIds.add(grant.roleId);
-        allowedRoleIds.delete(grant.roleId);
-      } else if (!deniedRoleIds.has(grant.roleId)) {
-        allowedRoleIds.add(grant.roleId);
-      }
+      allowedRoleIds.add(binding.roleId);
     }
   }
 
@@ -578,7 +595,7 @@ async function collectPrincipalScopeRoles(
       roleId: role.roleId,
       roleKey: role.key,
       roleName: role.name,
-      roleKind: role.kind,
+      roleKind: roleKindFromSource(role.source),
     });
   }
 

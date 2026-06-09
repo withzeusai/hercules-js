@@ -1,0 +1,38 @@
+{
+  "type": "access.projection.event",
+  "schemaVersion": 3,
+  "eventId": "evt_scope_cd_demo_0010",
+  "sourceVersion": 10,
+  "scopes": [
+    {
+      "accessScopeId": "as_default",
+      "changes": [
+        {
+          "entityType": "principal",
+          "principalId": "pr_default_bob",
+          "operation": "upsert"
+        },
+        {
+          "entityType": "permission_binding",
+          "bindingId": "pb_default_bob_docswrite",
+          "operation": "delete"
+        }
+      ],
+      "principals": [
+        {
+          "principalId": "pr_default_bob",
+          "type": "user",
+          "herculesAuthUserId": "u_bob",
+          "status": "blocked",
+          "joinedAt": 1767225600000,
+          "updatedAt": 1780444800000
+        }
+      ],
+      "principalMemberships": [],
+      "roles": [],
+      "rolePermissionOverrides": [],
+      "roleBindings": [],
+      "permissionBindings": []
+    }
+  ]
+}

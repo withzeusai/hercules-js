@@ -39,12 +39,58 @@ type GetEffectivePermissionsArgs = {
   resourceType?: string;
   resourceId?: string;
 };
+type ListScopeArgs = { tokenIdentifier?: string; scopeId: string };
+type ListDirectSubjectsArgs = {
+  tokenIdentifier?: string;
+  scopeId: string;
+  resourceType: string;
+  resourceId: string;
+  permission: string;
+};
 
 type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
   roleKind: "system" | "custom";
+};
+
+type ScopeMember = {
+  principalId: string;
+  herculesAuthUserId?: string;
+  status: "active" | "blocked" | "suspended" | "pending_approval";
+  joinedAt: number;
+  name?: string;
+  email?: string;
+  image?: string;
+  roles: RoleSummary[];
+};
+
+type ScopeRoleSummary = RoleSummary & { shared: boolean };
+
+type ScopePermissionSummary = {
+  permissionId: string;
+  key: string;
+  resourceType: string;
+  action: string;
+  classification: "delegable" | "owner_only";
+  tenantAssignable: boolean;
+};
+
+type DirectResourceSubject = {
+  principalId: string;
+  herculesAuthUserId?: string;
+  status: "active" | "blocked" | "suspended" | "pending_approval";
+  name?: string;
+  email?: string;
+  image?: string;
+  effect: "allow" | "deny";
+  expiresAt?: number;
+  roleId?: string;
+  roleKey?: string;
+  roleName?: string;
+  permissionId?: string;
+  permissionKey?: string;
 };
 
 type Membership = {
@@ -63,6 +109,11 @@ type EffectivePermissionsResult = {
   scopeId?: string;
   principalId?: string;
   effectiveRoleIds: string[];
+  // §0b: the principal's resolved wildcard mode. Under the wildcard model
+  // `permissions` is a projection over the unbounded catalog (Owner = whole
+  // catalog, Admin = catalog minus Owner-only levers), so callers should treat
+  // a non-"none" mode as future-inclusive rather than exhaustive.
+  wildcard: "none" | "immutable" | "default";
   permissions: string[];
 };
 
@@ -95,6 +146,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "internal",
       GetEffectivePermissionsArgs,
       EffectivePermissionsResult,
+      Name
+    >;
+    listScopeMembers: FunctionReference<"query", "internal", ListScopeArgs, ScopeMember[], Name>;
+    listScopeRoles: FunctionReference<"query", "internal", ListScopeArgs, ScopeRoleSummary[], Name>;
+    listScopePermissions: FunctionReference<
+      "query",
+      "internal",
+      ListScopeArgs,
+      ScopePermissionSummary[],
+      Name
+    >;
+    listDirectSubjectsForResource: FunctionReference<
+      "query",
+      "internal",
+      ListDirectSubjectsArgs,
+      DirectResourceSubject[],
       Name
     >;
   };

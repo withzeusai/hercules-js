@@ -11,7 +11,6 @@ import schema from "./schema";
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
-const ALL_RESOURCES_OBJECT_ID = "*";
 
 type PermissionSummary = {
   permissionId: string;
@@ -123,12 +122,15 @@ export async function evaluateEffectiveAccess(
     return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
   }
 
+  // The permission catalog is deployment-wide; rows are pinned to the default
+  // scope id (schema note on `permissions`), so this default-scope read returns
+  // the whole catalog.
   const catalogPermissions = await ctx.db
     .query("permissions")
     .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
     .collect();
   // permissionId -> (resourceType, action) lookup for translating role and
-  // direct-permission grants (which reference a permissionId) into canonical
+  // direct-permission bindings (which reference a permissionId) into canonical
   // entries.
   const permissionById = new Map(
     catalogPermissions.map((permission) => [
@@ -155,7 +157,6 @@ export async function evaluateEffectiveAccess(
   const wildcard = await resolvePrincipalWildcard(ctx, {
     roleIds: grantContributions.roleIds,
     targetScopeId: scope.accessScopeId,
-    defaultScopeId: defaultScope.accessScopeId,
   });
 
   // Role-permission rows resolve to a net {allow, deny} contribution per role
@@ -172,19 +173,17 @@ export async function evaluateEffectiveAccess(
   const roleEntries = await collectRolePermissionEntries(ctx, {
     roleIds: grantContributions.roleIds,
     targetScopeId: scope.accessScopeId,
-    defaultScopeId: defaultScope.accessScopeId,
     permissionById,
   });
 
-  // A role granted on a single resource instance (relationKind="role" +
-  // objectType="resource") grants that role's permission set, but scoped to
-  // the instance. Expand each such grant's role contribution into
-  // instance-level entries (mirroring collectRolePermissionEntries, then
-  // re-targeting from type-level to the specific objectId).
+  // A role bound to a single resource (a role_binding carrying resourceType)
+  // grants that role's permission set, but scoped to the resource. Expand each
+  // such binding's role contribution into instance/type-level entries
+  // (mirroring collectRolePermissionEntries, then re-targeting from scope-level
+  // to the resource target).
   const resourceRoleEntries = await collectResourceRoleEntries(ctx, {
     grants: grantContributions.resourceRoleGrants,
     targetScopeId: scope.accessScopeId,
-    defaultScopeId: defaultScope.accessScopeId,
     permissionById,
   });
 
@@ -231,31 +230,21 @@ export function enumeratePermissions(
   entries: RuntimeEntry[],
   args: { resourceId?: string },
 ): PermissionSummary[] {
-  const entryMatchesPermission = (
-    entry: RuntimeEntry,
-    permission: CatalogPermission,
-  ): boolean => {
+  const entryMatchesPermission = (entry: RuntimeEntry, permission: CatalogPermission): boolean => {
     if (entry.objectType === "resource" && entry.objectId !== args.resourceId) {
       return false;
     }
     return (
-      (entry.resourceType === WILDCARD_ACTION ||
-        entry.resourceType === permission.resourceType) &&
+      (entry.resourceType === WILDCARD_ACTION || entry.resourceType === permission.resourceType) &&
       actionMatches(entry.action, permission.action)
     );
   };
 
   const isDenied = (permission: CatalogPermission): boolean =>
-    entries.some(
-      (entry) =>
-        entry.effect === "deny" && entryMatchesPermission(entry, permission),
-    );
+    entries.some((entry) => entry.effect === "deny" && entryMatchesPermission(entry, permission));
 
   const isAllowed = (permission: CatalogPermission): boolean =>
-    entries.some(
-      (entry) =>
-        entry.effect === "allow" && entryMatchesPermission(entry, permission),
-    );
+    entries.some((entry) => entry.effect === "allow" && entryMatchesPermission(entry, permission));
 
   return catalogPermissions
     .filter((permission) => {
@@ -312,11 +301,15 @@ async function collectPrincipalIds(
 
 type PermissionLookup = Map<string, { resourceType: string; action: string }>;
 
+// A role granted on a resource target (role_binding with a non-undefined
+// resourceType). resourceId undefined => every resource of the type (type-wide);
+// set => one exact resource. Effect is always allow for a role binding (the
+// producer has no deny role binding), but we carry it for shape parity.
 type ResourceRoleGrant = {
   roleId: string;
   effect: "allow" | "deny";
-  objectId: string;
-  objectResourceType?: string;
+  resourceType: string;
+  resourceId?: string;
 };
 
 async function collectGrantContributions(
@@ -329,7 +322,7 @@ async function collectGrantContributions(
     permissionById: PermissionLookup;
   },
 ) {
-  // sync.ts schedules an exact-identity grant deletion at expiresAt so this
+  // sync.ts schedules an exact-identity binding deletion at expiresAt so this
   // query is reactively invalidated. Keep the timestamp check as a fail-closed
   // fallback if the scheduled mutation is delayed.
   const now = Date.now();
@@ -339,45 +332,93 @@ async function collectGrantContributions(
   const resourceRoleGrants: ResourceRoleGrant[] = [];
 
   for (const principalId of args.principalIds) {
-    const scopeGrants = await ctx.db
-      .query("grants")
-      .withIndex("by_subject_principal_object", (q) =>
+    // Scope-object role bindings (resourceType undefined): establish role
+    // membership. The role's permissions are expanded downstream.
+    const scopeRoleBindings = await ctx.db
+      .query("role_bindings")
+      .withIndex("by_subject_scope_resource", (q) =>
         q
           .eq("subjectPrincipalId", principalId)
-          .eq("objectType", "scope")
-          .eq("objectId", args.scopeId),
+          .eq("accessScopeId", args.scopeId)
+          .eq("resourceType", undefined)
+          .eq("resourceId", undefined),
       )
       .collect();
-    collect(scopeGrants);
+    for (const binding of scopeRoleBindings) {
+      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      // A role binding always registers the role; there is no deny role binding
+      // on the wire, so membership is purely additive.
+      if (!deniedRoleIds.has(binding.roleId)) {
+        roleIds.add(binding.roleId);
+      }
+    }
+
+    // Scope-object direct-permission bindings (resourceType undefined).
+    const scopePermissionBindings = await ctx.db
+      .query("permission_bindings")
+      .withIndex("by_subject_principal_scope_resource", (q) =>
+        q
+          .eq("subjectPrincipalId", principalId)
+          .eq("accessScopeId", args.scopeId)
+          .eq("resourceType", undefined)
+          .eq("resourceId", undefined),
+      )
+      .collect();
+    collectDirectPermissionBindings(scopePermissionBindings);
 
     if (args.resourceType && args.resourceId) {
-      const specificGrants = await ctx.db
-        .query("grants")
-        .withIndex("by_subject_principal_scope_object_resource", (q) =>
+      // Specific-resource role bindings: a role scoped to this exact resource.
+      const specificRoleBindings = await ctx.db
+        .query("role_bindings")
+        .withIndex("by_subject_scope_resource", (q) =>
           q
             .eq("subjectPrincipalId", principalId)
-            .eq("objectScopeId", args.scopeId)
-            .eq("objectType", "resource")
-            .eq("objectResourceType", args.resourceType!)
-            .eq("objectId", args.resourceId!),
+            .eq("accessScopeId", args.scopeId)
+            .eq("resourceType", args.resourceType)
+            .eq("resourceId", args.resourceId),
         )
         .collect();
-      collect(specificGrants);
+      collectResourceRoleBindings(specificRoleBindings);
 
-      if (args.resourceId !== ALL_RESOURCES_OBJECT_ID) {
-        const allResourceGrants = await ctx.db
-          .query("grants")
-          .withIndex("by_subject_principal_scope_object_resource", (q) =>
-            q
-              .eq("subjectPrincipalId", principalId)
-              .eq("objectScopeId", args.scopeId)
-              .eq("objectType", "resource")
-              .eq("objectResourceType", args.resourceType!)
-              .eq("objectId", ALL_RESOURCES_OBJECT_ID),
-          )
-          .collect();
-        collect(allResourceGrants);
-      }
+      // Type-wide role bindings (resourceId undefined): the role applies to
+      // every resource of the type, so it also covers this specific resource.
+      const typeWideRoleBindings = await ctx.db
+        .query("role_bindings")
+        .withIndex("by_subject_scope_resource", (q) =>
+          q
+            .eq("subjectPrincipalId", principalId)
+            .eq("accessScopeId", args.scopeId)
+            .eq("resourceType", args.resourceType)
+            .eq("resourceId", undefined),
+        )
+        .collect();
+      collectResourceRoleBindings(typeWideRoleBindings);
+
+      // Specific-resource direct-permission bindings.
+      const specificPermissionBindings = await ctx.db
+        .query("permission_bindings")
+        .withIndex("by_subject_principal_scope_resource", (q) =>
+          q
+            .eq("subjectPrincipalId", principalId)
+            .eq("accessScopeId", args.scopeId)
+            .eq("resourceType", args.resourceType)
+            .eq("resourceId", args.resourceId),
+        )
+        .collect();
+      collectDirectPermissionBindings(specificPermissionBindings);
+
+      // Type-wide direct-permission bindings (resourceId undefined).
+      const typeWidePermissionBindings = await ctx.db
+        .query("permission_bindings")
+        .withIndex("by_subject_principal_scope_resource", (q) =>
+          q
+            .eq("subjectPrincipalId", principalId)
+            .eq("accessScopeId", args.scopeId)
+            .eq("resourceType", args.resourceType)
+            .eq("resourceId", undefined),
+        )
+        .collect();
+      collectDirectPermissionBindings(typeWidePermissionBindings);
     }
   }
 
@@ -390,139 +431,126 @@ async function collectGrantContributions(
     if (role) effectiveRoleIds.push(roleId);
   }
 
+  // Role-subject permission bindings: a direct-permission rule that applies to
+  // every holder of a role on this resource (subjectRoleId set). The old
+  // role-subject grants were modeled only as direct-permission bindings; a role
+  // subject with a role relation does NOT exist on the wire.
   if (args.resourceType && args.resourceId) {
     for (const roleId of effectiveRoleIds) {
-      const specificGrants = await ctx.db
-        .query("grants")
-        .withIndex("by_subject_role_scope_object_resource", (q) =>
+      const specificRoleSubjectBindings = await ctx.db
+        .query("permission_bindings")
+        .withIndex("by_subject_role_scope_resource", (q) =>
           q
             .eq("subjectRoleId", roleId)
-            .eq("objectScopeId", args.scopeId)
-            .eq("objectType", "resource")
-            .eq("objectResourceType", args.resourceType!)
-            .eq("objectId", args.resourceId!),
+            .eq("accessScopeId", args.scopeId)
+            .eq("resourceType", args.resourceType)
+            .eq("resourceId", args.resourceId),
         )
         .collect();
-      collect(specificGrants);
+      collectDirectPermissionBindings(specificRoleSubjectBindings);
 
-      if (args.resourceId !== ALL_RESOURCES_OBJECT_ID) {
-        const allResourceGrants = await ctx.db
-          .query("grants")
-          .withIndex("by_subject_role_scope_object_resource", (q) =>
-            q
-              .eq("subjectRoleId", roleId)
-              .eq("objectScopeId", args.scopeId)
-              .eq("objectType", "resource")
-              .eq("objectResourceType", args.resourceType!)
-              .eq("objectId", ALL_RESOURCES_OBJECT_ID),
-          )
-          .collect();
-        collect(allResourceGrants);
-      }
+      const typeWideRoleSubjectBindings = await ctx.db
+        .query("permission_bindings")
+        .withIndex("by_subject_role_scope_resource", (q) =>
+          q
+            .eq("subjectRoleId", roleId)
+            .eq("accessScopeId", args.scopeId)
+            .eq("resourceType", args.resourceType)
+            .eq("resourceId", undefined),
+        )
+        .collect();
+      collectDirectPermissionBindings(typeWideRoleSubjectBindings);
     }
   }
 
   return { roleIds: effectiveRoleIds, entries, resourceRoleGrants };
 
-  // Translate raw grant rows into canonical entries. Scope-object role grants
-  // only register the effective role for role-permission expansion. A
-  // resource-object role grant (a role scoped to a single instance) is captured
-  // for downstream role-permission expansion against that instance. Direct
-  // permission grants become entries carrying the referenced permission's
-  // (resourceType, action), with objectType/objectId preserved so
-  // instance-level matching works (authz.entryMatches).
-  function collect(
-    grants: Array<{
-      relationKind: "role" | "direct_permission";
-      roleId?: string;
-      permissionId?: string;
-      effect: "allow" | "deny";
-      objectType: "scope" | "resource";
-      objectId: string;
-      objectResourceType?: string;
+  // A resource-target role binding scopes the role to instances of
+  // resourceType. Captured for downstream role-permission expansion against the
+  // target (needs role-permission + scope context). A type-wide binding
+  // (resourceId undefined) expands as a type-level entry; a specific binding as
+  // an instance-level entry.
+  function collectResourceRoleBindings(
+    bindings: Array<{
+      roleId: string;
+      resourceType?: string;
+      resourceId?: string;
       expiresAt?: number;
     }>,
   ) {
-    for (const grant of grants) {
-      if (typeof grant.expiresAt === "number" && grant.expiresAt <= now) continue;
-      if (grant.relationKind === "role") {
-        if (typeof grant.roleId !== "string") continue;
-        // A scope-object role grant establishes the role membership; its
-        // permissions are expanded from role_permissions downstream. Only
-        // allow grants register the role (a deny role grant removes the
-        // membership it would otherwise add).
-        if (grant.objectType === "scope") {
-          if (grant.effect === "deny") {
-            deniedRoleIds.add(grant.roleId);
-            roleIds.delete(grant.roleId);
-          } else if (!deniedRoleIds.has(grant.roleId)) {
-            roleIds.add(grant.roleId);
-          }
-          continue;
-        }
-        // A role granted on a resource object (per-instance role scoping, see
-        // management.ts grantResourceAccess). The producer emits
-        // relationKind="role" + objectType="resource" + roleId here; the role's
-        // permission set must be expanded onto the targeted instance. Captured
-        // for downstream expansion (needs role-permission + scope context).
-        resourceRoleGrants.push({
-          roleId: grant.roleId,
-          effect: grant.effect,
-          objectId: grant.objectId,
-          objectResourceType: grant.objectResourceType,
-        });
-        continue;
-      }
-      if (typeof grant.permissionId !== "string") continue;
-      const permission = args.permissionById.get(grant.permissionId);
+    for (const binding of bindings) {
+      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      if (!binding.resourceType) continue;
+      resourceRoleGrants.push({
+        roleId: binding.roleId,
+        effect: "allow",
+        resourceType: binding.resourceType,
+        resourceId: binding.resourceId,
+      });
+    }
+  }
+
+  // Direct-permission bindings become entries carrying the referenced
+  // permission's (resourceType, action), with the resource target preserved so
+  // instance-level matching works (authz.entryMatches). A binding with a
+  // resourceType but no resourceId is type-wide => a scope/type-level entry; a
+  // binding with a concrete resourceId is instance-level.
+  function collectDirectPermissionBindings(
+    bindings: Array<{
+      permissionId: string;
+      effect: "allow" | "deny";
+      resourceType?: string;
+      resourceId?: string;
+      expiresAt?: number;
+    }>,
+  ) {
+    for (const binding of bindings) {
+      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      const permission = args.permissionById.get(binding.permissionId);
       if (!permission) continue;
-      // Fail closed: a resource-object grant MUST carry its own
-      // objectResourceType. A malformed grant (missing type) confers NOTHING —
-      // never fall back to the permission's resourceType, which would silently
-      // grant the permission onto a foreign/garbage resource type. (Today the
-      // collection index also filters on objectResourceType; this is the
-      // second, defense-in-depth layer so the invariant holds if that changes.)
-      if (grant.objectType === "resource" && !grant.objectResourceType) continue;
-      if (
-        grant.objectType === "resource" &&
-        grant.objectResourceType !== permission.resourceType
-      ) {
+      // Fail closed: a resource-target binding MUST agree with the permission's
+      // resourceType. A binding whose resourceType does not match the
+      // permission confers NOTHING — never fall back to the permission's
+      // resourceType, which would silently grant the permission onto a
+      // foreign/garbage resource type.
+      if (binding.resourceType !== undefined && binding.resourceType !== permission.resourceType) {
         continue;
       }
-      // An all-instances resource grant (objectId "*") matches every instance
-      // of its resourceType, so it is a TYPE-level entry. Only a concrete
-      // objectId stays instance-level. A scope-object grant is always
-      // type-level. This preserves the prior `ALL_RESOURCES_OBJECT_ID`
-      // collection semantics under the canonical entry model.
-      const isInstanceLevel =
-        grant.objectType === "resource" && grant.objectId !== ALL_RESOURCES_OBJECT_ID;
+      // A concrete resourceId stays instance-level. A scope binding
+      // (resourceType undefined) or a type-wide binding (resourceType set,
+      // resourceId undefined) is type-level.
+      const isInstanceLevel = binding.resourceId !== undefined;
       entries.push({
-        effect: grant.effect,
-        resourceType:
-          grant.objectType === "resource" && grant.objectResourceType
-            ? grant.objectResourceType
-            : permission.resourceType,
+        effect: binding.effect,
+        resourceType: permission.resourceType,
         action: permission.action,
         objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? grant.objectId : undefined,
-        permissionId: grant.permissionId,
+        objectId: isInstanceLevel ? binding.resourceId : undefined,
+        permissionId: binding.permissionId,
       });
     }
   }
 }
 
 /**
- * Resolve the union of wildcard modes across the principal's effective roles.
- * immutable (Owner) dominates default (Admin) dominates none, matching "Owner
- * short-circuits, Admin allows-minus-levers" when a user holds multiple roles.
+ * Resolve the union of EFFECTIVE wildcard modes across the principal's effective
+ * roles. immutable (Owner) dominates default (Admin) dominates none, matching
+ * "Owner short-circuits, Admin allows-minus-levers" when a user holds multiple
+ * roles.
+ *
+ * The wire never carries a pre-computed effective wildcard (the deployment-wide
+ * catalog role is shared across scopes). It carries only the INTRINSIC
+ * `baseWildcard`. The effective wildcard is derived PER SCOPE here: a
+ * `default`-wildcard role (Admin) stays `default` when un-narrowed in this
+ * scope, but downgrades to `none` when narrowed. Narrowed = the presence of an
+ * ALLOW row in the role's base role-permissions UNION that scope's overrides (a
+ * deny-only override does NOT un-narrow, because narrowing keys on the presence
+ * of an allow row, not the net set). This is the prior narrowed-Admin downgrade
+ * (rawAllow.size === 0 stays default; any allow row downgrades to none).
  */
 async function resolvePrincipalWildcard(
   ctx: GenericQueryCtx<DataModel>,
-  args: {
-    roleIds: string[];
-    targetScopeId: string;
-    defaultScopeId: string;
-  },
+  args: { roleIds: string[]; targetScopeId: string },
 ): Promise<WildcardMode> {
   let mode: WildcardMode = "none";
   for (const roleId of args.roleIds) {
@@ -531,12 +559,11 @@ async function resolvePrincipalWildcard(
       .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
       .unique();
     if (!role) continue;
-    if (role.wildcard === "immutable") return "immutable";
-    if (role.wildcard === "default") {
+    if (role.baseWildcard === "immutable") return "immutable";
+    if (role.baseWildcard === "default") {
       const contribution = await resolveRoleNetPermissionIds(ctx, {
         roleId,
         targetScopeId: args.targetScopeId,
-        defaultScopeId: args.defaultScopeId,
       });
       if (!contribution || contribution.rawAllow.size === 0) {
         mode = "default";
@@ -548,12 +575,7 @@ async function resolvePrincipalWildcard(
 
 async function collectRolePermissionEntries(
   ctx: GenericQueryCtx<DataModel>,
-  args: {
-    roleIds: string[];
-    targetScopeId: string;
-    defaultScopeId: string;
-    permissionById: PermissionLookup;
-  },
+  args: { roleIds: string[]; targetScopeId: string; permissionById: PermissionLookup },
 ): Promise<RuntimeEntry[]> {
   const entries: RuntimeEntry[] = [];
 
@@ -567,7 +589,6 @@ async function collectRolePermissionEntries(
     const contribution = await resolveRoleNetPermissionIds(ctx, {
       roleId,
       targetScopeId: args.targetScopeId,
-      defaultScopeId: args.defaultScopeId,
     });
     if (!contribution) continue;
 
@@ -603,24 +624,18 @@ async function collectRolePermissionEntries(
 }
 
 /**
- * Expand role grants scoped to a single resource instance into instance-level
- * entries. An objectId of "*" means all instances of the resourceType, which
- * is a type-level entry. The grant's effect is propagated so a per-instance
- * deny role grant lands as a deny entry (and short-circuits in the
- * deny-override algebra).
+ * Expand role bindings scoped to a resource target into entries. A type-wide
+ * binding (resourceId undefined) is a type-level entry; a specific binding is an
+ * instance-level entry. The binding's effect is propagated so a per-resource
+ * deny lands as a deny entry (and short-circuits in the deny-override algebra).
  *
- * Only custom, non-wildcard roles can be granted on resources. System roles
- * (including Owner/Admin) are scope memberships and must never be re-targeted
- * to a resource instance.
+ * Only tenant, non-wildcard roles can be bound to resources. System/iam roles
+ * (including Owner/Admin) are scope memberships and must never be re-targeted to
+ * a resource. The old `kind === "system"` gate maps to `source !== "tenant"`.
  */
 async function collectResourceRoleEntries(
   ctx: GenericQueryCtx<DataModel>,
-  args: {
-    grants: ResourceRoleGrant[];
-    targetScopeId: string;
-    defaultScopeId: string;
-    permissionById: PermissionLookup;
-  },
+  args: { grants: ResourceRoleGrant[]; targetScopeId: string; permissionById: PermissionLookup },
 ): Promise<RuntimeEntry[]> {
   const entries: RuntimeEntry[] = [];
 
@@ -631,29 +646,36 @@ async function collectResourceRoleEntries(
       .unique();
     if (!role) continue;
 
-    const isInstanceLevel = grant.objectId !== ALL_RESOURCES_OBJECT_ID;
+    const isInstanceLevel = grant.resourceId !== undefined;
 
-    // A resource-object grant without a concrete resourceType is malformed and
+    // A resource-target binding without a concrete resourceType is malformed and
     // must confer nothing. Defaulting it to the wildcard would emit an
-    // all-resources/all-actions entry, escalating a bare per-instance grant to
+    // all-resources/all-actions entry, escalating a bare per-resource binding to
     // global all-access.
-    if (!grant.objectResourceType) continue;
+    if (!grant.resourceType) continue;
 
-    if (role.kind === "system" || role.wildcard !== "none") continue;
+    // Only tenant, non-wildcard roles expand onto resources. A reusable
+    // catalog role (system/iam) is a scope membership, never a per-resource
+    // binding. The effective wildcard is derived per scope; tenant roles are
+    // always "none", so they survive, while any wildcard role is excluded.
+    const effectiveWildcard = await resolveEffectiveWildcard(ctx, {
+      role,
+      targetScopeId: args.targetScopeId,
+    });
+    if (role.source !== "tenant" || effectiveWildcard !== "none") continue;
 
     const contribution = await resolveRoleNetPermissionIds(ctx, {
       roleId: grant.roleId,
       targetScopeId: args.targetScopeId,
-      defaultScopeId: args.defaultScopeId,
     });
     if (!contribution) continue;
 
     for (const permissionId of contribution.allow) {
       const permission = args.permissionById.get(permissionId);
       if (!permission) continue;
-      // The grant scopes the role to instances of objectResourceType, so only
-      // the role's permissions on that resourceType apply to this object.
-      if (permission.resourceType !== grant.objectResourceType) {
+      // The binding scopes the role to instances of resourceType, so only the
+      // role's permissions on that resourceType apply to this target.
+      if (permission.resourceType !== grant.resourceType) {
         continue;
       }
       entries.push({
@@ -661,13 +683,13 @@ async function collectResourceRoleEntries(
         resourceType: permission.resourceType,
         action: permission.action,
         objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? grant.objectId : undefined,
+        objectId: isInstanceLevel ? grant.resourceId : undefined,
         permissionId,
       });
     }
     for (const permissionId of contribution.deny) {
       const permission = args.permissionById.get(permissionId);
-      if (!permission || permission.resourceType !== grant.objectResourceType) {
+      if (!permission || permission.resourceType !== grant.resourceType) {
         continue;
       }
       entries.push({
@@ -675,7 +697,7 @@ async function collectResourceRoleEntries(
         resourceType: permission.resourceType,
         action: permission.action,
         objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? grant.objectId : undefined,
+        objectId: isInstanceLevel ? grant.resourceId : undefined,
         permissionId,
       });
     }
@@ -686,22 +708,21 @@ async function collectResourceRoleEntries(
 
 // A role's net permission contribution: the permission ids that end up allowed
 // vs denied after applying deny-overrides-allow within the role. Mirrors the
-// canonical RolePermissionContribution {allow, deny} model (query.ts).
-type RoleContribution = {
-  allow: Set<string>;
-  deny: Set<string>;
-  rawAllow: Set<string>;
-};
+// canonical RolePermissionContribution {allow, deny} model (query.ts). rawAllow
+// records every allow row seen (base + override) regardless of later deny, so
+// the narrowed-Admin downgrade can key on the PRESENCE of an allow row.
+type RoleContribution = { allow: Set<string>; deny: Set<string>; rawAllow: Set<string> };
 
 /**
- * Resolve a role's net permission contribution: the role's own-scope
- * role_permission rows (allow adds, deny removes), plus — for system roles
- * evaluated in a non-default scope — the target org's override rows layered on
- * top. Returns null when the role row is missing.
+ * Resolve a role's net permission contribution for the target scope: the role's
+ * BASE role_permission rows (deployment-wide; allow adds, deny removes), then —
+ * layered on top — the target scope's role_permission_overrides (base then
+ * override, same layering order as before). Returns null when the role row is
+ * missing.
  */
 async function resolveRoleNetPermissionIds(
   ctx: GenericQueryCtx<DataModel>,
-  args: { roleId: string; targetScopeId: string; defaultScopeId: string },
+  args: { roleId: string; targetScopeId: string },
 ): Promise<RoleContribution | null> {
   const role = await ctx.db
     .query("roles")
@@ -709,60 +730,108 @@ async function resolveRoleNetPermissionIds(
     .unique();
   if (!role) return null;
 
-  const contribution: RoleContribution = {
-    allow: new Set(),
-    deny: new Set(),
-    rawAllow: new Set(),
-  };
-  await applyRolePermissionRows(ctx, {
-    accessScopeId: role.accessScopeId,
+  const contribution: RoleContribution = { allow: new Set(), deny: new Set(), rawAllow: new Set() };
+  // Base map (deployment-wide).
+  await applyBaseRolePermissionRows(ctx, { roleId: args.roleId, contribution });
+  // Per-scope override, layered on top of the base (preserves per-scope
+  // overrides; deny wins within each layer, base folded before override).
+  await applyRolePermissionOverrideRows(ctx, {
+    accessScopeId: args.targetScopeId,
     roleId: args.roleId,
     contribution,
   });
-
-  if (role.kind === "system" && args.targetScopeId !== args.defaultScopeId) {
-    await applyRolePermissionRows(ctx, {
-      accessScopeId: args.targetScopeId,
-      roleId: args.roleId,
-      contribution,
-    });
-  }
 
   return contribution;
 }
 
 /**
- * Fold one scope's role_permission rows into a {allow, deny} contribution using
- * canonical semantics: an allow row adds to allow / clears deny, a deny row adds
- * to deny / clears allow.
+ * Fold the deployment-wide BASE role_permission rows into a {allow, deny}
+ * contribution: an allow row adds to allow / clears deny, a deny row adds to
+ * deny / clears allow. rawAllow accumulates every allow row regardless of a
+ * later deny.
  */
-async function applyRolePermissionRows(
+async function applyBaseRolePermissionRows(
+  ctx: GenericQueryCtx<DataModel>,
+  args: { roleId: string; contribution: RoleContribution },
+) {
+  const rows = await ctx.db
+    .query("role_permissions")
+    .withIndex("by_role", (q) => q.eq("roleId", args.roleId))
+    .collect();
+  applyRolePermissionRows(rows, args.contribution);
+}
+
+/**
+ * Fold one scope's role_permission_override rows into the contribution on top of
+ * the base map (same allow-adds / deny-removes semantics).
+ */
+async function applyRolePermissionOverrideRows(
   ctx: GenericQueryCtx<DataModel>,
   args: { accessScopeId: string; roleId: string; contribution: RoleContribution },
 ) {
   const rows = await ctx.db
-    .query("role_permissions")
-    .withIndex("by_role", (q) =>
+    .query("role_permission_overrides")
+    .withIndex("by_scope_role", (q) =>
       q.eq("accessScopeId", args.accessScopeId).eq("roleId", args.roleId),
     )
     .collect();
-  // Within a scope, deny wins regardless of row order (the unique key permits
-  // both an allow and a deny row for the same permission): apply the allow rows
-  // first, then let the deny rows override. Cross-scope, the base scope is
-  // folded before the org override (caller order), preserving per-org overrides.
+  applyRolePermissionRows(rows, args.contribution);
+}
+
+/**
+ * Apply one layer's effect rows into a {allow, deny, rawAllow} contribution
+ * using canonical semantics: within the layer, deny wins regardless of row
+ * order, so apply the allow rows first and then let the deny rows override.
+ * rawAllow records every allow row's permissionId (never cleared) so the
+ * narrowed-Admin downgrade keys on the PRESENCE of an allow row, not the net set
+ * — a deny-only override therefore never un-narrows.
+ */
+function applyRolePermissionRows(
+  rows: Array<{ permissionId: string; effect: "allow" | "deny" }>,
+  contribution: RoleContribution,
+) {
   for (const row of rows) {
     if (row.effect === "allow") {
-      args.contribution.rawAllow.add(row.permissionId);
-      args.contribution.allow.add(row.permissionId);
-      args.contribution.deny.delete(row.permissionId);
+      contribution.rawAllow.add(row.permissionId);
+      contribution.allow.add(row.permissionId);
+      contribution.deny.delete(row.permissionId);
     }
   }
   for (const row of rows) {
     if (row.effect === "deny") {
-      args.contribution.allow.delete(row.permissionId);
-      args.contribution.deny.add(row.permissionId);
+      contribution.allow.delete(row.permissionId);
+      contribution.deny.add(row.permissionId);
     }
   }
+}
+
+/**
+ * Derive a single role's EFFECTIVE wildcard for the target scope from its
+ * intrinsic baseWildcard plus per-scope narrowing — the same derivation
+ * resolvePrincipalWildcard applies, exposed for the resource-role gate. Owner
+ * (immutable) stays immutable; a default (Admin) role stays default when
+ * un-narrowed and downgrades to none when narrowed (any allow row present in
+ * base UNION overrides); everything else is none.
+ */
+async function resolveEffectiveWildcard(
+  ctx: GenericQueryCtx<DataModel>,
+  args: {
+    role: { roleId: string; baseWildcard: "none" | "immutable" | "default" };
+    targetScopeId: string;
+  },
+): Promise<WildcardMode> {
+  if (args.role.baseWildcard === "immutable") return "immutable";
+  if (args.role.baseWildcard === "default") {
+    const contribution = await resolveRoleNetPermissionIds(ctx, {
+      roleId: args.role.roleId,
+      targetScopeId: args.targetScopeId,
+    });
+    if (!contribution || contribution.rawAllow.size === 0) {
+      return "default";
+    }
+    return "none";
+  }
+  return "none";
 }
 
 function deny(

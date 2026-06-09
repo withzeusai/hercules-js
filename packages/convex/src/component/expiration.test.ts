@@ -1,11 +1,7 @@
-import { convexTest } from "convex-test";
+import { convexTest, type TestConvex } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import {
-  emptyAccessProjectionEntities,
-  type AccessProjectionEvent,
-  type AccessProjectionSnapshot,
-} from "../shared/sync";
+import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
 import schema from "./schema";
 
 const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
@@ -15,76 +11,75 @@ const authorize = makeFunctionReference<"query">("component/checks:authorize");
 const NOW = new Date("2026-06-08T12:00:00.000Z").getTime();
 const ISSUER = "https://auth.example.com";
 
+// A time-bound permission_binding is the v3 successor of the old expiring
+// direct-permission grant. sync.ts schedules an exact-identity deletion at
+// expiresAt; effective.ts also fails closed on the timestamp if the schedule is
+// delayed. These tests drive the v3 wire shape (top-level catalog + users,
+// per-scope permissionBindings) end to end.
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("grant expiration", () => {
-  test("expires a projected grant without an unrelated write", async () => {
+describe("permission binding expiration", () => {
+  test("expires a projected binding without an unrelated write", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     const t = convexTest(schema, modules);
 
-    await t.mutation(applySync, snapshotWithGrant(NOW + 1_000, 1));
-    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({
-      allowed: true,
-    });
+    await t.mutation(applySync, snapshotWithBinding(NOW + 1_000, 1));
+    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({ allowed: true });
 
     vi.advanceTimersByTime(1_000);
     await t.finishInProgressScheduledFunctions();
 
-    await expect(readGrant(t)).resolves.toBeNull();
+    await expect(readBinding(t)).resolves.toBeNull();
     await expect(authorizeTasksCreate(t)).resolves.toMatchObject({
       allowed: false,
       reasonCode: "permission_denied",
     });
   });
 
-  test("a stale timer cannot remove an extended grant", async () => {
+  test("a stale timer cannot remove an extended binding", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     const t = convexTest(schema, modules);
 
-    await t.mutation(applySync, snapshotWithGrant(NOW + 1_000, 1));
-    await t.mutation(applySync, grantEvent(NOW + 2_000, 2));
+    await t.mutation(applySync, snapshotWithBinding(NOW + 1_000, 1));
+    await t.mutation(applySync, bindingEvent(NOW + 2_000, 2));
 
     vi.advanceTimersByTime(1_000);
     await t.finishInProgressScheduledFunctions();
 
-    await expect(readGrant(t)).resolves.toMatchObject({
-      grantId: "grant_tasks_create",
+    await expect(readBinding(t)).resolves.toMatchObject({
+      bindingId: "pb_tasks_create",
       expiresAt: NOW + 2_000,
       updatedAt: 2,
     });
-    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({
-      allowed: true,
-    });
+    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({ allowed: true });
 
     vi.advanceTimersByTime(1_000);
     await t.finishInProgressScheduledFunctions();
 
-    await expect(readGrant(t)).resolves.toBeNull();
+    await expect(readBinding(t)).resolves.toBeNull();
   });
 
-  test("omits grants that are already expired in snapshots and events", async () => {
+  test("omits bindings that are already expired in snapshots and events", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
 
     const snapshotTest = convexTest(schema, modules);
-    await snapshotTest.mutation(
-      applySync,
-      snapshotWithGrant(NOW - 1, 1),
-    );
-    await expect(readGrant(snapshotTest)).resolves.toBeNull();
+    await snapshotTest.mutation(applySync, snapshotWithBinding(NOW - 1, 1));
+    await expect(readBinding(snapshotTest)).resolves.toBeNull();
     await expect(authorizeTasksCreate(snapshotTest)).resolves.toMatchObject({
       allowed: false,
       reasonCode: "permission_denied",
     });
 
     const eventTest = convexTest(schema, modules);
-    await eventTest.mutation(applySync, snapshotWithoutGrant());
-    await eventTest.mutation(applySync, grantEvent(NOW - 1, 2));
-    await expect(readGrant(eventTest)).resolves.toBeNull();
+    await eventTest.mutation(applySync, snapshotWithoutBinding());
+    await eventTest.mutation(applySync, bindingEvent(NOW - 1, 2));
+    await expect(readBinding(eventTest)).resolves.toBeNull();
     await expect(authorizeTasksCreate(eventTest)).resolves.toMatchObject({
       allowed: false,
       reasonCode: "permission_denied",
@@ -92,18 +87,13 @@ describe("grant expiration", () => {
   });
 });
 
-function snapshotWithGrant(
-  expiresAt: number,
-  updatedAt: number,
-): AccessProjectionSnapshot {
-  const snapshot = snapshotWithoutGrant();
-  snapshot.scopes[0]!.entities.grants = [
-    taskGrant(expiresAt, updatedAt),
-  ];
+function snapshotWithBinding(expiresAt: number, updatedAt: number): AccessProjectionSnapshot {
+  const snapshot = snapshotWithoutBinding();
+  snapshot.scopes[0]!.permissionBindings = [taskBinding(expiresAt, updatedAt)];
   return snapshot;
 }
 
-function snapshotWithoutGrant(): AccessProjectionSnapshot {
+function snapshotWithoutBinding(): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
     schemaVersion: 3,
@@ -111,6 +101,40 @@ function snapshotWithoutGrant(): AccessProjectionSnapshot {
     sourceVersion: 1,
     mode: "initialize",
     expectedIssuer: ISSUER,
+    catalog: {
+      roles: [
+        {
+          roleId: "role_member",
+          key: "member",
+          source: "system",
+          name: "Member",
+          baseWildcard: "none",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "permission_tasks_create",
+          key: "tasks:create",
+          resourceType: "tasks",
+          action: "create",
+          classification: "delegable",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      rolePermissions: [],
+    },
+    users: [
+      {
+        herculesAuthUserId: "user_alice",
+        name: "Alice",
+        email: "alice@example.com",
+        emailVerified: true,
+        phoneVerified: false,
+        updatedAt: 1,
+      },
+    ],
     scopes: [
       {
         scope: {
@@ -122,40 +146,27 @@ function snapshotWithoutGrant(): AccessProjectionSnapshot {
           defaultRoleId: "role_member",
           updatedAt: 1,
         },
-        entities: {
-          ...emptyAccessProjectionEntities(),
-          principals: [
-            {
-              principalId: "principal_alice",
-              type: "user",
-              herculesAuthUserId: "user_alice",
-              status: "active",
-              joinedAt: 1,
-              updatedAt: 1,
-            },
-          ],
-          permissions: [
-            {
-              accessScopeId: "scope_default",
-              permissionId: "permission_tasks_create",
-              key: "tasks:create",
-              resourceType: "tasks",
-              action: "create",
-              classification: "delegable",
-              tenantAssignable: true,
-              updatedAt: 1,
-            },
-          ],
-        },
+        principals: [
+          {
+            principalId: "principal_alice",
+            type: "user",
+            herculesAuthUserId: "user_alice",
+            status: "active",
+            joinedAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        principalMemberships: [],
+        roles: [],
+        rolePermissionOverrides: [],
+        roleBindings: [],
+        permissionBindings: [],
       },
     ],
   };
 }
 
-function grantEvent(
-  expiresAt: number,
-  updatedAt: number,
-): AccessProjectionEvent {
+function bindingEvent(expiresAt: number, updatedAt: number): AccessProjectionEvent {
   return {
     type: "access.projection.event",
     schemaVersion: 3,
@@ -163,43 +174,34 @@ function grantEvent(
     sourceVersion: 2,
     scopes: [
       {
-        scope: {
-          ...snapshotWithoutGrant().scopes[0]!.scope,
-          updatedAt,
-        },
+        accessScopeId: "scope_default",
         changes: [
-          {
-            entityType: "grant",
-            entityId: "grant_tasks_create",
-            operation: "upsert",
-          },
+          { entityType: "permission_binding", bindingId: "pb_tasks_create", operation: "upsert" },
         ],
-        entities: {
-          ...emptyAccessProjectionEntities(),
-          grants: [taskGrant(expiresAt, updatedAt)],
-        },
+        principals: [],
+        principalMemberships: [],
+        roles: [],
+        rolePermissionOverrides: [],
+        roleBindings: [],
+        permissionBindings: [taskBinding(expiresAt, updatedAt)],
       },
     ],
   };
 }
 
-function taskGrant(expiresAt: number, updatedAt: number) {
+function taskBinding(expiresAt: number, updatedAt: number) {
   return {
-    grantId: "grant_tasks_create",
+    bindingId: "pb_tasks_create",
     subjectPrincipalId: "principal_alice",
-    relationKind: "direct_permission" as const,
     permissionId: "permission_tasks_create",
     effect: "allow" as const,
-    objectType: "scope" as const,
-    objectId: "scope_default",
+    accessScopeId: "scope_default",
     expiresAt,
     updatedAt,
   };
 }
 
-async function authorizeTasksCreate(
-  t: ReturnType<typeof convexTest>,
-) {
+async function authorizeTasksCreate(t: TestConvex<typeof schema>) {
   return await t.query(authorize, {
     tokenIdentifier: `${ISSUER}|user_alice`,
     scopeId: "scope_default",
@@ -207,13 +209,11 @@ async function authorizeTasksCreate(
   });
 }
 
-async function readGrant(t: ReturnType<typeof convexTest>) {
+async function readBinding(t: TestConvex<typeof schema>) {
   return await t.run(async (ctx) => {
     return await ctx.db
-      .query("grants")
-      .withIndex("by_grant_id", (query) =>
-        query.eq("grantId", "grant_tasks_create"),
-      )
+      .query("permission_bindings")
+      .withIndex("by_binding_id", (query) => query.eq("bindingId", "pb_tasks_create"))
       .unique();
   });
 }
