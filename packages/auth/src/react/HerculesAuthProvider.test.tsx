@@ -1,10 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render } from "@testing-library/react";
-import {
-  HerculesAuthProvider,
-  getSafeStateStore,
-  getSafeUserStore,
-} from "./HerculesAuthProvider.js";
+import { HerculesAuthProvider } from "./HerculesAuthProvider.js";
+import { getSafeStateStore, getSafeUserStore } from "./safe-storage.js";
 
 vi.mock("react-oidc-context", () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => (
