@@ -30,9 +30,9 @@ import snapshotFixture from "../shared/__fixtures__/projection-v3/snapshot.json"
 import { evaluateAccess, type ApplicableEntry, type WildcardMode } from "./authz";
 import schema from "./schema";
 
-const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
-const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
-const authorize = makeFunctionReference<"query">("component/checks:authorize");
+import { componentModules as modules } from "./test-modules";
+const applySync = makeFunctionReference<"mutation">("sync:applySync");
+const authorize = makeFunctionReference<"query">("checks:authorize");
 
 const GOLDEN_ISSUER = "hercules-platform:cd_demo";
 

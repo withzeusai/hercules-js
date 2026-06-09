@@ -10,7 +10,7 @@ import schema from "./schema";
 // the v3 AccessProjectionSnapshot type.
 type Snapshot = LegacySnapshot;
 
-const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
+import { componentModules as modules } from "./test-modules";
 
 // Public-facing result shapes for the queries under test. Typing the function
 // references with these makes `t.query(...)` results concrete (rather than `{}`),
@@ -37,36 +37,36 @@ type ScopeMember = {
 };
 type DirectSubject = { principalId: string; herculesAuthUserId?: string };
 
-const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
+const applySync = makeFunctionReference<"mutation">("sync:applySync");
 const getEffectivePermissions = makeFunctionReference<
   "query",
   Record<string, unknown>,
   { allowed: boolean; wildcard: string; permissions: string[] }
->("component/queries:getEffectivePermissions");
+>("queries:getEffectivePermissions");
 const listMyMemberships = makeFunctionReference<
   "query",
   Record<string, unknown>,
   MembershipSummary[]
->("component/queries:listMyMemberships");
+>("queries:listMyMemberships");
 const listMyRoles = makeFunctionReference<"query", Record<string, unknown>, RoleSummary[]>(
-  "component/queries:listMyRoles",
+  "queries:listMyRoles",
 );
 const listScopeMembers = makeFunctionReference<"query", Record<string, unknown>, ScopeMember[]>(
-  "component/queries:listScopeMembers",
+  "queries:listScopeMembers",
 );
 const listScopeRoles = makeFunctionReference<"query", Record<string, unknown>, RoleSummary[]>(
-  "component/queries:listScopeRoles",
+  "queries:listScopeRoles",
 );
 const listScopePermissions = makeFunctionReference<
   "query",
   Record<string, unknown>,
   PermissionSummary[]
->("component/queries:listScopePermissions");
+>("queries:listScopePermissions");
 const listDirectSubjectsForResource = makeFunctionReference<
   "query",
   Record<string, unknown>,
   DirectSubject[]
->("component/queries:listDirectSubjectsForResource");
+>("queries:listDirectSubjectsForResource");
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>

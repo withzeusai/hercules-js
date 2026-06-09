@@ -31,11 +31,11 @@ const mutation = mutationGeneric as MutationBuilder<DataModel, "public">;
 const expireRoleBindingReference = makeFunctionReference<
   "mutation",
   { bindingId: string; expiresAt: number; updatedAt: number }
->("component/sync:expireRoleBinding");
+>("sync:expireRoleBinding");
 const expirePermissionBindingReference = makeFunctionReference<
   "mutation",
   { bindingId: string; expiresAt: number; updatedAt: number }
->("component/sync:expirePermissionBinding");
+>("sync:expirePermissionBinding");
 
 // Convex transactions have document-count limits. Reject an oversized aggregate
 // with a clear payload failure rather than letting the mutation abort opaquely.

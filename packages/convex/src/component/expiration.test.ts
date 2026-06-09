@@ -4,9 +4,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
 import schema from "./schema";
 
-const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
-const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
-const authorize = makeFunctionReference<"query">("component/checks:authorize");
+import { componentModules as modules } from "./test-modules";
+const applySync = makeFunctionReference<"mutation">("sync:applySync");
+const authorize = makeFunctionReference<"query">("checks:authorize");
 
 const NOW = new Date("2026-06-08T12:00:00.000Z").getTime();
 const ISSUER = "https://auth.example.com";

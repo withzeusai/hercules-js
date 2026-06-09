@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { withV3SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
 import schema from "./schema";
 
-const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
+import { componentModules as modules } from "./test-modules";
 
 // The behavioral fixtures below are authored in the pre-v3 (schemaVersion 2)
 // shape; withV3SyncFixtures upgrades them to the v3 wire shape before forwarding
@@ -12,8 +12,8 @@ const modules = import.meta.glob(["/src/**/*.ts", "!/src/**/*.test.ts"]);
 // fixtures are typed with the legacy shape instead.
 type Snapshot = LegacySnapshot;
 
-const applySync = makeFunctionReference<"mutation">("component/sync:applySync");
-const authorize = makeFunctionReference<"query">("component/checks:authorize");
+const applySync = makeFunctionReference<"mutation">("sync:applySync");
+const authorize = makeFunctionReference<"query">("checks:authorize");
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>
