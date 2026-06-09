@@ -10,7 +10,7 @@ import schema from "./schema";
 // the v3 AccessProjectionSnapshot type.
 type Snapshot = LegacySnapshot;
 
-import { componentModules as modules } from "./test-modules";
+import { componentModules as modules } from "../../test/component-modules";
 
 // Public-facing result shapes for the queries under test. Typing the function
 // references with these makes `t.query(...)` results concrete (rather than `{}`),

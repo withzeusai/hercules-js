@@ -8,13 +8,12 @@
 // The `import.meta.glob` ambient type lives in test/test-env.d.ts (shared with
 // every test); reference it so this file also typechecks under the production
 // tsconfig, which does not include that directory.
-/// <reference path="../../test/test-env.d.ts" />
+/// <reference path="./test-env.d.ts" />
 
 const componentFiles = import.meta.glob([
   "/src/component/**/*.ts",
   "!/src/component/**/*.test.ts",
-  "!/src/component/test-modules.ts",
-]);
+  ]);
 // convex-test anchors the module root at the directory containing _generated.
 const generatedFiles = import.meta.glob(["/src/_generated/**/*.ts"]);
 

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
 import schema from "./schema";
 
-import { componentModules as modules } from "./test-modules";
+import { componentModules as modules } from "../../test/component-modules";
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
 const authorize = makeFunctionReference<"query">("checks:authorize");
 

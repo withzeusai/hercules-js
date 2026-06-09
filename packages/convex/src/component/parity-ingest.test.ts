@@ -30,7 +30,7 @@ import snapshotFixture from "../shared/__fixtures__/projection-v3/snapshot.json"
 import { evaluateAccess, type ApplicableEntry, type WildcardMode } from "./authz";
 import schema from "./schema";
 
-import { componentModules as modules } from "./test-modules";
+import { componentModules as modules } from "../../test/component-modules";
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
 const authorize = makeFunctionReference<"query">("checks:authorize");
 

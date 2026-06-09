@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { withV3SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
 import schema from "./schema";
 
-import { componentModules as modules } from "./test-modules";
+import { componentModules as modules } from "../../test/component-modules";
 
 // The behavioral fixtures below are authored in the pre-v3 (schemaVersion 2)
 // shape; withV3SyncFixtures upgrades them to the v3 wire shape before forwarding
