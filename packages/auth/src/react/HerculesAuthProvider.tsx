@@ -6,6 +6,7 @@ import {
   type AuthProviderUserManagerProps,
 } from "react-oidc-context";
 import {
+  InMemoryWebStorage,
   UserManager,
   WebStorageStateStore,
   type UserManagerSettings,
@@ -49,6 +50,36 @@ export function useHerculesAuthProvider() {
   return context;
 }
 
+function getSafeWebStorage(kind: "local" | "session"): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const store =
+      kind === "local" ? window.localStorage : window.sessionStorage;
+    const probeKey = "__hercules_auth_storage_probe__";
+    store.setItem(probeKey, "1");
+    store.removeItem(probeKey);
+    return store;
+  } catch {
+    return null;
+  }
+}
+
+function pickSafeStore(): Storage | InMemoryWebStorage {
+  return (
+    getSafeWebStorage("local") ??
+    getSafeWebStorage("session") ??
+    new InMemoryWebStorage()
+  );
+}
+
+export function getSafeUserStore() {
+  return new WebStorageStateStore({ store: pickSafeStore() });
+}
+
+export function getSafeStateStore() {
+  return new WebStorageStateStore({ store: pickSafeStore() });
+}
+
 /**
  * A wrapper React component which provides a {@link ReactAuthProvider}
  * configured with Hercules Auth.
@@ -78,9 +109,8 @@ export function HerculesAuthProvider({
         post_logout_redirect_uri:
           userManagerSettings?.post_logout_redirect_uri ??
           window.location.origin,
-        userStore:
-          userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
+        userStore: userManagerSettings?.userStore ?? getSafeUserStore(),
+        stateStore: userManagerSettings?.stateStore ?? getSafeStateStore(),
       }),
   );
 
