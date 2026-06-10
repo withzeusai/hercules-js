@@ -58,9 +58,13 @@ type EffectivePermissionsResult = {
 
 type ScopeMember = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   joinedAt: number;
+  // A user member's name/email/image come from the deployment-wide user row; a
+  // group member's name is the group's own display name (groups have no
+  // email/image).
   name?: string;
   email?: string;
   image?: string;
@@ -197,11 +201,12 @@ export const listScopeMembers = query({
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return [];
 
+    // Both principal kinds are listed: user members AND groups. A user's
+    // name/email/image resolve from the deployment-wide user row; a group's
+    // name is the group's own display name carried on the principal row.
     const principals = await ctx.db
       .query("principals")
-      .withIndex("by_scope_type", (q) =>
-        q.eq("accessScopeId", scope.accessScopeId).eq("type", "user"),
-      )
+      .withIndex("by_scope", (q) => q.eq("accessScopeId", scope.accessScopeId))
       .collect();
 
     const members: ScopeMember[] = [];
@@ -209,8 +214,11 @@ export const listScopeMembers = query({
       let name: string | undefined;
       let email: string | undefined;
       let image: string | undefined;
+      if (principal.type === "group") {
+        name = principal.name;
+      }
       const authUserId = principal.herculesAuthUserId;
-      if (authUserId) {
+      if (principal.type === "user" && authUserId) {
         const user = await ctx.db
           .query("users")
           .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
@@ -227,6 +235,7 @@ export const listScopeMembers = query({
       });
       members.push({
         principalId: principal.principalId,
+        type: principal.type,
         herculesAuthUserId: authUserId,
         status: principal.status,
         joinedAt: principal.joinedAt,
@@ -330,7 +339,10 @@ export const listScopePermissions = query({
 
 type DirectResourceSubject = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
+  // A user subject's name/email/image come from the deployment-wide user row;
+  // a group subject's name is the group's own display name.
   name?: string;
   email?: string;
   image?: string;
@@ -442,13 +454,18 @@ export const listDirectSubjectsForResource = query({
         .query("principals")
         .withIndex("by_principal_id", (q) => q.eq("principalId", subjectPrincipalId))
         .unique();
-      if (!principal || principal.type !== "user") continue;
+      if (!principal) continue;
 
+      // Group subjects are listed by their own display name; user subjects
+      // resolve name/email/image from the deployment-wide user row.
       let name: string | undefined;
       let email: string | undefined;
       let image: string | undefined;
+      if (principal.type === "group") {
+        name = principal.name;
+      }
       const authUserId = principal.herculesAuthUserId;
-      if (authUserId) {
+      if (principal.type === "user" && authUserId) {
         const user = await ctx.db
           .query("users")
           .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", authUserId))
@@ -482,6 +499,7 @@ export const listDirectSubjectsForResource = query({
 
       results.push({
         principalId: principal.principalId,
+        type: principal.type,
         herculesAuthUserId: authUserId,
         name,
         email,

@@ -84,9 +84,12 @@ export type EffectivePermissionsResult = {
 
 export type ScopeMember = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   joinedAt: number;
+  // A user member's name/email/image come from the deployment-wide user row;
+  // a group member's name is the group's own display name.
   name?: string;
   email?: string;
   image?: string;
@@ -106,8 +109,11 @@ export type ScopePermissionSummary = {
 
 export type DirectResourceSubject = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  // A user subject's name/email/image come from the deployment-wide user row;
+  // a group subject's name is the group's own display name.
   name?: string;
   email?: string;
   image?: string;

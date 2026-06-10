@@ -77,6 +77,9 @@ export default defineSchema({
     principalId: v.string(),
     type: v.union(v.literal("user"), v.literal("group")),
     herculesAuthUserId: v.optional(v.string()),
+    // Display name for a `group` principal. A user principal's display name
+    // comes from the deployment-wide `users` table, never from this row.
+    name: v.optional(v.string()),
     status: principalStatusValidator,
     joinedAt: v.number(),
     updatedAt: v.number(),

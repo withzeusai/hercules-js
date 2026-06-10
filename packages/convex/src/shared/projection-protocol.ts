@@ -129,6 +129,10 @@ export const projectionPrincipalSchema = z
     principalId: z.string().min(1),
     type: z.enum(["user", "group"]),
     herculesAuthUserId: z.string().min(1).optional(),
+    // Display name for a `group` principal (e.g. "Engineering"). A user
+    // principal's display name lives on the deployment-wide user row and is
+    // never carried here; consumers ignore this field for user principals.
+    name: z.string().min(1).optional(),
     status: accessProjectionPrincipalStatusSchema,
     joinedAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),

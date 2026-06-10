@@ -57,6 +57,7 @@ type RoleSummary = {
 
 type ScopeMember = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   joinedAt: number;
@@ -79,6 +80,7 @@ type ScopePermissionSummary = {
 
 type DirectResourceSubject = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   name?: string;

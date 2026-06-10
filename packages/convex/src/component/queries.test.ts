@@ -31,11 +31,17 @@ type PermissionSummary = {
 };
 type ScopeMember = {
   principalId: string;
+  type: "user" | "group";
   herculesAuthUserId?: string;
   name?: string;
   roles: RoleSummary[];
 };
-type DirectSubject = { principalId: string; herculesAuthUserId?: string };
+type DirectSubject = {
+  principalId: string;
+  type: "user" | "group";
+  herculesAuthUserId?: string;
+  name?: string;
+};
 
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
 const getEffectivePermissions = makeFunctionReference<
@@ -1711,5 +1717,179 @@ describe("listDirectSubjectsForResource", () => {
       permission: "reports.read",
     });
     expect(subjects).toEqual([]);
+  });
+});
+
+// ── group principal names ────────────────────────────────────────────────────
+// The v3 wire carries an optional `name` on a GROUP principal (a user
+// principal's name still comes from the deployment-wide user row). Prove the
+// name is (a) stored on the mirror principal row by ingestion and (b) surfaced
+// by the member and direct-subject listings. Authored natively in the v3 wire
+// shape (the legacy adapter passes v3 payloads through untouched).
+describe("group principal names", () => {
+  function groupNameSnapshot() {
+    return {
+      type: "access.projection.snapshot" as const,
+      schemaVersion: 3 as const,
+      eventId: "evt_group_name",
+      mode: "initialize" as const,
+      sourceVersion: 1,
+      expectedIssuer: ISSUER,
+      catalog: {
+        roles: [
+          {
+            roleId: "role_owner",
+            key: "owner",
+            source: "system" as const,
+            name: "Owner",
+            baseWildcard: "immutable" as const,
+            updatedAt: 1,
+          },
+          {
+            roleId: "role_member",
+            key: "member",
+            source: "system" as const,
+            name: "Member",
+            baseWildcard: "none" as const,
+            updatedAt: 1,
+          },
+        ],
+        permissions: [
+          {
+            permissionId: "perm_members_read",
+            key: "system.members:read",
+            resourceType: "system.members",
+            action: "read",
+            classification: "delegable" as const,
+            tenantAssignable: false,
+            updatedAt: 1,
+          },
+          {
+            permissionId: "perm_reports_read",
+            key: "reports:read",
+            resourceType: "reports",
+            action: "read",
+            classification: "delegable" as const,
+            tenantAssignable: true,
+            updatedAt: 1,
+          },
+        ],
+        rolePermissions: [],
+      },
+      users: [
+        {
+          herculesAuthUserId: "user_owner",
+          name: "Olivia Owner",
+          email: "olivia@example.com",
+          emailVerified: true,
+          phoneVerified: false,
+          updatedAt: 1,
+        },
+      ],
+      scopes: [
+        {
+          scope: {
+            accessScopeId: "scope_default",
+            name: "Default",
+            kind: "default" as const,
+            status: "active" as const,
+            accountEntryMode: "open" as const,
+            defaultRoleId: "role_member",
+            updatedAt: 1,
+          },
+          principals: [
+            {
+              principalId: "p_owner",
+              type: "user" as const,
+              herculesAuthUserId: "user_owner",
+              status: "active" as const,
+              joinedAt: 1001,
+              updatedAt: 1,
+            },
+            {
+              principalId: "p_engineering",
+              type: "group" as const,
+              name: "Engineering",
+              status: "active" as const,
+              joinedAt: 1000,
+              updatedAt: 1,
+            },
+          ],
+          principalMemberships: [],
+          roles: [],
+          rolePermissionOverrides: [],
+          roleBindings: [
+            {
+              bindingId: "rb_owner",
+              subjectPrincipalId: "p_owner",
+              roleId: "role_owner",
+              accessScopeId: "scope_default",
+              updatedAt: 1,
+            },
+            {
+              bindingId: "rb_engineering",
+              subjectPrincipalId: "p_engineering",
+              roleId: "role_member",
+              accessScopeId: "scope_default",
+              updatedAt: 1,
+            },
+            {
+              bindingId: "rb_engineering_report",
+              subjectPrincipalId: "p_engineering",
+              roleId: "role_member",
+              accessScopeId: "scope_default",
+              resourceType: "reports",
+              resourceId: "report_1",
+              updatedAt: 1,
+            },
+          ],
+          permissionBindings: [],
+        },
+      ],
+    };
+  }
+
+  test("an ingested group principal's name is stored and surfaced", async () => {
+    const t = convexTest(schema, modules);
+    expect(await t.mutation(applySync, groupNameSnapshot() as never)).toMatchObject({
+      ok: true,
+      status: "applied",
+    });
+
+    // Stored: the mirror principal row carries the group's display name.
+    const stored = await t.run(async (ctx) =>
+      ctx.db
+        .query("principals")
+        .withIndex("by_principal_id", (q) => q.eq("principalId", "p_engineering"))
+        .unique(),
+    );
+    expect(stored).toMatchObject({ type: "group", name: "Engineering" });
+
+    // Surfaced in the member listing: the group by its own name, the user by
+    // the deployment-wide user row's name.
+    const members = await t.query(listScopeMembers, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      scopeId: "scope_default",
+    });
+    const group = members.find((m) => m.principalId === "p_engineering");
+    expect(group).toMatchObject({ type: "group", name: "Engineering" });
+    expect(group?.roles.map((r) => r.roleKey)).toEqual(["member"]);
+    expect(members.find((m) => m.principalId === "p_owner")).toMatchObject({
+      type: "user",
+      name: "Olivia Owner",
+    });
+
+    // Surfaced in the direct-subject listing: the group's direct role binding
+    // on the resource is reported under the group's name.
+    const subjects = await t.query(listDirectSubjectsForResource, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      scopeId: "scope_default",
+      resourceType: "reports",
+      resourceId: "report_1",
+      permission: "reports:read",
+    });
+    expect(subjects).toEqual([
+      expect.objectContaining({ principalId: "p_engineering", type: "group", name: "Engineering" }),
+    ]);
   });
 });

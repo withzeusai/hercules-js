@@ -579,6 +579,9 @@ export const applySync = mutation({
         principalId: string;
         type: "user" | "group";
         herculesAuthUserId?: string;
+        // Group display name; absent for user principals (their name lives on
+        // the deployment-wide user row).
+        name?: string;
         status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
         joinedAt: number;
         updatedAt: number;
