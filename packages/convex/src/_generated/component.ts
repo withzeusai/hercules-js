@@ -58,7 +58,7 @@ type RoleSummary = {
 type ScopeMember = {
   principalId: string;
   herculesAuthUserId?: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   joinedAt: number;
   name?: string;
   email?: string;
@@ -80,7 +80,7 @@ type ScopePermissionSummary = {
 type DirectResourceSubject = {
   principalId: string;
   herculesAuthUserId?: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   name?: string;
   email?: string;
   image?: string;
@@ -99,7 +99,7 @@ type Membership = {
   kind: ScopeKind;
   roles: RoleSummary[];
   joinedAt: number;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 };
 
 type EffectivePermissionsResult = {
@@ -124,13 +124,7 @@ type EffectivePermissionsResult = {
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> = {
   checks: {
-    authorize: FunctionReference<
-      "query",
-      "public",
-      AuthorizationArgs,
-      AuthorizationDecision,
-      Name
-    >;
+    authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision, Name>;
   };
   queries: {
     listMyMemberships: FunctionReference<

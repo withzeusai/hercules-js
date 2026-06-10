@@ -25,6 +25,7 @@ const principalStatusValidator = v.union(
   v.literal("blocked"),
   v.literal("suspended"),
   v.literal("pending_approval"),
+  v.literal("removed"),
 );
 
 export default defineSchema({

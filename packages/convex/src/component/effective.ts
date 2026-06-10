@@ -308,8 +308,8 @@ export async function collectPrincipalIds(
   for (const membership of memberships) {
     // E3 (blocked group fence): a membership only confers the group's authority
     // when the group principal actually exists, is a group, lives in this scope,
-    // and is active. A blocked/suspended group, a deleted group, or a row that
-    // points at a non-group principal must grant nothing. The membership query
+    // and is active. A blocked/suspended/removed group, a deleted group, or a row
+    // that points at a non-group principal must grant nothing. The membership query
     // is already scope-pinned, so a same-id group resolution confirms scope.
     const groupPrincipal = await ctx.db
       .query("principals")

@@ -36,7 +36,7 @@ type Membership = {
   kind: "default" | "org" | "suite";
   roles: RoleSummary[];
   joinedAt: number;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 };
 
 type EffectivePermissionsResult = {
@@ -59,7 +59,7 @@ type EffectivePermissionsResult = {
 type ScopeMember = {
   principalId: string;
   herculesAuthUserId?: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   joinedAt: number;
   name?: string;
   email?: string;
@@ -334,7 +334,7 @@ type DirectResourceSubject = {
   name?: string;
   email?: string;
   image?: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   effect: "allow" | "deny";
   expiresAt?: number;
   roleId?: string;

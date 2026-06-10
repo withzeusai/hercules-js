@@ -156,7 +156,7 @@ function effectiveRoleReadSnapshot(options: {
   roles: Snapshot["entities"]["roles"];
   // The group principal's status. Defaults to "active"; the blocked-group fence
   // tests (E3 / L9) pass "blocked" to assert the group confers nothing.
-  groupStatus?: "active" | "blocked" | "suspended" | "pending_approval";
+  groupStatus?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 }): Snapshot {
   return {
     type: "access.projection.snapshot",
@@ -641,6 +641,21 @@ describe("getEffectivePermissions", () => {
 
     expect(result).toMatchObject({ allowed: true, effectiveRoleIds: [], permissions: [] });
   });
+
+  // Same E3 fence for the MANUAL eviction state: a removed group must confer
+  // nothing, exactly like a blocked one.
+  test("a removed group confers no permission at runtime", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, groupPermissionCatalogSnapshot());
+    await t.mutation(applySync, groupPermissionOrgSnapshot("removed"));
+
+    const result = await t.query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    expect(result).toMatchObject({ allowed: true, effectiveRoleIds: [], permissions: [] });
+  });
 });
 
 function groupPermissionCatalogSnapshot(): Snapshot {
@@ -677,7 +692,7 @@ function groupPermissionCatalogSnapshot(): Snapshot {
 }
 
 function groupPermissionOrgSnapshot(
-  groupStatus: "active" | "blocked" | "suspended" | "pending_approval",
+  groupStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed",
 ): Snapshot {
   return {
     type: "access.projection.snapshot",

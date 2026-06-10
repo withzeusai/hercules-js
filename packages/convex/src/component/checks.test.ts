@@ -1,10 +1,9 @@
 import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
+import { componentModules as modules } from "../../test/component-modules";
 import { withV3SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
 import schema from "./schema";
-
-import { componentModules as modules } from "../../test/component-modules";
 
 // The behavioral fixtures below are authored in the pre-v3 (schemaVersion 2)
 // shape; withV3SyncFixtures upgrades them to the v3 wire shape before forwarding
@@ -294,6 +293,53 @@ describe("authorize", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reasonCode).toBe("principal_suspended");
+  });
+
+  // "removed" is the MANUAL admin-eviction state (split out of "blocked").
+  // Ingestion must accept it on the wire, and the runtime must treat it as
+  // non-active exactly like blocked/suspended.
+  test("permission mode denies a removed principal", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, defaultScopeSnapshot());
+
+    const ingest = await t.mutation(applySync, {
+      type: "access.projection.event",
+      schemaVersion: 2,
+      eventId: "evt_remove",
+      sourceVersion: 2,
+      scope: {
+        accessScopeId: "scope_default",
+        name: "Default",
+        kind: "default",
+        status: "active",
+        accountEntryMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 2,
+      },
+      changes: [{ entityType: "principal", entityId: "p_alice", operation: "upsert" }],
+      entities: {
+        ...emptyEntities(),
+        principals: [
+          {
+            principalId: "p_alice",
+            type: "user",
+            herculesAuthUserId: "user_alice",
+            status: "removed",
+            joinedAt: 100,
+            updatedAt: 200,
+          },
+        ],
+      },
+    });
+    expect(ingest).toMatchObject({ ok: true, status: "applied", acknowledgedVersion: 2 });
+
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_default",
+      permission: "tasks:create",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("principal_removed");
   });
 
   test("per-instance role grant grants the role's permissions on that instance only", async () => {

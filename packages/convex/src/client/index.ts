@@ -64,7 +64,7 @@ export type Membership = {
   kind: ScopeKind;
   roles: RoleSummary[];
   joinedAt: number;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 };
 
 export type EffectivePermissionsResult = {
@@ -85,7 +85,7 @@ export type EffectivePermissionsResult = {
 export type ScopeMember = {
   principalId: string;
   herculesAuthUserId?: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   joinedAt: number;
   name?: string;
   email?: string;
@@ -107,7 +107,7 @@ export type ScopePermissionSummary = {
 export type DirectResourceSubject = {
   principalId: string;
   herculesAuthUserId?: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval";
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   name?: string;
   email?: string;
   image?: string;
@@ -862,12 +862,7 @@ async function ensureAuthorized(
     authorizeChain &&
     authorizeChain.length > 0
   ) {
-    let explicitAncestorDeny:
-      | {
-          reasonCode: string;
-          sourceVersion?: number;
-        }
-      | undefined;
+    let explicitAncestorDeny: { reasonCode: string; sourceVersion?: number } | undefined;
     for (const ancestor of authorizeChain) {
       const ancestorDecision = await ctx.runQuery(component.checks.authorize, {
         tokenIdentifier: identity.tokenIdentifier,

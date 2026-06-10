@@ -46,6 +46,19 @@ describe("Access Control projection v3 consumer schemas", () => {
     expect(accessProjectionSyncPayloadSchema.parse(event)).toEqual(event);
   });
 
+  // "removed" is the MANUAL admin-eviction status (split out of "blocked").
+  // The consumer wire must accept it so ingestion can mirror an evicted member.
+  test("a principal with status removed parses", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: { principals: { status: string }[] }[];
+    };
+    const updated = structuredClone(snapshot);
+    updated.scopes[0]!.principals[0]!.status = "removed";
+
+    const result = accessProjectionSnapshotSchema.safeParse(updated);
+    expect(result.success).toBe(true);
+  });
+
   test("an upsert change with a missing row fails the integrity superRefine", () => {
     const event = loadFixture("event-scope.json") as { scopes: { principals: unknown[] }[] };
     // Drop the row the principal upsert change points at; the change now matches

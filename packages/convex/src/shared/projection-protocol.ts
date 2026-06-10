@@ -45,11 +45,16 @@ export type AccessProjectionAccountEntryMode = z.infer<
   typeof accessProjectionAccountEntryModeSchema
 >;
 
+// "blocked" and "pending_approval" are POLICY states (admission reconciliation
+// may move principals among active/pending_approval/blocked). "suspended" and
+// "removed" are MANUAL states (admin suspension/eviction) that reconciliation
+// must never touch; only an explicit manual action brings such a principal back.
 export const accessProjectionPrincipalStatusSchema = z.enum([
   "active",
   "blocked",
   "suspended",
   "pending_approval",
+  "removed",
 ]);
 export type AccessProjectionPrincipalStatus = z.infer<typeof accessProjectionPrincipalStatusSchema>;
 
