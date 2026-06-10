@@ -139,23 +139,25 @@ export const listMyRoles = query({
     const token = parseTokenIdentifier(args.tokenIdentifier);
     if (!token || token.issuer !== state.expectedIssuer) return [];
 
-    const scope = await ctx.db
-      .query("scopes")
-      .withIndex("by_scope_id", (q) => q.eq("accessScopeId", args.scopeId))
-      .unique();
+    // E5: resolve the scope through resolveScopeRow so the
+    // __hercules_default_scope__ sentinel maps to the real default scope (the
+    // other queries already do this; using the sentinel literally never matched
+    // a row, so this returned []). Use the RESOLVED accessScopeId for the
+    // principal and role lookups.
+    const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope || scope.status === "disabled") return [];
 
     const principal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
-        q.eq("accessScopeId", args.scopeId).eq("herculesAuthUserId", token.subject),
+        q.eq("accessScopeId", scope.accessScopeId).eq("herculesAuthUserId", token.subject),
       )
       .unique();
     if (!principal) return [];
 
     return collectPrincipalScopeRoles(ctx, {
       principalId: principal.principalId,
-      scopeId: args.scopeId,
+      scopeId: scope.accessScopeId,
     });
   },
 });

@@ -251,6 +251,12 @@ export const applySync = mutation({
             ...membership,
           });
         }
+        // E4 (cross-scope escalation fence): write every embedded row pinned to
+        // the ENCLOSING scope, never the nested accessScopeId the row carries.
+        // The zod parse already rejects a mismatched nested id, but pinning here
+        // is the second, in-depth layer so a scope-A block can never land a row
+        // in scope B even if the parse fence is bypassed.
+        const enclosingScopeId = scopeEntry.scope.accessScopeId;
         for (const role of scopeEntry.roles) {
           await ctx.db.insert("roles", {
             roleId: role.roleId,
@@ -258,25 +264,31 @@ export const applySync = mutation({
             source: role.source,
             name: role.name,
             baseWildcard: role.baseWildcard,
-            accessScopeId: role.accessScopeId,
+            accessScopeId: enclosingScopeId,
             updatedAt: role.updatedAt,
           });
         }
         for (const override of scopeEntry.rolePermissionOverrides) {
-          await ctx.db.insert("role_permission_overrides", { ...override });
+          await ctx.db.insert("role_permission_overrides", {
+            ...override,
+            accessScopeId: enclosingScopeId,
+          });
         }
         for (const binding of scopeEntry.roleBindings) {
           if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
             continue;
           }
-          await ctx.db.insert("role_bindings", { ...binding });
+          await ctx.db.insert("role_bindings", { ...binding, accessScopeId: enclosingScopeId });
           await scheduleRoleBindingExpiration(binding);
         }
         for (const binding of scopeEntry.permissionBindings) {
           if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
             continue;
           }
-          await ctx.db.insert("permission_bindings", { ...binding });
+          await ctx.db.insert("permission_bindings", {
+            ...binding,
+            accessScopeId: enclosingScopeId,
+          });
           await schedulePermissionBindingExpiration(binding);
         }
       }
@@ -388,7 +400,9 @@ export const applySync = mutation({
               await deleteTenantRole(change.roleId);
               break;
             case "role_permission_override":
-              await deleteOverride(change.accessScopeId, change.roleId, change.permissionId);
+              // E4: delete keyed on the ENCLOSING scope, never the change's own
+              // accessScopeId (which could name a foreign scope).
+              await deleteOverride(accessScopeId, change.roleId, change.permissionId);
               break;
             case "role_binding":
               await deleteRoleBinding(change.bindingId);
@@ -427,7 +441,9 @@ export const applySync = mutation({
               source: role.source,
               name: role.name,
               baseWildcard: role.baseWildcard,
-              accessScopeId: role.accessScopeId,
+              // E4: pin to the ENCLOSING scope, never the row's own
+              // accessScopeId.
+              accessScopeId,
               updatedAt: role.updatedAt,
             });
             break;
@@ -439,17 +455,20 @@ export const applySync = mutation({
                 o.roleId === change.roleId &&
                 o.permissionId === change.permissionId,
             )!;
-            await upsertOverride({ ...override });
+            // E4: write the override pinned to the ENCLOSING scope.
+            await upsertOverride({ ...override, accessScopeId });
             break;
           }
           case "role_binding": {
             const binding = scope.roleBindings.find((b) => b.bindingId === change.bindingId)!;
-            await upsertRoleBinding({ ...binding }, now);
+            // E4: write the binding pinned to the ENCLOSING scope.
+            await upsertRoleBinding({ ...binding, accessScopeId }, now);
             break;
           }
           case "permission_binding": {
             const binding = scope.permissionBindings.find((b) => b.bindingId === change.bindingId)!;
-            await upsertPermissionBinding({ ...binding }, now);
+            // E4: write the binding pinned to the ENCLOSING scope.
+            await upsertPermissionBinding({ ...binding, accessScopeId }, now);
             break;
           }
         }

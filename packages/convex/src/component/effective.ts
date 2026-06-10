@@ -118,6 +118,15 @@ export async function evaluateEffectiveAccess(
   if (!principal) {
     return deny("principal_missing", state.sourceVersion);
   }
+  // E1 (impersonation fence, defense in depth): the caller is authorized AS a
+  // user. The by_scope_auth_user lookup is keyed only on (scope,
+  // herculesAuthUserId); a group principal that smuggled a victim's
+  // herculesAuthUserId would resolve here. The parse fence rejects that payload,
+  // but require type==="user" at the resolution point too so a group principal
+  // is never authorized as a user.
+  if (principal.type !== "user") {
+    return deny("principal_missing", state.sourceVersion);
+  }
   if (principal.status !== "active") {
     return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
   }
@@ -294,7 +303,23 @@ async function collectPrincipalIds(
     )
     .collect();
   for (const membership of memberships) {
-    principalIds.add(membership.groupPrincipalId);
+    // E3 (blocked group fence): a membership only confers the group's authority
+    // when the group principal actually exists, is a group, lives in this scope,
+    // and is active. A blocked/suspended group, a deleted group, or a row that
+    // points at a non-group principal must grant nothing. The membership query
+    // is already scope-pinned, so a same-id group resolution confirms scope.
+    const groupPrincipal = await ctx.db
+      .query("principals")
+      .withIndex("by_principal_id", (q) => q.eq("principalId", membership.groupPrincipalId))
+      .unique();
+    if (
+      groupPrincipal &&
+      groupPrincipal.type === "group" &&
+      groupPrincipal.accessScopeId === args.scopeId &&
+      groupPrincipal.status === "active"
+    ) {
+      principalIds.add(membership.groupPrincipalId);
+    }
   }
   return [...principalIds];
 }

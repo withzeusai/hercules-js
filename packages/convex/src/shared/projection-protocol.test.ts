@@ -61,4 +61,123 @@ describe("Access Control projection v3 consumer schemas", () => {
       ),
     ).toBe(true);
   });
+
+  // E1 (impersonation fence): a group principal carrying a herculesAuthUserId
+  // would be resolvable as that user. The schema must reject it at parse.
+  test("a group principal carrying a herculesAuthUserId is rejected", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: { principals: { type: string; herculesAuthUserId?: string }[] }[];
+    };
+    const corrupted = structuredClone(snapshot);
+    // Promote the default scope's first principal to a group BUT keep the
+    // victim's herculesAuthUserId (u_alice). This is the impersonation payload.
+    corrupted.scopes[0]!.principals[0]!.type = "group";
+
+    const result = accessProjectionSnapshotSchema.safeParse(corrupted);
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.some((issue) =>
+        issue.message.includes("group principal must not carry a herculesAuthUserId"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a user principal missing its herculesAuthUserId is rejected", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: { principals: { type: string; herculesAuthUserId?: string }[] }[];
+    };
+    const corrupted = structuredClone(snapshot);
+    delete corrupted.scopes[0]!.principals[0]!.herculesAuthUserId;
+
+    const result = accessProjectionSnapshotSchema.safeParse(corrupted);
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.some((issue) =>
+        issue.message.includes("user principal requires a herculesAuthUserId"),
+      ),
+    ).toBe(true);
+  });
+
+  // E2 (tenant role wildcard fence): a tenant role's baseWildcard must always be
+  // "none"; a wire payload claiming "default"/"immutable" must fail at parse so a
+  // tenant role can never become Admin/Owner-equivalent.
+  test("a tenant role with a non-none baseWildcard is rejected at parse", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: { roles: { baseWildcard: string }[] }[];
+    };
+    const corrupted = structuredClone(snapshot);
+    // The org scope (index 1) owns a tenant role (role_org_lead). Flip its
+    // intrinsic wildcard to the Admin-equivalent "default".
+    corrupted.scopes[1]!.roles[0]!.baseWildcard = "default";
+
+    const result = accessProjectionSnapshotSchema.safeParse(corrupted);
+    expect(result.success).toBe(false);
+  });
+
+  // E4 (cross-scope escalation fence): a scope-A block that nests a binding
+  // targeting scope B must be rejected at parse.
+  test("a snapshot scope embedding a foreign-scope role binding is rejected", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: { scope: { accessScopeId: string }; roleBindings: { accessScopeId: string }[] }[];
+    };
+    const corrupted = structuredClone(snapshot);
+    // The default scope (index 0) ships a role binding; re-point it at the org
+    // scope (as_org1). Scope-A delta granting in scope B.
+    corrupted.scopes[0]!.roleBindings[0]!.accessScopeId = "as_org1";
+
+    const result = accessProjectionSnapshotSchema.safeParse(corrupted);
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.some((issue) =>
+        issue.message.includes("accessScopeId must equal the enclosing scope"),
+      ),
+    ).toBe(true);
+  });
+
+  test("an event scope delta embedding a foreign-scope override is rejected", () => {
+    // Build a scope delta for as_default that nests a role_permission_override
+    // targeting as_org1 (with a matching change identity referencing as_org1).
+    const event = {
+      type: "access.projection.event" as const,
+      schemaVersion: 3 as const,
+      eventId: "evt_cross_scope_0001",
+      sourceVersion: 11,
+      scopes: [
+        {
+          accessScopeId: "as_default",
+          changes: [
+            {
+              entityType: "role_permission_override" as const,
+              accessScopeId: "as_org1",
+              roleId: "role_admin",
+              permissionId: "perm_docs_write",
+              operation: "upsert" as const,
+            },
+          ],
+          principals: [],
+          principalMemberships: [],
+          roles: [],
+          rolePermissionOverrides: [
+            {
+              accessScopeId: "as_org1",
+              roleId: "role_admin",
+              permissionId: "perm_docs_write",
+              effect: "allow" as const,
+              updatedAt: 1780444800000,
+            },
+          ],
+          roleBindings: [],
+          permissionBindings: [],
+        },
+      ],
+    };
+
+    const result = accessProjectionEventSchema.safeParse(event);
+    expect(result.success).toBe(false);
+    expect(
+      result.error?.issues.some((issue) =>
+        issue.message.includes("accessScopeId must equal the enclosing scope"),
+      ),
+    ).toBe(true);
+  });
 });

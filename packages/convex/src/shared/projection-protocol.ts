@@ -119,14 +119,36 @@ export const projectionScopeMetadataSchema = z.strictObject({
 });
 export type ProjectionScopeMetadata = z.infer<typeof projectionScopeMetadataSchema>;
 
-export const projectionPrincipalSchema = z.strictObject({
-  principalId: z.string().min(1),
-  type: z.enum(["user", "group"]),
-  herculesAuthUserId: z.string().min(1).optional(),
-  status: accessProjectionPrincipalStatusSchema,
-  joinedAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-});
+export const projectionPrincipalSchema = z
+  .strictObject({
+    principalId: z.string().min(1),
+    type: z.enum(["user", "group"]),
+    herculesAuthUserId: z.string().min(1).optional(),
+    status: accessProjectionPrincipalStatusSchema,
+    joinedAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  // E1 (impersonation fence): the herculesAuthUserId is the identity key the
+  // evaluator resolves a caller to (by_scope_auth_user). A `user` principal MUST
+  // carry it; a `group` principal MUST NOT. A group principal smuggling a
+  // victim's herculesAuthUserId on a malformed payload would otherwise be
+  // resolved as that user. Fail closed at the parse boundary.
+  .superRefine((principal, ctx) => {
+    if (principal.type === "user" && principal.herculesAuthUserId === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["herculesAuthUserId"],
+        message: "A user principal requires a herculesAuthUserId",
+      });
+    }
+    if (principal.type === "group" && principal.herculesAuthUserId !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["herculesAuthUserId"],
+        message: "A group principal must not carry a herculesAuthUserId",
+      });
+    }
+  });
 export type ProjectionPrincipal = z.infer<typeof projectionPrincipalSchema>;
 
 export const projectionPrincipalMembershipSchema = z.strictObject({
@@ -144,7 +166,11 @@ export const projectionScopeTenantRoleSchema = z.strictObject({
   key: z.string().min(1),
   source: z.literal("tenant"),
   name: z.string().min(1),
-  baseWildcard: accessProjectionWildcardModeSchema,
+  // E2 (tenant role wildcard fence): a tenant (org-authored) role is ALWAYS a
+  // non-wildcard role. The effective wildcard derivation (resolvePrincipalWildcard)
+  // trusts baseWildcard, so a tenant role carrying "default"/"immutable" on a
+  // malformed payload could become Admin/Owner-equivalent. Pin it to "none".
+  baseWildcard: z.literal("none"),
   updatedAt: z.number().int().nonnegative(),
 });
 export type ProjectionScopeTenantRole = z.infer<typeof projectionScopeTenantRoleSchema>;
@@ -205,15 +231,55 @@ export type ProjectionScopePermissionBinding = z.infer<
   typeof projectionScopePermissionBindingSchema
 >;
 
-export const projectionScopeSchema = z.strictObject({
-  scope: projectionScopeMetadataSchema,
-  principals: z.array(projectionPrincipalSchema),
-  principalMemberships: z.array(projectionPrincipalMembershipSchema),
-  roles: z.array(projectionScopeTenantRoleSchema),
-  rolePermissionOverrides: z.array(projectionScopeRolePermissionOverrideSchema),
-  roleBindings: z.array(projectionScopeRoleBindingSchema),
-  permissionBindings: z.array(projectionScopePermissionBindingSchema),
-});
+// E4 (cross-scope escalation fence): every embedded row that names an
+// accessScopeId (tenant roles, role-permission overrides, role bindings,
+// permission bindings) MUST belong to the enclosing scope. A scope-A block that
+// nests a scope-B-targeted binding would otherwise be applied verbatim and grant
+// authority in scope B (the apply pins to the enclosing scope after this fix, but
+// we ALSO reject the malformed payload at the parse boundary). Reused by both the
+// snapshot scope and the scope delta.
+function assertEmbeddedScopePinned(
+  enclosingScopeId: string,
+  embedded: {
+    roles: { accessScopeId: string }[];
+    rolePermissionOverrides: { accessScopeId: string }[];
+    roleBindings: { accessScopeId: string }[];
+    permissionBindings: { accessScopeId: string }[];
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const checkArray = (
+    field: "roles" | "rolePermissionOverrides" | "roleBindings" | "permissionBindings",
+  ): void => {
+    for (const [index, row] of embedded[field].entries()) {
+      if (row.accessScopeId !== enclosingScopeId) {
+        ctx.addIssue({
+          code: "custom",
+          path: [field, index, "accessScopeId"],
+          message: `Embedded ${field} accessScopeId must equal the enclosing scope`,
+        });
+      }
+    }
+  };
+  checkArray("roles");
+  checkArray("rolePermissionOverrides");
+  checkArray("roleBindings");
+  checkArray("permissionBindings");
+}
+
+export const projectionScopeSchema = z
+  .strictObject({
+    scope: projectionScopeMetadataSchema,
+    principals: z.array(projectionPrincipalSchema),
+    principalMemberships: z.array(projectionPrincipalMembershipSchema),
+    roles: z.array(projectionScopeTenantRoleSchema),
+    rolePermissionOverrides: z.array(projectionScopeRolePermissionOverrideSchema),
+    roleBindings: z.array(projectionScopeRoleBindingSchema),
+    permissionBindings: z.array(projectionScopePermissionBindingSchema),
+  })
+  .superRefine((entry, ctx) => {
+    assertEmbeddedScopePinned(entry.scope.accessScopeId, entry, ctx);
+  });
 export type ProjectionScope = z.infer<typeof projectionScopeSchema>;
 
 // ── snapshot (bootstrap / reset) ──────────────────────────────────────────────
@@ -413,17 +479,44 @@ export type ProjectionUserDelta = z.infer<typeof projectionUserDeltaSchema>;
 // One scope's delta. `scope` is present when the scope metadata is upserted
 // (including scope creation); a scope deletion is a `changes` entry with
 // entityType `scope`, operation `delete`, and the scope's accessScopeId.
-export const projectionScopeDeltaSchema = z.strictObject({
-  accessScopeId: z.string().min(1),
-  scope: projectionScopeMetadataSchema.optional(),
-  changes: z.array(projectionScopeChangeSchema),
-  principals: z.array(projectionPrincipalSchema),
-  principalMemberships: z.array(projectionPrincipalMembershipSchema),
-  roles: z.array(projectionScopeTenantRoleSchema),
-  rolePermissionOverrides: z.array(projectionScopeRolePermissionOverrideSchema),
-  roleBindings: z.array(projectionScopeRoleBindingSchema),
-  permissionBindings: z.array(projectionScopePermissionBindingSchema),
-});
+export const projectionScopeDeltaSchema = z
+  .strictObject({
+    accessScopeId: z.string().min(1),
+    scope: projectionScopeMetadataSchema.optional(),
+    changes: z.array(projectionScopeChangeSchema),
+    principals: z.array(projectionPrincipalSchema),
+    principalMemberships: z.array(projectionPrincipalMembershipSchema),
+    roles: z.array(projectionScopeTenantRoleSchema),
+    rolePermissionOverrides: z.array(projectionScopeRolePermissionOverrideSchema),
+    roleBindings: z.array(projectionScopeRoleBindingSchema),
+    permissionBindings: z.array(projectionScopePermissionBindingSchema),
+  })
+  // E4 (cross-scope escalation fence): the delta names one enclosing scope, and
+  // every embedded row plus every scope-change identity that carries an
+  // accessScopeId MUST equal it. The `scope` metadata row (when present) must
+  // describe this same scope.
+  .superRefine((delta, ctx) => {
+    assertEmbeddedScopePinned(delta.accessScopeId, delta, ctx);
+    if (delta.scope !== undefined && delta.scope.accessScopeId !== delta.accessScopeId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["scope", "accessScopeId"],
+        message: "Embedded scope metadata accessScopeId must equal the enclosing scope",
+      });
+    }
+    for (const [index, change] of delta.changes.entries()) {
+      if (
+        (change.entityType === "scope" || change.entityType === "role_permission_override") &&
+        change.accessScopeId !== delta.accessScopeId
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["changes", index, "accessScopeId"],
+          message: "Scope change accessScopeId must equal the enclosing scope",
+        });
+      }
+    }
+  });
 export type ProjectionScopeDelta = z.infer<typeof projectionScopeDeltaSchema>;
 
 // ── event (normal delivery) ──────────────────────────────────────────────────
