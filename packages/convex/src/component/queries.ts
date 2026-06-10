@@ -6,7 +6,7 @@ import {
 } from "convex/server";
 import { v } from "convex/values";
 import { evaluatePermissionDecision } from "./checks";
-import { enumeratePermissions, evaluateEffectiveAccess } from "./effective";
+import { collectPrincipalIds, enumeratePermissions, evaluateEffectiveAccess } from "./effective";
 import schema from "./schema";
 
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
@@ -550,16 +550,14 @@ async function collectPrincipalScopeRoles(
   args: { principalId: string; scopeId: string },
 ): Promise<RoleSummary[]> {
   // Authorization treats the user and each directly joined group as subjects.
-  const subjectPrincipalIds = new Set([args.principalId]);
-  const memberships = await ctx.db
-    .query("principal_memberships")
-    .withIndex("by_member", (q) =>
-      q.eq("accessScopeId", args.scopeId).eq("memberPrincipalId", args.principalId),
-    )
-    .collect();
-  for (const membership of memberships) {
-    subjectPrincipalIds.add(membership.groupPrincipalId);
-  }
+  // Reuse the E3-fenced expansion (effective.collectPrincipalIds): a membership
+  // confers its group only when the group principal exists, is a group, lives in
+  // this scope, and is active. A blocked/deleted group, or a row pointing at a
+  // non-group principal, grants nothing here too.
+  const subjectPrincipalIds = await collectPrincipalIds(ctx, {
+    principalId: args.principalId,
+    scopeId: args.scopeId,
+  });
 
   const now = Date.now();
   const allowedRoleIds = new Set<string>();

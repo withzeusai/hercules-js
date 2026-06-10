@@ -154,6 +154,9 @@ function memberSnapshot(
 function effectiveRoleReadSnapshot(options: {
   grants: Snapshot["entities"]["grants"];
   roles: Snapshot["entities"]["roles"];
+  // The group principal's status. Defaults to "active"; the blocked-group fence
+  // tests (E3 / L9) pass "blocked" to assert the group confers nothing.
+  groupStatus?: "active" | "blocked" | "suspended" | "pending_approval";
 }): Snapshot {
   return {
     type: "access.projection.snapshot",
@@ -184,7 +187,7 @@ function effectiveRoleReadSnapshot(options: {
         {
           principalId: "p_engineering",
           type: "group",
-          status: "active",
+          status: options.groupStatus ?? "active",
           joinedAt: 1000,
           updatedAt: 1,
         },
@@ -197,6 +200,28 @@ function effectiveRoleReadSnapshot(options: {
     },
   };
 }
+
+// The engineer role conferred onto the engineering group, shared by the
+// group-conferral and blocked-group fence tests.
+const engineerRole = {
+  roleId: "role_engineer",
+  accessScopeId: "scope_acme",
+  key: "engineer",
+  kind: "custom" as const,
+  name: "Engineer",
+  wildcard: "none" as const,
+  updatedAt: 1,
+};
+const engineerGroupGrant = {
+  grantId: "grant_engineering_engineer",
+  subjectPrincipalId: "p_engineering",
+  relationKind: "role" as const,
+  roleId: "role_engineer",
+  effect: "allow" as const,
+  objectType: "scope" as const,
+  objectId: "scope_acme",
+  updatedAt: 1,
+};
 
 describe("listMyMemberships", () => {
   test("returns memberships across multiple active scopes", async () => {
@@ -354,31 +379,7 @@ describe("listMyMemberships", () => {
     const t = convexTest(schema, modules);
     await t.mutation(
       applySync,
-      effectiveRoleReadSnapshot({
-        roles: [
-          {
-            roleId: "role_engineer",
-            accessScopeId: "scope_acme",
-            key: "engineer",
-            kind: "custom",
-            name: "Engineer",
-            wildcard: "none",
-            updatedAt: 1,
-          },
-        ],
-        grants: [
-          {
-            grantId: "grant_engineering_engineer",
-            subjectPrincipalId: "p_engineering",
-            relationKind: "role",
-            roleId: "role_engineer",
-            effect: "allow",
-            objectType: "scope",
-            objectId: "scope_acme",
-            updatedAt: 1,
-          },
-        ],
-      }),
+      effectiveRoleReadSnapshot({ roles: [engineerRole], grants: [engineerGroupGrant] }),
     );
 
     const memberships = await t.query(listMyMemberships, {
@@ -393,6 +394,29 @@ describe("listMyMemberships", () => {
       { roleId: "role_engineer", roleKey: "engineer", roleName: "Engineer", roleKind: "custom" },
     ]);
     expect(roles).toEqual(memberships[0]?.roles);
+  });
+
+  // L9 (consumer-plane blocked-group fence): collectPrincipalScopeRoles must share
+  // the E3 fence — a membership whose group principal is NOT active confers
+  // nothing. Without the fence, the member would inherit the engineer role through
+  // a blocked group.
+  test("a blocked group confers no roles through membership", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      applySync,
+      effectiveRoleReadSnapshot({
+        roles: [engineerRole],
+        grants: [engineerGroupGrant],
+        groupStatus: "blocked",
+      }),
+    );
+
+    const roles = await t.query(listMyRoles, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    expect(roles).toEqual([]);
   });
 
   // NOTE: the v2-era "role deny overrides direct and group role allows" test was
@@ -581,7 +605,152 @@ describe("getEffectivePermissions", () => {
       "system.reports:export",
     ]);
   });
+
+  // Runtime-plane group conferral: a member inherits the permissions of a role
+  // bound to an ACTIVE group it belongs to (evaluateEffectiveAccess via the
+  // E3-fenced collectPrincipalIds).
+  test("a member inherits a permission through an active group", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, groupPermissionCatalogSnapshot());
+    await t.mutation(applySync, groupPermissionOrgSnapshot("active"));
+
+    const result = await t.query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    expect(result).toMatchObject({
+      allowed: true,
+      effectiveRoleIds: ["role_engineer"],
+      permissions: ["deploys.run"],
+    });
+  });
+
+  // E3 (runtime-plane blocked-group fence): a member inherits NOTHING when the
+  // group principal is blocked. Without the fence the member would still gain the
+  // group's permission.
+  test("a blocked group confers no permission at runtime", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, groupPermissionCatalogSnapshot());
+    await t.mutation(applySync, groupPermissionOrgSnapshot("blocked"));
+
+    const result = await t.query(getEffectivePermissions, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+    });
+
+    expect(result).toMatchObject({ allowed: true, effectiveRoleIds: [], permissions: [] });
+  });
 });
+
+function groupPermissionCatalogSnapshot(): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_group_permission_catalog",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_member",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      permissions: [
+        {
+          permissionId: "perm_deploys_run",
+          accessScopeId: "scope_default",
+          key: "deploys.run",
+          resourceType: "deploys",
+          action: "run",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function groupPermissionOrgSnapshot(
+  groupStatus: "active" | "blocked" | "suspended" | "pending_approval",
+): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_group_permission_org",
+    sourceVersion: 2,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_acme",
+      name: "Acme",
+      kind: "org",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_engineer",
+      updatedAt: 2,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice_acme",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+        {
+          principalId: "p_engineering",
+          type: "group",
+          status: groupStatus,
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      principalMemberships: [
+        { groupPrincipalId: "p_engineering", memberPrincipalId: "p_alice_acme", updatedAt: 2 },
+      ],
+      roles: [
+        {
+          roleId: "role_engineer",
+          accessScopeId: "scope_acme",
+          key: "engineer",
+          kind: "custom",
+          name: "Engineer",
+          wildcard: "none",
+          updatedAt: 2,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_engineer",
+          permissionId: "perm_deploys_run",
+          accessScopeId: "scope_acme",
+          effect: "allow",
+          updatedAt: 2,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_engineering_engineer",
+          subjectPrincipalId: "p_engineering",
+          relationKind: "role",
+          roleId: "role_engineer",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_acme",
+          updatedAt: 2,
+        },
+      ],
+    },
+  };
+}
 
 function manageCatalogSnapshot(): Snapshot {
   return {

@@ -291,7 +291,10 @@ function parseTokenIdentifier(tokenIdentifier: string) {
   };
 }
 
-async function collectPrincipalIds(
+// Exported so the consumer-plane role-listing query (queries.collectPrincipalScopeRoles)
+// shares the SAME E3 blocked-group fence rather than re-expanding memberships
+// without checking the group principal is an active, in-scope group.
+export async function collectPrincipalIds(
   ctx: GenericQueryCtx<DataModel>,
   args: { principalId: string; scopeId: string },
 ) {
