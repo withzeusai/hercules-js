@@ -584,7 +584,7 @@ describe("getEffectivePermissions", () => {
     expect(result.permissions).toEqual([]);
   });
 
-  test("reports a manage-action permission held via a non-wildcard role", async () => {
+  test("expands manage/* grants to concrete verbs without advertising superset keys", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, manageCatalogSnapshot());
     await t.mutation(applySync, manageOrgSnapshot());
@@ -594,16 +594,12 @@ describe("getEffectivePermissions", () => {
       scopeId: "scope_acme",
     });
 
-    // A `manage` (and a `*`) catalog permission held via a custom role must be
-    // reported by membership; re-evaluating with the permission's own superset
-    // action would never match and would drop it.
+    // L-3: superset-action catalog keys (`:manage`, `:*`) are control-plane
+    // management gates; authorize() rejects a request that resolves to one with
+    // `invalid_request`, so getEffectivePermissions must not advertise them.
+    // The grants still expand onto the concrete-verb catalog keys they cover.
     expect(result.wildcard).toBe("none");
-    expect(result.permissions).toEqual([
-      "system.access.roles:manage",
-      "system.access.roles:read",
-      "system.reports:*",
-      "system.reports:export",
-    ]);
+    expect(result.permissions).toEqual(["system.access.roles:read", "system.reports:export"]);
   });
 
   // Runtime-plane group conferral: a member inherits the permissions of a role

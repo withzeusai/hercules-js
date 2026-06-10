@@ -2,6 +2,7 @@ import type { DataModelFromSchemaDefinition, GenericQueryCtx } from "convex/serv
 import {
   actionMatches,
   isOwnerOnlyLever,
+  MANAGE_ACTION,
   WILDCARD_ACTION,
   type ApplicableEntry,
   type WildcardMode,
@@ -32,9 +33,10 @@ type CatalogPermission = {
 // from (when it maps to one). The id lets getEffectivePermissions report a
 // permission by set-membership — matching the canonical platform query
 // (selectEffectivePermissionsByPrincipalIds) — rather than re-evaluating each
-// catalog permission with its own action (which under-reports manage/`*`
-// permissions, since requests never carry those superset tokens). The
-// evaluator (evaluateAccess) ignores this extra field.
+// catalog permission with its own action. Superset-action (`manage`/`*`)
+// catalog keys themselves are control-plane-only and are filtered from the
+// enumeration (see isSupersetAction). The evaluator (evaluateAccess) ignores
+// this extra field.
 type RuntimeEntry = ApplicableEntry & { permissionId?: string };
 
 export type EffectiveAccessEvaluation = {
@@ -222,6 +224,18 @@ export async function evaluateEffectiveAccess(
 }
 
 /**
+ * Grant-side superset action tokens (`manage`, `*`) are never runtime-
+ * checkable: can() requests carry concrete verbs only, so the authorize gate
+ * (checks.ts evaluatePermissionDecision) rejects a request whose resolved
+ * catalog action is a superset token with `invalid_request` — even for an
+ * Owner. Shared by that gate and {@link enumeratePermissions} so the two stay
+ * consistent by construction.
+ */
+export function isSupersetAction(action: string): boolean {
+  return action === MANAGE_ACTION || action === WILDCARD_ACTION;
+}
+
+/**
  * Enumerate the catalog permissions this principal can exercise, by set-
  * membership over the assembled entries — matching the canonical platform query
  * (selectEffectivePermissionsByPrincipalIds). A catalog permission is reported
@@ -232,6 +246,14 @@ export async function evaluateEffectiveAccess(
  *     deny).
  *   - else / additionally → there is a matching allow entry whose action
  *     covers the catalog permission, and no matching deny entry overrides it.
+ *
+ * Superset-action catalog keys (`:manage`, `:*`) are control-plane management
+ * gates, not runtime-checkable permissions: the authorize gate rejects them
+ * with `invalid_request` ({@link isSupersetAction}), so they are excluded here
+ * for every wildcard mode — getEffectivePermissions must never advertise a key
+ * the runtime will then deny. The capability such a grant confers is still
+ * fully reported: a `manage`/`*` allow entry expands onto the concrete-verb
+ * catalog keys it covers via actionMatches.
  */
 export function enumeratePermissions(
   catalogPermissions: CatalogPermission[],
@@ -257,6 +279,8 @@ export function enumeratePermissions(
 
   return catalogPermissions
     .filter((permission) => {
+      // Control-plane-only keys: never advertised at runtime (see doc above).
+      if (isSupersetAction(permission.action)) return false;
       if (wildcard === "immutable") return true;
       if (isDenied(permission)) return false;
       const ownerOnly = isOwnerOnlyLever({

@@ -5,13 +5,8 @@ import {
   type QueryBuilder,
 } from "convex/server";
 import { v } from "convex/values";
-import {
-  evaluateAccess,
-  hasExplicitDeny,
-  MANAGE_ACTION,
-  WILDCARD_ACTION,
-} from "./authz";
-import { evaluateEffectiveAccess } from "./effective";
+import { evaluateAccess, hasExplicitDeny } from "./authz";
+import { evaluateEffectiveAccess, isSupersetAction } from "./effective";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -112,11 +107,12 @@ export async function evaluatePermissionDecision(
   // Requests carry concrete verbs only. A catalog permission whose action is
   // manage/* would map a request onto a superset token, which the algebra
   // does not special-case on the request side. Reject rather than evaluate.
+  // enumeratePermissions filters the same keys out of getEffectivePermissions
+  // (shared isSupersetAction), so the runtime never advertises a key this
+  // gate would then deny.
   if (
-    resolvedPermission.action === MANAGE_ACTION ||
-    resolvedPermission.action === WILDCARD_ACTION ||
-    (args.resourceType !== undefined &&
-      args.resourceType !== resolvedPermission.resourceType)
+    isSupersetAction(resolvedPermission.action) ||
+    (args.resourceType !== undefined && args.resourceType !== resolvedPermission.resourceType)
   ) {
     return deny(
       "invalid_request",
