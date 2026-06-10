@@ -410,3 +410,81 @@ describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
     expect(viaSentinel).toEqual(viaExplicit);
   });
 });
+
+describe("H8 - an iam-source role granted on a resource is honored at runtime", () => {
+  // The control plane (classifyResourceGrantOp + resource-effective.ts) rejects
+  // ONLY system-source roles on a resource and expands every other non-archived
+  // role onto it. An iam-source catalog role (e.g. Editor) is therefore a LEGAL
+  // resource grant: it is accepted, stored, mirrored, shown, and honored there.
+  // Pre-fix collectResourceRoleEntries skipped any `source !== "tenant"` role, so
+  // the runtime DENIED a resource the control plane allowed. This proves the
+  // runtime now matches: an iam role on a resource confers its permissions there.
+  test("a resource grant of an iam-source role ALLOWS the resource permission", async () => {
+    const t = convexTest(schema, modules);
+    await ingestGolden(t);
+
+    // role_editor is an iam-source, non-wildcard catalog role in the golden
+    // snapshot. Give it a fresh, isolated permission (app.widgets:approve) that
+    // u_bob cannot reach any other way, then bind the role to u_bob on one exact
+    // resource instance (app.widgets / widget_1).
+    await t.run(async (ctx) => {
+      const now = 1780444800000;
+      await ctx.db.insert("permissions", {
+        accessScopeId: "as_default",
+        permissionId: "perm_widgets_approve",
+        key: "app.widgets:approve",
+        resourceType: "app.widgets",
+        action: "approve",
+        classification: "delegable",
+        tenantAssignable: true,
+        updatedAt: now,
+      });
+      await ctx.db.insert("role_permissions", {
+        roleId: "role_editor",
+        permissionId: "perm_widgets_approve",
+        effect: "allow",
+        updatedAt: now,
+      });
+      await ctx.db.insert("role_bindings", {
+        bindingId: "rb_default_bob_editor_widget1",
+        subjectPrincipalId: "pr_default_bob",
+        roleId: "role_editor",
+        accessScopeId: "as_default",
+        resourceType: "app.widgets",
+        resourceId: "widget_1",
+        updatedAt: now,
+      });
+    });
+
+    // Control: at the SCOPE (no resource args) u_bob has no path to the
+    // permission — the iam role is bound only to the single resource.
+    const atScope = await t.query(authorize, {
+      tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
+      scopeId: "as_default",
+      permission: "app.widgets:approve",
+    });
+    expect(atScope.allowed).toBe(false);
+
+    // On the exact resource the iam-role binding targets, the runtime now
+    // expands the role and ALLOWS the permission (parity with the control
+    // plane). Pre-fix this denied because the iam role was skipped.
+    const onResource = await t.query(authorize, {
+      tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
+      scopeId: "as_default",
+      permission: "app.widgets:approve",
+      resourceType: "app.widgets",
+      resourceId: "widget_1",
+    });
+    expect(onResource.allowed).toBe(true);
+
+    // The grant is scoped to widget_1 only, so a sibling resource stays denied.
+    const onOtherResource = await t.query(authorize, {
+      tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
+      scopeId: "as_default",
+      permission: "app.widgets:approve",
+      resourceType: "app.widgets",
+      resourceId: "widget_2",
+    });
+    expect(onOtherResource.allowed).toBe(false);
+  });
+});

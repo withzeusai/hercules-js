@@ -654,9 +654,14 @@ async function collectRolePermissionEntries(
  * instance-level entry. The binding's effect is propagated so a per-resource
  * deny lands as a deny entry (and short-circuits in the deny-override algebra).
  *
- * Only tenant, non-wildcard roles can be bound to resources. System/iam roles
- * (including Owner/Admin) are scope memberships and must never be re-targeted to
- * a resource. The old `kind === "system"` gate maps to `source !== "tenant"`.
+ * Only non-system, non-wildcard roles can be bound to resources. The control
+ * plane (classifyResourceGrantOp + resource-effective.ts) rejects ONLY
+ * system-source roles on a resource and expands every other non-archived role
+ * onto it, so an iam-source role grant is legally accepted, stored, mirrored,
+ * shown, and honored there. The runtime must match: skip only `source ===
+ * "system"` (Owner/Admin scope memberships) so iam and tenant roles both
+ * expand. The wildcard check below still drops any role whose effective
+ * wildcard is non-`none`.
  */
 async function collectResourceRoleEntries(
   ctx: GenericQueryCtx<DataModel>,
@@ -679,15 +684,17 @@ async function collectResourceRoleEntries(
     // global all-access.
     if (!grant.resourceType) continue;
 
-    // Only tenant, non-wildcard roles expand onto resources. A reusable
-    // catalog role (system/iam) is a scope membership, never a per-resource
-    // binding. The effective wildcard is derived per scope; tenant roles are
-    // always "none", so they survive, while any wildcard role is excluded.
+    // Only non-system, non-wildcard roles expand onto resources. A system role
+    // (Owner/Admin) is a scope membership that the control plane forbids on a
+    // resource, so it is skipped here too. An iam-source role IS a legal
+    // resource grant on the control plane, so it must expand at runtime to keep
+    // parity. The effective wildcard is derived per scope; an iam role's base
+    // wildcard is "none", so it survives, while any wildcard role is excluded.
     const effectiveWildcard = await resolveEffectiveWildcard(ctx, {
       role,
       targetScopeId: args.targetScopeId,
     });
-    if (role.source !== "tenant" || effectiveWildcard !== "none") continue;
+    if (role.source === "system" || effectiveWildcard !== "none") continue;
 
     const contribution = await resolveRoleNetPermissionIds(ctx, {
       roleId: grant.roleId,
