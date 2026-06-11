@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import type { ComponentApi } from "../_generated/component";
 import {
   DEFAULT_SCOPE_SENTINEL,
+  PERMISSION_RESOURCE_TYPE_SENTINEL,
   createAccessControl,
   scopeFromArg,
   scopeFromResource,
@@ -92,13 +93,15 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: true,
+          reasonCode: "allowed",
+          sourceVersion: 1,
+          principalId: "principal_1",
+          effectiveRoleIds: ["role_member"],
+        }),
     };
 
     await expect(handler.handler(ctx, {})).resolves.toBe("ok");
@@ -127,11 +130,13 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: false,
-        reasonCode: "unexpected_issuer",
-        effectiveRoleIds: [],
-      }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: false,
+          reasonCode: "unexpected_issuer",
+          effectiveRoleIds: [],
+        }),
     };
 
     await expect(handler.handler(ctx)).rejects.toBeInstanceOf(ConvexError);
@@ -162,13 +167,15 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: true,
+          reasonCode: "allowed",
+          sourceVersion: 1,
+          principalId: "principal_1",
+          effectiveRoleIds: ["role_member"],
+        }),
     };
 
     await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
@@ -278,13 +285,15 @@ describe("createAccessControl", () => {
           .fn()
           .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
       },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({
+          allowed: true,
+          reasonCode: "allowed",
+          sourceVersion: 1,
+          principalId: "principal_1",
+          effectiveRoleIds: ["role_member"],
+        }),
     };
 
     await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
@@ -384,9 +393,13 @@ describe("createAccessControl", () => {
   test("scopeFromResource reads the scope field from the loaded row", async () => {
     const extract = scopeFromResource("loans", "loanId");
     const ctx = { db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_xyz" }) } };
+    // The resource type defers to the checked permission's canonical catalog
+    // type (sentinel substituted by the authorize gate), NOT the table name:
+    // resource grants are pinned to the catalog type, so emitting the table
+    // name would make every resource-scoped check deny.
     await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
       scopeId: "scope_xyz",
-      resourceType: "loans",
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "loan_1",
     });
     expect(ctx.db.get).toHaveBeenCalledWith("loan_1");
@@ -397,7 +410,7 @@ describe("createAccessControl", () => {
     const ctx = { db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_custom" }) } };
     await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
       scopeId: "scope_custom",
-      resourceType: "loans",
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "loan_1",
     });
   });
@@ -463,7 +476,10 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     expect(runQuery).toHaveBeenNthCalledWith(
       1,
       "authorize",
-      expect.objectContaining({ resourceType: "tasks", resourceId: "task_1" }),
+      expect.objectContaining({
+        resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+        resourceId: "task_1",
+      }),
     );
     expect(runQuery).toHaveBeenNthCalledWith(
       2,

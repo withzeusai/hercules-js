@@ -133,6 +133,32 @@ export async function evaluateEffectiveAccess(
     return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
   }
 
+  // H2 cross-scope fence (app-level standing): acting in a non-default scope
+  // ALSO requires an ACTIVE user principal in the default (app) scope. The
+  // control plane enforces this on every app-user mutation
+  // (loadActivePrincipalByAuthUser); without the same fence here, a user
+  // blocked/suspended/removed at the app level would keep full org-scope
+  // access at runtime until each org membership was also revoked. Fail
+  // closed: a missing or non-user app-scope principal denies too.
+  if (scope.accessScopeId !== defaultScope.accessScopeId) {
+    const appPrincipal = await ctx.db
+      .query("principals")
+      .withIndex("by_scope_auth_user", (q) =>
+        q.eq("accessScopeId", defaultScope.accessScopeId).eq("herculesAuthUserId", token.subject),
+      )
+      .unique();
+    if (!appPrincipal || appPrincipal.type !== "user") {
+      return deny("app_principal_missing", state.sourceVersion, principal.principalId);
+    }
+    if (appPrincipal.status !== "active") {
+      return deny(
+        `app_principal_${appPrincipal.status}`,
+        state.sourceVersion,
+        principal.principalId,
+      );
+    }
+  }
+
   // The permission catalog is deployment-wide; rows are pinned to the default
   // scope id (schema note on `permissions`), so this default-scope read returns
   // the whole catalog.

@@ -67,15 +67,18 @@ export const archiveProject = accessMutation({
 
 ### Resource-level (per-resource) permissions
 
-`scopeFromResource` returns `{ scopeId, resourceType, resourceId }`, so a
-resource grant on that specific resource is applied on top of the scope check.
-`hasPermission` and `getEffectivePermissions` also accept a `{ resource }` ref
-for per-resource UI gating.
+`scopeFromResource` names the specific resource, so a resource grant on that
+resource is applied on top of the scope check. `hasPermission` and
+`getEffectivePermissions` also accept a `{ resource }` ref for per-resource UI
+gating.
 
-> **Matching gotcha:** a resource grant only applies when its `resourceType`
-> matches the `resourceType` the resolver returns (the table name by default).
-> If your resource permissions use a different resource type (e.g. `app.project`
-> instead of the `projects` table), make the resolver return that type.
+> **Matching note:** resource grants are pinned to the permission's canonical
+> catalog resource type (`app.project` for `app.project:archive`), and
+> `scopeFromResource` defers its resource type to the checked permission, so
+> the two always agree; the table name passed to `scopeFromResource` is not
+> used for grant matching. When passing an explicit `{ resource }` ref to
+> `hasPermission`/`getEffectivePermissions`/`filterAuthorizedResources`, use
+> the permission's resource type (e.g. `app.project`), not the table name.
 
 ## In-app admin screens
 

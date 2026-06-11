@@ -16,6 +16,12 @@ type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 // exported, so the SDK's runQuery would fail with "does not export").
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
+// Mirrors client/index.ts PERMISSION_RESOURCE_TYPE_SENTINEL: the SDK's
+// scopeFromResource extractor cannot know the canonical catalog resource type
+// of the checked permission, so it sends this sentinel and the gate below
+// substitutes the resolved permission's resourceType.
+const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
+
 export const authorize = query({
   args: {
     tokenIdentifier: v.optional(v.string()),
@@ -78,7 +84,31 @@ export async function evaluatePermissionDecision(
     resourceId?: string;
   },
 ) {
-  const evaluation = await evaluateEffectiveAccess(ctx, args);
+  // Resolve the requested permission's canonical (resourceType, action) by
+  // catalog lookup rather than parsing the key string. The producer ships
+  // the structured columns verbatim, so this works for canonical
+  // (app.appointments:create), dot-action (reports.export), and namespaced
+  // keys alike without the runtime having to agree on slug grammar.
+  // Catalog permissions always live in the default scope (DL15). Resolved
+  // BEFORE the effective-access evaluation so the sentinel substitution below
+  // feeds the canonical type into the resource-grant walk.
+  const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
+
+  // scopeFromResource defers its resource type to the checked permission (it
+  // only sees the table row, not the catalog), so substitute the canonical
+  // catalog resourceType for the sentinel. Explicit resource refs keep their
+  // caller-provided type and the mismatch fence below.
+  const resourceType =
+    args.resourceType === PERMISSION_RESOURCE_TYPE_SENTINEL
+      ? resolvedPermission?.resourceType
+      : args.resourceType;
+
+  const evaluation = await evaluateEffectiveAccess(ctx, {
+    tokenIdentifier: args.tokenIdentifier,
+    scopeId: args.scopeId,
+    resourceType,
+    resourceId: args.resourceId,
+  });
   if (!evaluation.allowed) {
     return deny(
       evaluation.reasonCode,
@@ -88,13 +118,6 @@ export async function evaluatePermissionDecision(
     );
   }
 
-  // Resolve the requested permission's canonical (resourceType, action) by
-  // catalog lookup rather than parsing the key string. The producer ships
-  // the structured columns verbatim, so this works for canonical
-  // (app.appointments:create), dot-action (reports.export), and namespaced
-  // keys alike without the runtime having to agree on slug grammar.
-  // Catalog permissions always live in the default scope (DL15).
-  const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
   if (!resolvedPermission) {
     return deny(
       "permission_missing",
@@ -112,7 +135,7 @@ export async function evaluatePermissionDecision(
   // gate would then deny.
   if (
     isSupersetAction(resolvedPermission.action) ||
-    (args.resourceType !== undefined && args.resourceType !== resolvedPermission.resourceType)
+    (resourceType !== undefined && resourceType !== resolvedPermission.resourceType)
   ) {
     return deny(
       "invalid_request",

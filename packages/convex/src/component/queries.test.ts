@@ -660,6 +660,18 @@ describe("getEffectivePermissions", () => {
   });
 });
 
+// H2 cross-scope fence: org-scope evaluations also require an ACTIVE user
+// principal in the default (app) scope, so each catalog fixture below seeds
+// alice's app-scope standing alongside the deployment-wide catalog.
+const aliceAppPrincipal = {
+  principalId: "p_alice_app",
+  type: "user",
+  herculesAuthUserId: "user_alice",
+  status: "active",
+  joinedAt: 100,
+  updatedAt: 100,
+};
+
 function groupPermissionCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
@@ -678,6 +690,7 @@ function groupPermissionCatalogSnapshot(): Snapshot {
     },
     entities: {
       ...emptyEntities(),
+      principals: [aliceAppPrincipal],
       permissions: [
         {
           permissionId: "perm_deploys_run",
@@ -787,6 +800,7 @@ function manageCatalogSnapshot(): Snapshot {
     },
     entities: {
       ...emptyEntities(),
+      principals: [aliceAppPrincipal],
       permissions: [
         {
           permissionId: "perm_roles_manage",
@@ -927,6 +941,7 @@ function permissionCatalogSnapshot(): Snapshot {
     },
     entities: {
       ...emptyEntities(),
+      principals: [aliceAppPrincipal],
       roles: [
         {
           roleId: "role_manager",
@@ -1130,6 +1145,7 @@ function resourceCatalogSnapshot(): Snapshot {
     },
     entities: {
       ...emptyEntities(),
+      principals: [aliceAppPrincipal],
       permissions: [
         {
           permissionId: "perm_reports_read",

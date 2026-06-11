@@ -415,6 +415,16 @@ export const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
 
 export const defaultScope: ExtractScope<unknown, unknown> = () => DEFAULT_SCOPE_SENTINEL;
 
+// The resourceType `scopeFromResource` emits. An extractor only sees the table
+// row, not the permission catalog, so it cannot know the canonical resource
+// type the checked permission uses (e.g. `app.project` for
+// `app.project:archive`). It emits this sentinel instead, and the component's
+// authorize query substitutes the requested permission's canonical catalog
+// resourceType (resolved by catalog lookup). Resource grants are pinned to that
+// same canonical type on the control plane, so the two match by construction.
+// Mirrored in component/checks.ts (like DEFAULT_SCOPE_SENTINEL above).
+export const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
+
 /**
  * Resolves the scope for an `access*` builder from a string arg the caller
  * passes (e.g. the active org id). Use for list/create handlers where the
@@ -441,21 +451,20 @@ type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
 
 /**
  * Resolves the scope from a referenced row for an `access*` builder. Reads
- * the row named by `argKey`, returns `{ scopeId, resourceType, resourceId }`,
+ * the row named by `argKey`, returns the row's scope plus the resource id,
  * and lets `authorize` apply resource-level grants on top of the scope check.
  * Use for any read/update/delete that receives an org-owned row id.
  *
  * Params:
- * - `tableName`: the row's table. NOTE: this becomes the `resourceType`.
+ * - `tableName`: the row's table (used in error messages only).
  * - `argKey`: the field on `args` holding the row id.
  * - `options.scopeField`: column carrying the org scope id (default
  *   `"orgScopeId"`).
  *
- * Gotcha: a resource grant only applies if its `resourceType` matches the
- * `resourceType` returned here. By default that is the table name. If your
- * resource permissions use a different resource type (e.g. `app.project`
- * rather than the `projects` table), resolve the scope so `resourceType`
- * matches the permission's resource type, or the grant will not be found.
+ * Resource type: the emitted `resourceType` defers to the checked permission's
+ * canonical catalog resource type (e.g. `app.project` for
+ * `app.project:archive`), which is also the type resource grants are pinned
+ * to, so grants on the row always match the guarded permission.
  *
  * Hierarchy: pass `options.authorizeAgainst` to ALSO authorize against ancestor
  * resources (union). It receives the loaded row and returns the ordered
@@ -514,7 +523,12 @@ export function scopeFromResource<T extends string, K extends string>(
         message: `scopeFromResource("${tableName}", "${argKey}"): authorizeAgainst returned more than ${MAX_AUTHORIZE_CHAIN} ancestors`,
       });
     }
-    return { scopeId, resourceType: tableName, resourceId: String(id), authorizeChain };
+    return {
+      scopeId,
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      resourceId: String(id),
+      authorizeChain,
+    };
   };
 }
 

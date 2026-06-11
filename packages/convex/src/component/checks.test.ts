@@ -3,6 +3,7 @@ import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
 import { componentModules as modules } from "../../test/component-modules";
 import { withV3SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
+import { scopeFromResource } from "../client";
 import schema from "./schema";
 
 // The behavioral fixtures below are authored in the pre-v3 (schemaVersion 2)
@@ -1051,6 +1052,107 @@ describe("schema gating", () => {
   // projection-protocol parse tests.
 });
 
+// B1: the resource-type convention, end to end through the REAL client
+// extractor. The app stores rows in a `projects` table while the catalog names
+// the resource type `app.project` (the canonical `namespace.resourceType:action`
+// grammar the control plane enforces). scopeFromResource defers its resource
+// type to the checked permission, so a canonical app.* catalog must resolve
+// through a scopeFromResource-guarded check; emitting the table name instead
+// would hit the catalog-mismatch fence and deny EVERYONE with invalid_request.
+describe("scopeFromResource canonical resource type", () => {
+  async function extractProject(projectId: string) {
+    const extract = scopeFromResource("projects", "projectId");
+    return (await extract({ db: { get: async () => ({ orgScopeId: "scope_default" }) } } as never, {
+      projectId,
+    })) as { scopeId: string; resourceType: string; resourceId: string };
+  }
+
+  async function archiveDecision(
+    t: ReturnType<typeof convexTest>,
+    user: string,
+    projectId: string,
+  ) {
+    const extracted = await extractProject(projectId);
+    return (await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|${user}`,
+      scopeId: extracted.scopeId,
+      permission: "app.project:archive",
+      resourceType: extracted.resourceType,
+      resourceId: extracted.resourceId,
+    })) as { allowed: boolean; reasonCode: string };
+  }
+
+  test("a canonical app.* permission allows the role-entitled user and denies the unentitled one", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, projectCatalogSnapshot());
+
+    const entitled = await archiveDecision(t, "user_alice", "project_1");
+    expect(entitled.allowed).toBe(true);
+
+    // The unentitled member is denied on ENTITLEMENT (permission_denied), not
+    // on the convention fence (invalid_request), proving the extractor's
+    // resource type resolved to the catalog type for both callers.
+    const unentitled = await archiveDecision(t, "user_bob", "project_1");
+    expect(unentitled.allowed).toBe(false);
+    expect(unentitled.reasonCode).toBe("permission_denied");
+  });
+
+  test("a resource grant pinned to the permission's catalog type covers exactly the granted row", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, projectCatalogSnapshot());
+
+    // carol holds a direct grant on project_1 whose objectResourceType is the
+    // CANONICAL catalog type (`app.project`), as the control plane stores it.
+    const granted = await archiveDecision(t, "user_carol", "project_1");
+    expect(granted.allowed).toBe(true);
+
+    const otherRow = await archiveDecision(t, "user_carol", "project_2");
+    expect(otherRow.allowed).toBe(false);
+    expect(otherRow.reasonCode).toBe("permission_denied");
+  });
+});
+
+// H2 cross-scope fence: app-level standing gates org-scope access. The control
+// plane enforces this on every app-user mutation (loadActivePrincipalByAuthUser);
+// the runtime mirror must apply the SAME fence, or a user blocked/suspended/
+// removed at the app level keeps full org-scope access until each org
+// membership is also revoked.
+describe("app-level standing fence (H2)", () => {
+  async function orgDecision(
+    appStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed" | "missing",
+  ) {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, appStandingDefaultSnapshot(appStatus));
+    await t.mutation(applySync, appStandingOrgSnapshot());
+    return (await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_org",
+      permission: "app.docs:read",
+    })) as { allowed: boolean; reasonCode: string };
+  }
+
+  // Positive control: with an ACTIVE app-scope principal the org role grant
+  // allows, so any denial below is attributable solely to app-level standing.
+  test("an app-active member keeps org-scope access", async () => {
+    const decision = await orgDecision("active");
+    expect(decision.allowed).toBe(true);
+  });
+
+  for (const status of ["suspended", "blocked", "removed", "pending_approval"] as const) {
+    test(`an org-active member is denied when the app-scope principal is ${status}`, async () => {
+      const decision = await orgDecision(status);
+      expect(decision.allowed).toBe(false);
+      expect(decision.reasonCode).toBe(`app_principal_${status}`);
+    });
+  }
+
+  test("an org-active member is denied when the app-scope principal is missing", async () => {
+    const decision = await orgDecision("missing");
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe("app_principal_missing");
+  });
+});
+
 // A default-scope snapshot exercising all three wildcard modes: Owner
 // (immutable), Admin (default, fenced), and an enumerated Member with a
 // `manage` role row. Catalog seeds the lever resourceTypes so the Admin fence
@@ -1297,6 +1399,230 @@ function wildcardSnapshot(): Snapshot {
   };
 }
 
+// Canonical app.* catalog for the scopeFromResource convention tests: the
+// `app.project:archive` permission lives on resource type `app.project` while
+// the app's rows live in a `projects` table. alice is entitled through a scope
+// role, bob is an unentitled member, and carol holds a direct resource grant on
+// project_1 pinned to the CANONICAL type, exactly as the control plane stores
+// it (assertPermissionResourceTypeMatches).
+function projectCatalogSnapshot(): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_project_catalog",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_archiver",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+        {
+          principalId: "p_bob",
+          type: "user",
+          herculesAuthUserId: "user_bob",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+        {
+          principalId: "p_carol",
+          type: "user",
+          herculesAuthUserId: "user_carol",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
+      roles: [
+        {
+          roleId: "role_archiver",
+          accessScopeId: "scope_default",
+          key: "archiver",
+          kind: "custom",
+          name: "Archiver",
+          wildcard: "none",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_project_archive",
+          accessScopeId: "scope_default",
+          key: "app.project:archive",
+          resourceType: "app.project",
+          action: "archive",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_archiver",
+          permissionId: "perm_project_archive",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_archiver",
+          subjectPrincipalId: "p_alice",
+          relationKind: "role",
+          roleId: "role_archiver",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_default",
+          updatedAt: 1,
+        },
+        {
+          grantId: "grant_carol_project_1",
+          subjectPrincipalId: "p_carol",
+          relationKind: "direct_permission",
+          permissionId: "perm_project_archive",
+          effect: "allow",
+          objectType: "resource",
+          objectId: "project_1",
+          objectResourceType: "app.project",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+// H2 cross-scope fence fixtures: the app (default) scope carries the catalog
+// plus alice's app-scope principal (status under test, or none at all); the org
+// scope carries an ACTIVE alice principal holding a role that allows
+// app.docs:read.
+function appStandingDefaultSnapshot(
+  appStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed" | "missing",
+): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_app_standing_default",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_doc_reader",
+      updatedAt: 1,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals:
+        appStatus === "missing"
+          ? []
+          : [
+              {
+                principalId: "p_alice_app",
+                type: "user",
+                herculesAuthUserId: "user_alice",
+                status: appStatus,
+                joinedAt: 100,
+                updatedAt: 100,
+              },
+            ],
+      roles: [
+        {
+          roleId: "role_doc_reader",
+          accessScopeId: "scope_default",
+          key: "doc_reader",
+          kind: "system",
+          name: "Doc Reader",
+          wildcard: "none",
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_docs_read",
+          accessScopeId: "scope_default",
+          key: "app.docs:read",
+          resourceType: "app.docs",
+          action: "read",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      rolePermissions: [
+        {
+          roleId: "role_doc_reader",
+          permissionId: "perm_docs_read",
+          accessScopeId: "scope_default",
+          effect: "allow",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function appStandingOrgSnapshot(): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    schemaVersion: 2,
+    eventId: "evt_app_standing_org",
+    sourceVersion: 2,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_org",
+      name: "Acme",
+      kind: "org",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_doc_reader",
+      updatedAt: 2,
+    },
+    entities: {
+      ...emptyEntities(),
+      principals: [
+        {
+          principalId: "p_alice_org",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 200,
+          updatedAt: 200,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_org_doc_reader",
+          subjectPrincipalId: "p_alice_org",
+          relationKind: "role",
+          roleId: "role_doc_reader",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_org",
+          updatedAt: 2,
+        },
+      ],
+    },
+  };
+}
+
 function accessCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
@@ -1315,6 +1641,19 @@ function accessCatalogSnapshot(): Snapshot {
     },
     entities: {
       ...emptyEntities(),
+      // H2 cross-scope fence: org-scope checks also require an ACTIVE user
+      // principal in the default (app) scope, so the catalog seeds alice's
+      // app-scope standing alongside the deployment-wide catalog.
+      principals: [
+        {
+          principalId: "p_alice_app",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 100,
+          updatedAt: 100,
+        },
+      ],
       roles: [
         {
           roleId: "role_manager",
