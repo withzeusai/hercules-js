@@ -62,6 +62,7 @@ const exemptionMarkers = [
   "hercules-access-control: allow-raw-builder",
   "hercules-access-control: allow-raw-builders",
 ];
+const accessControlPackageName = "@usehercules/convex";
 
 export function checkAccessControlSource(
   options: CheckAccessControlSourceOptions = {},
@@ -90,11 +91,20 @@ export function checkAccessControlSource(
     };
   }
 
+  // The managed-pattern rules only apply to apps that actually wire managed
+  // Access Control into their Convex functions. A plain Convex app keeps raw
+  // builder behavior, so the whole check is a pass-through no-op for it.
+  const markerFiles = collectSourceFiles(convexDir, { includeExemptFiles: true });
+  if (!markerFiles.some((filePath) => fileUsesManagedAccessControl(filePath, convexDir))) {
+    return { ok: true, convexDir, filesChecked: markerFiles.length, fixedFiles: 0, findings: [] };
+  }
+
   const sourceFiles = collectSourceFiles(convexDir);
   const appSourceFiles = collectAppSourceFiles(cwd, convexDir);
   const orgOwnedTables = collectOrgOwnedTables(sourceFiles);
   const fixedFiles = options.fixAuthenticated
-    ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir)).length
+    ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir))
+        .length
     : 0;
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
@@ -122,14 +132,10 @@ export function formatAccessControlCheckResult(result: AccessControlCheckResult)
     return `Hercules Access Control check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel}`;
   }
 
-  const lines = [
-    `Hercules Access Control check failed with ${result.findings.length} finding(s):`,
-  ];
+  const lines = [`Hercules Access Control check failed with ${result.findings.length} finding(s):`];
 
   for (const finding of result.findings) {
-    lines.push(
-      `- ${finding.filePath}:${finding.line}:${finding.column} ${finding.message}`,
-    );
+    lines.push(`- ${finding.filePath}:${finding.line}:${finding.column} ${finding.message}`);
     if (finding.suggestion) {
       lines.push(`  ${finding.suggestion}`);
     }
@@ -172,7 +178,10 @@ function fixSourceFileToAuthenticatedBuilders(filePath: string, convexDir: strin
   return true;
 }
 
-function collectSourceFiles(directory: string): string[] {
+function collectSourceFiles(
+  directory: string,
+  options: { includeExemptFiles?: boolean } = {},
+): string[] {
   const entries = readdirSync(directory, { withFileTypes: true });
   const sourceFiles: string[] = [];
 
@@ -184,12 +193,15 @@ function collectSourceFiles(directory: string): string[] {
     const entryPath = join(directory, entry.name);
     if (entry.isDirectory()) {
       if (!ignoredDirectories.has(entry.name)) {
-        sourceFiles.push(...collectSourceFiles(entryPath));
+        sourceFiles.push(...collectSourceFiles(entryPath, options));
       }
       continue;
     }
 
-    if (isSourceFile(entryPath) && !exemptFileNames.has(basename(entryPath))) {
+    if (
+      isSourceFile(entryPath) &&
+      (options.includeExemptFiles || !exemptFileNames.has(basename(entryPath)))
+    ) {
       sourceFiles.push(entryPath);
     }
   }
@@ -249,8 +261,7 @@ function checkAccessControlOrgPatterns(
     sourceText,
     code: "local_org_membership_table",
     pattern: /\b(?:memberships|membership|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
-    message:
-      "Managed Access Control apps should not define app-local org membership tables.",
+    message: "Managed Access Control apps should not define app-local org membership tables.",
     suggestion:
       "Use Hercules Access Control scopes, principals, and role grants. Store only org metadata in app tables.",
   });
@@ -267,10 +278,7 @@ function checkAccessControlOrgPatterns(
       "Backfill existing rows during conversion, then store orgScopeId as v.string() on org-owned tables.",
   });
 
-  if (
-    /\borgScopeId\b/.test(sourceText) &&
-    /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)
-  ) {
+  if (/\borgScopeId\b/.test(sourceText) && /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)) {
     addPatternFinding({
       findings,
       cwd,
@@ -280,7 +288,7 @@ function checkAccessControlOrgPatterns(
       pattern: /\.withIndex\s*\(\s*["']by_slug["']/,
       message: "Org-scoped slug lookups must include the org scope id in the index.",
       suggestion:
-        "Use an index such as by_org_and_slug on [\"orgScopeId\", \"slug\"] and query both values together.",
+        'Use an index such as by_org_and_slug on ["orgScopeId", "slug"] and query both values together.',
     });
   }
 
@@ -291,9 +299,7 @@ function checkAccessControlOrgPatterns(
   ])) {
     if (
       /\bscopeFromArg\s*\(\s*["']orgScopeId["']\s*\)/.test(definition.text) &&
-      /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(
-        definition.text,
-      )
+      /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text)
     ) {
       findings.push(
         createPatternFindingAtNode({
@@ -355,8 +361,7 @@ function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
     if (!/^schema\.(?:ts|tsx|js|jsx)$/.test(basename(filePath))) continue;
 
     const sourceText = readFileSync(filePath, "utf8");
-    const tablePattern =
-      /\b([A-Za-z_$][\w$]*)\s*:\s*defineTable\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
+    const tablePattern = /\b([A-Za-z_$][\w$]*)\s*:\s*defineTable\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
     for (const match of sourceText.matchAll(tablePattern)) {
       if (/\borgScopeId\s*:/.test(match[2] ?? "")) {
         tableNames.add(match[1]!);
@@ -459,9 +464,7 @@ function createSourceFile(filePath: string, sourceText: string): ts.SourceFile {
     sourceText,
     ts.ScriptTarget.Latest,
     true,
-    filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-      ? ts.ScriptKind.TSX
-      : ts.ScriptKind.TS,
+    filePath.endsWith(".tsx") || filePath.endsWith(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
 }
 
@@ -592,19 +595,11 @@ function buildImportSpecifierRemoval(
   const previous = elements[index - 1];
   const next = elements[index + 1];
   if (next) {
-    return {
-      start: specifier.getFullStart(),
-      end: next.getFullStart(),
-      text: "",
-    };
+    return { start: specifier.getFullStart(), end: next.getFullStart(), text: "" };
   }
 
   if (previous) {
-    return {
-      start: previous.getEnd(),
-      end: specifier.getEnd(),
-      text: "",
-    };
+    return { start: previous.getEnd(), end: specifier.getEnd(), text: "" };
   }
 
   return { start: specifier.getFullStart(), end: specifier.getEnd(), text: "" };
@@ -639,9 +634,7 @@ function buildAccessImportReplacement(
 
   const accessImportPath = buildAccessImportPath(sourceFile, convexDir);
   const importLine = `import { ${sortedImports.join(", ")} } from "${accessImportPath}";\n`;
-  const lastImport = sourceFile.statements
-    .filter(ts.isImportDeclaration)
-    .at(-1);
+  const lastImport = sourceFile.statements.filter(ts.isImportDeclaration).at(-1);
   if (!lastImport) {
     return { start: 0, end: 0, text: importLine };
   }
@@ -653,11 +646,10 @@ function buildAccessImportReplacement(
   };
 }
 
-function findAccessImport(sourceFile: ts.SourceFile, convexDir: string):
-  | {
-      namedBindings?: ts.NamedImportBindings;
-    }
-  | null {
+function findAccessImport(
+  sourceFile: ts.SourceFile,
+  convexDir: string,
+): { namedBindings?: ts.NamedImportBindings } | null {
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
       continue;
@@ -682,7 +674,11 @@ function buildAccessImportPath(sourceFile: ts.SourceFile, convexDir: string): st
   return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
-function isAccessImport(sourceFile: ts.SourceFile, moduleSpecifier: string, convexDir: string): boolean {
+function isAccessImport(
+  sourceFile: ts.SourceFile,
+  moduleSpecifier: string,
+  convexDir: string,
+): boolean {
   if (!moduleSpecifier.startsWith(".")) {
     return false;
   }
@@ -693,6 +689,34 @@ function isAccessImport(sourceFile: ts.SourceFile, moduleSpecifier: string, conv
     stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
       join(convexDir, "access")
   );
+}
+
+// A Convex function file uses managed Access Control when it imports the
+// @usehercules/convex SDK (including subpaths such as /access-admin and
+// /convex.config) or the local convex/hercules or convex/access wiring module
+// the managed builders are re-exported from.
+function fileUsesManagedAccessControl(filePath: string, convexDir: string): boolean {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) {
+      continue;
+    }
+    const moduleSpecifier = statement.moduleSpecifier;
+    if (!moduleSpecifier || !ts.isStringLiteral(moduleSpecifier)) {
+      continue;
+    }
+    if (
+      moduleSpecifier.text === accessControlPackageName ||
+      moduleSpecifier.text.startsWith(`${accessControlPackageName}/`) ||
+      isAccessImport(sourceFile, moduleSpecifier.text, convexDir)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function collectExportedNames(sourceFile: ts.SourceFile): Set<string> {
@@ -778,10 +802,7 @@ function getRawBuilderCall(
     return null;
   }
 
-  return {
-    builder,
-    builderNode: callTarget,
-  };
+  return { builder, builderNode: callTarget };
 }
 
 function createFinding(
@@ -823,7 +844,8 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 function hasExportModifier(node: ts.Node): boolean {
   return (
     ts.canHaveModifiers(node) &&
-    ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) === true
+    ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ===
+      true
   );
 }
 
@@ -832,7 +854,10 @@ function hasLocalExemption(
   sourceText: string,
   declaration: ts.Node,
 ): boolean {
-  const leadingText = sourceText.slice(declaration.getFullStart(), declaration.getStart(sourceFile));
+  const leadingText = sourceText.slice(
+    declaration.getFullStart(),
+    declaration.getStart(sourceFile),
+  );
   return exemptionMarkers.some((marker) => leadingText.includes(marker));
 }
 
@@ -893,8 +918,7 @@ function applyTextReplacements(
   let result = sourceText;
 
   for (const replacement of sorted) {
-    result =
-      result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
+    result = result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
   }
 
   return result;

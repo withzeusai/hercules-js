@@ -60,6 +60,19 @@ export type AccessGroupListResult = {
   }>;
 };
 
+export type AccessGroupWriteResult = {
+  accessScopeId: string;
+  groupPrincipalId: string;
+  changed?: boolean;
+  sourceVersion: number;
+  projectionIds: string[];
+};
+
+export type AccessGroupMemberWriteResult = AccessGroupWriteResult & {
+  memberPrincipalId: string;
+  membershipId?: string;
+};
+
 export type AccessResourceInvitationListResult = {
   accessScopeId: string;
   invitations: Array<{
@@ -142,7 +155,16 @@ export type CreateResourceInvitationArgs = {
   expiresInDays?: number;
 };
 
-export type AcceptAccessInvitationArgs = { token: string; idToken: string };
+export type AcceptAccessInvitationArgs = {
+  token: string;
+  /**
+   * The signed-in user's OIDC ID token (`user.id_token`): a JWT with three
+   * dot-separated segments. Never pass a user or subject id (for example
+   * `user.profile.sub`); the control plane verifies the token signature, so a
+   * bare id is rejected.
+   */
+  idToken: string;
+};
 
 const serviceActor = { actor_mode: "service" as const };
 
@@ -505,7 +527,8 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
       args: { scopeId: v.string(), name: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId, name: args.name, ...serviceActor };
-        return await callAccessControlApi("/v1/access-control/groups/create", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/create", body);
+        return normalizeAccessGroupWriteResult(result);
       },
     }),
 
@@ -518,7 +541,8 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           name: args.name,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/groups/rename", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/rename", body);
+        return normalizeAccessGroupWriteResult(result);
       },
     }),
 
@@ -531,7 +555,8 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           group_principal_id: args.groupPrincipalId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/groups/archive", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/archive", body);
+        return normalizeAccessGroupWriteResult(result);
       },
     }),
 
@@ -557,7 +582,8 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           member_principal_id: args.memberPrincipalId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/groups/members/add", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/members/add", body);
+        return normalizeAccessGroupMemberWriteResult(result);
       },
     }),
 
@@ -570,7 +596,8 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           member_principal_id: args.memberPrincipalId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/groups/members/remove", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/members/remove", body);
+        return normalizeAccessGroupMemberWriteResult(result);
       },
     }),
 
@@ -610,6 +637,11 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
  * Builds authenticated public actions for end-user access management. The
  * control plane verifies the supplied ID token and applies the operation's
  * scope, Owner, or resource-level RBAC gate.
+ *
+ * Every action's `idToken` argument must be the signed-in user's OIDC ID token
+ * (`user.id_token`): a JWT with three dot-separated segments. Never pass a user
+ * or subject id (for example `user.profile.sub`); the SDK rejects values that
+ * are not JWT-shaped before calling the API.
  */
 export function createAccessUserActions<DataModel extends GenericDataModel>(
   options: CreateAccessUserActionsOptions<DataModel>,
@@ -1007,7 +1039,8 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
       args: { scopeId: v.string(), name: v.string(), idToken: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId, name: args.name, ...appUserActor(args.idToken) };
-        return await callAccessControlApi("/v1/access-control/groups/create", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/create", body);
+        return normalizeAccessGroupWriteResult(result);
       },
     }),
 
@@ -1025,7 +1058,8 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           name: args.name,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/groups/rename", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/rename", body);
+        return normalizeAccessGroupWriteResult(result);
       },
     }),
 
@@ -1038,7 +1072,8 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           group_principal_id: args.groupPrincipalId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/groups/archive", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/archive", body);
+        return normalizeAccessGroupWriteResult(result);
       },
     }),
 
@@ -1069,7 +1104,8 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           member_principal_id: args.memberPrincipalId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/groups/members/add", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/members/add", body);
+        return normalizeAccessGroupMemberWriteResult(result);
       },
     }),
 
@@ -1087,7 +1123,8 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           member_principal_id: args.memberPrincipalId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/groups/members/remove", body);
+        const result = await callAccessControlApi("/v1/access-control/groups/members/remove", body);
+        return normalizeAccessGroupMemberWriteResult(result);
       },
     }),
 
@@ -1215,7 +1252,7 @@ export async function acceptAccessInvitation(
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
   requireTokenIdentifier(identity?.tokenIdentifier);
-  const body = { token: args.token, id_token: args.idToken };
+  const body = { token: args.token, id_token: normalizeIdToken(args.idToken) };
   const result = await callAccessControlApi("/v1/access-control/invitations/accept", body);
   return normalizeAccessInvitationAcceptResult(result);
 }
@@ -1246,10 +1283,24 @@ function appUserActor(idToken: string) {
   return { actor_mode: "app_user" as const, id_token: normalizeIdToken(idToken) };
 }
 
+// An OIDC ID token is a JWT: three dot-separated base64url segments. A bare
+// user or subject id (for example user.profile.sub) has no dots, so a shape
+// check here turns the most common token mix-up into an immediate developer
+// error instead of a confusing control-plane 403.
+const jwtShapePattern = /^[\w-]+\.[\w-]+\.[\w-]+$/;
+
 function normalizeIdToken(idToken: string): string {
   const normalizedIdToken = idToken.trim();
   if (!normalizedIdToken) {
     throw new ConvexError({ code: "INVALID_ID_TOKEN", message: "idToken is required" });
+  }
+  if (!jwtShapePattern.test(normalizedIdToken)) {
+    throw new ConvexError({
+      code: "INVALID_ID_TOKEN",
+      message:
+        "idToken does not look like an OIDC ID token (a JWT with three dot-separated segments). " +
+        "Pass the signed-in user's ID token (user.id_token), not a user or subject id such as user.profile.sub.",
+    });
   }
   return normalizedIdToken;
 }
@@ -1326,6 +1377,24 @@ function normalizeAccessGroupListResult(result: WriteResult): AccessGroupListRes
       createdAt: requiredString(group, "created_at", "groups[].createdAt"),
       updatedAt: requiredString(group, "updated_at", "groups[].updatedAt"),
     })),
+  };
+}
+
+function normalizeAccessGroupWriteResult(result: WriteResult): AccessGroupWriteResult {
+  return {
+    accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
+    groupPrincipalId: requiredString(result, "group_principal_id", "groupPrincipalId"),
+    changed: optionalBoolean(result, "changed", "changed"),
+    sourceVersion: requiredNumber(result, "source_version", "sourceVersion"),
+    projectionIds: requiredStringArray(result, "projection_ids", "projectionIds"),
+  };
+}
+
+function normalizeAccessGroupMemberWriteResult(result: WriteResult): AccessGroupMemberWriteResult {
+  return {
+    ...normalizeAccessGroupWriteResult(result),
+    memberPrincipalId: requiredString(result, "member_principal_id", "memberPrincipalId"),
+    membershipId: optionalString(result, "membership_id", "membershipId"),
   };
 }
 

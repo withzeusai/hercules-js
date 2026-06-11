@@ -2,14 +2,15 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import {
-  checkAccessControlSource,
-  formatAccessControlCheckResult,
-} from "./index";
+import { checkAccessControlSource, formatAccessControlCheckResult } from "./index";
 
 describe("checkAccessControlSource", () => {
   test("reports exported raw Convex builders", () => {
     const root = createFixture({
+      "convex/hercules.ts": `
+        import { createAccessControl } from "@usehercules/convex";
+        export const builders = createAccessControl;
+      `,
       "convex/posts.ts": `
         import { query, mutation as rawMutation, internalMutation } from "./_generated/server";
         import { v } from "convex/values";
@@ -55,6 +56,93 @@ describe("checkAccessControlSource", () => {
     );
   });
 
+  test("passes apps that do not use managed Access Control", () => {
+    const root = createFixture({
+      "convex/posts.ts": `
+        import { query, mutation } from "./_generated/server";
+        import { v } from "convex/values";
+
+        export const list = query({
+          args: {},
+          handler: async () => [],
+        });
+
+        export const create = mutation({
+          args: { title: v.string() },
+          handler: async () => null,
+        });
+      `,
+      "convex/schema.ts": `
+        import { defineSchema, defineTable } from "convex/server";
+        import { v } from "convex/values";
+
+        export default defineSchema({
+          memberships: defineTable({
+            userId: v.id("users"),
+            role: v.string(),
+          }),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("does not rewrite raw builders in apps that do not use managed Access Control", () => {
+    const root = createFixture({
+      "convex/posts.ts": `
+        import { query } from "./_generated/server";
+
+        export const list = query({
+          args: {},
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root, fixAuthenticated: true });
+    const source = readFileSync(join(root, "convex/posts.ts"), "utf8");
+
+    expect(result).toMatchObject({ ok: true, fixedFiles: 0, findings: [] });
+    expect(source).toContain('import { query } from "./_generated/server";');
+    expect(source).toContain("export const list = query({");
+  });
+
+  test("still reports raw unguarded builders when Access Control is wired through convex.config.ts", () => {
+    const root = createFixture({
+      "convex/convex.config.ts": `
+        import { defineApp } from "convex/server";
+        import accessControl from "@usehercules/convex/convex.config";
+
+        const app = defineApp();
+        app.use(accessControl);
+        export default app;
+      `,
+      "convex/posts.ts": `
+        import { mutation } from "./_generated/server";
+
+        export const create = mutation({
+          args: {},
+          handler: async () => null,
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      {
+        code: "raw_exported_convex_builder",
+        filePath: "convex/posts.ts",
+        functionName: "create",
+        builder: "mutation",
+      },
+    ]);
+  });
+
   test("passes managed builders, internal functions, and local exemptions", () => {
     const root = createFixture({
       "convex/http.ts": `
@@ -95,11 +183,7 @@ describe("checkAccessControlSource", () => {
 
     const result = checkAccessControlSource({ cwd: root });
 
-    expect(result).toMatchObject({
-      ok: true,
-      filesChecked: 1,
-      findings: [],
-    });
+    expect(result).toMatchObject({ ok: true, filesChecked: 1, findings: [] });
   });
 
   test("reports a missing Convex directory", () => {
@@ -109,12 +193,7 @@ describe("checkAccessControlSource", () => {
     expect(result).toMatchObject({
       ok: false,
       filesChecked: 0,
-      findings: [
-        {
-          code: "convex_dir_missing",
-          filePath: "convex",
-        },
-      ],
+      findings: [{ code: "convex_dir_missing", filePath: "convex" }],
     });
   });
 
@@ -139,10 +218,7 @@ describe("checkAccessControlSource", () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
-      {
-        code: "placeholder_access_scope_id",
-        filePath: "convex/organizations.ts",
-      },
+      { code: "placeholder_access_scope_id", filePath: "convex/organizations.ts" },
     ]);
     expect(formatAccessControlCheckResult(result)).toContain(
       "Create a Hercules Access Control scope first",
@@ -151,6 +227,9 @@ describe("checkAccessControlSource", () => {
 
   test("reports app-local org membership tables in managed Access Control apps", () => {
     const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
       "convex/schema.ts": `
         import { defineSchema, defineTable } from "convex/server";
         import { v } from "convex/values";
@@ -169,10 +248,7 @@ describe("checkAccessControlSource", () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
-      {
-        code: "local_org_membership_table",
-        filePath: "convex/schema.ts",
-      },
+      { code: "local_org_membership_table", filePath: "convex/schema.ts" },
     ]);
   });
 
@@ -244,10 +320,7 @@ describe("checkAccessControlSource", () => {
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          code: "org_row_scope_from_arg",
-          filePath: "convex/posts.ts",
-        }),
+        expect.objectContaining({ code: "org_row_scope_from_arg", filePath: "convex/posts.ts" }),
       ]),
     );
     expect(formatAccessControlCheckResult(result)).toContain("scopeFromResource");
@@ -298,7 +371,8 @@ describe("checkAccessControlSource", () => {
   test("reports frontend role-name permission gates", () => {
     const root = createFixture({
       "convex/access.ts": `
-        export const marker = true;
+        import { createAccessControl } from "@usehercules/convex";
+        export const marker = createAccessControl;
       `,
       "src/hooks/use-org.tsx": `
         export function useOrg() {
@@ -312,15 +386,15 @@ describe("checkAccessControlSource", () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
-      {
-        code: "role_name_permission_gate",
-        filePath: "src/hooks/use-org.tsx",
-      },
+      { code: "role_name_permission_gate", filePath: "src/hooks/use-org.tsx" },
     ]);
   });
 
   test("can rewrite exported raw builders to authenticated builders", () => {
     const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
       "convex/posts.ts": `
         import { query, mutation as rawMutation, internalMutation } from "./_generated/server";
         import { v } from "convex/values";
@@ -357,6 +431,9 @@ describe("checkAccessControlSource", () => {
 
   test("rewrites nested files with a relative Hercules import", () => {
     const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
       "convex/admin/posts.ts": `
         import { query } from "../_generated/server";
 

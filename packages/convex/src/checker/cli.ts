@@ -1,21 +1,9 @@
 #!/usr/bin/env node
-import {
-  checkAccessControlSource,
-  formatAccessControlCheckResult,
-} from "./index.js";
+import { checkAccessControlSource, formatAccessControlCheckResult } from "./index.js";
 
 type ParsedArgs =
-  | {
-      ok: true;
-      convexDir?: string;
-      json: boolean;
-      fixAuthenticated: boolean;
-      help: boolean;
-    }
-  | {
-      ok: false;
-      message: string;
-    };
+  | { ok: true; convexDir?: string; json: boolean; fixAuthenticated: boolean; help: boolean }
+  | { ok: false; message: string };
 
 const parsedArgs = parseArgs(process.argv.slice(2));
 
@@ -61,27 +49,15 @@ function parseArgs(args: string[]): ParsedArgs {
       continue;
     }
     if (arg.startsWith("-")) {
-      return {
-        ok: false,
-        message: `Unknown option: ${arg}`,
-      };
+      return { ok: false, message: `Unknown option: ${arg}` };
     }
     if (convexDir) {
-      return {
-        ok: false,
-        message: `Unexpected argument: ${arg}`,
-      };
+      return { ok: false, message: `Unexpected argument: ${arg}` };
     }
     convexDir = arg;
   }
 
-  return {
-    ok: true,
-    convexDir,
-    json,
-    fixAuthenticated,
-    help,
-  };
+  return { ok: true, convexDir, json, fixAuthenticated, help };
 }
 
 function helpText(): string {
@@ -92,6 +68,8 @@ function helpText(): string {
     "builders that should use Hercules Access Control builders from convex/hercules.ts.",
     "Also checks common managed organization mistakes such as placeholder scope ids,",
     "app-local org membership tables, role-name permission gates, and unsafe org slug lookups.",
+    "Apps that do not use the @usehercules/convex Access Control SDK in their Convex",
+    "functions pass unchanged: raw Convex builders stay allowed there.",
     "",
     "--fix-authenticated rewrites exported raw builders to authenticated* builders",
     "as a conservative migration starting point. Review public and permissioned",

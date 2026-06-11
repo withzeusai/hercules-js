@@ -9,6 +9,11 @@ import {
   createResourceInvitation,
 } from "./access-admin";
 
+// A structurally valid (unsigned-content) OIDC ID token fixture: the SDK
+// requires the JWT shape of three dot-separated base64url segments before it
+// will forward an id_token to the control plane.
+const ID_TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.c2lnbmF0dXJl";
+
 describe("createAccessAdminActions", () => {
   test("posts role assignment writes", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
@@ -209,7 +214,7 @@ describe("createAccessAdminActions", () => {
     };
 
     await expect(
-      acceptAccessInvitation(ctx, { token: "token_1", idToken: "id-token" }, { client: { post } }),
+      acceptAccessInvitation(ctx, { token: "token_1", idToken: ID_TOKEN }, { client: { post } }),
     ).resolves.toEqual({
       accessScopeId: "scope_1",
       invitationId: "invite_1",
@@ -221,7 +226,7 @@ describe("createAccessAdminActions", () => {
     });
 
     expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/accept", {
-      body: { token: "token_1", id_token: "id-token" },
+      body: { token: "token_1", id_token: ID_TOKEN },
     });
   });
 
@@ -466,7 +471,7 @@ describe("actor_mode on resource-grant writes", () => {
         resourceType: "app.project",
         resourceId: "project_1",
         roleKey: "project_contributor",
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
 
@@ -481,7 +486,7 @@ describe("actor_mode on resource-grant writes", () => {
         permission_key: undefined,
         expires_at: undefined,
         actor_mode: "app_user",
-        id_token: "id-token",
+        id_token: ID_TOKEN,
       },
     });
   });
@@ -495,11 +500,11 @@ describe("actor_mode on resource-grant writes", () => {
 
     await getHandler(actions.revokeResourceGrant)(
       {},
-      { scopeId: "scope_1", grantId: "grant_1", idToken: "id-token" },
+      { scopeId: "scope_1", grantId: "grant_1", idToken: ID_TOKEN },
     );
     await getHandler(actions.setGrantExpiry)(
       {},
-      { scopeId: "scope_1", grantId: "grant_1", expiresAt: null, idToken: "id-token" },
+      { scopeId: "scope_1", grantId: "grant_1", expiresAt: null, idToken: ID_TOKEN },
     );
 
     expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
@@ -507,7 +512,7 @@ describe("actor_mode on resource-grant writes", () => {
         scope_id: "scope_1",
         grant_id: "grant_1",
         actor_mode: "app_user",
-        id_token: "id-token",
+        id_token: ID_TOKEN,
       },
     });
     expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
@@ -516,7 +521,7 @@ describe("actor_mode on resource-grant writes", () => {
         grant_id: "grant_1",
         expires_at: null,
         actor_mode: "app_user",
-        id_token: "id-token",
+        id_token: ID_TOKEN,
       },
     });
   });
@@ -540,7 +545,7 @@ describe("createAccessUserActions", () => {
     });
 
     await expect(
-      getHandler(actions.enterDeployment)({}, { idToken: "  id-token  " }),
+      getHandler(actions.enterDeployment)({}, { idToken: `  ${ID_TOKEN}  ` }),
     ).resolves.toEqual({
       allowed: true,
       reason: "open_allowed",
@@ -549,9 +554,7 @@ describe("createAccessUserActions", () => {
       stateVersion: 7,
       changed: true,
     });
-    expect(post).toHaveBeenCalledWith("/v1/access-control/entry", {
-      body: { id_token: "id-token" },
-    });
+    expect(post).toHaveBeenCalledWith("/v1/access-control/entry", { body: { id_token: ID_TOKEN } });
   });
 
   test("returns a denied deployment-entry decision", async () => {
@@ -570,16 +573,14 @@ describe("createAccessUserActions", () => {
       client: { post },
     });
 
-    await expect(getHandler(actions.enterDeployment)({}, { idToken: "id-token" })).resolves.toEqual(
-      {
-        allowed: false,
-        reason: "not_allowlisted",
-        principalId: "principal_1",
-        status: "pending_approval",
-        stateVersion: 11,
-        changed: false,
-      },
-    );
+    await expect(getHandler(actions.enterDeployment)({}, { idToken: ID_TOKEN })).resolves.toEqual({
+      allowed: false,
+      reason: "not_allowlisted",
+      principalId: "principal_1",
+      status: "pending_approval",
+      stateVersion: 11,
+      changed: false,
+    });
   });
 
   test("rejects an empty deployment-entry ID token before calling the API", async () => {
@@ -592,6 +593,45 @@ describe("createAccessUserActions", () => {
     await expect(getHandler(actions.enterDeployment)({}, { idToken: " " })).rejects.toThrow(
       "idToken is required",
     );
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test("rejects a bare subject id passed as the ID token before calling the API", async () => {
+    const post = vi.fn();
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|auth_user_1" }),
+      },
+    };
+
+    // user.profile.sub is the classic mix-up: a bare subject id, not a JWT.
+    await expect(
+      getHandler(actions.enterDeployment)({}, { idToken: "user_2abc123" }),
+    ).rejects.toThrow("not a user or subject id such as user.profile.sub");
+    await expect(
+      getHandler(actions.assignRole)(
+        {},
+        {
+          scopeId: "scope_1",
+          principalId: "principal_1",
+          roleKey: "member",
+          idToken: "user_2abc123",
+        },
+      ),
+    ).rejects.toThrow("OIDC ID token");
+    await expect(
+      acceptAccessInvitation(
+        ctx,
+        { token: "token_1", idToken: "user_2abc123" },
+        { client: { post } },
+      ),
+    ).rejects.toThrow("OIDC ID token");
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -616,16 +656,11 @@ describe("createAccessUserActions", () => {
 
     await getHandler(actions.assignRole)(
       {},
-      { scopeId: "scope_1", herculesAuthUserId: "user_1", roleKey: "member", idToken: "id-token" },
+      { scopeId: "scope_1", herculesAuthUserId: "user_1", roleKey: "member", idToken: ID_TOKEN },
     );
     await getHandler(actions.createInvitation)(
       {},
-      {
-        scopeId: "scope_1",
-        email: "member@example.com",
-        roleKeys: ["member"],
-        idToken: "id-token",
-      },
+      { scopeId: "scope_1", email: "member@example.com", roleKeys: ["member"], idToken: ID_TOKEN },
     );
     await getHandler(actions.createOrgCustomRole)(
       {},
@@ -633,7 +668,7 @@ describe("createAccessUserActions", () => {
         scopeId: "scope_1",
         name: "Reviewer",
         permissionKeys: ["app.docs:read"],
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
     await getHandler(actions.setRoleOverride)(
@@ -643,7 +678,7 @@ describe("createAccessUserActions", () => {
         roleKey: "member",
         allow: ["app.docs:read"],
         deny: [],
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
 
@@ -656,7 +691,7 @@ describe("createAccessUserActions", () => {
     for (const [, request] of post.mock.calls as Array<
       [string, { body: Record<string, unknown> }]
     >) {
-      expect(request.body).toMatchObject({ actor_mode: "app_user", id_token: "id-token" });
+      expect(request.body).toMatchObject({ actor_mode: "app_user", id_token: ID_TOKEN });
     }
   });
 });
@@ -731,7 +766,7 @@ describe("createResourceInvitation", () => {
         resourceType: "app.project",
         resourceId: "project_1",
         permissionKey: "app.project:edit",
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
 
@@ -745,7 +780,7 @@ describe("createResourceInvitation", () => {
         permission_key: "app.project:edit",
         expires_in_days: undefined,
         actor_mode: "app_user",
-        id_token: "id-token",
+        id_token: ID_TOKEN,
       },
     });
   });
@@ -921,15 +956,35 @@ describe("member lifecycle and admission administration", () => {
 
 describe("group administration", () => {
   test("creates, renames, and archives groups as the service", async () => {
-    const post = vi.fn().mockResolvedValue({ changed: true });
+    const post = vi
+      .fn()
+      .mockResolvedValue({
+        access_scope_id: "scope_1",
+        group_principal_id: "group_1",
+        changed: true,
+        source_version: 4,
+        projection_ids: ["projection_1"],
+      });
     const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
 
-    await getHandler(actions.createGroup)({}, { scopeId: "scope_1", name: "Moderators" });
-    await getHandler(actions.renameGroup)(
-      {},
-      { scopeId: "scope_1", groupPrincipalId: "group_1", name: "Mods" },
-    );
-    await getHandler(actions.archiveGroup)({}, { scopeId: "scope_1", groupPrincipalId: "group_1" });
+    await expect(
+      getHandler(actions.createGroup)({}, { scopeId: "scope_1", name: "Moderators" }),
+    ).resolves.toEqual({
+      accessScopeId: "scope_1",
+      groupPrincipalId: "group_1",
+      changed: true,
+      sourceVersion: 4,
+      projectionIds: ["projection_1"],
+    });
+    await expect(
+      getHandler(actions.renameGroup)(
+        {},
+        { scopeId: "scope_1", groupPrincipalId: "group_1", name: "Mods" },
+      ),
+    ).resolves.toMatchObject({ groupPrincipalId: "group_1" });
+    await expect(
+      getHandler(actions.archiveGroup)({}, { scopeId: "scope_1", groupPrincipalId: "group_1" }),
+    ).resolves.toMatchObject({ groupPrincipalId: "group_1" });
 
     expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/groups/create", {
       body: { scope_id: "scope_1", name: "Moderators", actor_mode: "service" },
@@ -948,17 +1003,39 @@ describe("group administration", () => {
   });
 
   test("adds and removes group members as the service", async () => {
-    const post = vi.fn().mockResolvedValue({ changed: true });
+    const post = vi
+      .fn()
+      .mockResolvedValue({
+        access_scope_id: "scope_1",
+        group_principal_id: "group_1",
+        member_principal_id: "principal_1",
+        membership_id: "membership_1",
+        changed: true,
+        source_version: 5,
+        projection_ids: ["projection_1"],
+      });
     const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
 
-    await getHandler(actions.addGroupMember)(
-      {},
-      { scopeId: "scope_1", groupPrincipalId: "group_1", memberPrincipalId: "principal_1" },
-    );
-    await getHandler(actions.removeGroupMember)(
-      {},
-      { scopeId: "scope_1", groupPrincipalId: "group_1", memberPrincipalId: "principal_1" },
-    );
+    await expect(
+      getHandler(actions.addGroupMember)(
+        {},
+        { scopeId: "scope_1", groupPrincipalId: "group_1", memberPrincipalId: "principal_1" },
+      ),
+    ).resolves.toEqual({
+      accessScopeId: "scope_1",
+      groupPrincipalId: "group_1",
+      memberPrincipalId: "principal_1",
+      membershipId: "membership_1",
+      changed: true,
+      sourceVersion: 5,
+      projectionIds: ["projection_1"],
+    });
+    await expect(
+      getHandler(actions.removeGroupMember)(
+        {},
+        { scopeId: "scope_1", groupPrincipalId: "group_1", memberPrincipalId: "principal_1" },
+      ),
+    ).resolves.toMatchObject({ groupPrincipalId: "group_1", memberPrincipalId: "principal_1" });
 
     expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/groups/members/add", {
       body: {
@@ -1173,12 +1250,16 @@ describe("app-user delegation for the admin surface", () => {
       .fn()
       .mockResolvedValue({
         access_scope_id: "scope_1",
+        group_principal_id: "group_1",
+        member_principal_id: "principal_1",
         groups: [],
         invitations: [],
         role_id: "role_member",
         principal_id: "principal_1",
         overrides: [],
         exceptions: [],
+        source_version: 1,
+        projection_ids: ["projection_1"],
       });
     const actions = createAccessUserActions({
       authenticatedAction: identityBuilder,
@@ -1187,15 +1268,15 @@ describe("app-user delegation for the admin surface", () => {
 
     await getHandler(actions.setMemberStatus)(
       {},
-      { scopeId: "scope_1", principalId: "principal_1", status: "active", idToken: "id-token" },
+      { scopeId: "scope_1", principalId: "principal_1", status: "active", idToken: ID_TOKEN },
     );
     await getHandler(actions.removeMember)(
       {},
-      { scopeId: "scope_1", principalId: "principal_1", idToken: "id-token" },
+      { scopeId: "scope_1", principalId: "principal_1", idToken: ID_TOKEN },
     );
     await getHandler(actions.approveMember)(
       {},
-      { scopeId: "scope_1", principalId: "principal_2", idToken: "id-token" },
+      { scopeId: "scope_1", principalId: "principal_2", idToken: ID_TOKEN },
     );
     await getHandler(actions.upsertAdmissionRule)(
       {},
@@ -1204,37 +1285,37 @@ describe("app-user delegation for the admin surface", () => {
         effect: "allow",
         subjectType: "email",
         subjectValue: "vip@example.com",
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
     await getHandler(actions.archiveAdmissionRule)(
       {},
-      { scopeId: "scope_1", ruleId: "rule_1", idToken: "id-token" },
+      { scopeId: "scope_1", ruleId: "rule_1", idToken: ID_TOKEN },
     );
     await getHandler(actions.setAccountEntryMode)(
       {},
-      { scopeId: "scope_1", accountEntryMode: "approval_required", idToken: "id-token" },
+      { scopeId: "scope_1", accountEntryMode: "approval_required", idToken: ID_TOKEN },
     );
     await getHandler(actions.createGroup)(
       {},
-      { scopeId: "scope_1", name: "Moderators", idToken: "id-token" },
+      { scopeId: "scope_1", name: "Moderators", idToken: ID_TOKEN },
     );
     await getHandler(actions.renameGroup)(
       {},
-      { scopeId: "scope_1", groupPrincipalId: "group_1", name: "Mods", idToken: "id-token" },
+      { scopeId: "scope_1", groupPrincipalId: "group_1", name: "Mods", idToken: ID_TOKEN },
     );
     await getHandler(actions.archiveGroup)(
       {},
-      { scopeId: "scope_1", groupPrincipalId: "group_1", idToken: "id-token" },
+      { scopeId: "scope_1", groupPrincipalId: "group_1", idToken: ID_TOKEN },
     );
-    await getHandler(actions.listGroups)({}, { scopeId: "scope_1", idToken: "id-token" });
+    await getHandler(actions.listGroups)({}, { scopeId: "scope_1", idToken: ID_TOKEN });
     await getHandler(actions.addGroupMember)(
       {},
       {
         scopeId: "scope_1",
         groupPrincipalId: "group_1",
         memberPrincipalId: "principal_1",
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
     await getHandler(actions.removeGroupMember)(
@@ -1243,20 +1324,20 @@ describe("app-user delegation for the admin surface", () => {
         scopeId: "scope_1",
         groupPrincipalId: "group_1",
         memberPrincipalId: "principal_1",
-        idToken: "id-token",
+        idToken: ID_TOKEN,
       },
     );
     await getHandler(actions.listResourceInvitations)(
       {},
-      { scopeId: "scope_1", idToken: "id-token" },
+      { scopeId: "scope_1", idToken: ID_TOKEN },
     );
     await getHandler(actions.getRoleOverrides)(
       {},
-      { scopeId: "scope_1", roleKey: "member", idToken: "id-token" },
+      { scopeId: "scope_1", roleKey: "member", idToken: ID_TOKEN },
     );
     await getHandler(actions.getUserExceptions)(
       {},
-      { scopeId: "scope_1", principalId: "principal_1", idToken: "id-token" },
+      { scopeId: "scope_1", principalId: "principal_1", idToken: ID_TOKEN },
     );
 
     expect(post.mock.calls.map(([path]) => path)).toEqual([
@@ -1279,7 +1360,7 @@ describe("app-user delegation for the admin surface", () => {
     for (const [, request] of post.mock.calls as Array<
       [string, { body: Record<string, unknown> }]
     >) {
-      expect(request.body).toMatchObject({ actor_mode: "app_user", id_token: "id-token" });
+      expect(request.body).toMatchObject({ actor_mode: "app_user", id_token: ID_TOKEN });
     }
   });
 });
