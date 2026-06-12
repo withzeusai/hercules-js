@@ -390,6 +390,119 @@ describe("checkAccessControlSource", () => {
     ]);
   });
 
+  test("reports access builder permission keys missing from the IAM catalog", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": `{
+        // App permission catalog.
+        "permissions": {
+          "app.projects:read": { "name": "Read projects" },
+          "app.projects:update": { "name": "Update projects" },
+        },
+      }`,
+      "convex/projects.ts": `
+        import { v } from "convex/values";
+        import { accessQuery, accessMutation, scopeFromArg } from "./hercules";
+
+        export const list = accessQuery({
+          permission: "projects:read",
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string() },
+          handler: async (ctx) => ctx.db.query("projects").collect(),
+        });
+
+        export const rename = accessMutation({
+          permission: "app.projects:update",
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string(), name: v.string() },
+          handler: async () => null,
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      { code: "noncanonical_permission_key", filePath: "convex/projects.ts" },
+    ]);
+    expect(formatAccessControlCheckResult(result)).toContain(
+      'Permission key "projects:read" is not declared in hercules/iam.jsonc.',
+    );
+    expect(formatAccessControlCheckResult(result)).toContain(
+      'Use the catalog key "app.projects:read"',
+    );
+  });
+
+  test("passes catalog, system, and dynamic access builder permission keys", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": `{
+        "permissions": {
+          "app.projects:read": { "name": "Read projects" },
+        },
+      }`,
+      "convex/projects.ts": `
+        import { v } from "convex/values";
+        import { accessQuery, scopeFromArg } from "./hercules";
+
+        const AUDIT_PERMISSION = "app.audit:read";
+
+        export const list = accessQuery({
+          permission: "app.projects:read",
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string() },
+          handler: async (ctx) => ctx.db.query("projects").collect(),
+        });
+
+        export const members = accessQuery({
+          permission: "system.members:read",
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string() },
+          handler: async () => [],
+        });
+
+        export const audit = accessQuery({
+          permission: AUDIT_PERMISSION,
+          scope: scopeFromArg("orgScopeId"),
+          args: { orgScopeId: v.string() },
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("skips the catalog permission check when hercules/iam.jsonc is missing or invalid", () => {
+    const builderSource = `
+      import { v } from "convex/values";
+      import { accessQuery, scopeFromArg } from "./hercules";
+
+      export const list = accessQuery({
+        permission: "projects:read",
+        scope: scopeFromArg("orgScopeId"),
+        args: { orgScopeId: v.string() },
+        handler: async (ctx) => ctx.db.query("projects").collect(),
+      });
+    `;
+
+    const missingCatalogRoot = createFixture({ "convex/projects.ts": builderSource });
+    const invalidCatalogRoot = createFixture({
+      "hercules/iam.jsonc": "{ broken",
+      "convex/projects.ts": builderSource,
+    });
+
+    expect(checkAccessControlSource({ cwd: missingCatalogRoot })).toMatchObject({
+      ok: true,
+      findings: [],
+    });
+    expect(checkAccessControlSource({ cwd: invalidCatalogRoot })).toMatchObject({
+      ok: true,
+      findings: [],
+    });
+  });
+
   test("can rewrite exported raw builders to authenticated builders", () => {
     const root = createFixture({
       "convex/hercules.ts": `

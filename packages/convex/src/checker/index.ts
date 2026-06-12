@@ -22,7 +22,8 @@ export type AccessControlCheckFinding = {
     | "org_scoped_global_slug_lookup"
     | "org_row_scope_from_arg"
     | "authenticated_org_data_read"
-    | "role_name_permission_gate";
+    | "role_name_permission_gate"
+    | "noncanonical_permission_key";
   severity: "error";
   filePath: string;
   line: number;
@@ -102,12 +103,16 @@ export function checkAccessControlSource(
   const sourceFiles = collectSourceFiles(convexDir);
   const appSourceFiles = collectAppSourceFiles(cwd, convexDir);
   const orgOwnedTables = collectOrgOwnedTables(sourceFiles);
+  const catalogPermissionKeys = loadCatalogPermissionKeys(cwd);
   const fixedFiles = options.fixAuthenticated
     ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir))
         .length
     : 0;
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
+    ...sourceFiles.flatMap((filePath) =>
+      checkCanonicalPermissionKeys(cwd, filePath, catalogPermissionKeys),
+    ),
     ...[...sourceFiles, ...appSourceFiles].flatMap((filePath) =>
       checkAccessControlOrgPatterns(cwd, filePath, orgOwnedTables),
     ),
@@ -374,16 +379,16 @@ function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
 function collectManagedBuilderDefinitions(
   sourceFile: ts.SourceFile,
   builderNames: string[],
-): Array<{ node: ts.Node; text: string }> {
+): Array<{ node: ts.Node; text: string; definition: ts.Expression }> {
   const acceptedNames = new Set(builderNames);
-  const definitions: Array<{ node: ts.Node; text: string }> = [];
+  const definitions: Array<{ node: ts.Node; text: string; definition: ts.Expression }> = [];
 
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node)) {
       const target = unwrapExpression(node.expression);
       const definition = node.arguments[0];
       if (ts.isIdentifier(target) && acceptedNames.has(target.text) && definition) {
-        definitions.push({ node, text: definition.getText(sourceFile) });
+        definitions.push({ node, text: definition.getText(sourceFile), definition });
       }
     }
     ts.forEachChild(node, visit);
@@ -391,6 +396,100 @@ function collectManagedBuilderDefinitions(
 
   visit(sourceFile);
   return definitions;
+}
+
+// The IAM catalog is file-only: hercules/iam.jsonc at the app root declares
+// every app permission key, and the control plane seeds the platform
+// system.* keys. Returns null when the file is missing or does not parse as
+// a permissions catalog, which disables the noncanonical_permission_key
+// check instead of risking false positives.
+function loadCatalogPermissionKeys(cwd: string): Set<string> | null {
+  const iamFilePath = join(cwd, "hercules", "iam.jsonc");
+  if (!existsSync(iamFilePath) || !statSync(iamFilePath).isFile()) {
+    return null;
+  }
+
+  // parseConfigFileTextToJson parses JSONC (comments and trailing commas),
+  // matching how the build applies the catalog file.
+  const parsed = ts.parseConfigFileTextToJson(iamFilePath, readFileSync(iamFilePath, "utf8"));
+  if (parsed.error) {
+    return null;
+  }
+  const permissions = (parsed.config as { permissions?: unknown } | undefined)?.permissions;
+  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) {
+    return null;
+  }
+  return new Set(Object.keys(permissions));
+}
+
+// The runtime authorize gate resolves a requested permission by exact key
+// lookup in the catalog and denies a miss with permission_missing, so a
+// builder-level permission literal that is not a declared catalog key always
+// fails at runtime. Membership only: no key grammar is parsed, dynamic
+// permission values are skipped, and system.* keys are platform-seeded.
+function checkCanonicalPermissionKeys(
+  cwd: string,
+  filePath: string,
+  catalogPermissionKeys: Set<string> | null,
+): AccessControlCheckFinding[] {
+  if (!catalogPermissionKeys) {
+    return [];
+  }
+
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+  const findings: AccessControlCheckFinding[] = [];
+
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, [
+    "accessQuery",
+    "accessMutation",
+    "accessAction",
+  ])) {
+    const permission = getLiteralPermissionProperty(definition.definition);
+    if (!permission) continue;
+    if (catalogPermissionKeys.has(permission.key) || permission.key.startsWith("system.")) {
+      continue;
+    }
+
+    const prefixedKey = `app.${permission.key}`;
+    findings.push(
+      createPatternFindingAtNode({
+        cwd,
+        sourceFile,
+        node: permission.node,
+        code: "noncanonical_permission_key",
+        message: `Permission key "${permission.key}" is not declared in hercules/iam.jsonc.`,
+        suggestion: catalogPermissionKeys.has(prefixedKey)
+          ? `Use the catalog key "${prefixedKey}" exactly as declared in hercules/iam.jsonc.`
+          : "Use a permission key exactly as declared in hercules/iam.jsonc, or add it to the catalog and rebuild.",
+      }),
+    );
+  }
+
+  return findings;
+}
+
+function getLiteralPermissionProperty(
+  definition: ts.Expression,
+): { key: string; node: ts.Node } | null {
+  const objectLiteral = unwrapExpression(definition);
+  if (!ts.isObjectLiteralExpression(objectLiteral)) {
+    return null;
+  }
+
+  for (const property of objectLiteral.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = property.name;
+    const nameText = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
+    if (nameText !== "permission") continue;
+
+    const initializer = unwrapExpression(property.initializer);
+    return ts.isStringLiteralLike(initializer)
+      ? { key: initializer.text, node: initializer }
+      : null;
+  }
+
+  return null;
 }
 
 function createPatternFindingAtNode(args: {
