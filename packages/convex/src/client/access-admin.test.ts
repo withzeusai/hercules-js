@@ -841,6 +841,49 @@ describe("createResourceInvitation", () => {
 });
 
 describe("member lifecycle and admission administration", () => {
+  test("adds and restores members as the service", async () => {
+    const post = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
+
+    // A new member identified by their auth user id with an explicit role.
+    await getHandler(actions.addMember)(
+      {},
+      { scopeId: "scope_1", herculesAuthUserId: "auth_user_1", roleKey: "member" },
+    );
+    // A removed or suspended member restored by auth user id, taking the scope
+    // default role when no role is given.
+    await getHandler(actions.addMember)(
+      {},
+      { scopeId: "scope_1", herculesAuthUserId: "auth_user_2" },
+    );
+
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/members/add", {
+      body: {
+        scope_id: "scope_1",
+        hercules_auth_user_id: "auth_user_1",
+        role_id: undefined,
+        role_key: "member",
+        actor_mode: "service",
+      },
+    });
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/members/add", {
+      body: {
+        scope_id: "scope_1",
+        hercules_auth_user_id: "auth_user_2",
+        role_id: undefined,
+        role_key: undefined,
+        actor_mode: "service",
+      },
+    });
+    // The route identifies the member by hercules_auth_user_id only and does
+    // not accept principal_id, so the SDK must not send the key at all.
+    for (const [, request] of post.mock.calls as Array<
+      [string, { body: Record<string, unknown> }]
+    >) {
+      expect(request.body).not.toHaveProperty("principal_id");
+    }
+  });
+
   test("suspends, removes, and approves members as the service", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
@@ -1266,6 +1309,15 @@ describe("app-user delegation for the admin surface", () => {
       client: { post },
     });
 
+    await getHandler(actions.addMember)(
+      {},
+      {
+        scopeId: "scope_1",
+        herculesAuthUserId: "auth_user_1",
+        roleKey: "member",
+        idToken: ID_TOKEN,
+      },
+    );
     await getHandler(actions.setMemberStatus)(
       {},
       { scopeId: "scope_1", principalId: "principal_1", status: "active", idToken: ID_TOKEN },
@@ -1341,6 +1393,7 @@ describe("app-user delegation for the admin surface", () => {
     );
 
     expect(post.mock.calls.map(([path]) => path)).toEqual([
+      "/v1/access-control/members/add",
       "/v1/access-control/members/status",
       "/v1/access-control/members/remove",
       "/v1/access-control/members/approve",
@@ -1362,5 +1415,18 @@ describe("app-user delegation for the admin surface", () => {
     >) {
       expect(request.body).toMatchObject({ actor_mode: "app_user", id_token: ID_TOKEN });
     }
+
+    // addMember identifies the member by hercules_auth_user_id only; the
+    // route does not accept principal_id, so the key must be absent.
+    const [, addMemberRequest] = post.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    expect(addMemberRequest.body).toEqual({
+      scope_id: "scope_1",
+      hercules_auth_user_id: "auth_user_1",
+      role_id: undefined,
+      role_key: "member",
+      actor_mode: "app_user",
+      id_token: ID_TOKEN,
+    });
+    expect(addMemberRequest.body).not.toHaveProperty("principal_id");
   });
 });

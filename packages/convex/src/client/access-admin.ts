@@ -449,6 +449,23 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
       },
     }),
 
+    // Adds a member to an organization scope, identified by their Hercules
+    // Auth user id, with an optional role (the scope default role when
+    // omitted). It also restores a previously removed or suspended member to
+    // active.
+    addMember: internalAction({
+      args: { scopeId: v.string(), herculesAuthUserId: v.string(), ...optionalRoleRef },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          hercules_auth_user_id: args.herculesAuthUserId,
+          ...roleRef(args),
+          ...serviceActor,
+        };
+        return await callAccessControlApi("/v1/access-control/members/add", body);
+      },
+    }),
+
     setMemberStatus: internalAction({
       args: {
         scopeId: v.string(),
@@ -940,6 +957,28 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           ...appUserActor(args.idToken),
         };
         return await callAccessControlApi("/v1/access-control/role-overrides/set", body);
+      },
+    }),
+
+    // Adds a member to an organization scope, identified by their Hercules
+    // Auth user id, with an optional role (the scope default role when
+    // omitted). It also restores a previously removed or suspended member to
+    // active.
+    addMember: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        herculesAuthUserId: v.string(),
+        ...optionalRoleRef,
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const body = {
+          scope_id: args.scopeId,
+          hercules_auth_user_id: args.herculesAuthUserId,
+          ...roleRef(args),
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi("/v1/access-control/members/add", body);
       },
     }),
 
