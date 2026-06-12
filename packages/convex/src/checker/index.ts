@@ -22,7 +22,6 @@ export type AccessControlCheckFinding = {
     | "org_scoped_global_slug_lookup"
     | "org_row_scope_from_arg"
     | "authenticated_org_data_read"
-    | "role_name_permission_gate"
     | "noncanonical_permission_key";
   severity: "error";
   filePath: string;
@@ -344,18 +343,6 @@ function checkAccessControlOrgPatterns(
       );
     }
   }
-
-  addPatternFinding({
-    findings,
-    cwd,
-    filePath,
-    sourceText,
-    code: "role_name_permission_gate",
-    pattern: /\b(?:role|roleKey)\s*(?:===|!==)\s*["'](?:owner|admin|member)["']/,
-    message: "Do not gate app behavior on role names in managed Access Control apps.",
-    suggestion:
-      "Use hasPermission or getEffectivePermissions for UI and backend capability checks. Roles are admin configuration labels.",
-  });
 
   return findings;
 }

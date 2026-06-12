@@ -8,6 +8,7 @@ const DEFAULT_API_VERSION = "2025-12-09";
 const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
 
 type WriteResult = Record<string, unknown>;
+export type AccessBindingAppliesTo = "self" | "self_and_descendants";
 
 export type AccessScopeCreateResult = {
   accessScopeId: string;
@@ -83,6 +84,7 @@ export type AccessResourceInvitationListResult = {
     conferralType: "role" | "permission" | null;
     roleId: string | null;
     permissionId: string | null;
+    appliesTo: AccessBindingAppliesTo;
     expiresAt: string;
     createdAt: string;
     updatedAt: string;
@@ -152,6 +154,7 @@ export type CreateResourceInvitationArgs = {
   /** Conferred grant — exactly one of these. A custom role or a single permission. */
   roleKey?: string;
   permissionKey?: string;
+  appliesTo?: AccessBindingAppliesTo;
   expiresInDays?: number;
 };
 
@@ -193,6 +196,10 @@ const accountEntryModeValidator = v.union(
   v.literal("allowlisted_only"),
   v.literal("invite_only"),
   v.literal("approval_required"),
+);
+const bindingAppliesToValidator = v.union(
+  v.literal("self"),
+  v.literal("self_and_descendants"),
 );
 
 /**
@@ -340,9 +347,11 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         resourceId: v.optional(v.union(v.string(), v.null())),
         roleKey: v.optional(v.string()),
         permissionKey: v.optional(v.string()),
+        appliesTo: v.optional(bindingAppliesToValidator),
         expiresAt: v.optional(v.union(v.string(), v.null())),
       },
       handler: async (_ctx, args) => {
+        requireExactResourceForDescendants(args);
         const body = {
           scope_id: args.scopeId,
           ...principalRef(args),
@@ -350,6 +359,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           resource_id: args.resourceId ?? null,
           role_key: args.roleKey,
           permission_key: args.permissionKey,
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
           expires_at: args.expiresAt,
           ...serviceActor,
         };
@@ -365,6 +375,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         resourceId: v.string(),
         roleKey: v.optional(v.string()),
         permissionKey: v.optional(v.string()),
+        appliesTo: v.optional(bindingAppliesToValidator),
         expiresInDays: v.optional(v.number()),
       },
       handler: async (_ctx, args) => {
@@ -386,9 +397,11 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         ),
         permissionKey: v.string(),
         effect: v.union(v.literal("allow"), v.literal("deny")),
+        appliesTo: v.optional(bindingAppliesToValidator),
         expiresAt: v.optional(v.union(v.string(), v.null())),
       },
       handler: async (_ctx, args) => {
+        requireSpecificTargetForDescendants(args);
         const body = {
           scope_id: args.scopeId,
           subject:
@@ -402,6 +415,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
               : { mode: "specific", resource_id: args.target.resourceId },
           permission_key: args.permissionKey,
           effect: args.effect,
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
           expires_at: args.expiresAt,
           ...serviceActor,
         };
@@ -824,10 +838,12 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
         resourceId: v.optional(v.union(v.string(), v.null())),
         roleKey: v.optional(v.string()),
         permissionKey: v.optional(v.string()),
+        appliesTo: v.optional(bindingAppliesToValidator),
         expiresAt: v.optional(v.union(v.string(), v.null())),
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
+        requireExactResourceForDescendants(args);
         const body = {
           scope_id: args.scopeId,
           ...principalRef(args),
@@ -835,6 +851,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           resource_id: args.resourceId ?? null,
           role_key: args.roleKey,
           permission_key: args.permissionKey,
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
           expires_at: args.expiresAt,
           ...appUserActor(args.idToken),
         };
@@ -850,10 +867,12 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
         resourceId: v.string(),
         roleKey: v.optional(v.string()),
         permissionKey: v.optional(v.string()),
+        appliesTo: v.optional(bindingAppliesToValidator),
         expiresInDays: v.optional(v.number()),
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
+        requireExactResourceForDescendants(args);
         const body = {
           scope_id: args.scopeId,
           email: args.email,
@@ -861,6 +880,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           resource_id: args.resourceId,
           role_key: args.roleKey,
           permission_key: args.permissionKey,
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
           expires_in_days: args.expiresInDays,
           ...appUserActor(args.idToken),
         };
@@ -886,10 +906,12 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
         ),
         permissionKey: v.string(),
         effect: v.union(v.literal("allow"), v.literal("deny")),
+        appliesTo: v.optional(bindingAppliesToValidator),
         expiresAt: v.optional(v.union(v.string(), v.null())),
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
+        requireSpecificTargetForDescendants(args);
         const body = {
           scope_id: args.scopeId,
           subject:
@@ -903,6 +925,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
               : { mode: "specific", resource_id: args.target.resourceId },
           permission_key: args.permissionKey,
           effect: args.effect,
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
           expires_at: args.expiresAt,
           ...appUserActor(args.idToken),
         };
@@ -1268,6 +1291,7 @@ export async function createResourceInvitation(
   args: CreateResourceInvitationArgs,
   options: AccessAdminApiOptions = {},
 ): Promise<AccessInvitationCreateResult> {
+  requireExactResourceForDescendants(args);
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const body = {
     scope_id: args.scopeId,
@@ -1276,11 +1300,33 @@ export async function createResourceInvitation(
     resource_id: args.resourceId,
     role_key: args.roleKey,
     permission_key: args.permissionKey,
+    ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
     expires_in_days: args.expiresInDays,
     ...serviceActor,
   };
   const result = await callAccessControlApi("/v1/access-control/invitations/create-resource", body);
   return normalizeAccessInvitationCreateResult(result);
+}
+
+function requireExactResourceForDescendants(args: {
+  appliesTo?: AccessBindingAppliesTo;
+  resourceId?: string | null;
+}) {
+  if (
+    args.appliesTo === "self_and_descendants" &&
+    (typeof args.resourceId !== "string" || args.resourceId.length === 0)
+  ) {
+    throw new Error('appliesTo "self_and_descendants" requires an exact resourceId.');
+  }
+}
+
+function requireSpecificTargetForDescendants(args: {
+  appliesTo?: AccessBindingAppliesTo;
+  target: { mode: "all" } | { mode: "specific"; resourceId: string };
+}) {
+  if (args.appliesTo === "self_and_descendants" && args.target.mode !== "specific") {
+    throw new Error('appliesTo "self_and_descendants" requires a specific resource target.');
+  }
 }
 
 export async function acceptAccessInvitation(
@@ -1450,6 +1496,7 @@ function normalizeAccessResourceInvitationListResult(
       conferralType: nullableConferralType(invitation),
       roleId: nullableString(invitation, "role_id", "invitations[].roleId"),
       permissionId: nullableString(invitation, "permission_id", "invitations[].permissionId"),
+      appliesTo: optionalBindingAppliesTo(invitation),
       expiresAt: requiredString(invitation, "expires_at", "invitations[].expiresAt"),
       createdAt: requiredString(invitation, "created_at", "invitations[].createdAt"),
       updatedAt: requiredString(invitation, "updated_at", "invitations[].updatedAt"),
@@ -1593,6 +1640,15 @@ function requiredEffect(result: WriteResult, apiKey: string, resultName: string)
   const value = result[apiKey];
   if (value !== "allow" && value !== "deny") {
     throw new Error(`Access Control API response has invalid ${resultName}.`);
+  }
+  return value;
+}
+
+function optionalBindingAppliesTo(result: WriteResult): AccessBindingAppliesTo {
+  const value = result["applies_to"];
+  if (value === undefined) return "self";
+  if (value !== "self" && value !== "self_and_descendants") {
+    throw new Error("Access Control API response has invalid invitations[].appliesTo.");
   }
   return value;
 }

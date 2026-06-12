@@ -11,6 +11,10 @@ import { v } from "convex/values";
 // (role membership) and `permission_bindings` (direct permission authority).
 
 const effectValidator = v.union(v.literal("allow"), v.literal("deny"));
+const bindingAppliesToValidator = v.union(
+  v.literal("self"),
+  v.literal("self_and_descendants"),
+);
 const wildcardValidator = v.union(v.literal("none"), v.literal("immutable"), v.literal("default"));
 const scopeKindValidator = v.union(v.literal("default"), v.literal("org"), v.literal("suite"));
 const scopeStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
@@ -89,7 +93,8 @@ export default defineSchema({
     .index("by_scope_auth_user", ["accessScopeId", "herculesAuthUserId"])
     .index("by_auth_user", ["herculesAuthUserId"])
     .index("by_scope_type", ["accessScopeId", "type"])
-    .index("by_scope_status", ["accessScopeId", "status"]),
+    .index("by_scope_status", ["accessScopeId", "status"])
+    .index("by_scope_status_type", ["accessScopeId", "status", "type"]),
 
   principal_memberships: defineTable({
     accessScopeId: v.string(),
@@ -184,6 +189,7 @@ export default defineSchema({
     accessScopeId: v.string(),
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
+    appliesTo: bindingAppliesToValidator,
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
@@ -214,6 +220,7 @@ export default defineSchema({
     accessScopeId: v.string(),
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
+    appliesTo: bindingAppliesToValidator,
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
   })

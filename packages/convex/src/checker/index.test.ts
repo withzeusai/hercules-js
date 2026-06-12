@@ -368,7 +368,7 @@ describe("checkAccessControlSource", () => {
     );
   });
 
-  test("reports frontend role-name permission gates", () => {
+  test("allows role-name comparisons because syntax cannot prove authorization intent", () => {
     const root = createFixture({
       "convex/access.ts": `
         import { createAccessControl } from "@usehercules/convex";
@@ -384,10 +384,8 @@ describe("checkAccessControlSource", () => {
 
     const result = checkAccessControlSource({ cwd: root });
 
-    expect(result.ok).toBe(false);
-    expect(result.findings).toMatchObject([
-      { code: "role_name_permission_gate", filePath: "src/hooks/use-org.tsx" },
-    ]);
+    expect(result.ok).toBe(true);
+    expect(result.findings).toEqual([]);
   });
 
   test("reports access builder permission keys missing from the IAM catalog", () => {

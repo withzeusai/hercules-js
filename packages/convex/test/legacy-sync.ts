@@ -63,6 +63,7 @@ type LegacyGrant = {
   objectType: "scope" | "resource";
   objectId?: string;
   objectResourceType?: string;
+  appliesTo?: "self" | "self_and_descendants";
   expiresAt?: number;
   updatedAt: number;
 };
@@ -423,6 +424,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
             accessScopeId: scope.accessScopeId,
             resourceType,
             resourceId,
+            appliesTo: grant.appliesTo ?? "self",
             expiresAt: grant.expiresAt,
             updatedAt: grant.updatedAt,
           }),
@@ -438,6 +440,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
             accessScopeId: scope.accessScopeId,
             resourceType,
             resourceId,
+            appliesTo: grant.appliesTo ?? "self",
             expiresAt: grant.expiresAt,
             updatedAt: grant.updatedAt,
           }),

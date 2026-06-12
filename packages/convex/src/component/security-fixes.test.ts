@@ -124,6 +124,7 @@ describe("E3 - a blocked group must grant nothing", () => {
         subjectPrincipalId: "pr_default_admins_group",
         roleId: "role_admin",
         accessScopeId: "as_default",
+        appliesTo: "self",
         updatedAt: now,
       });
     });
@@ -452,6 +453,7 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
         accessScopeId: "as_default",
         resourceType: "app.widgets",
         resourceId: "widget_1",
+        appliesTo: "self",
         updatedAt: now,
       });
     });

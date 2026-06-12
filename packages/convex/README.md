@@ -28,10 +28,10 @@ export const {
   accessQuery, accessMutation, accessAction,
   hasPermission, requirePermission, requireAnyPermission, getEffectivePermissions,
   listMyMemberships, listMyRoles,
-  listScopeMembers, listScopeRoles, listScopePermissions,
+  listScopeMembers, listScopeMemberDirectory, listScopeRoles, listScopePermissions,
 } = createAccessControl({ query, mutation, action, components });
 
-export { scopeFromArg, scopeFromResource } from "@usehercules/convex";
+export { scopeFromArg, scopeFromParentResource, scopeFromResource } from "@usehercules/convex";
 ```
 
 ## Enforcing access
@@ -72,13 +72,25 @@ resource is applied on top of the scope check. `hasPermission` and
 `getEffectivePermissions` also accept a `{ resource }` ref for per-resource UI
 gating.
 
-> **Matching note:** resource grants are pinned to the permission's canonical
-> catalog resource type (`app.project` for `app.project:archive`), and
-> `scopeFromResource` defers its resource type to the checked permission, so
-> the two always agree; the table name passed to `scopeFromResource` is not
-> used for grant matching. When passing an explicit `{ resource }` ref to
-> `hasPermission`/`getEffectivePermissions`/`filterAuthorizedResources`, use
-> the permission's resource type (e.g. `app.project`), not the table name.
+Declare trusted parent resources for child authorization. The target and
+ancestors are evaluated together with the child permission, so any applicable
+deny wins. Parent access applies only when its binding uses
+`appliesTo: "self_and_descendants"`.
+
+```ts
+scope: scopeFromResource("tasks", "taskId", {
+  authorizeAgainst: task => [{ type: "app.projects", id: String(task.projectId) }],
+})
+
+scope: scopeFromParentResource("projects", "projectId", {
+  parentResourceType: "app.projects",
+})
+```
+
+> **Matching note:** a self-only binding targets the permission resource type.
+> A descendant-enabled binding targets the parent resource type while keeping
+> the child permission key. Table names are only used to load rows. Explicit
+> resource references must use canonical `app.*` types.
 
 ## In-app admin screens
 
@@ -86,10 +98,15 @@ Read the scope's members, roles, and catalog with the `listScope*` helpers.
 Each self-gates on the matching `system.*:read` permission and returns `[]`
 when the caller lacks it (`owner`/`admin` hold these automatically).
 
+For member-facing pickers, use `listScopeMemberDirectory`. It is gated by
+`app.members:read` and returns bounded pages of active users with only their
+principal id, Hercules Auth user id, name, email, and optional image.
+
 ```ts
 export const teamMembers = authenticatedQuery({
   args: { scopeId: v.string() },
-  handler: async (ctx, args) => listScopeMembers(ctx, { scopeId: args.scopeId }),
+  handler: async (ctx, args) =>
+    listScopeMemberDirectory(ctx, { scopeId: args.scopeId, limit: 50 }),
 });
 ```
 
@@ -120,6 +137,25 @@ import { authenticatedAction } from "./hercules";
 export const { assignRole, createInvitation, createResourceGrant, createResourceInvitation } =
   createAccessUserActions({ authenticatedAction });
 ```
+
+The actor and recipient are separate. Pass `user.id_token` as `idToken` to
+authenticate the caller. Pass `principalId` or `herculesAuthUserId` to select
+who receives the grant. There is no implicit self target, and targeting the
+caller does not bypass the normal authorization gate.
+
+```ts
+await createResourceGrant({
+  scopeId,
+  resourceType: "app.projects",
+  resourceId: String(projectId),
+  roleKey: "project_manager",
+  herculesAuthUserId: user.profile.sub,
+  idToken: user.id_token,
+});
+```
+
+`user.profile.sub` is valid above only because the field explicitly asks for
+the recipient's Hercules Auth user id. Never pass it as `idToken`.
 
 ## Notes
 

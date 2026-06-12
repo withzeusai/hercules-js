@@ -12,6 +12,32 @@ import schema from "./schema";
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
+const MAX_AUTHORIZATION_ANCESTORS = 10;
+
+export type AuthorizationAncestor = {
+  resourceType: string;
+  resourceId: string;
+};
+
+export function normalizeAuthorizationAncestors(
+  ancestors: AuthorizationAncestor[] | undefined,
+): AuthorizationAncestor[] | null {
+  if ((ancestors?.length ?? 0) > MAX_AUTHORIZATION_ANCESTORS) {
+    return null;
+  }
+  const normalized: AuthorizationAncestor[] = [];
+  const seen = new Set<string>();
+  for (const ancestor of ancestors ?? []) {
+    if (ancestor.resourceType.length === 0 || ancestor.resourceId.length === 0) {
+      return null;
+    }
+    const key = `${ancestor.resourceType}\0${ancestor.resourceId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(ancestor);
+  }
+  return normalized;
+}
 
 type PermissionSummary = {
   permissionId: string;
@@ -65,7 +91,13 @@ export type EffectiveAccessEvaluation = {
 
 export async function evaluateEffectiveAccess(
   ctx: GenericQueryCtx<DataModel>,
-  args: { tokenIdentifier?: string; scopeId?: string; resourceType?: string; resourceId?: string },
+  args: {
+    tokenIdentifier?: string;
+    scopeId?: string;
+    resourceType?: string;
+    resourceId?: string;
+    ancestors?: AuthorizationAncestor[];
+  },
 ): Promise<EffectiveAccessEvaluation> {
   if (!args.tokenIdentifier) {
     return deny("missing_identity");
@@ -85,6 +117,13 @@ export async function evaluateEffectiveAccess(
   }
   if (!args.scopeId) {
     return deny("scope_missing", state.sourceVersion);
+  }
+  if (args.resourceId !== undefined && args.resourceType === undefined) {
+    return deny("invalid_request", state.sourceVersion);
+  }
+  const ancestors = normalizeAuthorizationAncestors(args.ancestors);
+  if (ancestors === null) {
+    return deny("invalid_request", state.sourceVersion);
   }
 
   const defaultScope = await ctx.db
@@ -186,6 +225,7 @@ export async function evaluateEffectiveAccess(
     scopeId: scope.accessScopeId,
     resourceType: args.resourceType,
     resourceId: args.resourceId,
+    ancestors,
     permissionById,
   });
 
@@ -221,6 +261,8 @@ export async function evaluateEffectiveAccess(
   const resourceRoleEntries = await collectResourceRoleEntries(ctx, {
     grants: grantContributions.resourceRoleGrants,
     targetScopeId: scope.accessScopeId,
+    targetResourceType: args.resourceType,
+    targetResourceId: args.resourceId,
     permissionById,
   });
 
@@ -384,10 +426,18 @@ type PermissionLookup = Map<string, { resourceType: string; action: string }>;
 // set => one exact resource. Effect is always allow for a role binding (the
 // producer has no deny role binding), but we carry it for shape parity.
 type ResourceRoleGrant = {
+  bindingId: string;
   roleId: string;
   effect: "allow" | "deny";
   resourceType: string;
   resourceId?: string;
+  inherited: boolean;
+};
+
+type BindingTarget = {
+  resourceType?: string;
+  resourceId?: string;
+  inherited: boolean;
 };
 
 async function collectGrantContributions(
@@ -397,6 +447,7 @@ async function collectGrantContributions(
     scopeId: string;
     resourceType?: string;
     resourceId?: string;
+    ancestors: AuthorizationAncestor[];
     permissionById: PermissionLookup;
   },
 ) {
@@ -404,166 +455,140 @@ async function collectGrantContributions(
   // query is reactively invalidated. Keep the timestamp check as a fail-closed
   // fallback if the scheduled mutation is delayed.
   const now = Date.now();
-  const roleIds = new Set<string>();
-  const deniedRoleIds = new Set<string>();
+  const principalIds = new Set(args.principalIds);
+  const scopeRoleIds = new Set<string>();
   const entries: RuntimeEntry[] = [];
   const resourceRoleGrants: ResourceRoleGrant[] = [];
-
-  for (const principalId of args.principalIds) {
-    // Scope-object role bindings (resourceType undefined): establish role
-    // membership. The role's permissions are expanded downstream.
-    const scopeRoleBindings = await ctx.db
-      .query("role_bindings")
-      .withIndex("by_subject_scope_resource", (q) =>
-        q
-          .eq("subjectPrincipalId", principalId)
-          .eq("accessScopeId", args.scopeId)
-          .eq("resourceType", undefined)
-          .eq("resourceId", undefined),
-      )
-      .collect();
-    for (const binding of scopeRoleBindings) {
-      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
-      // A role binding always registers the role; there is no deny role binding
-      // on the wire, so membership is purely additive.
-      if (!deniedRoleIds.has(binding.roleId)) {
-        roleIds.add(binding.roleId);
-      }
-    }
-
-    // Scope-object direct-permission bindings (resourceType undefined).
-    const scopePermissionBindings = await ctx.db
-      .query("permission_bindings")
-      .withIndex("by_subject_principal_scope_resource", (q) =>
-        q
-          .eq("subjectPrincipalId", principalId)
-          .eq("accessScopeId", args.scopeId)
-          .eq("resourceType", undefined)
-          .eq("resourceId", undefined),
-      )
-      .collect();
-    collectDirectPermissionBindings(scopePermissionBindings);
-
-    if (args.resourceType && args.resourceId) {
-      // Specific-resource role bindings: a role scoped to this exact resource.
-      const specificRoleBindings = await ctx.db
-        .query("role_bindings")
-        .withIndex("by_subject_scope_resource", (q) =>
-          q
-            .eq("subjectPrincipalId", principalId)
-            .eq("accessScopeId", args.scopeId)
-            .eq("resourceType", args.resourceType)
-            .eq("resourceId", args.resourceId),
-        )
-        .collect();
-      collectResourceRoleBindings(specificRoleBindings);
-
-      // Type-wide role bindings (resourceId undefined): the role applies to
-      // every resource of the type, so it also covers this specific resource.
-      const typeWideRoleBindings = await ctx.db
-        .query("role_bindings")
-        .withIndex("by_subject_scope_resource", (q) =>
-          q
-            .eq("subjectPrincipalId", principalId)
-            .eq("accessScopeId", args.scopeId)
-            .eq("resourceType", args.resourceType)
-            .eq("resourceId", undefined),
-        )
-        .collect();
-      collectResourceRoleBindings(typeWideRoleBindings);
-
-      // Specific-resource direct-permission bindings.
-      const specificPermissionBindings = await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_subject_principal_scope_resource", (q) =>
-          q
-            .eq("subjectPrincipalId", principalId)
-            .eq("accessScopeId", args.scopeId)
-            .eq("resourceType", args.resourceType)
-            .eq("resourceId", args.resourceId),
-        )
-        .collect();
-      collectDirectPermissionBindings(specificPermissionBindings);
-
-      // Type-wide direct-permission bindings (resourceId undefined).
-      const typeWidePermissionBindings = await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_subject_principal_scope_resource", (q) =>
-          q
-            .eq("subjectPrincipalId", principalId)
-            .eq("accessScopeId", args.scopeId)
-            .eq("resourceType", args.resourceType)
-            .eq("resourceId", undefined),
-        )
-        .collect();
-      collectDirectPermissionBindings(typeWidePermissionBindings);
+  const seenRoleBindings = new Set<string>();
+  const seenPermissionBindings = new Set<string>();
+  const targets = dedupeBindingTargets([
+    { inherited: false },
+    ...(args.resourceType
+      ? [
+          { resourceType: args.resourceType, inherited: false },
+          ...(args.resourceId
+            ? [
+                {
+                  resourceType: args.resourceType,
+                  resourceId: args.resourceId,
+                  inherited: false,
+                },
+              ]
+            : []),
+        ]
+      : []),
+    ...args.ancestors.map((ancestor) => ({ ...ancestor, inherited: true })),
+  ]);
+  for (const target of targets) {
+    for (const principalId of principalIds) {
+      const [roleBindings, permissionBindings] = await Promise.all([
+        ctx.db
+          .query("role_bindings")
+          .withIndex("by_subject_scope_resource", (q) =>
+            q
+              .eq("subjectPrincipalId", principalId)
+              .eq("accessScopeId", args.scopeId)
+              .eq("resourceType", target.resourceType)
+              .eq("resourceId", target.resourceId),
+          )
+          .collect(),
+        ctx.db
+          .query("permission_bindings")
+          .withIndex("by_subject_principal_scope_resource", (q) =>
+            q
+              .eq("subjectPrincipalId", principalId)
+              .eq("accessScopeId", args.scopeId)
+              .eq("resourceType", target.resourceType)
+              .eq("resourceId", target.resourceId),
+          )
+          .collect(),
+      ]);
+      collectRoleBindings(roleBindings, target);
+      collectDirectPermissionBindings(permissionBindings, target);
     }
   }
 
-  const effectiveRoleIds = [];
-  for (const roleId of roleIds) {
+  const candidateRoleIds = new Set([
+    ...scopeRoleIds,
+    ...resourceRoleGrants.map((grant) => grant.roleId),
+  ]);
+  const validRoleIds = new Set<string>();
+  for (const roleId of candidateRoleIds) {
     const role = await ctx.db
       .query("roles")
       .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
       .unique();
-    if (role) effectiveRoleIds.push(roleId);
+    if (role) validRoleIds.add(roleId);
   }
+  const effectiveRoleIds = [...scopeRoleIds].filter((roleId) => validRoleIds.has(roleId));
+  const resourceRoleIds = new Set(
+    resourceRoleGrants
+      .map((grant) => grant.roleId)
+      .filter((roleId) => validRoleIds.has(roleId)),
+  );
 
-  // Role-subject permission bindings: a direct-permission rule that applies to
-  // every holder of a role on this resource (subjectRoleId set). The old
-  // role-subject grants were modeled only as direct-permission bindings; a role
-  // subject with a role relation does NOT exist on the wire.
-  if (args.resourceType && args.resourceId) {
-    for (const roleId of effectiveRoleIds) {
-      const specificRoleSubjectBindings = await ctx.db
+  // Resource-scoped roles participate in role-subject rules for the bounded
+  // resource targets in this evaluation, but stay out of effectiveRoleIds so
+  // they cannot acquire scope-wide role permissions or wildcard behavior.
+  for (const target of targets) {
+    const applicableRoleIds =
+      target.resourceType === undefined
+        ? new Set(effectiveRoleIds)
+        : new Set([...effectiveRoleIds, ...resourceRoleIds]);
+    for (const roleId of applicableRoleIds) {
+      const bindings = await ctx.db
         .query("permission_bindings")
         .withIndex("by_subject_role_scope_resource", (q) =>
           q
             .eq("subjectRoleId", roleId)
             .eq("accessScopeId", args.scopeId)
-            .eq("resourceType", args.resourceType)
-            .eq("resourceId", args.resourceId),
+            .eq("resourceType", target.resourceType)
+            .eq("resourceId", target.resourceId),
         )
         .collect();
-      collectDirectPermissionBindings(specificRoleSubjectBindings);
-
-      const typeWideRoleSubjectBindings = await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_subject_role_scope_resource", (q) =>
-          q
-            .eq("subjectRoleId", roleId)
-            .eq("accessScopeId", args.scopeId)
-            .eq("resourceType", args.resourceType)
-            .eq("resourceId", undefined),
-        )
-        .collect();
-      collectDirectPermissionBindings(typeWideRoleSubjectBindings);
+      collectDirectPermissionBindings(bindings, target);
     }
   }
 
-  return { roleIds: effectiveRoleIds, entries, resourceRoleGrants };
+  return {
+    roleIds: effectiveRoleIds,
+    entries,
+    resourceRoleGrants: resourceRoleGrants.filter((grant) => validRoleIds.has(grant.roleId)),
+  };
 
   // A resource-target role binding scopes the role to instances of
   // resourceType. Captured for downstream role-permission expansion against the
   // target (needs role-permission + scope context). A type-wide binding
   // (resourceId undefined) expands as a type-level entry; a specific binding as
   // an instance-level entry.
-  function collectResourceRoleBindings(
+  function collectRoleBindings(
     bindings: Array<{
+      bindingId: string;
       roleId: string;
       resourceType?: string;
       resourceId?: string;
+      appliesTo: "self" | "self_and_descendants";
       expiresAt?: number;
     }>,
+    target: BindingTarget,
   ) {
     for (const binding of bindings) {
+      if (seenRoleBindings.has(binding.bindingId)) continue;
+      seenRoleBindings.add(binding.bindingId);
       if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      if (target.inherited && binding.appliesTo !== "self_and_descendants") continue;
+      if (binding.resourceType === undefined) {
+        scopeRoleIds.add(binding.roleId);
+        continue;
+      }
       if (!binding.resourceType) continue;
       resourceRoleGrants.push({
+        bindingId: binding.bindingId,
         roleId: binding.roleId,
         effect: "allow",
         resourceType: binding.resourceType,
         resourceId: binding.resourceId,
+        inherited: target.inherited,
       });
     }
   }
@@ -575,15 +600,21 @@ async function collectGrantContributions(
   // binding with a concrete resourceId is instance-level.
   function collectDirectPermissionBindings(
     bindings: Array<{
+      bindingId: string;
       permissionId: string;
       effect: "allow" | "deny";
       resourceType?: string;
       resourceId?: string;
+      appliesTo: "self" | "self_and_descendants";
       expiresAt?: number;
     }>,
+    target: BindingTarget,
   ) {
     for (const binding of bindings) {
+      if (seenPermissionBindings.has(binding.bindingId)) continue;
+      seenPermissionBindings.add(binding.bindingId);
       if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      if (target.inherited && binding.appliesTo !== "self_and_descendants") continue;
       const permission = args.permissionById.get(binding.permissionId);
       if (!permission) continue;
       // Fail closed: a resource-target binding MUST agree with the permission's
@@ -591,23 +622,39 @@ async function collectGrantContributions(
       // permission confers NOTHING — never fall back to the permission's
       // resourceType, which would silently grant the permission onto a
       // foreign/garbage resource type.
-      if (binding.resourceType !== undefined && binding.resourceType !== permission.resourceType) {
+      if (
+        !target.inherited &&
+        binding.resourceType !== undefined &&
+        binding.resourceType !== permission.resourceType
+      ) {
         continue;
       }
       // A concrete resourceId stays instance-level. A scope binding
       // (resourceType undefined) or a type-wide binding (resourceType set,
       // resourceId undefined) is type-level.
-      const isInstanceLevel = binding.resourceId !== undefined;
+      const isInstanceLevel = args.resourceId !== undefined;
       entries.push({
         effect: binding.effect,
         resourceType: permission.resourceType,
         action: permission.action,
         objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? binding.resourceId : undefined,
+        objectId: isInstanceLevel ? args.resourceId : undefined,
         permissionId: binding.permissionId,
       });
     }
   }
+}
+
+function dedupeBindingTargets(targets: BindingTarget[]): BindingTarget[] {
+  const deduped: BindingTarget[] = [];
+  const seen = new Set<string>();
+  for (const target of targets) {
+    const key = JSON.stringify([target.resourceType, target.resourceId]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(target);
+  }
+  return deduped;
 }
 
 /**
@@ -718,7 +765,13 @@ async function collectRolePermissionEntries(
  */
 async function collectResourceRoleEntries(
   ctx: GenericQueryCtx<DataModel>,
-  args: { grants: ResourceRoleGrant[]; targetScopeId: string; permissionById: PermissionLookup },
+  args: {
+    grants: ResourceRoleGrant[];
+    targetScopeId: string;
+    targetResourceType?: string;
+    targetResourceId?: string;
+    permissionById: PermissionLookup;
+  },
 ): Promise<RuntimeEntry[]> {
   const entries: RuntimeEntry[] = [];
 
@@ -729,7 +782,9 @@ async function collectResourceRoleEntries(
       .unique();
     if (!role) continue;
 
-    const isInstanceLevel = grant.resourceId !== undefined;
+    const isInstanceLevel = grant.inherited
+      ? args.targetResourceId !== undefined
+      : grant.resourceId !== undefined;
 
     // A resource-target binding without a concrete resourceType is malformed and
     // must confer nothing. Defaulting it to the wildcard would emit an
@@ -759,8 +814,12 @@ async function collectResourceRoleEntries(
       const permission = args.permissionById.get(permissionId);
       if (!permission) continue;
       // The binding scopes the role to instances of resourceType, so only the
-      // role's permissions on that resourceType apply to this target.
-      if (permission.resourceType !== grant.resourceType) {
+      // role's permissions on that resourceType apply to a flat target. An
+      // inherited role is retargeted to the requested child type.
+      if (
+        (!grant.inherited && permission.resourceType !== grant.resourceType) ||
+        (grant.inherited && permission.resourceType !== args.targetResourceType)
+      ) {
         continue;
       }
       entries.push({
@@ -768,13 +827,21 @@ async function collectResourceRoleEntries(
         resourceType: permission.resourceType,
         action: permission.action,
         objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? grant.resourceId : undefined,
+        objectId: isInstanceLevel
+          ? grant.inherited
+            ? args.targetResourceId
+            : grant.resourceId
+          : undefined,
         permissionId,
       });
     }
     for (const permissionId of contribution.deny) {
       const permission = args.permissionById.get(permissionId);
-      if (!permission || permission.resourceType !== grant.resourceType) {
+      if (
+        !permission ||
+        (!grant.inherited && permission.resourceType !== grant.resourceType) ||
+        (grant.inherited && permission.resourceType !== args.targetResourceType)
+      ) {
         continue;
       }
       entries.push({
@@ -782,7 +849,11 @@ async function collectResourceRoleEntries(
         resourceType: permission.resourceType,
         action: permission.action,
         objectType: isInstanceLevel ? "resource" : "scope",
-        objectId: isInstanceLevel ? grant.resourceId : undefined,
+        objectId: isInstanceLevel
+          ? grant.inherited
+            ? args.targetResourceId
+            : grant.resourceId
+          : undefined,
         permissionId,
       });
     }

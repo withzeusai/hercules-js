@@ -155,6 +155,7 @@
           "subjectPrincipalId": "pr_default_alice",
           "roleId": "role_admin",
           "accessScopeId": "as_default",
+          "appliesTo": "self",
           "updatedAt": 1767225600000
         },
         {
@@ -162,6 +163,7 @@
           "subjectPrincipalId": "pr_default_bob",
           "roleId": "role_member",
           "accessScopeId": "as_default",
+          "appliesTo": "self",
           "updatedAt": 1767225600000
         }
       ],
@@ -172,6 +174,7 @@
           "permissionId": "perm_docs_write",
           "effect": "allow",
           "accessScopeId": "as_default",
+          "appliesTo": "self",
           "updatedAt": 1767225600000
         }
       ]
@@ -223,6 +226,7 @@
           "subjectPrincipalId": "pr_org1_alice",
           "roleId": "role_org_lead",
           "accessScopeId": "as_org1",
+          "appliesTo": "self",
           "updatedAt": 1767225600000
         },
         {
@@ -230,6 +234,7 @@
           "subjectPrincipalId": "pr_org1_alice",
           "roleId": "role_admin",
           "accessScopeId": "as_org1",
+          "appliesTo": "self",
           "updatedAt": 1767225600000
         }
       ],

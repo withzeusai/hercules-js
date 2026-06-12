@@ -38,6 +38,7 @@ type AuthorizationArgs = {
   // walks grants whose object is the specific resource.
   resourceType?: string;
   resourceId?: string;
+  ancestors?: Array<{ resourceType: string; resourceId: string }>;
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
@@ -47,9 +48,11 @@ type GetEffectivePermissionsArgs = {
   scopeId: string;
   resourceType?: string;
   resourceId?: string;
+  ancestors?: Array<{ resourceType: string; resourceId: string }>;
 };
 
 type ListScopeArgs = { tokenIdentifier?: string; scopeId: string };
+type ListScopeMemberDirectoryArgs = ListScopeArgs & { cursor?: string; limit?: number };
 
 export type RoleSummary = {
   roleId: string;
@@ -96,6 +99,19 @@ export type ScopeMember = {
   roles: RoleSummary[];
 };
 
+export type ScopeMemberDirectoryEntry = {
+  principalId: string;
+  herculesAuthUserId: string;
+  name: string;
+  email: string;
+  image?: string;
+};
+
+export type ScopeMemberDirectoryPage = {
+  members: ScopeMemberDirectoryEntry[];
+  nextCursor?: string;
+};
+
 export type ScopeRoleSummary = RoleSummary & { shared: boolean };
 
 export type ScopePermissionSummary = {
@@ -118,6 +134,7 @@ export type DirectResourceSubject = {
   email?: string;
   image?: string;
   effect: "allow" | "deny";
+  appliesTo: "self" | "self_and_descendants";
   expiresAt?: number;
   roleId?: string;
   roleKey?: string;
@@ -139,7 +156,8 @@ export type AccessContext<DataModel extends GenericDataModel = any> =
   | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery">
   | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">;
 
-export type AccessResourceRef = { type: string; id: string };
+export type AccessResourceRef = { type: string; id?: string };
+export type AccessAuthorizationAncestor = { type: string; id: string };
 
 export type AccessControlComponent = {
   checks: {
@@ -155,6 +173,12 @@ export type AccessControlComponent = {
       EffectivePermissionsResult
     >;
     listScopeMembers: FunctionReference<"query", "public", ListScopeArgs, ScopeMember[]>;
+    listScopeMemberDirectory: FunctionReference<
+      "query",
+      "public",
+      ListScopeMemberDirectoryArgs,
+      { members: ScopeMemberDirectoryEntry[]; cursor?: string }
+    >;
     listScopeRoles: FunctionReference<"query", "public", ListScopeArgs, ScopeRoleSummary[]>;
     listScopePermissions: FunctionReference<
       "query",
@@ -184,27 +208,13 @@ export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
 // richer object that also names a specific resource for DL16 resource
 // grant support. scopeFromResource returns the richer shape so the
 // authorize call can walk resource-object grants.
-export type AuthorizeAncestor = {
-  resourceType: string;
-  resourceId: string;
-  /**
-   * Permission to check on this ancestor. Required when the ancestor uses a
-   * different resource type from the requested child permission.
-   */
-  permission?: string;
-};
-
 export type ExtractedScope =
   | string
   | {
       scopeId: string;
       resourceType?: string;
       resourceId?: string;
-      // Ordered ancestor resources to ALSO check (union): the request is
-      // allowed if the resource itself OR any ancestor grants the permission.
-      // Used for resource hierarchy (e.g. a task inheriting its project's
-      // access). Consumed client-side; never forwarded to the authorize query.
-      authorizeChain?: AuthorizeAncestor[];
+      ancestors?: Array<{ resourceType: string; resourceId: string }>;
     };
 
 export type ExtractScope<Ctx, Args> = (
@@ -297,6 +307,7 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
       permission: string;
       scopeId?: string;
       resource: (item: T) => AccessResourceRef;
+      ancestors?: (item: T) => AccessAuthorizationAncestor[];
     },
   ) => Promise<T[]>;
   listMyMemberships: (ctx: AccessContext<DataModel>) => Promise<Membership[]>;
@@ -312,6 +323,10 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     ctx: AccessContext<DataModel>,
     args?: { scopeId?: string },
   ) => Promise<ScopeMember[]>;
+  listScopeMemberDirectory: (
+    ctx: AccessContext<DataModel>,
+    args?: { scopeId?: string; cursor?: string; limit?: number },
+  ) => Promise<ScopeMemberDirectoryPage>;
   listScopeRoles: (
     ctx: AccessContext<DataModel>,
     args?: { scopeId?: string },
@@ -334,13 +349,27 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
 
 export type PermissionCheckArgs =
   | string
-  | { scopeId?: string; permission: string; resource?: AccessResourceRef };
+  | {
+      scopeId?: string;
+      permission: string;
+      resource?: AccessResourceRef;
+      ancestors?: AccessAuthorizationAncestor[];
+    };
 
 export type AnyPermissionCheckArgs =
   | string[]
-  | { scopeId?: string; permissions: string[]; resource?: AccessResourceRef };
+  | {
+      scopeId?: string;
+      permissions: string[];
+      resource?: AccessResourceRef;
+      ancestors?: AccessAuthorizationAncestor[];
+    };
 
-export type EffectivePermissionsArgs = { scopeId?: string; resource?: AccessResourceRef };
+export type EffectivePermissionsArgs = {
+  scopeId?: string;
+  resource?: AccessResourceRef;
+  ancestors?: AccessAuthorizationAncestor[];
+};
 
 type ConvexDefinitionObject<Ctx> = {
   args?: GenericValidator | PropertyValidators | void;
@@ -399,6 +428,7 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     listMyMemberships: makeListMyMemberships(component),
     listMyRoles: makeListMyRoles(component),
     listScopeMembers: makeListScopeMembers(component),
+    listScopeMemberDirectory: makeListScopeMemberDirectory(component),
     listScopeRoles: makeListScopeRoles(component),
     listScopePermissions: makeListScopePermissions(component),
     listDirectSubjectsForResource: makeListDirectSubjectsForResource(component),
@@ -466,21 +496,17 @@ type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
  * `app.project:archive`), which is also the type resource grants are pinned
  * to, so grants on the row always match the guarded permission.
  *
- * Hierarchy: pass `options.authorizeAgainst` to ALSO authorize against ancestor
- * resources (union). It receives the loaded row and returns the ordered
- * ancestors to check (e.g. a task returns its parent project). When an ancestor
- * has a different resource type, include that ancestor's permission key.
- * Explicit denies on the child stop inheritance; otherwise the request is
- * allowed if the resource itself OR an ancestor grants the applicable
- * permission. The app owns these parent/child relationships; the chain is
- * bounded (max 10 ancestors).
+ * Hierarchy: pass `options.authorizeAgainst` to declare ordered parent
+ * resources. The target and ancestors are evaluated atomically with the same
+ * requested permission, so any applicable deny wins. The app owns these
+ * relationships; the chain is bounded to ten ancestors.
  */
 export function scopeFromResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
     scopeField?: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => AuthorizeAncestor[];
+    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
   } = {},
 ) {
   const scopeField = options.scopeField ?? "orgScopeId";
@@ -491,7 +517,7 @@ export function scopeFromResource<T extends string, K extends string>(
     scopeId: string;
     resourceType: string;
     resourceId: string;
-    authorizeChain?: AuthorizeAncestor[];
+    ancestors?: Array<{ resourceType: string; resourceId: string }>;
   }> => {
     const id = args?.[argKey];
     if (id == null) {
@@ -514,21 +540,64 @@ export function scopeFromResource<T extends string, K extends string>(
         message: `scopeFromResource("${tableName}", "${argKey}"): resource is missing "${scopeField}"`,
       });
     }
-    const authorizeChain = options.authorizeAgainst
-      ? options.authorizeAgainst(row as Record<string, unknown>)
-      : undefined;
-    if (authorizeChain && authorizeChain.length > MAX_AUTHORIZE_CHAIN) {
-      throw new ConvexError({
-        code: "INVALID_SCOPE_ARG",
-        message: `scopeFromResource("${tableName}", "${argKey}"): authorizeAgainst returned more than ${MAX_AUTHORIZE_CHAIN} ancestors`,
-      });
-    }
+    const ancestors = normalizeAncestors(
+      options.authorizeAgainst?.(row as Record<string, unknown>),
+      `scopeFromResource("${tableName}", "${argKey}")`,
+    );
     return {
       scopeId,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: String(id),
-      authorizeChain,
+      ...(ancestors ? { ancestors } : {}),
     };
+  };
+}
+
+/**
+ * Resolves child-creation authorization from an existing parent row. The
+ * requested child permission stays unchanged; the parent is supplied as an
+ * explicit ancestor and only descendant-enabled bindings apply through it.
+ */
+export function scopeFromParentResource<T extends string, K extends string>(
+  tableName: T,
+  argKey: K,
+  options: { scopeField?: string; parentResourceType: string },
+) {
+  const scopeField = options.scopeField ?? "orgScopeId";
+  return async (
+    ctx: DbResourceCtx,
+    args: Record<string, unknown>,
+  ): Promise<{
+    scopeId: string;
+    resourceType: string;
+    ancestors: Array<{ resourceType: string; resourceId: string }>;
+  }> => {
+    const id = args?.[argKey];
+    if (id == null) {
+      throw new ConvexError({
+        code: "INVALID_SCOPE_ARG",
+        message: `scopeFromParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+      });
+    }
+    const row = await ctx.db.get(id);
+    if (!row || typeof row !== "object") {
+      throw new ConvexError({
+        code: "RESOURCE_NOT_FOUND",
+        message: `scopeFromParentResource("${tableName}", "${argKey}"): resource not found`,
+      });
+    }
+    const scopeId = (row as Record<string, unknown>)[scopeField];
+    if (typeof scopeId !== "string" || scopeId.length === 0) {
+      throw new ConvexError({
+        code: "INVALID_RESOURCE_SCOPE",
+        message: `scopeFromParentResource("${tableName}", "${argKey}"): resource is missing "${scopeField}"`,
+      });
+    }
+    const ancestors = normalizeAncestors(
+      [{ type: options.parentResourceType, id: String(id) }],
+      `scopeFromParentResource("${tableName}", "${argKey}")`,
+    );
+    return { scopeId, resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL, ancestors: ancestors! };
   };
 }
 
@@ -627,34 +696,76 @@ function resourceArgs(resource?: AccessResourceRef) {
   return { resourceType: resource?.type, resourceId: resource?.id };
 }
 
+function ancestorArgs(ancestors?: Array<{ resourceType: string; resourceId: string }>) {
+  return ancestors ? { ancestors } : {};
+}
+
+function normalizeAncestors(
+  ancestors: AccessAuthorizationAncestor[] | undefined,
+  source = "authorization check",
+): Array<{ resourceType: string; resourceId: string }> | undefined {
+  if (!ancestors || ancestors.length === 0) return undefined;
+  if (ancestors.length > MAX_AUTHORIZE_CHAIN) {
+    throw new ConvexError({
+      code: "INVALID_SCOPE_ARG",
+      message: `${source}: expected at most ${MAX_AUTHORIZE_CHAIN} ancestors`,
+    });
+  }
+  return ancestors.map((ancestor) => {
+    if (!ancestor.type || !ancestor.id) {
+      throw new ConvexError({
+        code: "INVALID_SCOPE_ARG",
+        message: `${source}: ancestors require non-empty type and id`,
+      });
+    }
+    return { resourceType: ancestor.type, resourceId: ancestor.id };
+  });
+}
+
 async function getTokenIdentifier(ctx: AccessContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
 }
 
 function normalizePermissionCheckArgs(args: PermissionCheckArgs) {
   if (typeof args === "string") {
-    return { scopeId: DEFAULT_SCOPE_SENTINEL, permission: args, resource: undefined };
+    return {
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      permission: args,
+      resource: undefined,
+      ancestors: undefined,
+    };
   }
   return {
     scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
     permission: args.permission,
     resource: args.resource,
+    ancestors: normalizeAncestors(args.ancestors),
   };
 }
 
 function normalizeAnyPermissionCheckArgs(args: AnyPermissionCheckArgs) {
   if (Array.isArray(args)) {
-    return { scopeId: DEFAULT_SCOPE_SENTINEL, permissions: args, resource: undefined };
+    return {
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      permissions: args,
+      resource: undefined,
+      ancestors: undefined,
+    };
   }
   return {
     scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
     permissions: args.permissions,
     resource: args.resource,
+    ancestors: args.ancestors,
   };
 }
 
 function normalizeEffectivePermissionsArgs(args: EffectivePermissionsArgs | undefined) {
-  return { scopeId: args?.scopeId ?? DEFAULT_SCOPE_SENTINEL, resource: args?.resource };
+  return {
+    scopeId: args?.scopeId ?? DEFAULT_SCOPE_SENTINEL,
+    resource: args?.resource,
+    ancestors: normalizeAncestors(args?.ancestors),
+  };
 }
 
 function makeHasPermission(component: AccessControlComponent) {
@@ -668,6 +779,7 @@ function makeHasPermission(component: AccessControlComponent) {
       scopeId: normalized.scopeId,
       permission: normalized.permission,
       ...resourceArgs(normalized.resource),
+      ...ancestorArgs(normalized.ancestors),
     });
     return decision.allowed;
   };
@@ -702,6 +814,7 @@ function makeGetEffectivePermissions(component: AccessControlComponent) {
       tokenIdentifier,
       scopeId: normalized.scopeId,
       ...resourceArgs(normalized.resource),
+      ...ancestorArgs(normalized.ancestors),
     });
     return result.permissions;
   };
@@ -715,6 +828,7 @@ function makeFilterAuthorizedResources(component: AccessControlComponent) {
       permission: string;
       scopeId?: string;
       resource: (item: T) => AccessResourceRef;
+      ancestors?: (item: T) => AccessAuthorizationAncestor[];
     },
   ): Promise<T[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -724,12 +838,17 @@ function makeFilterAuthorizedResources(component: AccessControlComponent) {
     const allowed: T[] = [];
     for (const item of args.resources) {
       const ref = args.resource(item);
+      const ancestors = normalizeAncestors(
+        args.ancestors?.(item),
+        "filterAuthorizedResources",
+      );
       const decision = await ctx.runQuery(component.checks.authorize, {
         tokenIdentifier,
         scopeId,
         permission: args.permission,
         resourceType: ref.type,
         resourceId: ref.id,
+        ...ancestorArgs(ancestors),
       });
       if (decision.allowed) allowed.push(item);
     }
@@ -767,6 +886,27 @@ function makeListScopeMembers(component: AccessControlComponent) {
       tokenIdentifier,
       scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
     });
+  };
+}
+
+function makeListScopeMemberDirectory(component: AccessControlComponent) {
+  return async (
+    ctx: AccessContext,
+    args: { scopeId?: string; cursor?: string; limit?: number } = {},
+  ): Promise<ScopeMemberDirectoryPage> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return { members: [] };
+
+    const result = await ctx.runQuery(component.queries.listScopeMemberDirectory, {
+      tokenIdentifier,
+      scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
+      cursor: args.cursor,
+      limit: args.limit,
+    });
+    return {
+      members: result.members,
+      ...(result.cursor ? { nextCursor: result.cursor } : {}),
+    };
   };
 }
 
@@ -841,7 +981,7 @@ async function ensureAuthorized(
   let scopeId: string | undefined;
   let resourceType: string | undefined;
   let resourceId: string | undefined;
-  let authorizeChain: AuthorizeAncestor[] | undefined;
+  let ancestors: Array<{ resourceType: string; resourceId: string }> | undefined;
   if (mode === "permission") {
     try {
       const extracted = await (access?.scope ?? defaultScope)(ctx, callerArgs);
@@ -851,7 +991,7 @@ async function ensureAuthorized(
         scopeId = extracted.scopeId;
         resourceType = extracted.resourceType;
         resourceId = extracted.resourceId;
-        authorizeChain = extracted.authorizeChain;
+        ancestors = extracted.ancestors;
       }
     } catch (error) {
       if (error instanceof ConvexError) throw error;
@@ -869,43 +1009,8 @@ async function ensureAuthorized(
     permission: mode === "permission" ? access?.permission : undefined,
     resourceType,
     resourceId,
+    ...ancestorArgs(ancestors),
   });
-
-  // Resource hierarchy (union): only when the direct check denied AND the scope
-  // resolver supplied ancestors. The default path (no chain) is unchanged and
-  // makes exactly one authorize call. `authorizeChain` is consumed here and
-  // never forwarded to the authorize query.
-  if (
-    !decision.allowed &&
-    !decision.explicitDeny &&
-    mode === "permission" &&
-    authorizeChain &&
-    authorizeChain.length > 0
-  ) {
-    let explicitAncestorDeny: { reasonCode: string; sourceVersion?: number } | undefined;
-    for (const ancestor of authorizeChain) {
-      const ancestorDecision = await ctx.runQuery(component.checks.authorize, {
-        tokenIdentifier: identity.tokenIdentifier,
-        scopeId,
-        permission: ancestor.permission ?? access?.permission,
-        resourceType: ancestor.resourceType,
-        resourceId: ancestor.resourceId,
-      });
-      if (ancestorDecision.allowed) return;
-      if (ancestorDecision.explicitDeny) {
-        explicitAncestorDeny = ancestorDecision;
-        break;
-      }
-    }
-    if (explicitAncestorDeny) {
-      throw new ConvexError({
-        code: "ACCESS_DENIED",
-        message: "Access denied",
-        reasonCode: explicitAncestorDeny.reasonCode,
-        sourceVersion: explicitAncestorDeny.sourceVersion,
-      });
-    }
-  }
 
   if (!decision.allowed) {
     throw new ConvexError({

@@ -46,6 +46,73 @@ describe("Access Control projection v3 consumer schemas", () => {
     expect(accessProjectionSyncPayloadSchema.parse(event)).toEqual(event);
   });
 
+  test("exact resource bindings may apply to descendants", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: {
+        roleBindings: Record<string, unknown>[];
+        permissionBindings: Record<string, unknown>[];
+      }[];
+    };
+    const updated = structuredClone(snapshot);
+    updated.scopes[0]!.roleBindings[0] = {
+      ...updated.scopes[0]!.roleBindings[0],
+      resourceType: "app.projects",
+      resourceId: "project_1",
+      appliesTo: "self_and_descendants",
+    };
+    updated.scopes[0]!.permissionBindings[0] = {
+      ...updated.scopes[0]!.permissionBindings[0],
+      resourceType: "app.projects",
+      resourceId: "project_1",
+      appliesTo: "self_and_descendants",
+    };
+
+    const parsed = accessProjectionSnapshotSchema.parse(updated);
+    expect(parsed.scopes[0]!.roleBindings[0]!.appliesTo).toBe("self_and_descendants");
+    expect(parsed.scopes[0]!.permissionBindings[0]!.appliesTo).toBe("self_and_descendants");
+  });
+
+  test("bindings without appliesTo default to self", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      scopes: {
+        roleBindings: { appliesTo?: string }[];
+        permissionBindings: { appliesTo?: string }[];
+      }[];
+    };
+    const legacyFlatPayload = structuredClone(snapshot);
+    delete legacyFlatPayload.scopes[0]!.roleBindings[0]!.appliesTo;
+    delete legacyFlatPayload.scopes[0]!.permissionBindings[0]!.appliesTo;
+
+    const parsed = accessProjectionSnapshotSchema.parse(legacyFlatPayload);
+    expect(parsed.scopes[0]!.roleBindings[0]!.appliesTo).toBe("self");
+    expect(parsed.scopes[0]!.permissionBindings[0]!.appliesTo).toBe("self");
+  });
+
+  test.each(["roleBindings", "permissionBindings"] as const)(
+    "%s require an exact resource when applying to descendants",
+    (field) => {
+      const snapshot = loadFixture("snapshot.json") as {
+        scopes: Record<
+          "roleBindings" | "permissionBindings",
+          { resourceType?: string; resourceId?: string; appliesTo?: string }[]
+        >[];
+      };
+      const corrupted = structuredClone(snapshot);
+      const binding = corrupted.scopes[0]![field][0]!;
+      binding.resourceType = "app.projects";
+      delete binding.resourceId;
+      binding.appliesTo = "self_and_descendants";
+
+      const result = accessProjectionSnapshotSchema.safeParse(corrupted);
+      expect(result.success).toBe(false);
+      expect(
+        result.error?.issues.some((issue) =>
+          issue.message.includes("Descendant applicability requires an exact resource"),
+        ),
+      ).toBe(true);
+    },
+  );
+
   // "removed" is the MANUAL admin-eviction status (split out of "blocked").
   // The consumer wire must accept it so ingestion can mirror an evicted member.
   test("a principal with status removed parses", () => {

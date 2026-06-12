@@ -21,6 +21,14 @@ import { z } from "zod";
 export const accessProjectionEffectSchema = z.enum(["allow", "deny"]);
 export type AccessProjectionEffect = z.infer<typeof accessProjectionEffectSchema>;
 
+export const accessProjectionApplicabilitySchema = z.enum([
+  "self",
+  "self_and_descendants",
+]);
+export type AccessProjectionApplicability = z.infer<
+  typeof accessProjectionApplicabilitySchema
+>;
+
 export const accessProjectionWildcardModeSchema = z.enum(["none", "immutable", "default"]);
 export type AccessProjectionWildcardMode = z.infer<typeof accessProjectionWildcardModeSchema>;
 
@@ -205,8 +213,20 @@ export const projectionScopeRoleBindingSchema = z.strictObject({
   accessScopeId: z.string().min(1),
   resourceType: z.string().min(1).optional(),
   resourceId: z.string().min(1).optional(),
+  appliesTo: accessProjectionApplicabilitySchema.default("self"),
   expiresAt: z.number().int().nonnegative().optional(),
   updatedAt: z.number().int().nonnegative(),
+}).superRefine((binding, ctx) => {
+  if (
+    binding.appliesTo === "self_and_descendants" &&
+    (binding.resourceType === undefined || binding.resourceId === undefined)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["appliesTo"],
+      message: "Descendant applicability requires an exact resource",
+    });
+  }
 });
 export type ProjectionScopeRoleBinding = z.infer<typeof projectionScopeRoleBindingSchema>;
 
@@ -222,6 +242,7 @@ export const projectionScopePermissionBindingSchema = z
     accessScopeId: z.string().min(1),
     resourceType: z.string().min(1).optional(),
     resourceId: z.string().min(1).optional(),
+    appliesTo: accessProjectionApplicabilitySchema.default("self"),
     expiresAt: z.number().int().nonnegative().optional(),
     updatedAt: z.number().int().nonnegative(),
   })
@@ -233,6 +254,16 @@ export const projectionScopePermissionBindingSchema = z
       ctx.addIssue({
         code: "custom",
         message: "Exactly one permission binding subject is required (principal XOR role)",
+      });
+    }
+    if (
+      binding.appliesTo === "self_and_descendants" &&
+      (binding.resourceType === undefined || binding.resourceId === undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["appliesTo"],
+        message: "Descendant applicability requires an exact resource",
       });
     }
   });

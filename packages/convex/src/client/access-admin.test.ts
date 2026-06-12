@@ -108,6 +108,7 @@ describe("createAccessAdminActions", () => {
         target: { mode: "specific", resourceId: "report_private" },
         permissionKey: "reports.read",
         effect: "deny",
+        appliesTo: "self_and_descendants",
         expiresAt: null,
       },
     );
@@ -120,6 +121,7 @@ describe("createAccessAdminActions", () => {
         target: { mode: "specific", resource_id: "report_private" },
         permission_key: "reports.read",
         effect: "deny",
+        applies_to: "self_and_descendants",
         expires_at: null,
         actor_mode: "service",
       },
@@ -491,6 +493,50 @@ describe("actor_mode on resource-grant writes", () => {
     });
   });
 
+  test("createResourceGrant forwards descendant applicability for an exact resource", async () => {
+    const post = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
+
+    await getHandler(actions.createResourceGrant)(
+      {},
+      {
+        scopeId: "scope_1",
+        herculesAuthUserId: "auth_user_2",
+        resourceType: "app.projects",
+        resourceId: "project_1",
+        roleKey: "project_manager",
+        appliesTo: "self_and_descendants",
+      },
+    );
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
+      body: expect.objectContaining({
+        resource_id: "project_1",
+        applies_to: "self_and_descendants",
+      }),
+    });
+  });
+
+  test("createResourceGrant rejects descendant applicability without an exact resource", async () => {
+    const post = vi.fn();
+    const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
+
+    await expect(
+      getHandler(actions.createResourceGrant)(
+        {},
+        {
+          scopeId: "scope_1",
+          herculesAuthUserId: "auth_user_2",
+          resourceType: "app.projects",
+          resourceId: null,
+          roleKey: "project_manager",
+          appliesTo: "self_and_descendants",
+        },
+      ),
+    ).rejects.toThrow("exact resourceId");
+    expect(post).not.toHaveBeenCalled();
+  });
+
   test("revokeResourceGrant and setGrantExpiry forward the app_user id_token when delegated", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessUserActions({
@@ -731,6 +777,7 @@ describe("createResourceInvitation", () => {
           resourceType: "app.project",
           resourceId: "project_1",
           roleKey: "project_contributor",
+          appliesTo: "self_and_descendants",
           expiresInDays: 7,
         },
         { client: { post } },
@@ -745,6 +792,7 @@ describe("createResourceInvitation", () => {
         resource_id: "project_1",
         role_key: "project_contributor",
         permission_key: undefined,
+        applies_to: "self_and_descendants",
         expires_in_days: 7,
         actor_mode: "service",
       },
@@ -1192,6 +1240,7 @@ describe("raw access reads", () => {
           conferralType: "role",
           roleId: "role_contributor",
           permissionId: null,
+          appliesTo: "self",
           expiresAt: "2026-06-20T00:00:00.000Z",
           createdAt: "2026-06-10T00:00:00.000Z",
           updatedAt: "2026-06-10T00:00:00.000Z",

@@ -6,7 +6,11 @@ import {
 } from "convex/server";
 import { v } from "convex/values";
 import { evaluatePermissionDecision } from "./checks";
-import { collectPrincipalIds, enumeratePermissions, evaluateEffectiveAccess } from "./effective";
+import {
+  collectPrincipalIds,
+  enumeratePermissions,
+  evaluateEffectiveAccess,
+} from "./effective";
 import schema from "./schema";
 
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
@@ -54,6 +58,14 @@ type EffectivePermissionsResult = {
   // and avoid treating the materialized list as exhaustive.
   wildcard: "none" | "immutable" | "default";
   permissions: string[];
+};
+
+type ScopeMemberDirectoryEntry = {
+  principalId: string;
+  herculesAuthUserId: string;
+  name: string;
+  email: string;
+  image?: string;
 };
 
 type ScopeMember = {
@@ -172,6 +184,9 @@ export const getEffectivePermissions = query({
     scopeId: v.string(),
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
+    ancestors: v.optional(
+      v.array(v.object({ resourceType: v.string(), resourceId: v.string() })),
+    ),
   },
   handler: async (ctx, args): Promise<EffectivePermissionsResult> => {
     const evaluation = await evaluateEffectiveAccess(ctx, args);
@@ -190,6 +205,67 @@ export const getEffectivePermissions = query({
       effectiveRoleIds: evaluation.effectiveRoleIds,
       wildcard: evaluation.wildcard,
       permissions: permissions.map((permission) => permission.key),
+    };
+  },
+});
+
+export const listScopeMemberDirectory = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    scopeId: v.string(),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ members: ScopeMemberDirectoryEntry[]; cursor?: string }> => {
+    if (!(await callerHasScopePermission(ctx, args, "app.members:read"))) {
+      return { members: [] };
+    }
+    const scope = await resolveScopeRow(ctx, args.scopeId);
+    if (!scope) return { members: [] };
+
+    const limit = args.limit ?? 50;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("listScopeMemberDirectory limit must be an integer from 1 to 100");
+    }
+
+    const page = await ctx.db
+      .query("principals")
+      .withIndex("by_scope_status_type", (q) =>
+        q
+          .eq("accessScopeId", scope.accessScopeId)
+          .eq("status", "active")
+          .eq("type", "user"),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: limit });
+
+    const members = (
+      await Promise.all(
+        page.page.map(async (principal): Promise<ScopeMemberDirectoryEntry | null> => {
+          if (!principal.herculesAuthUserId) return null;
+          const user = await ctx.db
+            .query("users")
+            .withIndex("by_auth_user_id", (q) =>
+              q.eq("herculesAuthUserId", principal.herculesAuthUserId!),
+            )
+            .unique();
+          if (!user) return null;
+          return {
+            principalId: principal.principalId,
+            herculesAuthUserId: principal.herculesAuthUserId,
+            name: user.name,
+            email: user.email,
+            ...(user.image === undefined ? {} : { image: user.image }),
+          };
+        }),
+      )
+    ).filter((member): member is ScopeMemberDirectoryEntry => member !== null);
+
+    return {
+      members,
+      ...(page.isDone ? {} : { cursor: page.continueCursor }),
     };
   },
 });
@@ -348,6 +424,7 @@ type DirectResourceSubject = {
   image?: string;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   effect: "allow" | "deny";
+  appliesTo: "self" | "self_and_descendants";
   expiresAt?: number;
   roleId?: string;
   roleKey?: string;
@@ -418,6 +495,7 @@ export const listDirectSubjectsForResource = query({
       roleId?: string;
       permissionId?: string;
       effect: "allow" | "deny";
+      appliesTo: "self" | "self_and_descendants";
       expiresAt?: number;
     };
     const grants: ResourceBinding[] = [
@@ -426,6 +504,7 @@ export const listDirectSubjectsForResource = query({
         relationKind: "role" as const,
         roleId: binding.roleId,
         effect: "allow" as const,
+        appliesTo: binding.appliesTo,
         expiresAt: binding.expiresAt,
       })),
       ...resourcePermissionBindings.flatMap((binding) =>
@@ -436,6 +515,7 @@ export const listDirectSubjectsForResource = query({
                 relationKind: "direct_permission" as const,
                 permissionId: binding.permissionId,
                 effect: binding.effect,
+                appliesTo: binding.appliesTo,
                 expiresAt: binding.expiresAt,
               },
             ]
@@ -506,6 +586,7 @@ export const listDirectSubjectsForResource = query({
         image,
         status: principal.status,
         effect: grant.effect,
+        appliesTo: grant.appliesTo,
         expiresAt: grant.expiresAt,
         roleId: grant.roleId,
         roleKey,

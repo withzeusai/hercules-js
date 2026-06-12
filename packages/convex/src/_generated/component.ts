@@ -20,6 +20,12 @@ type AuthorizationArgs = {
   // returns these via ensureAuthorized in the SDK client.
   resourceType?: string;
   resourceId?: string;
+  ancestors?: AuthorizationAncestor[];
+};
+
+type AuthorizationAncestor = {
+  resourceType: string;
+  resourceId: string;
 };
 
 type AuthorizationDecision = {
@@ -38,8 +44,13 @@ type GetEffectivePermissionsArgs = {
   scopeId: string;
   resourceType?: string;
   resourceId?: string;
+  ancestors?: AuthorizationAncestor[];
 };
 type ListScopeArgs = { tokenIdentifier?: string; scopeId: string };
+type ListScopeMemberDirectoryArgs = ListScopeArgs & {
+  cursor?: string;
+  limit?: number;
+};
 type ListDirectSubjectsArgs = {
   tokenIdentifier?: string;
   scopeId: string;
@@ -65,6 +76,19 @@ type ScopeMember = {
   email?: string;
   image?: string;
   roles: RoleSummary[];
+};
+
+type ScopeMemberDirectoryEntry = {
+  principalId: string;
+  herculesAuthUserId: string;
+  name: string;
+  email: string;
+  image?: string;
+};
+
+type ScopeMemberDirectoryPage = {
+  members: ScopeMemberDirectoryEntry[];
+  cursor?: string;
 };
 
 type ScopeRoleSummary = RoleSummary & { shared: boolean };
@@ -142,6 +166,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "public",
       GetEffectivePermissionsArgs,
       EffectivePermissionsResult,
+      Name
+    >;
+    listScopeMemberDirectory: FunctionReference<
+      "query",
+      "public",
+      ListScopeMemberDirectoryArgs,
+      ScopeMemberDirectoryPage,
       Name
     >;
     listScopeMembers: FunctionReference<"query", "public", ListScopeArgs, ScopeMember[], Name>;

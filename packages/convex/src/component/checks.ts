@@ -6,7 +6,12 @@ import {
 } from "convex/server";
 import { v } from "convex/values";
 import { evaluateAccess, hasExplicitDeny } from "./authz";
-import { evaluateEffectiveAccess, isSupersetAction } from "./effective";
+import {
+  evaluateEffectiveAccess,
+  isSupersetAction,
+  normalizeAuthorizationAncestors,
+  type AuthorizationAncestor,
+} from "./effective";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -21,6 +26,10 @@ const query = queryGeneric as QueryBuilder<DataModel, "public">;
 // of the checked permission, so it sends this sentinel and the gate below
 // substitutes the resolved permission's resourceType.
 const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
+const authorizationAncestorValidator = v.object({
+  resourceType: v.string(),
+  resourceId: v.string(),
+});
 
 export const authorize = query({
   args: {
@@ -32,6 +41,7 @@ export const authorize = query({
     // via a scope extractor when the permission applies to a specific row.
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
+    ancestors: v.optional(v.array(authorizationAncestorValidator)),
   },
   handler: async (ctx, args) => {
     if (!args.tokenIdentifier) {
@@ -64,6 +74,7 @@ export const authorize = query({
       permission: args.permission,
       resourceType: args.resourceType,
       resourceId: args.resourceId,
+      ancestors: args.ancestors,
     });
   },
 });
@@ -82,6 +93,7 @@ export async function evaluatePermissionDecision(
     permission: string;
     resourceType?: string;
     resourceId?: string;
+    ancestors?: AuthorizationAncestor[];
   },
 ) {
   // Resolve the requested permission's canonical (resourceType, action) by
@@ -102,12 +114,17 @@ export async function evaluatePermissionDecision(
     args.resourceType === PERMISSION_RESOURCE_TYPE_SENTINEL
       ? resolvedPermission?.resourceType
       : args.resourceType;
+  const ancestors = normalizeAuthorizationAncestors(args.ancestors);
+  if (ancestors === null) {
+    return deny("invalid_request");
+  }
 
   const evaluation = await evaluateEffectiveAccess(ctx, {
     tokenIdentifier: args.tokenIdentifier,
     scopeId: args.scopeId,
     resourceType,
     resourceId: args.resourceId,
+    ancestors,
   });
   if (!evaluation.allowed) {
     return deny(

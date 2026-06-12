@@ -67,7 +67,7 @@ function helpText(): string {
     "Checks exported Convex functions for raw query(), mutation(), or action()",
     "builders that should use Hercules Access Control builders from convex/hercules.ts.",
     "Also checks common managed organization mistakes such as placeholder scope ids,",
-    "app-local org membership tables, role-name permission gates, unsafe org slug lookups,",
+    "app-local org membership tables, unsafe org slug lookups,",
     "and access* permission keys that are not declared in hercules/iam.jsonc.",
     "Apps that do not use the @usehercules/convex Access Control SDK in their Convex",
     "functions pass unchanged: raw Convex builders stay allowed there.",

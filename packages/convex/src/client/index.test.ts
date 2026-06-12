@@ -6,6 +6,7 @@ import {
   PERMISSION_RESOURCE_TYPE_SENTINEL,
   createAccessControl,
   scopeFromArg,
+  scopeFromParentResource,
   scopeFromResource,
   type AccessControlComponent,
 } from "./index";
@@ -22,6 +23,7 @@ const component = {
     listMyMemberships: "listMyMemberships",
     listMyRoles: "listMyRoles",
     getEffectivePermissions: "getEffectivePermissions",
+    listScopeMemberDirectory: "listScopeMemberDirectory",
   },
 };
 
@@ -244,6 +246,19 @@ describe("createAccessControl", () => {
             { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
           ];
         }
+        if (ref === "listScopeMemberDirectory") {
+          return {
+            members: [
+              {
+                principalId: "principal_1",
+                herculesAuthUserId: "user_1",
+                name: "Alice",
+                email: "alice@example.com",
+              },
+            ],
+            cursor: "cursor_2",
+          };
+        }
         throw new Error(`Unexpected query ref ${ref}`);
       }),
     };
@@ -256,12 +271,32 @@ describe("createAccessControl", () => {
       }),
     ).resolves.toBe(true);
     await expect(
-      builders.getEffectivePermissions(ctx as never, { scopeId: "scope_abc" }),
+      builders.getEffectivePermissions(ctx as never, {
+        scopeId: "scope_abc",
+        resource: { type: "app.projects" },
+      }),
     ).resolves.toEqual(["tasks.read"]);
     await expect(builders.listMyMemberships(ctx as never)).resolves.toHaveLength(1);
     await expect(builders.listMyRoles(ctx as never, { scopeId: "scope_abc" })).resolves.toEqual([
       { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
     ]);
+    await expect(
+      builders.listScopeMemberDirectory(ctx as never, {
+        scopeId: "scope_abc",
+        cursor: "cursor_1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      members: [
+        {
+          principalId: "principal_1",
+          herculesAuthUserId: "user_1",
+          name: "Alice",
+          email: "alice@example.com",
+        },
+      ],
+      nextCursor: "cursor_2",
+    });
 
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
@@ -269,6 +304,56 @@ describe("createAccessControl", () => {
       permission: "tasks.read",
       resourceType: "tasks",
       resourceId: "task_1",
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("getEffectivePermissions", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_abc",
+      resourceType: "app.projects",
+      resourceId: undefined,
+      ancestors: undefined,
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("listScopeMemberDirectory", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_abc",
+      cursor: "cursor_1",
+      limit: 25,
+    });
+  });
+
+  test("hasPermission forwards a bounded explicit ancestor chain atomically", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi
+        .fn()
+        .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
+    };
+
+    await expect(
+      builders.hasPermission(ctx, {
+        scopeId: "scope_1",
+        permission: "app.tasks:update",
+        resource: { type: "app.tasks", id: "task_1" },
+        ancestors: [{ type: "app.projects", id: "project_1" }],
+      }),
+    ).resolves.toBe(true);
+
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_1",
+      permission: "app.tasks:update",
+      resourceType: "app.tasks",
+      resourceId: "task_1",
+      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
     });
   });
 
@@ -344,6 +429,82 @@ describe("createAccessControl", () => {
       resourceType: "app.project",
       resourceId: "p1",
     });
+  });
+
+  test("filterAuthorizedResources includes rows allowed by an ancestor", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn(async (_ref: string, args: { ancestors?: unknown[] }) => ({
+        allowed: args.ancestors?.length === 1,
+        reasonCode: "allowed",
+        effectiveRoleIds: [],
+      })),
+    };
+
+    const rows = [{ _id: "task_1", projectId: "project_1" }];
+    const result = await builders.filterAuthorizedResources(ctx as never, {
+      resources: rows,
+      permission: "app.tasks:read",
+      scopeId: "scope_1",
+      resource: (row) => ({ type: "app.tasks", id: row._id }),
+      ancestors: (row) => [{ type: "app.projects", id: row.projectId }],
+    });
+
+    expect(result).toEqual(rows);
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_1",
+      permission: "app.tasks:read",
+      resourceType: "app.tasks",
+      resourceId: "task_1",
+      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+    });
+  });
+
+  test("filterAuthorizedResources excludes rows denied by an ancestor", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi
+          .fn()
+          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+      },
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: false,
+        reasonCode: "explicit_deny",
+        effectiveRoleIds: [],
+      }),
+    };
+
+    const result = await builders.filterAuthorizedResources(ctx as never, {
+      resources: [{ _id: "task_1", projectId: "project_1" }],
+      permission: "app.tasks:read",
+      resource: (row) => ({ type: "app.tasks", id: row._id }),
+      ancestors: (row) => [{ type: "app.projects", id: row.projectId }],
+    });
+
+    expect(result).toEqual([]);
+    expect(ctx.runQuery).toHaveBeenCalledWith(
+      "authorize",
+      expect.objectContaining({
+        ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+      }),
+    );
   });
 
   test("filterAuthorizedResources returns [] when the caller is unauthenticated", async () => {
@@ -424,9 +585,7 @@ describe("createAccessControl", () => {
 
 describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   function makeTaskMutation(
-    authorizeAgainst?: (
-      row: Record<string, unknown>,
-    ) => Array<{ resourceType: string; resourceId: string; permission?: string }>,
+    authorizeAgainst?: (row: Record<string, unknown>) => Array<{ type: string; id: string }>,
   ) {
     const builders = createAccessControl({
       query: identityBuilder,
@@ -460,60 +619,40 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   test("allows via an ancestor when the resource itself is implicitly denied", async () => {
     const handler = makeTaskMutation((task) => [
       {
-        resourceType: "app.project",
-        resourceId: String(task.projectId),
-        permission: "app.project:edit",
+        type: "app.project",
+        id: String(task.projectId),
       },
     ]);
-    const runQuery = vi.fn(async (_ref: string, a: { resourceType?: string }) => ({
-      allowed: a.resourceType === "app.project",
-      reasonCode: a.resourceType === "app.project" ? "allowed" : "denied",
-      explicitDeny: false,
+    const runQuery = vi.fn(async () => ({
+      allowed: true,
+      reasonCode: "allowed",
       effectiveRoleIds: [],
     }));
     await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).resolves.toBe("ok");
-    expect(runQuery).toHaveBeenCalledTimes(2);
-    expect(runQuery).toHaveBeenNthCalledWith(
-      1,
-      "authorize",
-      expect.objectContaining({
-        resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
-        resourceId: "task_1",
-      }),
-    );
-    expect(runQuery).toHaveBeenNthCalledWith(
-      2,
-      "authorize",
-      expect.objectContaining({
-        resourceType: "app.project",
-        resourceId: "proj_1",
-        permission: "app.project:edit",
-      }),
-    );
+    expect(runQuery).toHaveBeenCalledTimes(1);
+    expect(runQuery).toHaveBeenCalledWith("authorize", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_1",
+      permission: "app.task:edit",
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      resourceId: "task_1",
+      ancestors: [{ resourceType: "app.project", resourceId: "proj_1" }],
+    });
   });
 
-  test("does not let an ancestor allow override an explicit child deny", async () => {
+  test("returns an atomic deny from the target and ancestor evaluation", async () => {
     const handler = makeTaskMutation((task) => [
       {
-        resourceType: "app.project",
-        resourceId: String(task.projectId),
-        permission: "app.project:edit",
+        type: "app.project",
+        id: String(task.projectId),
       },
     ]);
-    const runQuery = vi
-      .fn()
-      .mockResolvedValueOnce({
-        allowed: false,
-        reasonCode: "permission_denied",
-        explicitDeny: true,
-        effectiveRoleIds: [],
-      })
-      .mockResolvedValueOnce({
-        allowed: true,
-        reasonCode: "allowed",
-        explicitDeny: false,
-        effectiveRoleIds: [],
-      });
+    const runQuery = vi.fn().mockResolvedValue({
+      allowed: false,
+      reasonCode: "permission_denied",
+      explicitDeny: true,
+      effectiveRoleIds: [],
+    });
 
     await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(
       ConvexError,
@@ -521,68 +660,15 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     expect(runQuery).toHaveBeenCalledTimes(1);
   });
 
-  test("does not let a later ancestor override an earlier explicit deny", async () => {
+  test("always sends declared ancestors even when the target itself allows", async () => {
     const handler = makeTaskMutation((task) => [
-      {
-        resourceType: "app.project",
-        resourceId: String(task.projectId),
-        permission: "app.project:edit",
-      },
-      {
-        resourceType: "app.workspace",
-        resourceId: "workspace_1",
-        permission: "app.workspace:edit",
-      },
-    ]);
-    const runQuery = vi
-      .fn()
-      .mockResolvedValueOnce({
-        allowed: false,
-        reasonCode: "permission_denied",
-        explicitDeny: false,
-        effectiveRoleIds: [],
-      })
-      .mockResolvedValueOnce({
-        allowed: false,
-        reasonCode: "permission_denied",
-        explicitDeny: true,
-        effectiveRoleIds: [],
-      })
-      .mockResolvedValueOnce({
-        allowed: true,
-        reasonCode: "allowed",
-        explicitDeny: false,
-        effectiveRoleIds: [],
-      });
-
-    await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(
-      ConvexError,
-    );
-    expect(runQuery).toHaveBeenCalledTimes(2);
-  });
-
-  test("does not check ancestors when the resource itself allows", async () => {
-    const handler = makeTaskMutation((task) => [
-      { resourceType: "app.project", resourceId: String(task.projectId) },
+      { type: "app.project", id: String(task.projectId) },
     ]);
     const runQuery = vi
       .fn()
       .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] });
     await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).resolves.toBe("ok");
     expect(runQuery).toHaveBeenCalledTimes(1);
-  });
-
-  test("denies when neither the resource nor any ancestor allows", async () => {
-    const handler = makeTaskMutation((task) => [
-      { resourceType: "app.project", resourceId: String(task.projectId) },
-    ]);
-    const runQuery = vi
-      .fn()
-      .mockResolvedValue({ allowed: false, reasonCode: "denied", effectiveRoleIds: [] });
-    await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(
-      ConvexError,
-    );
-    expect(runQuery).toHaveBeenCalledTimes(2);
   });
 
   test("default path without authorizeAgainst makes exactly one authorize call", async () => {
@@ -597,8 +683,8 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   test("rejects an over-long ancestor chain before any authorize call", async () => {
     const handler = makeTaskMutation(() =>
       Array.from({ length: 11 }, (_unused, i) => ({
-        resourceType: "app.project",
-        resourceId: `p${i}`,
+        type: "app.project",
+        id: `p${i}`,
       })),
     );
     const runQuery = vi
@@ -608,5 +694,18 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
       ConvexError,
     );
     expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  test("scopeFromParentResource authorizes child creation against its loaded parent", async () => {
+    const extract = scopeFromParentResource("projects", "projectId", {
+      parentResourceType: "app.projects",
+    });
+    const ctx = { db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_1" }) } };
+
+    await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
+      scopeId: "scope_1",
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+    });
   });
 });

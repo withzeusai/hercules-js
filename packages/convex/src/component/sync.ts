@@ -41,6 +41,18 @@ const expirePermissionBindingReference = makeFunctionReference<
 // with a clear payload failure rather than letting the mutation abort opaquely.
 const MAX_SNAPSHOT_DOCUMENTS = 16_000;
 
+type AccessBindingAppliesTo = "self" | "self_and_descendants";
+
+function bindingAppliesTo(binding: object): AccessBindingAppliesTo {
+  if (
+    "appliesTo" in binding &&
+    (binding.appliesTo === "self" || binding.appliesTo === "self_and_descendants")
+  ) {
+    return binding.appliesTo;
+  }
+  return "self";
+}
+
 // The args validator is intentionally loose (the producer ships either payload
 // kind); real validation is the zod parse below. Accept the v3 top-level shape.
 const syncPayloadArgs = {
@@ -278,7 +290,11 @@ export const applySync = mutation({
           if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
             continue;
           }
-          await ctx.db.insert("role_bindings", { ...binding, accessScopeId: enclosingScopeId });
+          await ctx.db.insert("role_bindings", {
+            ...binding,
+            accessScopeId: enclosingScopeId,
+            appliesTo: bindingAppliesTo(binding),
+          });
           await scheduleRoleBindingExpiration(binding);
         }
         for (const binding of scopeEntry.permissionBindings) {
@@ -288,6 +304,7 @@ export const applySync = mutation({
           await ctx.db.insert("permission_bindings", {
             ...binding,
             accessScopeId: enclosingScopeId,
+            appliesTo: bindingAppliesTo(binding),
           });
           await schedulePermissionBindingExpiration(binding);
         }
@@ -863,6 +880,7 @@ export const applySync = mutation({
         accessScopeId: string;
         resourceType?: string;
         resourceId?: string;
+        appliesTo?: AccessBindingAppliesTo;
         expiresAt?: number;
         updatedAt: number;
       },
@@ -876,8 +894,9 @@ export const applySync = mutation({
         if (existing) await ctx.db.delete(existing._id);
         return;
       }
-      if (existing) await ctx.db.replace(existing._id, binding);
-      else await ctx.db.insert("role_bindings", binding);
+      const normalized = { ...binding, appliesTo: bindingAppliesTo(binding) };
+      if (existing) await ctx.db.replace(existing._id, normalized);
+      else await ctx.db.insert("role_bindings", normalized);
       await scheduleRoleBindingExpiration(binding);
     }
 
@@ -899,6 +918,7 @@ export const applySync = mutation({
         accessScopeId: string;
         resourceType?: string;
         resourceId?: string;
+        appliesTo?: AccessBindingAppliesTo;
         expiresAt?: number;
         updatedAt: number;
       },
@@ -912,8 +932,9 @@ export const applySync = mutation({
         if (existing) await ctx.db.delete(existing._id);
         return;
       }
-      if (existing) await ctx.db.replace(existing._id, binding);
-      else await ctx.db.insert("permission_bindings", binding);
+      const normalized = { ...binding, appliesTo: bindingAppliesTo(binding) };
+      if (existing) await ctx.db.replace(existing._id, normalized);
+      else await ctx.db.insert("permission_bindings", normalized);
       await schedulePermissionBindingExpiration(binding);
     }
 

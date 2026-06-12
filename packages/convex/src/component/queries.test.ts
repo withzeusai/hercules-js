@@ -41,6 +41,7 @@ type DirectSubject = {
   type: "user" | "group";
   herculesAuthUserId?: string;
   name?: string;
+  appliesTo: "self" | "self_and_descendants";
 };
 
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
@@ -1715,7 +1716,66 @@ describe("listDirectSubjectsForResource", () => {
         principalId: "p_alice_acme",
         permissionKey: "reports.read",
         effect: "allow",
+        appliesTo: "self",
       }),
+    ]);
+  });
+
+  test("reports applicability for direct permission and role bindings", async () => {
+    const t = convexTest(schema, modules);
+    const catalog = resourceCatalogSnapshot();
+    catalog.entities.roles.push({
+      roleId: "role_reporter",
+      accessScopeId: "scope_default",
+      key: "reporter",
+      kind: "iam",
+      name: "Reporter",
+      wildcard: "none",
+      updatedAt: 1,
+    });
+    const org = resourceOrgSnapshot();
+    org.entities.grants[0]!.appliesTo = "self_and_descendants";
+    org.entities.grants.push({
+      grantId: "grant_alice_reporter",
+      subjectPrincipalId: "p_alice_acme",
+      relationKind: "role",
+      roleId: "role_reporter",
+      effect: "allow",
+      objectType: "resource",
+      objectId: "report_123",
+      objectResourceType: "reports",
+      appliesTo: "self",
+      updatedAt: 2,
+    });
+
+    await t.mutation(applySync, catalog);
+    await t.mutation(applySync, org);
+
+    const subjects = await t.query(listDirectSubjectsForResource, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      scopeId: "scope_acme",
+      resourceType: "reports",
+      resourceId: "report_123",
+      permission: "reports.read",
+    });
+
+    expect(
+      subjects.map(({ permissionKey, roleKey, appliesTo }) => ({
+        permissionKey,
+        roleKey,
+        appliesTo,
+      })),
+    ).toEqual([
+      {
+        permissionKey: undefined,
+        roleKey: "reporter",
+        appliesTo: "self",
+      },
+      {
+        permissionKey: "reports.read",
+        roleKey: undefined,
+        appliesTo: "self_and_descendants",
+      },
     ]);
   });
 
