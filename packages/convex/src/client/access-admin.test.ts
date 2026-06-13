@@ -609,6 +609,106 @@ describe("actor_mode on resource-grant writes", () => {
 });
 
 describe("createAccessUserActions", () => {
+  test("uses an active principal from the local mirror without calling the API", async () => {
+    const post = vi.fn();
+    const getDeploymentEntryStatus = vi.fn().mockResolvedValue({
+      kind: "principal",
+      principalId: "principal_1",
+      status: "active",
+      stateVersion: 7,
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      getDeploymentEntryStatus,
+      client: { post },
+    });
+
+    await expect(
+      getHandler(actions.enterDeployment)({}, { idToken: ID_TOKEN }),
+    ).resolves.toEqual({
+      allowed: true,
+      reason: "existing_active",
+      principalId: "principal_1",
+      status: "active",
+      stateVersion: 7,
+      changed: false,
+    });
+    expect(getDeploymentEntryStatus).toHaveBeenCalledWith({});
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test.each(["blocked", "suspended", "pending_approval", "removed"] as const)(
+    "keeps a local %s principal on the audited control-plane path",
+    async (status) => {
+      const post = vi.fn().mockResolvedValue({
+        allowed: false,
+        reason: `principal_${status}`,
+        principal_id: "principal_1",
+        status,
+        state_version: 9,
+        changed: false,
+      });
+      const getDeploymentEntryStatus = vi.fn().mockResolvedValue({
+        kind: "principal",
+        principalId: "principal_1",
+        status,
+        stateVersion: 9,
+      });
+      const actions = createAccessUserActions({
+        authenticatedAction: identityBuilder,
+        getDeploymentEntryStatus,
+        client: { post },
+      });
+
+      await expect(
+        getHandler(actions.enterDeployment)({}, { idToken: ID_TOKEN }),
+      ).resolves.toEqual({
+        allowed: false,
+        reason: `principal_${status}`,
+        principalId: "principal_1",
+        status,
+        stateVersion: 9,
+        changed: false,
+      });
+      expect(post).toHaveBeenCalledWith("/v1/access-control/entry", {
+        body: { id_token: ID_TOKEN },
+      });
+    },
+  );
+
+  test("falls back to the control plane when the principal is missing locally", async () => {
+    const post = vi.fn().mockResolvedValue({
+      allowed: true,
+      reason: "open_allowed",
+      principal_id: "principal_1",
+      status: "active",
+      state_version: 8,
+      changed: true,
+    });
+    const getDeploymentEntryStatus = vi.fn().mockResolvedValue({
+      kind: "fallback",
+      reason: "principal_missing",
+      stateVersion: 7,
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      getDeploymentEntryStatus,
+      client: { post },
+    });
+
+    await expect(
+      getHandler(actions.enterDeployment)({}, { idToken: ID_TOKEN }),
+    ).resolves.toMatchObject({
+      allowed: true,
+      principalId: "principal_1",
+      stateVersion: 8,
+      changed: true,
+    });
+    expect(post).toHaveBeenCalledWith("/v1/access-control/entry", {
+      body: { id_token: ID_TOKEN },
+    });
+  });
+
   test("enters the current deployment and normalizes the decision", async () => {
     const post = vi
       .fn()

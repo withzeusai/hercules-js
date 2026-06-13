@@ -38,6 +38,7 @@ type AuthorizationDecision = {
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
+type GetDeploymentEntryStatusArgs = { tokenIdentifier?: string };
 type ListMyRolesArgs = { tokenIdentifier?: string; scopeId: string };
 type GetEffectivePermissionsArgs = {
   tokenIdentifier?: string;
@@ -128,6 +129,25 @@ type Membership = {
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 };
 
+type DeploymentEntryStatus =
+  | {
+      kind: "principal";
+      principalId: string;
+      status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+      stateVersion: number;
+    }
+  | {
+      kind: "fallback";
+      reason:
+        | "identity_missing"
+        | "identity_invalid"
+        | "unexpected_issuer"
+        | "mirror_not_ready"
+        | "default_scope_missing"
+        | "principal_missing";
+      stateVersion?: number;
+    };
+
 type EffectivePermissionsResult = {
   allowed: boolean;
   reasonCode: string;
@@ -153,6 +173,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision, Name>;
   };
   queries: {
+    getDeploymentEntryStatus: FunctionReference<
+      "query",
+      "public",
+      GetDeploymentEntryStatusArgs,
+      DeploymentEntryStatus,
+      Name
+    >;
     listMyMemberships: FunctionReference<
       "query",
       "public",

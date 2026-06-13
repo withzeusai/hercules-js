@@ -98,6 +98,69 @@ type ScopePermissionSummary = {
   tenantAssignable: boolean;
 };
 
+export const getDeploymentEntryStatus = query({
+  args: { tokenIdentifier: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!args.tokenIdentifier) {
+      return { kind: "fallback" as const, reason: "identity_missing" as const };
+    }
+
+    const state = await ctx.db.query("sync_state").unique();
+    if (!state) {
+      return { kind: "fallback" as const, reason: "mirror_not_ready" as const };
+    }
+
+    const token = parseTokenIdentifier(args.tokenIdentifier);
+    if (!token) {
+      return {
+        kind: "fallback" as const,
+        reason: "identity_invalid" as const,
+        stateVersion: state.sourceVersion,
+      };
+    }
+    if (token.issuer !== state.expectedIssuer) {
+      return {
+        kind: "fallback" as const,
+        reason: "unexpected_issuer" as const,
+        stateVersion: state.sourceVersion,
+      };
+    }
+
+    const scope = await ctx.db
+      .query("scopes")
+      .withIndex("by_kind", (q) => q.eq("kind", "default"))
+      .unique();
+    if (!scope || scope.status !== "active") {
+      return {
+        kind: "fallback" as const,
+        reason: "default_scope_missing" as const,
+        stateVersion: state.sourceVersion,
+      };
+    }
+
+    const principal = await ctx.db
+      .query("principals")
+      .withIndex("by_scope_auth_user", (q) =>
+        q.eq("accessScopeId", scope.accessScopeId).eq("herculesAuthUserId", token.subject),
+      )
+      .unique();
+    if (!principal || principal.type !== "user") {
+      return {
+        kind: "fallback" as const,
+        reason: "principal_missing" as const,
+        stateVersion: state.sourceVersion,
+      };
+    }
+
+    return {
+      kind: "principal" as const,
+      principalId: principal.principalId,
+      status: principal.status,
+      stateVersion: state.sourceVersion,
+    };
+  },
+});
+
 export const listMyMemberships = query({
   args: { tokenIdentifier: v.optional(v.string()) },
   handler: async (ctx, args) => {

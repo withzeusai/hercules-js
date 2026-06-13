@@ -42,6 +42,7 @@ type AuthorizationArgs = {
 };
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
+type GetDeploymentEntryStatusArgs = { tokenIdentifier?: string };
 type ListMyRolesArgs = { tokenIdentifier?: string; scopeId: string };
 type GetEffectivePermissionsArgs = {
   tokenIdentifier?: string;
@@ -69,6 +70,32 @@ export type Membership = {
   joinedAt: number;
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 };
+
+export type AccessPrincipalStatus =
+  | "active"
+  | "blocked"
+  | "suspended"
+  | "pending_approval"
+  | "removed";
+
+export type AccessDeploymentEntryMirrorResult =
+  | {
+      kind: "principal";
+      principalId: string;
+      status: AccessPrincipalStatus;
+      stateVersion: number;
+    }
+  | {
+      kind: "fallback";
+      reason:
+        | "identity_missing"
+        | "identity_invalid"
+        | "unexpected_issuer"
+        | "mirror_not_ready"
+        | "default_scope_missing"
+        | "principal_missing";
+      stateVersion?: number;
+    };
 
 export type EffectivePermissionsResult = {
   allowed: boolean;
@@ -164,6 +191,12 @@ export type AccessControlComponent = {
     authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision>;
   };
   queries: {
+    getDeploymentEntryStatus: FunctionReference<
+      "query",
+      "public",
+      GetDeploymentEntryStatusArgs,
+      AccessDeploymentEntryMirrorResult
+    >;
     listMyMemberships: FunctionReference<"query", "public", ListMyMembershipsArgs, Membership[]>;
     listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[]>;
     getEffectivePermissions: FunctionReference<
@@ -295,6 +328,9 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     ctx: AccessContext<DataModel>,
     args?: EffectivePermissionsArgs,
   ) => Promise<string[]>;
+  getDeploymentEntryStatus: (
+    ctx: AccessContext<DataModel>,
+  ) => Promise<AccessDeploymentEntryMirrorResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
   // real `accessQuery`. Use this for "list my projects" style lists: the app
@@ -424,6 +460,7 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     requirePermission: makeRequirePermission(component),
     requireAnyPermission: makeRequireAnyPermission(component),
     getEffectivePermissions: makeGetEffectivePermissions(component),
+    getDeploymentEntryStatus: makeGetDeploymentEntryStatus(component),
     filterAuthorizedResources: makeFilterAuthorizedResources(component),
     listMyMemberships: makeListMyMemberships(component),
     listMyRoles: makeListMyRoles(component),
@@ -862,6 +899,19 @@ function makeListMyMemberships(component: AccessControlComponent) {
     if (!tokenIdentifier) return [];
 
     return await ctx.runQuery(component.queries.listMyMemberships, { tokenIdentifier });
+  };
+}
+
+function makeGetDeploymentEntryStatus(component: AccessControlComponent) {
+  return async (ctx: AccessContext): Promise<AccessDeploymentEntryMirrorResult> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) {
+      return { kind: "fallback", reason: "identity_missing" };
+    }
+
+    return await ctx.runQuery(component.queries.getDeploymentEntryStatus, {
+      tokenIdentifier,
+    });
   };
 }
 

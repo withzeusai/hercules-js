@@ -43,6 +43,18 @@ type DirectSubject = {
   name?: string;
   appliesTo: "self" | "self_and_descendants";
 };
+type DeploymentEntryStatus =
+  | {
+      kind: "principal";
+      principalId: string;
+      status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+      stateVersion: number;
+    }
+  | {
+      kind: "fallback";
+      reason: string;
+      stateVersion?: number;
+    };
 
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
 const getEffectivePermissions = makeFunctionReference<
@@ -74,6 +86,11 @@ const listDirectSubjectsForResource = makeFunctionReference<
   Record<string, unknown>,
   DirectSubject[]
 >("queries:listDirectSubjectsForResource");
+const getDeploymentEntryStatus = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  DeploymentEntryStatus
+>("queries:getDeploymentEntryStatus");
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>
@@ -90,6 +107,127 @@ function emptyEntities() {
     grants: [],
   };
 }
+
+async function seedDeploymentEntryMirror(
+  t: ReturnType<typeof convexTest>,
+  options: {
+    sourceVersion: number;
+    principal?: {
+      id: string;
+      type: "user" | "group";
+      authUserId: string;
+      status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+    };
+  },
+) {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("sync_state", {
+      sourceVersion: options.sourceVersion,
+      expectedIssuer: ISSUER,
+      lastSyncedAt: 1,
+    });
+    await ctx.db.insert("scopes", {
+      accessScopeId: "scope_default",
+      name: "App",
+      kind: "default",
+      status: "active",
+      accountEntryMode: "open",
+      defaultRoleId: "role_member",
+      updatedAt: 1,
+    });
+    if (options.principal) {
+      await ctx.db.insert("principals", {
+        accessScopeId: "scope_default",
+        principalId: options.principal.id,
+        type: options.principal.type,
+        herculesAuthUserId: options.principal.authUserId,
+        status: options.principal.status,
+        joinedAt: 1,
+        updatedAt: 1,
+      });
+    }
+  });
+}
+
+describe("getDeploymentEntryStatus", () => {
+  test.each(["active", "blocked", "suspended", "pending_approval", "removed"] as const)(
+    "returns the default-scope principal's %s status from the mirror",
+    async (status) => {
+      const t = convexTest(schema, modules);
+      await seedDeploymentEntryMirror(t, {
+        sourceVersion: 7,
+        principal: {
+          id: "principal_1",
+          type: "user",
+          authUserId: "user_1",
+          status,
+        },
+      });
+
+      await expect(
+        t.query(getDeploymentEntryStatus, {
+          tokenIdentifier: `${ISSUER}|user_1`,
+        }),
+      ).resolves.toEqual({
+        kind: "principal",
+        principalId: "principal_1",
+        status,
+        stateVersion: 7,
+      });
+    },
+  );
+
+  test("falls back when the principal has not entered this deployment", async () => {
+    const t = convexTest(schema, modules);
+    await seedDeploymentEntryMirror(t, { sourceVersion: 3 });
+
+    await expect(
+      t.query(getDeploymentEntryStatus, {
+        tokenIdentifier: `${ISSUER}|new_user`,
+      }),
+    ).resolves.toEqual({
+      kind: "fallback",
+      reason: "principal_missing",
+      stateVersion: 3,
+    });
+  });
+
+  test("never treats a malformed group principal as the signed-in user", async () => {
+    const t = convexTest(schema, modules);
+    await seedDeploymentEntryMirror(t, {
+      sourceVersion: 4,
+      principal: {
+        id: "group_1",
+        type: "group",
+        authUserId: "user_1",
+        status: "active",
+      },
+    });
+
+    await expect(
+      t.query(getDeploymentEntryStatus, {
+        tokenIdentifier: `${ISSUER}|user_1`,
+      }),
+    ).resolves.toEqual({
+      kind: "fallback",
+      reason: "principal_missing",
+      stateVersion: 4,
+    });
+  });
+
+  test("falls back before the deployment mirror is initialized", async () => {
+    const t = convexTest(schema, modules);
+
+    await expect(
+      t.query(getDeploymentEntryStatus, {
+        tokenIdentifier: `${ISSUER}|user_1`,
+      }),
+    ).resolves.toEqual({
+      kind: "fallback",
+      reason: "mirror_not_ready",
+    });
+  });
+});
 
 function memberSnapshot(
   scopeId: string,

@@ -20,6 +20,7 @@ const identityBuilder = ((definition: unknown) => definition) as never;
 const component = {
   checks: { authorize: "authorize" },
   queries: {
+    getDeploymentEntryStatus: "getDeploymentEntryStatus",
     listMyMemberships: "listMyMemberships",
     listMyRoles: "listMyRoles",
     getEffectivePermissions: "getEffectivePermissions",
@@ -222,6 +223,14 @@ describe("createAccessControl", () => {
             permissions: ["tasks.read"],
           };
         }
+        if (ref === "getDeploymentEntryStatus") {
+          return {
+            kind: "principal",
+            principalId: "principal_1",
+            status: "active",
+            stateVersion: 1,
+          };
+        }
         if (ref === "listMyMemberships") {
           return [
             {
@@ -276,6 +285,12 @@ describe("createAccessControl", () => {
         resource: { type: "app.projects" },
       }),
     ).resolves.toEqual(["tasks.read"]);
+    await expect(builders.getDeploymentEntryStatus(ctx as never)).resolves.toEqual({
+      kind: "principal",
+      principalId: "principal_1",
+      status: "active",
+      stateVersion: 1,
+    });
     await expect(builders.listMyMemberships(ctx as never)).resolves.toHaveLength(1);
     await expect(builders.listMyRoles(ctx as never, { scopeId: "scope_abc" })).resolves.toEqual([
       { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
@@ -311,6 +326,9 @@ describe("createAccessControl", () => {
       resourceType: "app.projects",
       resourceId: undefined,
       ancestors: undefined,
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("getDeploymentEntryStatus", {
+      tokenIdentifier: "https://auth.example.com|user_1",
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("listScopeMemberDirectory", {
       tokenIdentifier: "https://auth.example.com|user_1",

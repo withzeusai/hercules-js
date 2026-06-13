@@ -1,8 +1,9 @@
 "use node";
 
 import { Hercules } from "@usehercules/sdk";
-import type { ActionBuilder, GenericDataModel } from "convex/server";
+import type { ActionBuilder, GenericActionCtx, GenericDataModel } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import type { AccessDeploymentEntryMirrorResult } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
 const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
@@ -43,7 +44,7 @@ export type AccessDeploymentEntryResult = {
   allowed: boolean;
   reason: string;
   principalId?: string;
-  status?: "active" | "blocked" | "suspended" | "pending_approval";
+  status?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   stateVersion: number;
   changed: boolean;
 };
@@ -123,7 +124,12 @@ export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> 
   AccessAdminApiOptions & { internalAction: ActionBuilder<DataModel, "internal"> };
 
 export type CreateAccessUserActionsOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & { authenticatedAction: ActionBuilder<DataModel, "public"> };
+  AccessAdminApiOptions & {
+    authenticatedAction: ActionBuilder<DataModel, "public">;
+    getDeploymentEntryStatus?: (
+      ctx: GenericActionCtx<DataModel>,
+    ) => Promise<AccessDeploymentEntryMirrorResult>;
+  };
 
 // The full admission-policy surface the entry evaluator handles.
 export type AccessAccountEntryMode =
@@ -719,9 +725,17 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
   return {
     enterDeployment: authenticatedAction({
       args: { idToken: v.string() },
-      handler: async (_ctx, args) => {
+      handler: async (ctx, args) => {
+        const idToken = normalizeIdToken(args.idToken);
+        if (options.getDeploymentEntryStatus) {
+          const mirror = await options.getDeploymentEntryStatus(ctx);
+          if (mirror.kind === "principal" && mirror.status === "active") {
+            return activeDeploymentEntryResultFromMirror(mirror);
+          }
+        }
+
         const result = await callAccessControlApi("/v1/access-control/entry", {
-          id_token: normalizeIdToken(args.idToken),
+          id_token: idToken,
         });
         return normalizeAccessDeploymentEntryResult(result);
       },
@@ -1615,6 +1629,20 @@ function normalizeAccessDeploymentEntryResult(result: WriteResult): AccessDeploy
   };
 }
 
+function activeDeploymentEntryResultFromMirror(result: {
+  principalId: string;
+  stateVersion: number;
+}): AccessDeploymentEntryResult {
+  return {
+    allowed: true,
+    reason: "existing_active",
+    principalId: result.principalId,
+    status: "active",
+    stateVersion: result.stateVersion,
+    changed: false,
+  };
+}
+
 function requiredString(result: WriteResult, apiKey: string, resultName: string): string {
   const value = result[apiKey];
   if (typeof value !== "string" || value.length === 0) {
@@ -1664,7 +1692,8 @@ function optionalAccessEntryStatus(result: WriteResult): AccessDeploymentEntryRe
     value !== "active" &&
     value !== "blocked" &&
     value !== "suspended" &&
-    value !== "pending_approval"
+    value !== "pending_approval" &&
+    value !== "removed"
   ) {
     throw new Error("Access Control API response has invalid status.");
   }
