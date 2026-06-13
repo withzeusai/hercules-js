@@ -128,6 +128,41 @@ describe("createAccessAdminActions", () => {
     });
   });
 
+  test("sets multiple resource permission rules atomically as the service", async () => {
+    const post = vi.fn().mockResolvedValue({ changed: true });
+    const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
+
+    await getHandler(actions.setResourcePermissionRules)(
+      {},
+      {
+        scopeId: "scope_1",
+        subject: { type: "principal", principalId: "principal_1" },
+        resourceType: "app.projects",
+        target: { mode: "specific", resourceId: "project_1" },
+        appliesTo: "self_and_descendants",
+        rules: [
+          { permissionKey: "app.tasks:update", effect: "deny" },
+          { permissionKey: "app.projects:archive", effect: "clear" },
+        ],
+      },
+    );
+
+    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-rules/replace", {
+      body: {
+        scope_id: "scope_1",
+        subject: { type: "principal", principal_id: "principal_1" },
+        resource_type: "app.projects",
+        target: { mode: "specific", resource_id: "project_1" },
+        applies_to: "self_and_descendants",
+        rules: [
+          { permission_key: "app.tasks:update", effect: "deny", expires_at: undefined },
+          { permission_key: "app.projects:archive", effect: "clear", expires_at: undefined },
+        ],
+        actor_mode: "service",
+      },
+    });
+  });
+
   test("wraps scope lifecycle writes", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
     const actions = createAccessAdminActions({ internalAction: identityBuilder, client: { post } });
@@ -1432,6 +1467,17 @@ describe("app-user delegation for the admin surface", () => {
       {},
       { scopeId: "scope_1", idToken: ID_TOKEN },
     );
+    await getHandler(actions.setResourcePermissionRules)(
+      {},
+      {
+        scopeId: "scope_1",
+        subject: { type: "principal", principalId: "principal_1" },
+        resourceType: "app.projects",
+        target: { mode: "specific", resourceId: "project_1" },
+        rules: [{ permissionKey: "app.tasks:update", effect: "deny" }],
+        idToken: ID_TOKEN,
+      },
+    );
     await getHandler(actions.getRoleOverrides)(
       {},
       { scopeId: "scope_1", roleKey: "member", idToken: ID_TOKEN },
@@ -1456,6 +1502,7 @@ describe("app-user delegation for the admin surface", () => {
       "/v1/access-control/groups/members/add",
       "/v1/access-control/groups/members/remove",
       "/v1/access-control/invitations/list-resource",
+      "/v1/access-control/resource-rules/replace",
       "/v1/access-control/role-overrides/get",
       "/v1/access-control/user-exceptions/get",
     ]);

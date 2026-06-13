@@ -17,11 +17,13 @@ export type AccessControlCheckFinding = {
     | "convex_dir_missing"
     | "raw_exported_convex_builder"
     | "placeholder_access_scope_id"
+    | "hardcoded_access_scope_id"
     | "local_org_membership_table"
     | "optional_org_scope_id"
     | "org_scoped_global_slug_lookup"
     | "org_row_scope_from_arg"
     | "authenticated_org_data_read"
+    | "privileged_resource_permission_rule"
     | "noncanonical_permission_key";
   severity: "error";
   filePath: string;
@@ -109,6 +111,8 @@ export function checkAccessControlSource(
     : 0;
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
+    ...markerFiles.flatMap((filePath) => checkHardcodedAccessScopeIds(cwd, filePath)),
+    ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) =>
       checkCanonicalPermissionKeys(cwd, filePath, catalogPermissionKeys),
     ),
@@ -383,6 +387,88 @@ function collectManagedBuilderDefinitions(
 
   visit(sourceFile);
   return definitions;
+}
+
+function checkHardcodedAccessScopeIds(
+  cwd: string,
+  filePath: string,
+): AccessControlCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const findings: AccessControlCheckFinding[] = [];
+
+  addPatternFinding({
+    findings,
+    cwd,
+    filePath,
+    sourceText,
+    code: "hardcoded_access_scope_id",
+    pattern:
+      /\b(?:[A-Z][A-Z0-9_]*_)?(?:ACCESS_)?SCOPE_ID\b\s*=\s*["']01[A-Z0-9]{24}["']|\bscopeId\s*:\s*["']01[A-Z0-9]{24}["']/,
+    message: "Do not hardcode Access Control scope ids.",
+    suggestion:
+      'Use the "default" scope sentinel for the app scope, or store org scope ids returned by createAccessScope/createOrgScope on app rows and load them from the row.',
+  });
+
+  return findings;
+}
+
+function checkPrivilegedResourcePermissionRules(
+  cwd: string,
+  filePath: string,
+): AccessControlCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+  const findings: AccessControlCheckFinding[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isObjectLiteralExpression(node)) {
+      const permission = getStringProperty(node, "permissionKey");
+      const effect = getStringProperty(node, "effect");
+      if (permission && effect?.value === "allow" && isPrivilegedResourceRuleKey(permission.value)) {
+        findings.push(
+          createPatternFindingAtNode({
+            cwd,
+            sourceFile,
+            node: permission.node,
+            code: "privileged_resource_permission_rule",
+            message:
+              "Do not grant manage_members, manage_access, system.*, or wildcard permissions through resource permission rules.",
+            suggestion:
+              "Use resource role grants for scoped management authority. Resource permission rules are for ordinary allow/deny exceptions.",
+          }),
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return findings;
+}
+
+function getStringProperty(
+  objectLiteral: ts.ObjectLiteralExpression,
+  propertyName: string,
+): { value: string; node: ts.Node } | null {
+  for (const property of objectLiteral.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = property.name;
+    const nameText = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
+    if (nameText !== propertyName) continue;
+    const value = unwrapExpression(property.initializer);
+    if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+      return { value: value.text, node: value };
+    }
+  }
+  return null;
+}
+
+function isPrivilegedResourceRuleKey(permissionKey: string): boolean {
+  if (permissionKey.startsWith("system.")) return true;
+  if (!permissionKey.startsWith("app.")) return false;
+  const actionSeparatorIndex = permissionKey.lastIndexOf(":");
+  const action = actionSeparatorIndex === -1 ? "" : permissionKey.slice(actionSeparatorIndex + 1);
+  return action === "*" || action === "manage_members" || action === "manage_access";
 }
 
 // The IAM catalog is file-only: hercules/iam.jsonc at the app root declares

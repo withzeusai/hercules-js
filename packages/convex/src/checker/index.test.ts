@@ -225,6 +225,33 @@ describe("checkAccessControlSource", () => {
     );
   });
 
+  test("reports hardcoded Access Control scope ids in source", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/access.ts": `
+        import { getEffectivePermissions } from "./hercules";
+
+        export const CLINIC_SCOPE_ID = "01KTYRQ825E43T3PFRPZZESTPJ";
+
+        export async function getMyPermissions(ctx: unknown) {
+          return await getEffectivePermissions(ctx, { scopeId: CLINIC_SCOPE_ID });
+        }
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "hardcoded_access_scope_id", filePath: "convex/access.ts" }),
+      ]),
+    );
+    expect(formatAccessControlCheckResult(result)).toContain("Do not hardcode Access Control scope ids");
+  });
+
   test("reports app-local org membership tables in managed Access Control apps", () => {
     const root = createFixture({
       "convex/hercules.ts": `
@@ -386,6 +413,45 @@ describe("checkAccessControlSource", () => {
 
     expect(result.ok).toBe(true);
     expect(result.findings).toEqual([]);
+  });
+
+  test("reports privileged permissions in resource permission rules", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projectMembers.ts": `
+        import { api } from "./_generated/api";
+
+        export async function promote(ctx, args) {
+          await ctx.runAction(api.accessUser.setResourcePermissionRule, {
+            scopeId: args.scopeId,
+            subject: { type: "principal", principalId: args.principalId },
+            resourceType: "app.projects",
+            target: { mode: "specific", resourceId: args.projectId },
+            permissionKey: "app.projects:manage_members",
+            effect: "allow",
+            appliesTo: "self_and_descendants",
+            idToken: args.idToken,
+          });
+        }
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "privileged_resource_permission_rule",
+          filePath: "convex/projectMembers.ts",
+        }),
+      ]),
+    );
+    expect(formatAccessControlCheckResult(result)).toContain(
+      "Do not grant manage_members, manage_access, system.*, or wildcard permissions through resource permission rules",
+    );
   });
 
   test("reports access builder permission keys missing from the IAM catalog", () => {

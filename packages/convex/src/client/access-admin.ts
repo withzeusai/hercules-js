@@ -201,6 +201,20 @@ const bindingAppliesToValidator = v.union(
   v.literal("self"),
   v.literal("self_and_descendants"),
 );
+const resourceRuleSubjectValidator = v.union(
+  v.object({ type: v.literal("principal"), principalId: v.string() }),
+  v.object({ type: v.literal("role"), roleKey: v.string() }),
+);
+const resourceRuleTargetValidator = v.union(
+  v.object({ mode: v.literal("all") }),
+  v.object({ mode: v.literal("specific"), resourceId: v.string() }),
+);
+const resourceRuleEffectValidator = v.union(v.literal("allow"), v.literal("deny"));
+const resourceRuleReplacementEffectValidator = v.union(
+  v.literal("allow"),
+  v.literal("deny"),
+  v.literal("clear"),
+);
 
 /**
  * Builds the managed Access Control write actions (assign/remove roles,
@@ -386,17 +400,11 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     setResourcePermissionRule: internalAction({
       args: {
         scopeId: v.string(),
-        subject: v.union(
-          v.object({ type: v.literal("principal"), principalId: v.string() }),
-          v.object({ type: v.literal("role"), roleKey: v.string() }),
-        ),
+        subject: resourceRuleSubjectValidator,
         resourceType: v.string(),
-        target: v.union(
-          v.object({ mode: v.literal("all") }),
-          v.object({ mode: v.literal("specific"), resourceId: v.string() }),
-        ),
+        target: resourceRuleTargetValidator,
         permissionKey: v.string(),
-        effect: v.union(v.literal("allow"), v.literal("deny")),
+        effect: resourceRuleEffectValidator,
         appliesTo: v.optional(bindingAppliesToValidator),
         expiresAt: v.optional(v.union(v.string(), v.null())),
       },
@@ -404,15 +412,9 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         requireSpecificTargetForDescendants(args);
         const body = {
           scope_id: args.scopeId,
-          subject:
-            args.subject.type === "role"
-              ? { type: "role", role_key: args.subject.roleKey }
-              : { type: "principal", principal_id: args.subject.principalId },
+          subject: resourceRuleSubjectBody(args.subject),
           resource_type: args.resourceType,
-          target:
-            args.target.mode === "all"
-              ? { mode: "all" }
-              : { mode: "specific", resource_id: args.target.resourceId },
+          target: resourceRuleTargetBody(args.target),
           permission_key: args.permissionKey,
           effect: args.effect,
           ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
@@ -420,6 +422,40 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
           ...serviceActor,
         };
         return await callAccessControlApi("/v1/access-control/resource-rules/set", body);
+      },
+    }),
+
+    setResourcePermissionRules: internalAction({
+      args: {
+        scopeId: v.string(),
+        subject: resourceRuleSubjectValidator,
+        resourceType: v.string(),
+        target: resourceRuleTargetValidator,
+        appliesTo: v.optional(bindingAppliesToValidator),
+        rules: v.array(
+          v.object({
+            permissionKey: v.string(),
+            effect: resourceRuleReplacementEffectValidator,
+            expiresAt: v.optional(v.union(v.string(), v.null())),
+          }),
+        ),
+      },
+      handler: async (_ctx, args) => {
+        requireSpecificTargetForDescendants(args);
+        const body = {
+          scope_id: args.scopeId,
+          subject: resourceRuleSubjectBody(args.subject),
+          resource_type: args.resourceType,
+          target: resourceRuleTargetBody(args.target),
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
+          rules: args.rules.map((rule) => ({
+            permission_key: rule.permissionKey,
+            effect: rule.effect,
+            expires_at: rule.expiresAt,
+          })),
+          ...serviceActor,
+        };
+        return await callAccessControlApi("/v1/access-control/resource-rules/replace", body);
       },
     }),
 
@@ -895,17 +931,11 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     setResourcePermissionRule: authenticatedAction({
       args: {
         scopeId: v.string(),
-        subject: v.union(
-          v.object({ type: v.literal("principal"), principalId: v.string() }),
-          v.object({ type: v.literal("role"), roleKey: v.string() }),
-        ),
+        subject: resourceRuleSubjectValidator,
         resourceType: v.string(),
-        target: v.union(
-          v.object({ mode: v.literal("all") }),
-          v.object({ mode: v.literal("specific"), resourceId: v.string() }),
-        ),
+        target: resourceRuleTargetValidator,
         permissionKey: v.string(),
-        effect: v.union(v.literal("allow"), v.literal("deny")),
+        effect: resourceRuleEffectValidator,
         appliesTo: v.optional(bindingAppliesToValidator),
         expiresAt: v.optional(v.union(v.string(), v.null())),
         idToken: v.string(),
@@ -914,15 +944,9 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
         requireSpecificTargetForDescendants(args);
         const body = {
           scope_id: args.scopeId,
-          subject:
-            args.subject.type === "role"
-              ? { type: "role", role_key: args.subject.roleKey }
-              : { type: "principal", principal_id: args.subject.principalId },
+          subject: resourceRuleSubjectBody(args.subject),
           resource_type: args.resourceType,
-          target:
-            args.target.mode === "all"
-              ? { mode: "all" }
-              : { mode: "specific", resource_id: args.target.resourceId },
+          target: resourceRuleTargetBody(args.target),
           permission_key: args.permissionKey,
           effect: args.effect,
           ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
@@ -930,6 +954,41 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           ...appUserActor(args.idToken),
         };
         return await callAccessControlApi("/v1/access-control/resource-rules/set", body);
+      },
+    }),
+
+    setResourcePermissionRules: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        subject: resourceRuleSubjectValidator,
+        resourceType: v.string(),
+        target: resourceRuleTargetValidator,
+        appliesTo: v.optional(bindingAppliesToValidator),
+        rules: v.array(
+          v.object({
+            permissionKey: v.string(),
+            effect: resourceRuleReplacementEffectValidator,
+            expiresAt: v.optional(v.union(v.string(), v.null())),
+          }),
+        ),
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        requireSpecificTargetForDescendants(args);
+        const body = {
+          scope_id: args.scopeId,
+          subject: resourceRuleSubjectBody(args.subject),
+          resource_type: args.resourceType,
+          target: resourceRuleTargetBody(args.target),
+          ...(args.appliesTo ? { applies_to: args.appliesTo } : {}),
+          rules: args.rules.map((rule) => ({
+            permission_key: rule.permissionKey,
+            effect: rule.effect,
+            expires_at: rule.expiresAt,
+          })),
+          ...appUserActor(args.idToken),
+        };
+        return await callAccessControlApi("/v1/access-control/resource-rules/replace", body);
       },
     }),
 
@@ -1396,6 +1455,22 @@ function principalRef(args: { principalId?: string; herculesAuthUserId?: string 
 
 function roleRef(args: { roleId?: string; roleKey?: string }) {
   return { role_id: args.roleId, role_key: args.roleKey };
+}
+
+function resourceRuleSubjectBody(
+  subject: { type: "principal"; principalId: string } | { type: "role"; roleKey: string },
+) {
+  return subject.type === "role"
+    ? { type: "role" as const, role_key: subject.roleKey }
+    : { type: "principal" as const, principal_id: subject.principalId };
+}
+
+function resourceRuleTargetBody(
+  target: { mode: "all" } | { mode: "specific"; resourceId: string },
+) {
+  return target.mode === "all"
+    ? { mode: "all" as const }
+    : { mode: "specific" as const, resource_id: target.resourceId };
 }
 
 function parseTokenIdentifierSubject(tokenIdentifier: string | null | undefined): string {
