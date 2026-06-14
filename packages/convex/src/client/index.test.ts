@@ -6,6 +6,8 @@ import {
   PERMISSION_RESOURCE_TYPE_SENTINEL,
   createAccessControl,
   scopeFromArg,
+  scopeFromDefaultParentResource,
+  scopeFromDefaultResource,
   scopeFromParentResource,
   scopeFromResource,
   type AccessControlComponent,
@@ -722,6 +724,60 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
 
     await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
       scopeId: "scope_1",
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+    });
+  });
+});
+
+describe("default-scope resource extractors", () => {
+  test("scopeFromDefaultResource loads a row without a stored scope id", async () => {
+    const extract = scopeFromDefaultResource("documents", "documentId");
+    const ctx = {
+      db: {
+        get: vi.fn().mockResolvedValue({ _id: "document_1", title: "Draft" }),
+      },
+    };
+
+    await expect(extract(ctx as never, { documentId: "document_1" })).resolves.toEqual({
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      resourceId: "document_1",
+    });
+  });
+
+  test("scopeFromDefaultResource includes trusted ancestors from the loaded row", async () => {
+    const extract = scopeFromDefaultResource("tasks", "taskId", {
+      authorizeAgainst: (task) => [
+        { type: "app.projects", id: String(task.projectId) },
+      ],
+    });
+    const ctx = {
+      db: {
+        get: vi.fn().mockResolvedValue({ _id: "task_1", projectId: "project_1" }),
+      },
+    };
+
+    await expect(extract(ctx as never, { taskId: "task_1" })).resolves.toEqual({
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      resourceId: "task_1",
+      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+    });
+  });
+
+  test("scopeFromDefaultParentResource authorizes creation against a loaded parent", async () => {
+    const extract = scopeFromDefaultParentResource("projects", "projectId", {
+      parentResourceType: "app.projects",
+    });
+    const ctx = {
+      db: {
+        get: vi.fn().mockResolvedValue({ _id: "project_1", name: "Roadmap" }),
+      },
+    };
+
+    await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
+      scopeId: DEFAULT_SCOPE_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
     });

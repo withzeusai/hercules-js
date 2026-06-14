@@ -1299,6 +1299,12 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
   };
 }
 
+/**
+ * Builds a public authenticated action for creating an organization scope.
+ * `canCreateScope` is the app's product-policy gate. The authenticated caller
+ * becomes the new scope's Owner automatically; do not add a separate self
+ * role or resource grant.
+ */
 export function createAccessScopeAction<DataModel extends GenericDataModel>(
   options: CreateAccessScopeActionOptions<DataModel>,
 ) {
@@ -1319,6 +1325,12 @@ export function createAccessScopeAction<DataModel extends GenericDataModel>(
   });
 }
 
+/**
+ * Creates an organization scope for the authenticated caller. Hercules derives
+ * the caller from the Convex identity and makes that user Owner of the new
+ * scope. The app should persist the returned `accessScopeId` on its
+ * organization metadata row.
+ */
 export async function createAccessScope(
   ctx: CreateAccessScopeContext,
   args: CreateAccessScopeArgs,

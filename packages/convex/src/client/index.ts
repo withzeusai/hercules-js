@@ -591,6 +591,58 @@ export function scopeFromResource<T extends string, K extends string>(
 }
 
 /**
+ * Resolves a specific resource in the default app scope without requiring a
+ * scope id column on the row. Use this for single-scope apps that still need
+ * resource grants, denies, or per-resource UI checks.
+ *
+ * The row is loaded from `args[argKey]`, so authorization and mutation stay
+ * bound to the same resource. Pass `authorizeAgainst` for trusted parent
+ * resources exactly as with {@link scopeFromResource}.
+ */
+export function scopeFromDefaultResource<T extends string, K extends string>(
+  tableName: T,
+  argKey: K,
+  options: {
+    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+  } = {},
+) {
+  return async (
+    ctx: DbResourceCtx,
+    args: Record<string, unknown>,
+  ): Promise<{
+    scopeId: string;
+    resourceType: string;
+    resourceId: string;
+    ancestors?: Array<{ resourceType: string; resourceId: string }>;
+  }> => {
+    const id = args?.[argKey];
+    if (id == null) {
+      throw new ConvexError({
+        code: "INVALID_SCOPE_ARG",
+        message: `scopeFromDefaultResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+      });
+    }
+    const row = await ctx.db.get(id);
+    if (!row || typeof row !== "object") {
+      throw new ConvexError({
+        code: "RESOURCE_NOT_FOUND",
+        message: `scopeFromDefaultResource("${tableName}", "${argKey}"): resource not found`,
+      });
+    }
+    const ancestors = normalizeAncestors(
+      options.authorizeAgainst?.(row as Record<string, unknown>),
+      `scopeFromDefaultResource("${tableName}", "${argKey}")`,
+    );
+    return {
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      resourceId: String(id),
+      ...(ancestors ? { ancestors } : {}),
+    };
+  };
+}
+
+/**
  * Resolves child-creation authorization from an existing parent row. The
  * requested child permission stays unchanged; the parent is supplied as an
  * explicit ancestor and only descendant-enabled bindings apply through it.
@@ -635,6 +687,50 @@ export function scopeFromParentResource<T extends string, K extends string>(
       `scopeFromParentResource("${tableName}", "${argKey}")`,
     );
     return { scopeId, resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL, ancestors: ancestors! };
+  };
+}
+
+/**
+ * Resolves child creation against a parent resource in the default app scope.
+ * The parent row is loaded from `args[argKey]`; no scope id field is required
+ * on the parent or child tables.
+ */
+export function scopeFromDefaultParentResource<T extends string, K extends string>(
+  tableName: T,
+  argKey: K,
+  options: { parentResourceType: string },
+) {
+  return async (
+    ctx: DbResourceCtx,
+    args: Record<string, unknown>,
+  ): Promise<{
+    scopeId: string;
+    resourceType: string;
+    ancestors: Array<{ resourceType: string; resourceId: string }>;
+  }> => {
+    const id = args?.[argKey];
+    if (id == null) {
+      throw new ConvexError({
+        code: "INVALID_SCOPE_ARG",
+        message: `scopeFromDefaultParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+      });
+    }
+    const row = await ctx.db.get(id);
+    if (!row || typeof row !== "object") {
+      throw new ConvexError({
+        code: "RESOURCE_NOT_FOUND",
+        message: `scopeFromDefaultParentResource("${tableName}", "${argKey}"): resource not found`,
+      });
+    }
+    const ancestors = normalizeAncestors(
+      [{ type: options.parentResourceType, id: String(id) }],
+      `scopeFromDefaultParentResource("${tableName}", "${argKey}")`,
+    );
+    return {
+      scopeId: DEFAULT_SCOPE_SENTINEL,
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      ancestors: ancestors!,
+    };
   };
 }
 

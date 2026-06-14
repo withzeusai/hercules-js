@@ -5,11 +5,11 @@ roles, permissions, and resource-level grants, enforced inside your Convex
 functions. The app reads from a local mirror that Hercules keeps in sync with
 the control plane.
 
-> Exact signatures are in the type definitions:
-> `node_modules/@usehercules/convex/dist/client/index.d.ts` (builders and
-> in-handler checks) and `.../dist/client/access-admin.d.ts` (admin write
-> actions). Those are the source of truth — read them rather than guessing.
-> REST payload shapes are documented at https://docs-cloud.hercules.app.
+Start with this README and the generated wrappers in `convex/hercules.ts`,
+`convex/accessUser.ts`, and `convex/accessOrgAdmin.ts`. These are the supported
+public integration surface. Do not inspect component internals for normal app
+setup. TypeScript exposes exact signatures at the call site; public REST
+payloads are documented at https://docs-cloud.hercules.app.
 
 ## Setup
 
@@ -31,15 +31,29 @@ export const {
   listScopeMembers, listScopeMemberDirectory, listScopeRoles, listScopePermissions,
 } = createAccessControl({ query, mutation, action, components });
 
-export { scopeFromArg, scopeFromParentResource, scopeFromResource } from "@usehercules/convex";
+export {
+  scopeFromArg,
+  scopeFromDefaultParentResource,
+  scopeFromDefaultResource,
+  scopeFromParentResource,
+  scopeFromResource,
+} from "@usehercules/convex";
 ```
 
 ## Enforcing access
 
 `accessQuery` / `accessMutation` / `accessAction` take a `permission` and a
-`scope`. Resolve the scope with `scopeFromArg` (scope id passed by the caller)
-or `scopeFromResource` (scope read from the referenced row). Gate **every**
-org-owned read and write this way; `authenticatedQuery` only proves sign-in.
+`scope`. Choose the scope helper from the app shape:
+
+| App shape | Create/list | Existing row | Child create |
+| --- | --- | --- | --- |
+| Default app scope | omit `scope` | `scopeFromDefaultResource` | `scopeFromDefaultParentResource` |
+| Organization scopes | `scopeFromArg` | `scopeFromResource` | `scopeFromParentResource` |
+
+The default-scope resource helpers load the referenced row but do not require a
+scope id column. Organization helpers read or accept the organization scope.
+Gate **every** protected read and write; `authenticatedQuery` only proves
+sign-in.
 
 ```ts
 import { v } from "convex/values";
@@ -91,6 +105,19 @@ scope: scopeFromParentResource("projects", "projectId", {
 > A descendant-enabled binding targets the parent resource type while keeping
 > the child permission key. Table names are only used to load rows. Explicit
 > resource references must use canonical `app.*` types.
+
+For a default-scope app, use the matching helpers without adding a persisted
+scope id to each row:
+
+```ts
+scope: scopeFromDefaultResource("tasks", "taskId", {
+  authorizeAgainst: task => [{ type: "app.projects", id: String(task.projectId) }],
+})
+
+scope: scopeFromDefaultParentResource("projects", "projectId", {
+  parentResourceType: "app.projects",
+})
+```
 
 ## In-app admin screens
 
@@ -156,6 +183,10 @@ await createResourceGrant({
 
 `user.profile.sub` is valid above only because the field explicitly asks for
 the recipient's Hercules Auth user id. Never pass it as `idToken`.
+
+Create organization scopes with `createAccessScopeAction` or
+`createAccessScope`. The authenticated creator is sent as the scope Owner
+automatically; do not create a second self-grant.
 
 ## Notes
 
