@@ -36,6 +36,7 @@ export const {
   requirePermission,
   requireAnyPermission,
   getEffectivePermissions,
+  getCurrentHerculesAuthUserId,
   listMyMemberships,
   listMyRoles,
   listScopeMembers,
@@ -54,6 +55,47 @@ export {
   scopeFromResource,
 } from "@usehercules/convex";
 ```
+
+## IAM catalog
+
+`hercules/iam.jsonc` is the only writer for reusable permissions, reusable
+roles, base role permissions, and `orgAdminGrantablePermissions`. Runtime APIs
+manage members, invitations, groups, organization roles, overrides,
+exceptions, and resource access.
+
+```jsonc
+{
+  "$schema": "https://schemas.hercules.app/iam/v1.json",
+  "version": "v1",
+  "permissions": {
+    "app.documents:read": { "name": "Read documents" },
+    "app.documents:update": { "name": "Update documents" },
+    "app.documents:manage_members": { "name": "Share documents" },
+  },
+  "orgAdminGrantablePermissions": [
+    "app.documents:read",
+    "app.documents:update",
+  ],
+  "roles": {
+    "owner": { "type": "built_in" },
+    "admin": { "type": "built_in" },
+    "member": { "type": "built_in" },
+    "reviewer": { "type": "custom", "name": "Reviewer" },
+  },
+  "rolePermissions": {
+    "member": ["app.documents:read"],
+    "reviewer": ["app.documents:read"],
+  },
+}
+```
+
+- Permission keys are `app.<resource>:<action>`.
+- Check concrete actions at runtime. Do not check `manage` or `*`.
+- Declare `owner` and `admin`, but do not add app-authored base permissions to
+  them.
+- A resource role that may share its resource needs the exact
+  `<resourceType>:manage_members` permission.
+- A failed IAM apply means the build failed, even if TypeScript and Vite passed.
 
 ## Enforcing access
 
@@ -173,6 +215,40 @@ scope: scopeFromDefaultParentResource("projects", "projectId", {
 });
 ```
 
+## Identity and app relationships
+
+Use `getCurrentHerculesAuthUserId` for the stable Hercules Auth user id. It
+returns the verified OIDC `sub`; never parse `tokenIdentifier`.
+
+```ts
+export const getMyProfile = accessQuery({
+  permission: "app.profiles:read",
+  args: {},
+  handler: async (ctx) => {
+    const herculesAuthUserId = await getCurrentHerculesAuthUserId(ctx);
+    if (!herculesAuthUserId) throw new Error("Authentication required");
+    return await ctx.db
+      .query("profiles")
+      .withIndex("by_auth_user", (q) =>
+        q.eq("herculesAuthUserId", herculesAuthUserId),
+      )
+      .unique();
+  },
+});
+```
+
+Application tables own product relationships such as owner, assignee,
+attending user, or linked profile. Access Control owns capabilities. Enforce
+both:
+
+1. Gate the function with a concrete Access Control permission.
+2. Load the trusted application row.
+3. Apply any relationship-based row or field restriction.
+
+A relationship may narrow an authorized result; it must not grant a capability
+by itself. Use a managed resource grant when the relationship should confer
+additional access.
+
 ## In-app admin screens
 
 Read the scope's members, roles, and catalog with the `listScope*` helpers.
@@ -239,6 +315,46 @@ resource type, and resolve a selected `herculesAuthUserId` with
 `getScopeMemberDirectoryEntry`; pass the returned `principalId` as the
 recipient. Do not trust a browser-supplied principal or scope/resource pair.
 
+Common public action calls:
+
+```ts
+await ctx.runAction(api.accessUser.replaceMemberRoles, {
+  scopeId,
+  herculesAuthUserId,
+  roleKeys: ["reviewer"],
+  idToken,
+});
+
+await ctx.runAction(api.accessUser.createInvitation, {
+  scopeId,
+  email,
+  roleKeys: ["member"],
+  idToken,
+});
+
+await ctx.runAction(api.accessUser.replaceResourceGrants, {
+  scopeId,
+  resourceType: "app.documents",
+  resourceId: String(documentId),
+  subjects: [{ principalId, grants: [{ roleKey: "reviewer" }] }],
+  idToken,
+});
+```
+
+For a browser-selected user, resolve active scope membership before writing:
+
+```ts
+const recipient = await getScopeMemberDirectoryEntry(ctx, {
+  scopeId,
+  herculesAuthUserId,
+});
+if (!recipient) throw new Error("Active member not found");
+```
+
+Grant `app.members:read` to roles that may use a member-facing directory.
+Access-administration screens should use `listScopeMembers`, which requires
+`system.members:read`.
+
 Use `replaceMemberRoles` to atomically replace up to 500 direct scope roles for
 one member.
 Use `replaceResourceGrants` to atomically replace direct grants for each listed
@@ -264,3 +380,6 @@ automatically; do not create a second self-grant.
 - Run `hercules-convex-access-check convex` (the `./checker` export) in lint to
   catch deterministic source patterns. It is static and does not prove runtime
   role decisions or control-plane writes are authorized.
+- Before claiming completion, exercise at least one intended allow, one denied
+  operation, one cross-row or cross-scope isolation case, and each sensitive
+  field-redaction path with real non-Owner identities.

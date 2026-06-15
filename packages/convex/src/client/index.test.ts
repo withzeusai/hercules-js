@@ -86,6 +86,42 @@ describe("createAccessControl", () => {
     ).toThrow("access* builders require a non-empty permission.");
   });
 
+  test("returns the canonical Hercules Auth user id from the verified identity", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: {
+        getUserIdentity: vi.fn().mockResolvedValue({
+          subject: "auth_user_1",
+          tokenIdentifier: "https://auth.example.com|different_suffix",
+        }),
+      },
+      runQuery: vi.fn(),
+    };
+
+    await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBe("auth_user_1");
+    expect(ctx.runQuery).not.toHaveBeenCalled();
+  });
+
+  test("returns undefined when there is no authenticated user", async () => {
+    const builders = createAccessControl({
+      query: identityBuilder,
+      mutation: identityBuilder,
+      action: identityBuilder,
+      component: component as never,
+    });
+    const ctx = {
+      auth: { getUserIdentity: vi.fn().mockResolvedValue(null) },
+      runQuery: vi.fn(),
+    };
+
+    await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBeUndefined();
+  });
+
   test("defaults access builders to the app scope", async () => {
     const builders = createAccessControl({
       query: identityBuilder,

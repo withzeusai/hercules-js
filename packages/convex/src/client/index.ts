@@ -349,6 +349,14 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     ctx: AccessContext<DataModel>,
     checks: Array<Exclude<PermissionCheckArgs, string>>,
   ) => Promise<AuthorizationDecision[]>;
+  /**
+   * Return the current user's canonical Hercules Auth id (`sub`) from the
+   * verified Convex identity. Use this to link app-owned profile or domain
+   * rows to the signed-in user instead of parsing `tokenIdentifier`.
+   */
+  getCurrentHerculesAuthUserId: (
+    ctx: AccessContext<DataModel>,
+  ) => Promise<string | undefined>;
   getDeploymentEntryStatus: (ctx: AccessContext<DataModel>) => Promise<AccessDeploymentEntryMirrorResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
@@ -459,6 +467,8 @@ type BuilderCaller = (definition: unknown) => unknown;
  *   `getEffectivePermissions`: in-handler checks. `getEffectivePermissions`
  *   and `hasPermission` accept an optional `{ resource }` ref for per-resource
  *   (e.g. per-project) checks.
+ * - `getCurrentHerculesAuthUserId`: the verified OIDC subject for linking
+ *   app-owned domain rows. Do not parse `tokenIdentifier`.
  * - `listMyMemberships`/`listMyRoles`: the caller's own scopes/roles.
  * - `listScopeMembers`/`listScopeRoles`/`listScopePermissions`: admin reads
  *   for an in-app management screen. Each self-gates on the matching
@@ -490,6 +500,7 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     requireAnyPermission: makeRequireAnyPermission(component),
     getEffectivePermissions: makeGetEffectivePermissions(component),
     checkPermissions: makeCheckPermissions(component),
+    getCurrentHerculesAuthUserId,
     getDeploymentEntryStatus: makeGetDeploymentEntryStatus(component),
     filterAuthorizedResources: makeFilterAuthorizedResources(component),
     listMyMemberships: makeListMyMemberships(component),
@@ -908,6 +919,12 @@ function normalizeAncestors(
 
 async function getTokenIdentifier(ctx: AccessContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
+}
+
+async function getCurrentHerculesAuthUserId(
+  ctx: AccessContext,
+): Promise<string | undefined> {
+  return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
 function normalizePermissionCheckArgs(args: PermissionCheckArgs) {
