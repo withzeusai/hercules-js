@@ -7,6 +7,7 @@ import {
   type ApplicableEntry,
   type WildcardMode,
 } from "./authz";
+import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -370,17 +371,6 @@ export function enumeratePermissions(
       classification: permission.classification,
     }))
     .sort((a, b) => a.key.localeCompare(b.key) || a.permissionId.localeCompare(b.permissionId));
-}
-
-function parseTokenIdentifier(tokenIdentifier: string) {
-  const separatorIndex = tokenIdentifier.lastIndexOf("|");
-  if (separatorIndex <= 0 || separatorIndex === tokenIdentifier.length - 1) {
-    return null;
-  }
-  return {
-    issuer: tokenIdentifier.slice(0, separatorIndex),
-    subject: tokenIdentifier.slice(separatorIndex + 1),
-  };
 }
 
 // Exported so the consumer-plane role-listing query (queries.collectPrincipalScopeRoles)
@@ -994,14 +984,13 @@ function deny(
   reasonCode: string,
   sourceVersion?: number,
   principalId?: string,
-  effectiveRoleIds?: string[],
 ): EffectiveAccessEvaluation {
   return {
     allowed: false,
     reasonCode,
     sourceVersion,
     principalId,
-    effectiveRoleIds: effectiveRoleIds ?? [],
+    effectiveRoleIds: [],
     catalogPermissions: [],
     wildcard: "none",
     entries: [],

@@ -12,6 +12,7 @@ import {
   enumeratePermissions,
   evaluateEffectiveAccess,
 } from "./effective";
+import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
 const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
@@ -357,7 +358,7 @@ export const getScopeMemberDirectoryEntry = query({
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return null;
 
-    const principal = args.principalId
+    const principal = args.principalId !== undefined
       ? await ctx.db
           .query("principals")
           .withIndex("by_principal_id", (q) => q.eq("principalId", args.principalId!))
@@ -765,17 +766,6 @@ async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, scopeId: string)
     .query("scopes")
     .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scopeId))
     .unique();
-}
-
-function parseTokenIdentifier(tokenIdentifier: string) {
-  const separatorIndex = tokenIdentifier.lastIndexOf("|");
-  if (separatorIndex <= 0 || separatorIndex === tokenIdentifier.length - 1) {
-    return null;
-  }
-  return {
-    issuer: tokenIdentifier.slice(0, separatorIndex),
-    subject: tokenIdentifier.slice(separatorIndex + 1),
-  };
 }
 
 async function collectPrincipalScopeRoles(

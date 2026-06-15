@@ -12,6 +12,7 @@ import {
   normalizeAuthorizationAncestors,
   type AuthorizationAncestor,
 } from "./effective";
+import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
@@ -231,17 +232,6 @@ async function findCatalogPermissionByKey(ctx: GenericQueryCtx<DataModel>, key: 
       q.eq("accessScopeId", defaultScope.accessScopeId).eq("key", key),
     )
     .unique();
-}
-
-function parseTokenIdentifier(tokenIdentifier: string) {
-  const separatorIndex = tokenIdentifier.lastIndexOf("|");
-  if (separatorIndex <= 0 || separatorIndex === tokenIdentifier.length - 1) {
-    return null;
-  }
-  return {
-    issuer: tokenIdentifier.slice(0, separatorIndex),
-    subject: tokenIdentifier.slice(separatorIndex + 1),
-  };
 }
 
 function allow(sourceVersion: number, principalId: string | undefined, effectiveRoleIds: string[]) {
