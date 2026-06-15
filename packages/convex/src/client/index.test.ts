@@ -312,6 +312,7 @@ describe("createAccessControl", () => {
                 herculesAuthUserId: "user_1",
                 name: "Alice",
                 email: "alice@example.com",
+                roleKeys: ["member"],
               },
             ],
             cursor: "cursor_2",
@@ -323,6 +324,7 @@ describe("createAccessControl", () => {
             herculesAuthUserId: "user_1",
             name: "Alice",
             email: "alice@example.com",
+            roleKeys: ["member"],
           };
         }
         if (ref === "authorizeMany") {
@@ -381,6 +383,7 @@ describe("createAccessControl", () => {
           herculesAuthUserId: "user_1",
           name: "Alice",
           email: "alice@example.com",
+          roleKeys: ["member"],
         },
       ],
       nextCursor: "cursor_2",
@@ -395,6 +398,7 @@ describe("createAccessControl", () => {
       herculesAuthUserId: "user_1",
       name: "Alice",
       email: "alice@example.com",
+      roleKeys: ["member"],
     });
     await expect(
       builders.checkPermissions(ctx as never, [

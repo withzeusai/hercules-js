@@ -257,15 +257,24 @@ when the caller lacks it (`owner`/`admin` hold these automatically).
 
 For member-facing pickers, use `listScopeMemberDirectory`. It is gated by
 `app.members:read` and returns bounded pages of active users with only their
-principal id, Hercules Auth user id, name, email, and optional image.
+principal id, Hercules Auth user id, name, email, optional image, and
+authoritative effective scope-role keys.
 
 ```ts
 export const teamMembers = authenticatedQuery({
   args: { scopeId: v.string() },
-  handler: async (ctx, args) =>
-    listScopeMemberDirectory(ctx, { scopeId: args.scopeId, limit: 50 }),
+  handler: async (ctx, args) => {
+    const page = await listScopeMemberDirectory(ctx, { scopeId: args.scopeId, limit: 50 });
+    return {
+      ...page,
+      members: page.members.filter((member) => member.roleKeys.includes("reviewer")),
+    };
+  },
 });
 ```
+
+`roleKeys` comes from managed scope-role bindings, including active group
+membership. Do not copy it into an app-owned role table.
 
 ### Authority matrix
 

@@ -142,6 +142,7 @@ export type ScopeMemberDirectoryEntry = {
   name: string;
   email: string;
   image?: string;
+  roleKeys: string[];
 };
 
 export type ScopeMemberDirectoryPage = {

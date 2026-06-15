@@ -67,6 +67,7 @@ type ScopeMemberDirectoryEntry = {
   name: string;
   email: string;
   image?: string;
+  roleKeys: string[];
 };
 
 type ScopeMember = {
@@ -316,12 +317,17 @@ export const listScopeMemberDirectory = query({
             )
             .unique();
           if (!user) return null;
+          const roles = await collectPrincipalScopeRoles(ctx, {
+            principalId: principal.principalId,
+            scopeId: scope.accessScopeId,
+          });
           return {
             principalId: principal.principalId,
             herculesAuthUserId: principal.herculesAuthUserId,
             name: user.name,
             email: user.email,
             ...(user.image === undefined ? {} : { image: user.image }),
+            roleKeys: roles.map((role) => role.roleKey),
           };
         }),
       )
@@ -377,6 +383,10 @@ export const getScopeMemberDirectoryEntry = query({
       .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", principal.herculesAuthUserId!))
       .unique();
     if (!user) return null;
+    const roles = await collectPrincipalScopeRoles(ctx, {
+      principalId: principal.principalId,
+      scopeId: scope.accessScopeId,
+    });
 
     return {
       principalId: principal.principalId,
@@ -384,6 +394,7 @@ export const getScopeMemberDirectoryEntry = query({
       name: user.name,
       email: user.email,
       ...(user.image === undefined ? {} : { image: user.image }),
+      roleKeys: roles.map((role) => role.roleKey),
     };
   },
 });

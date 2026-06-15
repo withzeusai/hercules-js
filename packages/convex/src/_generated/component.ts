@@ -85,6 +85,7 @@ type ScopeMemberDirectoryEntry = {
   name: string;
   email: string;
   image?: string;
+  roleKeys: string[];
 };
 
 type ScopeMemberDirectoryPage = {

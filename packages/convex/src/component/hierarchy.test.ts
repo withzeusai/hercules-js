@@ -38,6 +38,7 @@ const listScopeMemberDirectory = makeFunctionReference<
       name: string;
       email: string;
       image?: string;
+      roleKeys: string[];
     }>;
     cursor?: string;
   }
@@ -51,6 +52,7 @@ const getScopeMemberDirectoryEntry = makeFunctionReference<
     name: string;
     email: string;
     image?: string;
+    roleKeys: string[];
   } | null
 >("queries:getScopeMemberDirectoryEntry");
 
@@ -259,6 +261,7 @@ function directorySnapshot() {
     users: Array<Record<string, unknown>>;
     scopes: Array<{
       principals: Array<Record<string, unknown>>;
+      principalMemberships: Array<Record<string, unknown>>;
       roleBindings: Array<Record<string, unknown>>;
     }>;
   };
@@ -323,6 +326,27 @@ function directorySnapshot() {
       updatedAt: 4,
     },
   );
+  snapshot.scopes[0]!.roleBindings.push({
+    bindingId: "rb_bob_task_editor",
+    subjectPrincipalId: "principal_bob",
+    roleId: "role_task_editor",
+    accessScopeId: "scope_default",
+    appliesTo: "self",
+    updatedAt: 2,
+  });
+  snapshot.scopes[0]!.principalMemberships.push({
+    groupPrincipalId: "principal_group",
+    memberPrincipalId: "principal_bob",
+    updatedAt: 2,
+  });
+  snapshot.scopes[0]!.roleBindings.push({
+    bindingId: "rb_group_member",
+    subjectPrincipalId: "principal_group",
+    roleId: "role_member",
+    accessScopeId: "scope_default",
+    appliesTo: "self",
+    updatedAt: 2,
+  });
   return snapshot;
 }
 
@@ -499,6 +523,7 @@ describe("scope member directory", () => {
         herculesAuthUserId: "user_alice",
         name: "Alice",
         email: "alice@example.com",
+        roleKeys: ["member"],
       },
       {
         principalId: "principal_bob",
@@ -506,6 +531,7 @@ describe("scope member directory", () => {
         name: "Bob",
         email: "bob@example.com",
         image: "https://example.com/bob.png",
+        roleKeys: ["member", "task_editor"],
       },
     ]);
     expect(Object.keys(members[0]!).sort()).toEqual([
@@ -513,6 +539,7 @@ describe("scope member directory", () => {
       "herculesAuthUserId",
       "name",
       "principalId",
+      "roleKeys",
     ]);
     expect(second.cursor).toBeUndefined();
   });
@@ -533,6 +560,7 @@ describe("scope member directory", () => {
       name: "Bob",
       email: "bob@example.com",
       image: "https://example.com/bob.png",
+      roleKeys: ["member", "task_editor"],
     });
   });
 
@@ -592,13 +620,13 @@ describe("scope member directory", () => {
 
     await expect(
       t.query(listScopeMemberDirectory, {
-        tokenIdentifier: `${ISSUER}|user_bob`,
+        tokenIdentifier: `${ISSUER}|user_blocked`,
         scopeId: "scope_default",
       }),
     ).resolves.toEqual({ members: [] });
     await expect(
       t.query(getScopeMemberDirectoryEntry, {
-        tokenIdentifier: `${ISSUER}|user_bob`,
+        tokenIdentifier: `${ISSUER}|user_blocked`,
         scopeId: "scope_default",
         principalId: "principal_alice",
       }),
