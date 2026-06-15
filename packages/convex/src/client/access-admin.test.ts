@@ -3,6 +3,7 @@ import {
   acceptAccessInvitation,
   createAccessAdminActions,
   createAccessInvitation,
+  createResourceCreatorBootstrapAction,
   createAccessScope,
   createAccessScopeAction,
   createAccessUserActions,
@@ -524,6 +525,250 @@ describe("createAccessAdminActions", () => {
         actor_mode: "service",
       },
     });
+  });
+});
+
+describe("createResourceCreatorBootstrapAction", () => {
+  function makeContext(herculesAuthUserId = "auth_user_1") {
+    return {
+      auth: {
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: `https://auth.example.com|${herculesAuthUserId}`,
+        }),
+      },
+    };
+  }
+
+  function makeOptions(
+    overrides: {
+      post?: ReturnType<typeof vi.fn>;
+      getBootstrapTarget?: ReturnType<typeof vi.fn>;
+      listMyMemberships?: ReturnType<typeof vi.fn>;
+      activateResource?: ReturnType<typeof vi.fn>;
+    } = {},
+  ) {
+    const post =
+      overrides.post ?? vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
+    const getBootstrapTarget =
+      overrides.getBootstrapTarget ??
+      vi.fn().mockResolvedValue({
+        scopeId: "scope_1",
+        resourceId: "project_1",
+        creatorHerculesAuthUserId: "auth_user_1",
+        state: "provisioning",
+      });
+    const listMyMemberships =
+      overrides.listMyMemberships ??
+      vi.fn().mockResolvedValue([
+        {
+          scopeId: "scope_1",
+          scopeName: "Acme",
+          kind: "org",
+          roles: [],
+          joinedAt: 1,
+          status: "active",
+        },
+      ]);
+    const activateResource =
+      overrides.activateResource ?? vi.fn().mockResolvedValue(undefined);
+    const action = createResourceCreatorBootstrapAction({
+      authenticatedAction: identityBuilder,
+      resourceType: "app.projects",
+      managerRoleKey: "project_manager",
+      appliesTo: "self_and_descendants",
+      getBootstrapTarget,
+      listMyMemberships,
+      activateResource,
+      client: { post },
+    } as never);
+
+    return {
+      action,
+      post,
+      getBootstrapTarget,
+      listMyMemberships,
+      activateResource,
+    };
+  }
+
+  test("grants the fixed manager role to the active resource creator and activates the row", async () => {
+    const {
+      action,
+      post,
+      getBootstrapTarget,
+      listMyMemberships,
+      activateResource,
+    } = makeOptions();
+    const ctx = makeContext();
+
+    await expect(
+      getHandler(action)(ctx, { resourceId: "project_1" }),
+    ).resolves.toEqual({
+      resourceId: "project_1",
+      state: "active",
+      bootstrapped: true,
+      grant: {
+        accessScopeId: "scope_1",
+        grantId: "grant_1",
+        changed: true,
+        sourceVersion: 2,
+        projectionIds: ["projection_2"],
+      },
+    });
+
+    expect(getBootstrapTarget).toHaveBeenCalledWith(ctx, {
+      resourceId: "project_1",
+    });
+    expect(listMyMemberships).toHaveBeenCalledWith(ctx);
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/resource-grants/create",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: undefined,
+          hercules_auth_user_id: "auth_user_1",
+          resource_type: "app.projects",
+          resource_id: "project_1",
+          role_key: "project_manager",
+          permission_key: undefined,
+          applies_to: "self_and_descendants",
+          expires_at: undefined,
+          actor_mode: "service",
+        },
+      },
+    );
+    expect(activateResource).toHaveBeenCalledWith(ctx, {
+      resourceId: "project_1",
+      creatorHerculesAuthUserId: "auth_user_1",
+      grant: {
+        accessScopeId: "scope_1",
+        grantId: "grant_1",
+        changed: true,
+        sourceVersion: 2,
+        projectionIds: ["projection_2"],
+      },
+    });
+  });
+
+  test("rejects a caller who is not the trusted resource creator", async () => {
+    const { action, post, listMyMemberships, activateResource } = makeOptions();
+
+    await expect(
+      getHandler(action)(makeContext("auth_user_2"), {
+        resourceId: "project_1",
+      }),
+    ).rejects.toMatchObject({
+      data: { code: "ACCESS_DENIED", message: "Access denied" },
+    });
+
+    expect(listMyMemberships).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    expect(activateResource).not.toHaveBeenCalled();
+  });
+
+  test("requires the creator to remain active in the target scope", async () => {
+    const { action, post, activateResource } = makeOptions({
+      listMyMemberships: vi.fn().mockResolvedValue([
+        {
+          scopeId: "scope_1",
+          scopeName: "Acme",
+          kind: "org",
+          roles: [],
+          joinedAt: 1,
+          status: "removed",
+        },
+      ]),
+    });
+
+    await expect(
+      getHandler(action)(makeContext(), { resourceId: "project_1" }),
+    ).rejects.toMatchObject({
+      data: { code: "ACCESS_DENIED", message: "Access denied" },
+    });
+
+    expect(post).not.toHaveBeenCalled();
+    expect(activateResource).not.toHaveBeenCalled();
+  });
+
+  test("does not recreate a manager grant after the resource is active", async () => {
+    const { action, post, activateResource } = makeOptions({
+      getBootstrapTarget: vi.fn().mockResolvedValue({
+        scopeId: "scope_1",
+        resourceId: "project_1",
+        creatorHerculesAuthUserId: "auth_user_1",
+        state: "active",
+      }),
+    });
+
+    await expect(
+      getHandler(action)(makeContext(), { resourceId: "project_1" }),
+    ).resolves.toEqual({
+      resourceId: "project_1",
+      state: "active",
+      bootstrapped: false,
+    });
+
+    expect(post).not.toHaveBeenCalled();
+    expect(activateResource).not.toHaveBeenCalled();
+  });
+
+  test("retries an idempotent grant when activation previously failed", async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce(RESOURCE_GRANT_RESULT)
+      .mockResolvedValueOnce({ ...RESOURCE_GRANT_RESULT, changed: false });
+    const activateResource = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("activation failed"))
+      .mockResolvedValueOnce(undefined);
+    const { action } = makeOptions({ post, activateResource });
+    const ctx = makeContext();
+
+    await expect(
+      getHandler(action)(ctx, { resourceId: "project_1" }),
+    ).rejects.toThrow("activation failed");
+    await expect(
+      getHandler(action)(ctx, { resourceId: "project_1" }),
+    ).resolves.toMatchObject({
+      resourceId: "project_1",
+      state: "active",
+      bootstrapped: true,
+      grant: { grantId: "grant_1", changed: false },
+    });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(activateResource).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not reveal whether a missing resource exists", async () => {
+    const { action, post } = makeOptions({
+      getBootstrapTarget: vi.fn().mockResolvedValue(null),
+    });
+
+    await expect(
+      getHandler(action)(makeContext(), { resourceId: "missing" }),
+    ).rejects.toMatchObject({
+      data: { code: "ACCESS_DENIED", message: "Access denied" },
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test("rejects a trusted lookup that resolves a different resource", async () => {
+    const { action, post } = makeOptions({
+      getBootstrapTarget: vi.fn().mockResolvedValue({
+        scopeId: "scope_1",
+        resourceId: "project_2",
+        creatorHerculesAuthUserId: "auth_user_1",
+        state: "provisioning",
+      }),
+    });
+
+    await expect(
+      getHandler(action)(makeContext(), { resourceId: "project_1" }),
+    ).rejects.toMatchObject({
+      data: { code: "ACCESS_DENIED", message: "Access denied" },
+    });
+    expect(post).not.toHaveBeenCalled();
   });
 });
 

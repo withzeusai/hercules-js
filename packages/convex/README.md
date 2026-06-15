@@ -284,6 +284,7 @@ membership. Do not copy it into an app-owned role table.
 | `createAccessUserActions`                                                        | Public `authenticatedAction`     | Signed-in app user via `idToken`; the control plane applies runtime role checks |
 | `createAccessScopeAction`                                                        | Public `authenticatedAction`     | Authenticated creator after `canCreateScope`; the creator becomes Owner         |
 | `createAccessScope`                                                              | App-owned authenticated function | Authenticated creator from `ctx`; the app supplies its own product-policy gate  |
+| `createResourceCreatorBootstrapAction`                                           | Public `authenticatedAction`     | Trusted resource creator; one fixed initial resource role                       |
 | `acceptAccessInvitation`                                                         | App-owned authenticated function | Invitee identified by the invitation token and `idToken`                        |
 
 Never call generated `internal.accessAdmin.*` actions from an exported public,
@@ -349,6 +350,66 @@ await ctx.runAction(api.accessUser.replaceResourceGrants, {
   idToken,
 });
 ```
+
+### Give a resource creator its initial manager role
+
+When creating a resource should make its creator the resource manager, use
+`createResourceCreatorBootstrapAction`. It is deliberately narrower than a
+normal grant action:
+
+- the browser passes only the resource id;
+- trusted app data supplies the creator and scope;
+- the resource type, role, and descendant behavior are fixed in code;
+- the caller must still be an active member of the scope; and
+- an active resource is never bootstrapped again, so revoked access is not
+  silently restored.
+
+Create the app row as `provisioning`, record its creator with
+`getCurrentHerculesAuthUserId`, and exclude provisioning rows from normal
+queries. Then expose one action:
+
+```ts
+// convex/accessUser.ts
+"use node";
+
+import { createResourceCreatorBootstrapAction } from "@usehercules/convex/access-admin";
+import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
+import { authenticatedAction, listMyMemberships } from "./hercules";
+
+export const bootstrapProjectCreator =
+  createResourceCreatorBootstrapAction({
+    authenticatedAction,
+    resourceType: "app.projects",
+    managerRoleKey: "project_manager",
+    appliesTo: "self_and_descendants",
+    listMyMemberships,
+    getBootstrapTarget: async (ctx, { resourceId }) =>
+      await ctx.runQuery(internal.projects.getCreatorBootstrapTarget, {
+        projectId: resourceId as Id<"projects">,
+      }),
+    activateResource: async (
+      ctx,
+      { resourceId, creatorHerculesAuthUserId },
+    ) => {
+      await ctx.runMutation(internal.projects.activateCreatorBootstrap, {
+        projectId: resourceId as Id<"projects">,
+        creatorHerculesAuthUserId,
+      });
+    },
+  });
+```
+
+The internal query returns only `{ scopeId, resourceId,
+creatorHerculesAuthUserId, state }`. The activation mutation must re-read the
+row and require the same creator plus `state === "provisioning"` before
+changing it to `active`. If activation fails after the grant, retry the action;
+the managed grant write is idempotent.
+
+Do not accept a browser-supplied scope, role, resource type, or recipient, and
+do not expose a raw service-authority action. If every scope Admin should
+already manage every resource, skip creator bootstrap entirely: the built-in
+Admin role already covers ordinary `app.*` permissions.
 
 For a browser-selected user, resolve active scope membership before writing:
 

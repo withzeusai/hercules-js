@@ -7,7 +7,10 @@ import type {
   GenericDataModel,
 } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import type { AccessDeploymentEntryMirrorResult } from "./index";
+import type {
+  AccessDeploymentEntryMirrorResult,
+  Membership,
+} from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
 const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
@@ -238,6 +241,50 @@ export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
       args: CreateAccessScopeArgs,
     ) => boolean | Promise<boolean>;
   };
+
+export type ResourceCreatorBootstrapTarget = {
+  scopeId: string;
+  resourceId: string;
+  creatorHerculesAuthUserId: string;
+  state: "provisioning" | "active";
+};
+
+export type ResourceCreatorBootstrapResult =
+  | {
+      resourceId: string;
+      state: "active";
+      bootstrapped: false;
+    }
+  | {
+      resourceId: string;
+      state: "active";
+      bootstrapped: true;
+      grant: AccessResourceGrantWriteResult;
+    };
+
+export type CreateResourceCreatorBootstrapActionOptions<
+  DataModel extends GenericDataModel,
+> = AccessAdminApiOptions & {
+  authenticatedAction: ActionBuilder<DataModel, "public">;
+  resourceType: string;
+  managerRoleKey: string;
+  appliesTo: AccessBindingAppliesTo;
+  getBootstrapTarget: (
+    ctx: GenericActionCtx<DataModel>,
+    args: { resourceId: string },
+  ) => Promise<ResourceCreatorBootstrapTarget | null>;
+  listMyMemberships: (
+    ctx: GenericActionCtx<DataModel>,
+  ) => Promise<Membership[]>;
+  activateResource: (
+    ctx: GenericActionCtx<DataModel>,
+    args: {
+      resourceId: string;
+      creatorHerculesAuthUserId: string;
+      grant: AccessResourceGrantWriteResult;
+    },
+  ) => Promise<void>;
+};
 
 const optionalPrincipalRef = {
   principalId: v.optional(v.string()),
@@ -1779,6 +1826,95 @@ export function createAccessScopeAction<DataModel extends GenericDataModel>(
 }
 
 /**
+ * Builds a public action that gives a newly created app resource's trusted
+ * creator one fixed manager role, then marks the app row active.
+ *
+ * The browser supplies only `resourceId`. App-owned callbacks must load the
+ * trusted creator and scope from the database and activate the same
+ * provisioning row. The resource type, role, and descendant behavior are
+ * static factory configuration, so callers cannot turn this into arbitrary
+ * self-grant.
+ *
+ * Keep the resource unavailable while it is `provisioning`. If activation
+ * fails after the grant, retrying is safe because the control-plane grant
+ * write is idempotent. Once active, this action never recreates a removed
+ * manager grant.
+ */
+export function createResourceCreatorBootstrapAction<
+  DataModel extends GenericDataModel,
+>(
+  options: CreateResourceCreatorBootstrapActionOptions<DataModel>,
+) {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+
+  return options.authenticatedAction({
+    args: { resourceId: v.string() },
+    handler: async (ctx, args): Promise<ResourceCreatorBootstrapResult> => {
+      const identity = await ctx.auth.getUserIdentity();
+      const actorHerculesAuthUserId = parseTokenIdentifierSubject(
+        identity?.tokenIdentifier,
+      );
+      const target = await options.getBootstrapTarget(ctx, args);
+      if (
+        !target ||
+        target.resourceId !== args.resourceId ||
+        target.creatorHerculesAuthUserId !== actorHerculesAuthUserId
+      ) {
+        throwAccessDenied();
+      }
+
+      const memberships = await options.listMyMemberships(ctx);
+      const activeInTargetScope = memberships.some(
+        (membership) =>
+          membership.scopeId === target.scopeId &&
+          membership.status === "active",
+      );
+      if (!activeInTargetScope) {
+        throwAccessDenied();
+      }
+
+      if (target.state === "active") {
+        return {
+          resourceId: target.resourceId,
+          state: "active",
+          bootstrapped: false,
+        };
+      }
+
+      const result = await callAccessControlApi(
+        "/v1/access-control/resource-grants/create",
+        {
+          scope_id: target.scopeId,
+          principal_id: undefined,
+          hercules_auth_user_id: actorHerculesAuthUserId,
+          resource_type: options.resourceType,
+          resource_id: target.resourceId,
+          role_key: options.managerRoleKey,
+          permission_key: undefined,
+          applies_to: options.appliesTo,
+          expires_at: undefined,
+          ...serviceActor,
+        },
+      );
+      const grant = normalizeAccessResourceGrantWriteResult(result);
+
+      await options.activateResource(ctx, {
+        resourceId: target.resourceId,
+        creatorHerculesAuthUserId: actorHerculesAuthUserId,
+        grant,
+      });
+
+      return {
+        resourceId: target.resourceId,
+        state: "active",
+        bootstrapped: true,
+        grant,
+      };
+    },
+  });
+}
+
+/**
  * Creates an organization scope for the authenticated caller. Hercules derives
  * the caller from the Convex identity and makes that user Owner of the new
  * scope. The app should persist the returned `accessScopeId` on its
@@ -2078,6 +2214,13 @@ function requireTokenIdentifier(
     });
   }
   return tokenIdentifier;
+}
+
+function throwAccessDenied(): never {
+  throw new ConvexError({
+    code: "ACCESS_DENIED",
+    message: "Access denied",
+  });
 }
 
 function normalizeAccessScopeCreateResult(
