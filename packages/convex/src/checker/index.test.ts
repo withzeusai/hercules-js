@@ -2,7 +2,10 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { checkAccessControlSource, formatAccessControlCheckResult } from "./index";
+import {
+  checkAccessControlSource,
+  formatAccessControlCheckResult,
+} from "./index";
 
 describe("checkAccessControlSource", () => {
   test("reports exported raw Convex builders", () => {
@@ -229,7 +232,11 @@ describe("checkAccessControlSource", () => {
         }),
       ]),
     );
-    expect(result.findings.filter((finding) => finding.code === "public_service_authority_call")).toHaveLength(2);
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(2);
   });
 
   test("reports service-authority references hidden behind same-file helpers", () => {
@@ -265,7 +272,7 @@ describe("checkAccessControlSource", () => {
     );
   });
 
-  test("does not infer public service-authority calls across files or from internal-only files", () => {
+  test("reports service-authority calls hidden behind imported local helpers", () => {
     const root = createFixture({
       "convex/hercules.ts": `
         export { createAccessControl } from "@usehercules/convex";
@@ -284,6 +291,1166 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) => assignRole(ctx, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/accessHelpers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("reports service-authority calls behind aliased and namespace public builders", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/aliased.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        const auth = authenticatedAction;
+        export const addMember = auth({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.accessAdmin.assignRole, args),
+        });
+      `,
+      "convex/namespaced.ts": `
+        import { internal } from "./_generated/api";
+        import * as access from "./hercules";
+
+        export const removeMember = access.authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.accessAdmin.removeRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("reports imported helper aliases through barrels and emitted js specifiers", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/helpers/access.ts": `
+        import { internal } from "../_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/helpers/index.ts": `
+        export { assignRole } from "./access.js";
+      `,
+      "convex/projectMembers.ts": `
+        import { authenticatedAction } from "./hercules";
+        import { assignRole as importedAssignRole } from "./helpers/index.js";
+
+        const delegated = importedAssignRole;
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => delegated(ctx, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/helpers/access.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("reports service-authority calls through namespace-imported local helpers", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projectMembers.ts": `
+        import { authenticatedAction } from "./hercules";
+        import * as helpers from "./accessHelpers";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => helpers.assignRole(ctx, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/accessHelpers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("reports standalone service-authority helpers imported from access-admin", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projectMembers.ts": `
+        import {
+          createAccessInvitation as inviteMember,
+        } from "@usehercules/convex/access-admin";
+        import * as accessAdmin from "@usehercules/convex/access-admin";
+        import { authenticatedAction } from "./hercules";
+
+        export const invite = authenticatedAction({
+          args: {},
+          handler: async () =>
+            inviteMember({
+              scopeId: "scope_1",
+              email: "member@example.com",
+            }),
+        });
+
+        export const inviteToProject = authenticatedAction({
+          args: {},
+          handler: async () =>
+            accessAdmin.createResourceInvitation({
+              scopeId: "scope_1",
+              email: "member@example.com",
+              resourceType: "app.projects",
+              resourceId: "project_1",
+              roleKey: "project_member",
+            }),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("resolves builders and service helpers through src namespace barrels", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessBuilders.ts": `
+        export { authenticatedAction } from "./hercules";
+      `,
+      "src/access/service.ts": `
+        export {
+          createAccessInvitation as inviteMember,
+        } from "@usehercules/convex/access-admin";
+      `,
+      "src/access/index.ts": `
+        export * as service from "./service";
+      `,
+      "convex/projectMembers.ts": `
+        import * as access from "./accessBuilders";
+        import { service } from "../src/access";
+
+        export const invite = access.authenticatedAction({
+          args: {},
+          handler: async () =>
+            service.inviteMember({
+              scopeId: "scope_1",
+              email: "member@example.com",
+            }),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/projectMembers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("resolves bound handlers from non-inline builder configs", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        const definition = {
+          args: {},
+          handler: assignRole.bind(undefined),
+        };
+
+        export const update = authenticatedAction(definition);
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("uses final static config properties after object spreads", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        const serviceConfig = {
+          args: {},
+          handler: assignRole,
+        };
+        const publicConfig = {
+          ...serviceConfig,
+          handler: async () => null,
+        };
+
+        export const update = authenticatedAction(publicConfig);
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("resolves statically returned handler callbacks", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function removeRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.removeRole, args);
+        }
+
+        function makeHandler() {
+          return removeRole;
+        }
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: makeHandler(),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("resolves destructured aliases and deterministic outer reassignments", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        async function removeRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.removeRole, args);
+        }
+
+        const helpers = { assignRole };
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const { assignRole: delegated } = helpers;
+            return await delegated(ctx, args);
+          },
+        });
+
+        export const removeMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            let delegated = async () => null;
+            {
+              delegated = removeRole;
+            }
+            return await delegated(ctx, args);
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("uses the latest deterministic lexical assignment", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async () => {
+            let delegated = assignRole;
+            {
+              delegated = async () => null;
+            }
+            return await delegated();
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("does not infer branch-only callable reassignments", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            let delegated = async () => null;
+            if (args.useServiceAuthority) {
+              delegated = assignRole;
+            }
+            return await delegated(ctx, args);
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("does not infer switch or loop-only callable reassignments", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        export const throughSwitch = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            let delegated = async () => null;
+            switch (args.mode) {
+              case "service":
+                delegated = assignRole;
+                break;
+            }
+            return await delegated(ctx, args);
+          },
+        });
+
+        export const throughLoop = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            let delegated = async () => null;
+            for (const value of args.values) {
+              delegated = assignRole;
+            }
+            return await delegated(ctx, args);
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("detects renamed modules built with createAccessAdminActions", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/services/accessService.ts": `
+        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { internalAction } from "../_generated/server";
+
+        export const { assignRole } = createAccessAdminActions({ internalAction });
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.assignRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/projectMembers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("detects service modules built through a namespace package import", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/services/accessService.ts": `
+        import * as accessAdmin from "@usehercules/convex/access-admin";
+        import { internalAction } from "../_generated/server";
+
+        export const { assignRole } = accessAdmin.createAccessAdminActions({ internalAction });
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.assignRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/projectMembers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("marks only exports derived from createAccessAdminActions", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/services/accessService.ts": `
+        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { internalAction } from "../_generated/server";
+
+        const actions = createAccessAdminActions({ internalAction });
+        export const { assignRole } = actions;
+        export const health = internalAction({
+          args: {},
+          handler: async () => "ok",
+        });
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.assignRole, args),
+        });
+
+        export const health = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.health, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("keeps safe properties separate when spreading admin actions", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/services/accessService.ts": `
+        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { internalAction } from "../_generated/server";
+
+        const health = internalAction({
+          args: {},
+          handler: async () => "ok",
+        });
+        const actions = {
+          health,
+          ...createAccessAdminActions({ internalAction }),
+        };
+
+        export const { assignRole, health: exportedHealth } = actions;
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.assignRole, args),
+        });
+
+        export const health = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.exportedHealth, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("ignores shadowed helpers and uncalled nested functions", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+        import { assignRole } from "./accessHelpers";
+
+        export const list = authenticatedAction({
+          args: {},
+          handler: async () => {
+            const assignRole = async () => null;
+            await assignRole();
+
+            async function unused(ctx, args) {
+              return await ctx.runAction(internal.accessAdmin.removeRole, args);
+            }
+
+            return [];
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("reports direct object-property and Function.call/apply indirections", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+
+        const helpers = { assignRole };
+
+        export const throughObject = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => helpers.assignRole(ctx, args),
+        });
+
+        export const throughCall = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => assignRole.call(undefined, ctx, args),
+        });
+
+        export const throughApply = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => assignRole.apply(undefined, [ctx, args]),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("reports aliases of generated service-authority modules", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/services/accessService.ts": `
+        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { internalAction } from "../_generated/server";
+
+        export const { assignRole } = createAccessAdminActions({ internalAction });
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        const accessAdmin = internal.accessAdmin;
+        const accessService = internal.services.accessService;
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(accessAdmin.assignRole, args),
+        });
+
+        export const addProjectMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(accessService.assignRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("detects aliased createAccessAdminActions factories", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/services/accessService.ts": `
+        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { internalAction } from "../_generated/server";
+
+        const createAdminActions = createAccessAdminActions;
+        export const { assignRole } = createAdminActions({ internalAction });
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.services.accessService.assignRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/projectMembers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("resolves default exports and import-then-export barrels", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/defaultHelper.ts": `
+        import { internal } from "./_generated/api";
+
+        export default async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/namedHelper.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function removeRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.removeRole, args);
+        }
+      `,
+      "convex/barrel.ts": `
+        import { removeRole } from "./namedHelper";
+        export { removeRole };
+      `,
+      "convex/projectMembers.ts": `
+        import { authenticatedAction } from "./hercules";
+        import assignRole from "./defaultHelper";
+        import { removeRole } from "./barrel";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => assignRole(ctx, args),
+        });
+
+        export const removeMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => removeRole(ctx, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(2);
+  });
+
+  test("keeps dangerous closure bindings from declaration scope", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projects.ts": `
+        import { authenticatedAction } from "./hercules";
+        import { assignRole as dangerousAssignRole } from "./accessHelpers";
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const dangerousClosure = async () => dangerousAssignRole(ctx, args);
+
+            {
+              const dangerousAssignRole = async () => null;
+              await dangerousClosure();
+            }
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("keeps safe closure bindings from declaration scope", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projects.ts": `
+        import { authenticatedAction } from "./hercules";
+        import { assignRole as dangerousAssignRole } from "./accessHelpers";
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async () => {
+            const assignRole = async () => null;
+            const safeClosure = async () => assignRole();
+
+            {
+              const assignRole = dangerousAssignRole;
+              await safeClosure();
+            }
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("reports service-authority calls through shorthand handler properties", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        const handler = async (ctx, args) =>
+          ctx.runAction(internal.accessAdmin.assignRole, args);
+
+        export const update = authenticatedAction({
+          args: {},
+          handler,
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("ignores namespace helper imports shadowed in callable scope", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projects.ts": `
+        import { authenticatedAction } from "./hercules";
+        import * as helpers from "./accessHelpers";
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async (helpers) => helpers.assignRole(),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("terminates on cyclic local callable aliases", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { authenticatedAction } from "./hercules";
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async () => {
+            const first = second;
+            const second = first;
+            await first();
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("ignores loop and generated-internal lexical shadows", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+        import { assignRole } from "./accessHelpers";
+
+        export const list = authenticatedAction({
+          args: {},
+          handler: async () => {
+            for (const assignRole of [async () => null]) {
+              await assignRole();
+            }
+
+            {
+              const internal = {
+                accessAdmin: {
+                  assignRole: async () => null,
+                },
+              };
+              await internal.accessAdmin.assignRole();
+            }
+
+            return [];
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("ignores generated-internal lexical shadows in switch clauses", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./hercules";
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async (value) => {
+            switch (value) {
+              case "safe":
+                const internal = {
+                  accessAdmin: {
+                    assignRole: async () => null,
+                  },
+                };
+                await internal.accessAdmin.assignRole();
+                break;
+            }
+          },
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("treats passing a known dangerous callable as public exposure", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projects.ts": `
+        import { authenticatedAction } from "./hercules";
+        import { assignRole } from "./accessHelpers";
+
+        const invoke = (callback, ctx, args) => callback(ctx, args);
+        const ignore = (_callback) => null;
+
+        export const invoked = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => invoke(assignRole, ctx, args),
+        });
+
+        export const ignored = authenticatedAction({
+          args: {},
+          handler: async () => ignore(assignRole),
+        });
+
+        export const safe = authenticatedAction({
+          args: {},
+          handler: async () => ignore(async () => null),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    // The checker does not infer whether arbitrary higher-order functions call
+    // their arguments. Passing a statically dangerous callable from a public
+    // handler is itself treated as service-authority exposure.
+    expect(
+      result.findings.filter(
+        (finding) => finding.code === "public_service_authority_call",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("does not treat unrelated builder-shaped imports as public roots", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/fakeBuilders.ts": `
+        export const authenticatedAction = (definition) => definition;
+      `,
+      "convex/named.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./fakeBuilders";
+
+        export const run = authenticatedAction({
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.accessAdmin.assignRole, args),
+        });
+      `,
+      "convex/namespaced.ts": `
+        import { internal } from "./_generated/api";
+        import * as fakeBuilders from "./fakeBuilders";
+
+        export const run = fakeBuilders.authenticatedAction({
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.accessAdmin.assignRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("ignores unreachable service references in internal-only functions", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { internalAction } from "./_generated/server";
+        import { authenticatedAction } from "./hercules";
+
+        export const list = authenticatedAction({
+          args: {},
+          handler: async () => [],
+        });
+
+        export const repair = internalAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.accessAdmin.assignRole, args),
         });
       `,
       "convex/repairs.ts": `
@@ -318,10 +1485,14 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const message = formatAccessControlCheckResult(checkAccessControlSource({ cwd: root }));
+    const message = formatAccessControlCheckResult(
+      checkAccessControlSource({ cwd: root }),
+    );
 
     expect(message).toContain("static check passed");
-    expect(message).toContain("does not prove runtime role decisions or control-plane writes are authorized");
+    expect(message).toContain(
+      "does not prove runtime role decisions or control-plane writes are authorized",
+    );
   });
 
   test("reports a missing Convex directory", () => {
@@ -393,7 +1564,9 @@ describe("checkAccessControlSource", () => {
         }),
       ]),
     );
-    expect(formatAccessControlCheckResult(result)).toContain("Do not hardcode Access Control scope ids");
+    expect(formatAccessControlCheckResult(result)).toContain(
+      "Do not hardcode Access Control scope ids",
+    );
   });
 
   test("reports app-local org membership tables in managed Access Control apps", () => {
@@ -500,7 +1673,9 @@ describe("checkAccessControlSource", () => {
         }),
       ]),
     );
-    expect(formatAccessControlCheckResult(result)).toContain("scopeFromResource");
+    expect(formatAccessControlCheckResult(result)).toContain(
+      "scopeFromResource",
+    );
   });
 
   test("reports authenticated reads of org-owned tables", () => {
@@ -709,14 +1884,18 @@ describe("checkAccessControlSource", () => {
       "convex/projects.ts": builderSource,
     });
 
-    expect(checkAccessControlSource({ cwd: missingCatalogRoot })).toMatchObject({
-      ok: true,
-      findings: [],
-    });
-    expect(checkAccessControlSource({ cwd: invalidCatalogRoot })).toMatchObject({
-      ok: true,
-      findings: [],
-    });
+    expect(checkAccessControlSource({ cwd: missingCatalogRoot })).toMatchObject(
+      {
+        ok: true,
+        findings: [],
+      },
+    );
+    expect(checkAccessControlSource({ cwd: invalidCatalogRoot })).toMatchObject(
+      {
+        ok: true,
+        findings: [],
+      },
+    );
   });
 
   test("can rewrite exported raw builders to authenticated builders", () => {
@@ -757,7 +1936,9 @@ describe("checkAccessControlSource", () => {
     );
     expect(source).toContain("export const list = authenticatedQuery({");
     expect(source).toContain("export const create = authenticatedMutation({");
-    expect(source).toContain('import { internalMutation } from "./_generated/server";');
+    expect(source).toContain(
+      'import { internalMutation } from "./_generated/server";',
+    );
     expect(source).toContain("export const repair = internalMutation({");
   });
 
@@ -783,7 +1964,9 @@ describe("checkAccessControlSource", () => {
     const source = readFileSync(join(root, "convex/admin/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
-    expect(source).toContain('import { authenticatedQuery } from "../hercules";');
+    expect(source).toContain(
+      'import { authenticatedQuery } from "../hercules";',
+    );
     expect(source).toContain("export const list = authenticatedQuery({");
   });
 });

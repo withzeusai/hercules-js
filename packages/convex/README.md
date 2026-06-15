@@ -60,10 +60,10 @@ export {
 `accessQuery` / `accessMutation` / `accessAction` take a `permission` and a
 `scope`. Choose the scope helper from the app shape:
 
-| App shape | Create/list | Existing row | Child create |
-| --- | --- | --- | --- |
-| Default app scope | omit `scope` | `scopeFromDefaultResource` | `scopeFromDefaultParentResource` |
-| Organization scopes | `scopeFromArg` | `scopeFromResource` | `scopeFromParentResource` |
+| App shape           | Create/list    | Existing row               | Child create                     |
+| ------------------- | -------------- | -------------------------- | -------------------------------- |
+| Default app scope   | omit `scope`   | `scopeFromDefaultResource` | `scopeFromDefaultParentResource` |
+| Organization scopes | `scopeFromArg` | `scopeFromResource`        | `scopeFromParentResource`        |
 
 The default-scope resource helpers load the referenced row but do not require a
 scope id column. Organization helpers read or accept the organization scope.
@@ -72,7 +72,12 @@ sign-in.
 
 ```ts
 import { v } from "convex/values";
-import { accessQuery, accessMutation, scopeFromArg, scopeFromResource } from "./hercules";
+import {
+  accessQuery,
+  accessMutation,
+  scopeFromArg,
+  scopeFromResource,
+} from "./hercules";
 
 // Read: scope from an arg. "view" is a real permission; grant it to every role
 // that should see the data, including a read-only role.
@@ -81,7 +86,10 @@ export const listProjects = accessQuery({
   scope: scopeFromArg("orgScopeId"),
   args: { orgScopeId: v.string() },
   handler: async (ctx, args) =>
-    ctx.db.query("projects").withIndex("by_org", (q) => q.eq("orgScopeId", args.orgScopeId)).collect(),
+    ctx.db
+      .query("projects")
+      .withIndex("by_org", (q) => q.eq("orgScopeId", args.orgScopeId))
+      .collect(),
 });
 
 // Write on a specific row: scope from the resource, so the caller cannot pair
@@ -90,7 +98,8 @@ export const archiveProject = accessMutation({
   permission: "app.project:archive",
   scope: scopeFromResource("projects", "projectId"),
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) => ctx.db.patch(args.projectId, { status: "archived" }),
+  handler: async (ctx, args) =>
+    ctx.db.patch(args.projectId, { status: "archived" }),
 });
 ```
 
@@ -110,17 +119,22 @@ deny wins. Parent access applies only when its binding uses
 export const updateTask = accessMutation({
   permission: "app.tasks:update",
   scope: scopeFromResource("tasks", "taskId", {
-    authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
+    authorizeAgainst: (task) => [
+      { type: "app.projects", id: String(task.projectId) },
+    ],
   }),
   args: { taskId: v.id("tasks"), title: v.string() },
-  handler: async (ctx, args) => ctx.db.patch(args.taskId, { title: args.title }),
+  handler: async (ctx, args) =>
+    ctx.db.patch(args.taskId, { title: args.title }),
 });
 
 export const createTask = accessMutation({
   permission: "app.tasks:create",
   scope: scopeFromParentResource("projects", "projectId", {
     parentResourceType: "app.projects",
-    authorizeAgainst: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
+    authorizeAgainst: (project) => [
+      { type: "app.workspaces", id: String(project.workspaceId) },
+    ],
   }),
   args: { projectId: v.id("projects"), title: v.string() },
   handler: async (ctx, args) => {
@@ -149,12 +163,14 @@ scope id to each row:
 
 ```ts
 scope: scopeFromDefaultResource("tasks", "taskId", {
-  authorizeAgainst: task => [{ type: "app.projects", id: String(task.projectId) }],
-})
+  authorizeAgainst: (task) => [
+    { type: "app.projects", id: String(task.projectId) },
+  ],
+});
 
 scope: scopeFromDefaultParentResource("projects", "projectId", {
   parentResourceType: "app.projects",
-})
+});
 ```
 
 ## In-app admin screens
@@ -223,13 +239,18 @@ resource type, and resolve a selected `herculesAuthUserId` with
 `getScopeMemberDirectoryEntry`; pass the returned `principalId` as the
 recipient. Do not trust a browser-supplied principal or scope/resource pair.
 
-Use `replaceMemberRoles` to atomically replace one member's direct scope roles.
+Use `replaceMemberRoles` to atomically replace up to 500 direct scope roles for
+one member.
 Use `replaceResourceGrants` to atomically replace direct grants for each listed
-subject; `grants: []` clears that subject. For one grant, use the `grantId`
-returned by `createResourceGrant` or `listDirectSubjectsForResource`, then call
-`revokeResourceGrant`. Use `listResourceInvitations` and `revokeInvitation` for
-pending resource invitations. `setResourcePermissionRules` atomically applies
-a rule batch; `effect: "clear"` removes a listed rule.
+subject; `grants: []` clears that subject. Each request must include 1-100
+subjects and may involve at most 500 distinct existing or desired grants. Split
+larger edits by subjects, never by one subject's complete grant set.
+`createResourceGrant` requires one exact `resourceId`. For one grant, use its
+returned `grantId` or
+`listDirectSubjectsForResource`, then call `revokeResourceGrant`. Use
+`listResourceInvitations` and `revokeInvitation` for pending resource
+invitations. `setResourcePermissionRules` atomically applies a rule batch;
+`effect: "clear"` removes a listed rule.
 
 Create organization scopes with `createAccessScopeAction` or
 `createAccessScope`. The authenticated creator is sent as the scope Owner

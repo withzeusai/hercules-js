@@ -30,7 +30,10 @@ describe("createAccessAdminActions", () => {
     });
 
     await expect(
-      getHandler(actions.assignRole)({}, { scopeId: "scope_1", roleKey: "admin" }),
+      getHandler(actions.assignRole)(
+        {},
+        { scopeId: "scope_1", roleKey: "admin" },
+      ),
     ).resolves.toEqual({ changed: true });
 
     expect(post).toHaveBeenCalledWith("/v1/access-control/roles/assign", {
@@ -64,16 +67,19 @@ describe("createAccessAdminActions", () => {
       ),
     ).resolves.toEqual({ changed: true });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/user-exceptions/set", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: undefined,
-        hercules_auth_user_id: "user_1",
-        allow: ["reports.export"],
-        deny: [],
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/user-exceptions/set",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: undefined,
+          hercules_auth_user_id: "user_1",
+          allow: ["reports.export"],
+          deny: [],
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("requires the Hercules API key by default", async () => {
@@ -104,19 +110,26 @@ describe("createAccessAdminActions", () => {
       client: { post },
     });
 
-    await getHandler(actions.revokeResourceGrant)({}, { scopeId: "scope_1", grantId: "grant_1" });
+    await getHandler(actions.revokeResourceGrant)(
+      {},
+      { scopeId: "scope_1", grantId: "grant_1" },
+    );
     await getHandler(actions.setGrantExpiry)(
       {},
       { scopeId: "scope_1", grantId: "grant_1", expiresAt: null },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
-      body: {
-        scope_id: "scope_1",
-        grant_id: "grant_1",
-        actor_mode: "service",
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/resource-grants/revoke",
+      {
+        body: {
+          scope_id: "scope_1",
+          grant_id: "grant_1",
+          actor_mode: "service",
+        },
       },
-    });
+    );
     expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
       body: {
         scope_id: "scope_1",
@@ -185,28 +198,31 @@ describe("createAccessAdminActions", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-rules/replace", {
-      body: {
-        scope_id: "scope_1",
-        subject: { type: "principal", principal_id: "principal_1" },
-        resource_type: "app.projects",
-        target: { mode: "specific", resource_id: "project_1" },
-        applies_to: "self_and_descendants",
-        rules: [
-          {
-            permission_key: "app.tasks:update",
-            effect: "deny",
-            expires_at: undefined,
-          },
-          {
-            permission_key: "app.projects:archive",
-            effect: "clear",
-            expires_at: undefined,
-          },
-        ],
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/resource-rules/replace",
+      {
+        body: {
+          scope_id: "scope_1",
+          subject: { type: "principal", principal_id: "principal_1" },
+          resource_type: "app.projects",
+          target: { mode: "specific", resource_id: "project_1" },
+          applies_to: "self_and_descendants",
+          rules: [
+            {
+              permission_key: "app.tasks:update",
+              effect: "deny",
+              expires_at: undefined,
+            },
+            {
+              permission_key: "app.projects:archive",
+              effect: "clear",
+              expires_at: undefined,
+            },
+          ],
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("wraps scope lifecycle writes", async () => {
@@ -230,16 +246,22 @@ describe("createAccessAdminActions", () => {
       client: { post },
     });
 
-    await getHandler(actions.setDefaultRole)({}, { scopeId: "scope_1", roleKey: "viewer" });
+    await getHandler(actions.setDefaultRole)(
+      {},
+      { scopeId: "scope_1", roleKey: "viewer" },
+    );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/set-default-role", {
-      body: {
-        scope_id: "scope_1",
-        role_id: undefined,
-        role_key: "viewer",
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/scopes/set-default-role",
+      {
+        body: {
+          scope_id: "scope_1",
+          role_id: undefined,
+          role_key: "viewer",
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("creates invitations from an access-admin action and normalizes the result", async () => {
@@ -289,17 +311,15 @@ describe("createAccessAdminActions", () => {
   });
 
   test("accepts invitations for the signed-in Hercules auth user", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_1",
-        invitation_id: "invite_1",
-        principal_id: "principal_1",
-        role_ids: ["role_member"],
-        changed: true,
-        source_version: 10,
-        projection_ids: ["projection_1"],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      invitation_id: "invite_1",
+      principal_id: "principal_1",
+      role_ids: ["role_member"],
+      changed: true,
+      source_version: 10,
+      projection_ids: ["projection_1"],
+    });
     const ctx = {
       auth: {
         getUserIdentity: vi.fn().mockResolvedValue({
@@ -309,7 +329,11 @@ describe("createAccessAdminActions", () => {
     };
 
     await expect(
-      acceptAccessInvitation(ctx, { token: "token_1", idToken: ID_TOKEN }, { client: { post } }),
+      acceptAccessInvitation(
+        ctx,
+        { token: "token_1", idToken: ID_TOKEN },
+        { client: { post } },
+      ),
     ).resolves.toEqual({
       accessScopeId: "scope_1",
       invitationId: "invite_1",
@@ -326,14 +350,19 @@ describe("createAccessAdminActions", () => {
   });
 
   test("revokes invitations from an access-admin action", async () => {
-    const post = vi.fn().mockResolvedValue({ invitation_id: "invite_1", revoked: true });
+    const post = vi
+      .fn()
+      .mockResolvedValue({ invitation_id: "invite_1", revoked: true });
     const actions = createAccessAdminActions({
       internalAction: identityBuilder,
       client: { post },
     });
 
     await expect(
-      getHandler(actions.revokeInvitation)({}, { scopeId: "scope_1", invitationId: "invite_1" }),
+      getHandler(actions.revokeInvitation)(
+        {},
+        { scopeId: "scope_1", invitationId: "invite_1" },
+      ),
     ).resolves.toEqual({ invitation_id: "invite_1", revoked: true });
 
     expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/revoke", {
@@ -346,14 +375,12 @@ describe("createAccessAdminActions", () => {
   });
 
   test("creates scopes through an explicit app policy and normalizes the result", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_1",
-        created: true,
-        source_version: 7,
-        projection_ids: ["projection_1"],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      created: true,
+      source_version: 7,
+      projection_ids: ["projection_1"],
+    });
     const canCreateScope = vi.fn().mockResolvedValue(true);
     const action = createAccessScopeAction({
       authenticatedAction: identityBuilder,
@@ -416,14 +443,12 @@ describe("createAccessAdminActions", () => {
   });
 
   test("exposes a composable scope creation helper for app-specific metadata actions", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_2",
-        created: true,
-        source_version: 8,
-        projection_ids: ["projection_2"],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_2",
+      created: true,
+      source_version: 8,
+      projection_ids: ["projection_2"],
+    });
     const ctx = {
       auth: {
         getUserIdentity: vi.fn().mockResolvedValue({
@@ -433,7 +458,11 @@ describe("createAccessAdminActions", () => {
     };
 
     await expect(
-      createAccessScope(ctx, { name: "Beta", defaultRoleKey: "member" }, { client: { post } }),
+      createAccessScope(
+        ctx,
+        { name: "Beta", defaultRoleKey: "member" },
+        { client: { post } },
+      ),
     ).resolves.toEqual({
       accessScopeId: "scope_2",
       created: true,
@@ -452,19 +481,17 @@ describe("createAccessAdminActions", () => {
   });
 
   test("exposes a composable invitation creation helper", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_2",
-        invitation_id: "invite_2",
-        email: "admin@example.com",
-        role_ids: ["role_admin"],
-        token: "token_2",
-        accept_url: "https://app.example.com/invite?token=token_2",
-        expires_at: "2026-06-12T00:00:00.000Z",
-        source_version: 11,
-        projection_ids: ["projection_2"],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_2",
+      invitation_id: "invite_2",
+      email: "admin@example.com",
+      role_ids: ["role_admin"],
+      token: "token_2",
+      accept_url: "https://app.example.com/invite?token=token_2",
+      expires_at: "2026-06-12T00:00:00.000Z",
+      source_version: 11,
+      projection_ids: ["projection_2"],
+    });
 
     await expect(
       createAccessInvitation(
@@ -542,20 +569,26 @@ describe("actor_mode on resource-grant writes", () => {
       projectionIds: ["projection_2"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: undefined,
-        hercules_auth_user_id: "auth_user_2",
-        resource_type: "app.project",
-        resource_id: "project_1",
-        role_key: "project_contributor",
-        permission_key: undefined,
-        expires_at: undefined,
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/resource-grants/create",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: undefined,
+          hercules_auth_user_id: "auth_user_2",
+          resource_type: "app.project",
+          resource_id: "project_1",
+          role_key: "project_contributor",
+          permission_key: undefined,
+          expires_at: undefined,
+          actor_mode: "service",
+        },
       },
-    });
-    const [, sent] = post.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    );
+    const [, sent] = post.mock.calls[0] as [
+      string,
+      { body: Record<string, unknown> },
+    ];
     expect(sent.body).not.toHaveProperty("id_token");
   });
 
@@ -637,34 +670,180 @@ describe("actor_mode on resource-grant writes", () => {
       projectionIds: ["projection_9"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/replace", {
-      body: {
-        scope_id: "scope_1",
-        resource_type: "app.projects",
-        resource_id: "project_1",
-        subjects: [
-          {
-            principal_id: "principal_old",
-            hercules_auth_user_id: undefined,
-            grants: [],
-          },
-          {
-            principal_id: undefined,
-            hercules_auth_user_id: "user_new",
-            grants: [
-              {
-                role_key: "project_manager",
-                permission_key: undefined,
-                applies_to: "self_and_descendants",
-                expires_at: undefined,
-              },
-            ],
-          },
-        ],
-        actor_mode: "app_user",
-        id_token: ID_TOKEN,
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/resource-grants/replace",
+      {
+        body: {
+          scope_id: "scope_1",
+          resource_type: "app.projects",
+          resource_id: "project_1",
+          subjects: [
+            {
+              principal_id: "principal_old",
+              hercules_auth_user_id: undefined,
+              grants: [],
+            },
+            {
+              principal_id: undefined,
+              hercules_auth_user_id: "user_new",
+              grants: [
+                {
+                  role_key: "project_manager",
+                  permission_key: undefined,
+                  applies_to: "self_and_descendants",
+                  expires_at: undefined,
+                },
+              ],
+            },
+          ],
+          actor_mode: "app_user",
+          id_token: ID_TOKEN,
+        },
       },
+    );
+  });
+
+  test("replaceResourceGrants accepts 500 grants and rejects 501 before the API call", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      resource_type: "app.projects",
+      resource_id: "project_1",
+      subjects: [],
+      changed: false,
+      source_version: 9,
+      projection_ids: ["projection_9"],
     });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+    const makeSubjects = (grantCount: number) => [
+      {
+        principalId: "principal_1",
+        grants: Array.from({ length: grantCount }, (_, index) => ({
+          permissionKey: `app.projects:read_${index}`,
+        })),
+      },
+    ];
+
+    await expect(
+      getHandler(actions.replaceResourceGrants)(
+        {},
+        {
+          scopeId: "scope_1",
+          resourceType: "app.projects",
+          resourceId: "project_1",
+          subjects: makeSubjects(500),
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).resolves.toBeDefined();
+    expect(post).toHaveBeenCalledTimes(1);
+
+    await expect(
+      getHandler(actions.replaceResourceGrants)(
+        {},
+        {
+          scopeId: "scope_1",
+          resourceType: "app.projects",
+          resourceId: "project_1",
+          subjects: makeSubjects(501),
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).rejects.toThrow("At most 500 resource grants can be replaced at once");
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  test("replaceResourceGrants requires between 1 and 100 subjects before the API call", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      resource_type: "app.projects",
+      resource_id: "project_1",
+      subjects: [],
+      changed: false,
+      source_version: 9,
+      projection_ids: ["projection_9"],
+    });
+    const userActions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+    const adminActions = createAccessAdminActions({
+      internalAction: identityBuilder,
+      client: { post },
+    });
+    const makeSubjects = (subjectCount: number) =>
+      Array.from({ length: subjectCount }, (_, index) => ({
+        principalId: `principal_${index}`,
+        grants: [],
+      }));
+    const baseArgs = {
+      scopeId: "scope_1",
+      resourceType: "app.projects",
+      resourceId: "project_1",
+    };
+    const handlers = [
+      {
+        handler: getHandler(userActions.replaceResourceGrants),
+        args: { ...baseArgs, idToken: ID_TOKEN },
+      },
+      {
+        handler: getHandler(adminActions.replaceResourceGrants),
+        args: baseArgs,
+      },
+    ];
+
+    for (const { handler, args } of handlers) {
+      await expect(
+        handler({}, { ...args, subjects: makeSubjects(1) }),
+      ).resolves.toBeDefined();
+      await expect(
+        handler({}, { ...args, subjects: makeSubjects(100) }),
+      ).resolves.toBeDefined();
+    }
+    expect(post).toHaveBeenCalledTimes(4);
+
+    for (const { handler, args } of handlers) {
+      await expect(handler({}, { ...args, subjects: [] })).rejects.toThrow(
+        "At least 1 resource grant subject is required",
+      );
+      await expect(
+        handler({}, { ...args, subjects: makeSubjects(101) }),
+      ).rejects.toThrow(
+        "At most 100 resource grant subjects can be replaced at once",
+      );
+    }
+    expect(post).toHaveBeenCalledTimes(4);
+  });
+
+  test("replaceResourceGrants requires one exact resource", async () => {
+    const post = vi.fn();
+    const userActions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+    const adminActions = createAccessAdminActions({
+      internalAction: identityBuilder,
+      client: { post },
+    });
+    const args = {
+      scopeId: "scope_1",
+      resourceType: "app.projects",
+      resourceId: "",
+      subjects: [{ principalId: "principal_1", grants: [] }],
+    };
+
+    await expect(
+      getHandler(userActions.replaceResourceGrants)(
+        {},
+        { ...args, idToken: ID_TOKEN },
+      ),
+    ).rejects.toThrow("resourceId must identify one exact resource");
+    await expect(
+      getHandler(adminActions.replaceResourceGrants)({}, args),
+    ).rejects.toThrow("resourceId must identify one exact resource");
+    expect(post).not.toHaveBeenCalled();
   });
 
   test("replaces one member's direct scope roles atomically", async () => {
@@ -712,30 +891,67 @@ describe("actor_mode on resource-grant writes", () => {
     });
   });
 
-  test("createResourceGrant supports all resources of a type", async () => {
+  test("limits atomic member role replacement to 500 roles", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      principal_id: "principal_2",
+      role_ids: [],
+      changed: false,
+      source_version: 10,
+      projection_ids: ["projection_10"],
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+    const makeRoleKeys = (count: number) =>
+      Array.from({ length: count }, (_, index) => `role_${index}`);
+
+    await expect(
+      getHandler(actions.replaceMemberRoles)(
+        {},
+        {
+          scopeId: "scope_1",
+          herculesAuthUserId: "user_2",
+          roleKeys: makeRoleKeys(500),
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).resolves.toBeDefined();
+    expect(post).toHaveBeenCalledTimes(1);
+
+    await expect(
+      getHandler(actions.replaceMemberRoles)(
+        {},
+        {
+          scopeId: "scope_1",
+          herculesAuthUserId: "user_2",
+          roleKeys: makeRoleKeys(501),
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).rejects.toThrow("At most 500 member roles can be replaced at once");
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  test("createResourceGrant requires one exact resource", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
     const actions = createAccessAdminActions({
       internalAction: identityBuilder,
       client: { post },
     });
 
-    await getHandler(actions.createResourceGrant)(
-      {},
-      {
+    await expect(
+      getHandler(actions.createResourceGrant)({}, {
         scopeId: "scope_1",
         herculesAuthUserId: "user_1",
         resourceType: "app.projects",
         resourceId: null,
         permissionKey: "app.projects:read",
-      },
-    );
+      } as never),
+    ).rejects.toThrow("resourceId must identify one exact resource");
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
-      body: expect.objectContaining({
-        resource_type: "app.projects",
-        resource_id: null,
-      }),
-    });
+    expect(post).not.toHaveBeenCalled();
   });
 
   test("createResourceGrant delegates as app_user when an id_token is passed", async () => {
@@ -757,20 +973,23 @@ describe("actor_mode on resource-grant writes", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: undefined,
-        hercules_auth_user_id: "auth_user_2",
-        resource_type: "app.project",
-        resource_id: "project_1",
-        role_key: "project_contributor",
-        permission_key: undefined,
-        expires_at: undefined,
-        actor_mode: "app_user",
-        id_token: ID_TOKEN,
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/resource-grants/create",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: undefined,
+          hercules_auth_user_id: "auth_user_2",
+          resource_type: "app.project",
+          resource_id: "project_1",
+          role_key: "project_contributor",
+          permission_key: undefined,
+          expires_at: undefined,
+          actor_mode: "app_user",
+          id_token: ID_TOKEN,
+        },
       },
-    });
+    );
   });
 
   test("createResourceGrant forwards descendant applicability for an exact resource", async () => {
@@ -792,12 +1011,15 @@ describe("actor_mode on resource-grant writes", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
-      body: expect.objectContaining({
-        resource_id: "project_1",
-        applies_to: "self_and_descendants",
-      }),
-    });
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/resource-grants/create",
+      {
+        body: expect.objectContaining({
+          resource_id: "project_1",
+          applies_to: "self_and_descendants",
+        }),
+      },
+    );
   });
 
   test("createResourceGrant rejects descendant applicability without an exact resource", async () => {
@@ -819,7 +1041,7 @@ describe("actor_mode on resource-grant writes", () => {
           appliesTo: "self_and_descendants",
         },
       ),
-    ).rejects.toThrow("exact resourceId");
+    ).rejects.toThrow("resourceId must identify one exact resource");
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -844,14 +1066,18 @@ describe("actor_mode on resource-grant writes", () => {
       },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
-      body: {
-        scope_id: "scope_1",
-        grant_id: "grant_1",
-        actor_mode: "app_user",
-        id_token: ID_TOKEN,
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/resource-grants/revoke",
+      {
+        body: {
+          scope_id: "scope_1",
+          grant_id: "grant_1",
+          actor_mode: "app_user",
+          id_token: ID_TOKEN,
+        },
       },
-    });
+    );
     expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
       body: {
         scope_id: "scope_1",
@@ -966,16 +1192,14 @@ describe("createAccessUserActions", () => {
   });
 
   test("enters the current deployment and normalizes the decision", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        allowed: true,
-        reason: "open_allowed",
-        principal_id: "principal_1",
-        status: "active",
-        state_version: 7,
-        changed: true,
-      });
+    const post = vi.fn().mockResolvedValue({
+      allowed: true,
+      reason: "open_allowed",
+      principal_id: "principal_1",
+      status: "active",
+      state_version: 7,
+      changed: true,
+    });
     const actions = createAccessUserActions({
       authenticatedAction: identityBuilder,
       client: { post },
@@ -997,22 +1221,22 @@ describe("createAccessUserActions", () => {
   });
 
   test("returns a denied deployment-entry decision", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        allowed: false,
-        reason: "not_allowlisted",
-        principal_id: "principal_1",
-        status: "pending_approval",
-        state_version: 11,
-        changed: false,
-      });
+    const post = vi.fn().mockResolvedValue({
+      allowed: false,
+      reason: "not_allowlisted",
+      principal_id: "principal_1",
+      status: "pending_approval",
+      state_version: 11,
+      changed: false,
+    });
     const actions = createAccessUserActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
 
-    await expect(getHandler(actions.enterDeployment)({}, { idToken: ID_TOKEN })).resolves.toEqual({
+    await expect(
+      getHandler(actions.enterDeployment)({}, { idToken: ID_TOKEN }),
+    ).resolves.toEqual({
       allowed: false,
       reason: "not_allowlisted",
       principalId: "principal_1",
@@ -1029,9 +1253,9 @@ describe("createAccessUserActions", () => {
       client: { post },
     });
 
-    await expect(getHandler(actions.enterDeployment)({}, { idToken: " " })).rejects.toThrow(
-      "idToken is required",
-    );
+    await expect(
+      getHandler(actions.enterDeployment)({}, { idToken: " " }),
+    ).rejects.toThrow("idToken is required");
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -1075,19 +1299,17 @@ describe("createAccessUserActions", () => {
   });
 
   test("delegates scope administration with the verified app-user actor", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_1",
-        invitation_id: "invite_1",
-        email: "member@example.com",
-        role_ids: ["role_member"],
-        token: "token_1",
-        accept_url: "https://app.example.com/invite?token=token_1",
-        expires_at: "2026-06-11T00:00:00.000Z",
-        source_version: 1,
-        projection_ids: [],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      invitation_id: "invite_1",
+      email: "member@example.com",
+      role_ids: ["role_member"],
+      token: "token_1",
+      accept_url: "https://app.example.com/invite?token=token_1",
+      expires_at: "2026-06-11T00:00:00.000Z",
+      source_version: 1,
+      projection_ids: [],
+    });
     const actions = createAccessUserActions({
       authenticatedAction: identityBuilder,
       client: { post },
@@ -1137,7 +1359,9 @@ describe("createAccessUserActions", () => {
       "/v1/access-control/roles/create-org-custom",
       "/v1/access-control/role-overrides/set",
     ]);
-    for (const [, request] of post.mock.calls as Array<[string, { body: Record<string, unknown> }]>) {
+    for (const [, request] of post.mock.calls as Array<
+      [string, { body: Record<string, unknown> }]
+    >) {
       expect(request.body).toMatchObject({
         actor_mode: "app_user",
         id_token: ID_TOKEN,
@@ -1188,19 +1412,22 @@ describe("createResourceInvitation", () => {
       ),
     ).resolves.toEqual(parsedResult);
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
-      body: {
-        scope_id: "scope_1",
-        email: "pm@example.com",
-        resource_type: "app.project",
-        resource_id: "project_1",
-        role_key: "project_contributor",
-        permission_key: undefined,
-        applies_to: "self_and_descendants",
-        expires_in_days: 7,
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/invitations/create-resource",
+      {
+        body: {
+          scope_id: "scope_1",
+          email: "pm@example.com",
+          resource_type: "app.project",
+          resource_id: "project_1",
+          role_key: "project_contributor",
+          permission_key: undefined,
+          applies_to: "self_and_descendants",
+          expires_in_days: 7,
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("public app-user action requires an id_token and sends a single permission_key", async () => {
@@ -1222,19 +1449,22 @@ describe("createResourceInvitation", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
-      body: {
-        scope_id: "scope_1",
-        email: "pm@example.com",
-        resource_type: "app.project",
-        resource_id: "project_1",
-        role_key: undefined,
-        permission_key: "app.project:edit",
-        expires_in_days: undefined,
-        actor_mode: "app_user",
-        id_token: ID_TOKEN,
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/invitations/create-resource",
+      {
+        body: {
+          scope_id: "scope_1",
+          email: "pm@example.com",
+          resource_type: "app.project",
+          resource_id: "project_1",
+          role_key: undefined,
+          permission_key: "app.project:edit",
+          expires_in_days: undefined,
+          actor_mode: "app_user",
+          id_token: ID_TOKEN,
+        },
       },
-    });
+    );
   });
 
   test("is exposed as an access-admin action", async () => {
@@ -1257,18 +1487,21 @@ describe("createResourceInvitation", () => {
       ),
     ).resolves.toEqual(parsedResult);
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
-      body: {
-        scope_id: "scope_1",
-        email: "pm@example.com",
-        resource_type: "app.project",
-        resource_id: "project_1",
-        role_key: "project_contributor",
-        permission_key: undefined,
-        expires_in_days: undefined,
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/invitations/create-resource",
+      {
+        body: {
+          scope_id: "scope_1",
+          email: "pm@example.com",
+          resource_type: "app.project",
+          resource_id: "project_1",
+          role_key: "project_contributor",
+          permission_key: undefined,
+          expires_in_days: undefined,
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("rejects an empty app-user id token before calling the API", async () => {
@@ -1357,31 +1590,49 @@ describe("member lifecycle and admission administration", () => {
       {},
       { scopeId: "scope_1", principalId: "principal_1", status: "suspended" },
     );
-    await getHandler(actions.removeMember)({}, { scopeId: "scope_1", principalId: "principal_1" });
-    await getHandler(actions.approveMember)({}, { scopeId: "scope_1", principalId: "principal_2" });
+    await getHandler(actions.removeMember)(
+      {},
+      { scopeId: "scope_1", principalId: "principal_1" },
+    );
+    await getHandler(actions.approveMember)(
+      {},
+      { scopeId: "scope_1", principalId: "principal_2" },
+    );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/members/status", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: "principal_1",
-        status: "suspended",
-        actor_mode: "service",
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/members/status",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: "principal_1",
+          status: "suspended",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/members/remove", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: "principal_1",
-        actor_mode: "service",
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/v1/access-control/members/remove",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: "principal_1",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(3, "/v1/access-control/members/approve", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: "principal_2",
-        actor_mode: "service",
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      3,
+      "/v1/access-control/members/approve",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: "principal_2",
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("upserts and archives admission rules as the service", async () => {
@@ -1401,21 +1652,32 @@ describe("member lifecycle and admission administration", () => {
         reason: "Abuse",
       },
     );
-    await getHandler(actions.archiveAdmissionRule)({}, { scopeId: "scope_1", ruleId: "rule_1" });
+    await getHandler(actions.archiveAdmissionRule)(
+      {},
+      { scopeId: "scope_1", ruleId: "rule_1" },
+    );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/admission-rules/upsert", {
-      body: {
-        scope_id: "scope_1",
-        effect: "deny",
-        subject_type: "domain",
-        subject_value: "spam.example.com",
-        reason: "Abuse",
-        actor_mode: "service",
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/admission-rules/upsert",
+      {
+        body: {
+          scope_id: "scope_1",
+          effect: "deny",
+          subject_type: "domain",
+          subject_value: "spam.example.com",
+          reason: "Abuse",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/admission-rules/archive", {
-      body: { scope_id: "scope_1", rule_id: "rule_1", actor_mode: "service" },
-    });
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/v1/access-control/admission-rules/archive",
+      {
+        body: { scope_id: "scope_1", rule_id: "rule_1", actor_mode: "service" },
+      },
+    );
   });
 
   test("sets the account entry mode including the invite and approval modes", async () => {
@@ -1434,31 +1696,37 @@ describe("member lifecycle and admission administration", () => {
       { scopeId: "scope_1", accountEntryMode: "approval_required" },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/entry-mode/set", {
-      body: {
-        scope_id: "scope_1",
-        account_entry_mode: "invite_only",
-        actor_mode: "service",
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/entry-mode/set",
+      {
+        body: {
+          scope_id: "scope_1",
+          account_entry_mode: "invite_only",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/entry-mode/set", {
-      body: {
-        scope_id: "scope_1",
-        account_entry_mode: "approval_required",
-        actor_mode: "service",
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/v1/access-control/entry-mode/set",
+      {
+        body: {
+          scope_id: "scope_1",
+          account_entry_mode: "approval_required",
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("creates scopes with the invite-only entry mode", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_3",
-        created: true,
-        source_version: 1,
-        projection_ids: ["projection_3"],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_3",
+      created: true,
+      source_version: 1,
+      projection_ids: ["projection_3"],
+    });
     const ctx = {
       auth: {
         getUserIdentity: vi.fn().mockResolvedValue({
@@ -1499,7 +1767,10 @@ describe("group administration", () => {
     });
 
     await expect(
-      getHandler(actions.createGroup)({}, { scopeId: "scope_1", name: "Moderators" }),
+      getHandler(actions.createGroup)(
+        {},
+        { scopeId: "scope_1", name: "Moderators" },
+      ),
     ).resolves.toEqual({
       accessScopeId: "scope_1",
       groupPrincipalId: "group_1",
@@ -1514,31 +1785,46 @@ describe("group administration", () => {
       ),
     ).resolves.toMatchObject({ groupPrincipalId: "group_1" });
     await expect(
-      getHandler(actions.archiveGroup)({}, { scopeId: "scope_1", groupPrincipalId: "group_1" }),
+      getHandler(actions.archiveGroup)(
+        {},
+        { scopeId: "scope_1", groupPrincipalId: "group_1" },
+      ),
     ).resolves.toMatchObject({ groupPrincipalId: "group_1" });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/groups/create", {
-      body: {
-        scope_id: "scope_1",
-        name: "Moderators",
-        actor_mode: "service",
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/groups/create",
+      {
+        body: {
+          scope_id: "scope_1",
+          name: "Moderators",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/groups/rename", {
-      body: {
-        scope_id: "scope_1",
-        group_principal_id: "group_1",
-        name: "Mods",
-        actor_mode: "service",
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/v1/access-control/groups/rename",
+      {
+        body: {
+          scope_id: "scope_1",
+          group_principal_id: "group_1",
+          name: "Mods",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(3, "/v1/access-control/groups/archive", {
-      body: {
-        scope_id: "scope_1",
-        group_principal_id: "group_1",
-        actor_mode: "service",
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      3,
+      "/v1/access-control/groups/archive",
+      {
+        body: {
+          scope_id: "scope_1",
+          group_principal_id: "group_1",
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("adds and removes group members as the service", async () => {
@@ -1588,22 +1874,30 @@ describe("group administration", () => {
       memberPrincipalId: "principal_1",
     });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/groups/members/add", {
-      body: {
-        scope_id: "scope_1",
-        group_principal_id: "group_1",
-        member_principal_id: "principal_1",
-        actor_mode: "service",
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      "/v1/access-control/groups/members/add",
+      {
+        body: {
+          scope_id: "scope_1",
+          group_principal_id: "group_1",
+          member_principal_id: "principal_1",
+          actor_mode: "service",
+        },
       },
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/groups/members/remove", {
-      body: {
-        scope_id: "scope_1",
-        group_principal_id: "group_1",
-        member_principal_id: "principal_1",
-        actor_mode: "service",
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/v1/access-control/groups/members/remove",
+      {
+        body: {
+          scope_id: "scope_1",
+          group_principal_id: "group_1",
+          member_principal_id: "principal_1",
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 
   test("lists groups and normalizes the rows", async () => {
@@ -1636,7 +1930,10 @@ describe("group administration", () => {
     });
 
     await expect(
-      getHandler(actions.listGroups)({}, { scopeId: "scope_1", includeArchived: true }),
+      getHandler(actions.listGroups)(
+        {},
+        { scopeId: "scope_1", includeArchived: true },
+      ),
     ).resolves.toEqual({
       accessScopeId: "scope_1",
       groups: [
@@ -1716,9 +2013,12 @@ describe("raw access reads", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/list-resource", {
-      body: { scope_id: "scope_1", actor_mode: "service" },
-    });
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/invitations/list-resource",
+      {
+        body: { scope_id: "scope_1", actor_mode: "service" },
+      },
+    );
   });
 
   test("reads raw role overrides and normalizes the rows", async () => {
@@ -1744,7 +2044,10 @@ describe("raw access reads", () => {
     });
 
     await expect(
-      getHandler(actions.getRoleOverrides)({}, { scopeId: "scope_1", roleKey: "member" }),
+      getHandler(actions.getRoleOverrides)(
+        {},
+        { scopeId: "scope_1", roleKey: "member" },
+      ),
     ).resolves.toEqual({
       accessScopeId: "scope_1",
       roleId: "role_member",
@@ -1820,34 +2123,35 @@ describe("raw access reads", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/user-exceptions/get", {
-      body: {
-        scope_id: "scope_1",
-        principal_id: undefined,
-        hercules_auth_user_id: "user_1",
-        actor_mode: "service",
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/user-exceptions/get",
+      {
+        body: {
+          scope_id: "scope_1",
+          principal_id: undefined,
+          hercules_auth_user_id: "user_1",
+          actor_mode: "service",
+        },
       },
-    });
+    );
   });
 });
 
 describe("app-user delegation for the admin surface", () => {
   test("threads the app-user actor through every new management action", async () => {
-    const post = vi
-      .fn()
-      .mockResolvedValue({
-        access_scope_id: "scope_1",
-        group_principal_id: "group_1",
-        member_principal_id: "principal_1",
-        groups: [],
-        invitations: [],
-        role_id: "role_member",
-        principal_id: "principal_1",
-        overrides: [],
-        exceptions: [],
-        source_version: 1,
-        projection_ids: ["projection_1"],
-      });
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      group_principal_id: "group_1",
+      member_principal_id: "principal_1",
+      groups: [],
+      invitations: [],
+      role_id: "role_member",
+      principal_id: "principal_1",
+      overrides: [],
+      exceptions: [],
+      source_version: 1,
+      projection_ids: ["projection_1"],
+    });
     const actions = createAccessUserActions({
       authenticatedAction: identityBuilder,
       client: { post },
@@ -1918,7 +2222,10 @@ describe("app-user delegation for the admin surface", () => {
       {},
       { scopeId: "scope_1", groupPrincipalId: "group_1", idToken: ID_TOKEN },
     );
-    await getHandler(actions.listGroups)({}, { scopeId: "scope_1", idToken: ID_TOKEN });
+    await getHandler(actions.listGroups)(
+      {},
+      { scopeId: "scope_1", idToken: ID_TOKEN },
+    );
     await getHandler(actions.addGroupMember)(
       {},
       {
@@ -1980,7 +2287,9 @@ describe("app-user delegation for the admin surface", () => {
       "/v1/access-control/role-overrides/get",
       "/v1/access-control/user-exceptions/get",
     ]);
-    for (const [, request] of post.mock.calls as Array<[string, { body: Record<string, unknown> }]>) {
+    for (const [, request] of post.mock.calls as Array<
+      [string, { body: Record<string, unknown> }]
+    >) {
       expect(request.body).toMatchObject({
         actor_mode: "app_user",
         id_token: ID_TOKEN,
@@ -1989,7 +2298,10 @@ describe("app-user delegation for the admin surface", () => {
 
     // addMember identifies the member by hercules_auth_user_id only; the
     // route does not accept principal_id, so the key must be absent.
-    const [, addMemberRequest] = post.mock.calls[0] as [string, { body: Record<string, unknown> }];
+    const [, addMemberRequest] = post.mock.calls[0] as [
+      string,
+      { body: Record<string, unknown> },
+    ];
     expect(addMemberRequest.body).toEqual({
       scope_id: "scope_1",
       hercules_auth_user_id: "auth_user_1",
