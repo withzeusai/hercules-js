@@ -20,13 +20,14 @@ import {
 const identityBuilder = ((definition: unknown) => definition) as never;
 
 const component = {
-  checks: { authorize: "authorize" },
+  checks: { authorize: "authorize", authorizeMany: "authorizeMany" },
   queries: {
     getDeploymentEntryStatus: "getDeploymentEntryStatus",
     listMyMemberships: "listMyMemberships",
     listMyRoles: "listMyRoles",
     getEffectivePermissions: "getEffectivePermissions",
     listScopeMemberDirectory: "listScopeMemberDirectory",
+    getScopeMemberDirectoryEntry: "getScopeMemberDirectoryEntry",
   },
 };
 
@@ -36,7 +37,10 @@ describe("createAccessControl", () => {
   });
 
   test("resolves the Hercules-mounted component by default", () => {
-    const herculesComponent = { ...component, checks: { authorize: "herculesAuthorize" } };
+    const herculesComponent = {
+      ...component,
+      checks: { authorize: "herculesAuthorize" },
+    };
     const builders = createAccessControl({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -49,13 +53,15 @@ describe("createAccessControl", () => {
     } as never) as unknown as { handler: Function };
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
-      runQuery: vi
-        .fn()
-        .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        effectiveRoleIds: [],
+      }),
     };
 
     return definition.handler(ctx).then(() => {
@@ -94,9 +100,9 @@ describe("createAccessControl", () => {
     } as never) as unknown as { handler: Function };
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi
         .fn()
@@ -131,9 +137,9 @@ describe("createAccessControl", () => {
 
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi
         .fn()
@@ -168,9 +174,9 @@ describe("createAccessControl", () => {
 
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi
         .fn()
@@ -200,9 +206,9 @@ describe("createAccessControl", () => {
     });
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi.fn(async (ref: string) => {
         if (ref === "authorize") {
@@ -254,7 +260,12 @@ describe("createAccessControl", () => {
         }
         if (ref === "listMyRoles") {
           return [
-            { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
+            {
+              roleId: "role_member",
+              roleKey: "member",
+              roleName: "Member",
+              roleKind: "system",
+            },
           ];
         }
         if (ref === "listScopeMemberDirectory") {
@@ -269,6 +280,25 @@ describe("createAccessControl", () => {
             ],
             cursor: "cursor_2",
           };
+        }
+        if (ref === "getScopeMemberDirectoryEntry") {
+          return {
+            principalId: "principal_1",
+            herculesAuthUserId: "user_1",
+            name: "Alice",
+            email: "alice@example.com",
+          };
+        }
+        if (ref === "authorizeMany") {
+          return [
+            {
+              allowed: true,
+              reasonCode: "allowed",
+              sourceVersion: 1,
+              principalId: "principal_1",
+              effectiveRoleIds: ["role_member"],
+            },
+          ];
         }
         throw new Error(`Unexpected query ref ${ref}`);
       }),
@@ -295,7 +325,12 @@ describe("createAccessControl", () => {
     });
     await expect(builders.listMyMemberships(ctx as never)).resolves.toHaveLength(1);
     await expect(builders.listMyRoles(ctx as never, { scopeId: "scope_abc" })).resolves.toEqual([
-      { roleId: "role_member", roleKey: "member", roleName: "Member", roleKind: "system" },
+      {
+        roleId: "role_member",
+        roleKey: "member",
+        roleName: "Member",
+        roleKind: "system",
+      },
     ]);
     await expect(
       builders.listScopeMemberDirectory(ctx as never, {
@@ -314,6 +349,31 @@ describe("createAccessControl", () => {
       ],
       nextCursor: "cursor_2",
     });
+    await expect(
+      builders.getScopeMemberDirectoryEntry(ctx as never, {
+        scopeId: "scope_abc",
+        herculesAuthUserId: "user_1",
+      }),
+    ).resolves.toEqual({
+      principalId: "principal_1",
+      herculesAuthUserId: "user_1",
+      name: "Alice",
+      email: "alice@example.com",
+    });
+    await expect(
+      builders.checkPermissions(ctx as never, [
+        {
+          scopeId: "scope_abc",
+          permission: "tasks.read",
+          resource: { type: "tasks", id: "task_1" },
+        },
+      ]),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        allowed: true,
+        reasonCode: "allowed",
+      }),
+    ]);
 
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
@@ -338,6 +398,23 @@ describe("createAccessControl", () => {
       cursor: "cursor_1",
       limit: 25,
     });
+    expect(ctx.runQuery).toHaveBeenCalledWith("getScopeMemberDirectoryEntry", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      scopeId: "scope_abc",
+      herculesAuthUserId: "user_1",
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("authorizeMany", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      checks: [
+        {
+          scopeId: "scope_abc",
+          permission: "tasks.read",
+          resourceType: "tasks",
+          resourceId: "task_1",
+          ancestors: undefined,
+        },
+      ],
+    });
   });
 
   test("hasPermission forwards a bounded explicit ancestor chain atomically", async () => {
@@ -349,13 +426,15 @@ describe("createAccessControl", () => {
     });
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
-      runQuery: vi
-        .fn()
-        .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] }),
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        effectiveRoleIds: [],
+      }),
     };
 
     await expect(
@@ -386,9 +465,9 @@ describe("createAccessControl", () => {
     });
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi
         .fn()
@@ -418,9 +497,9 @@ describe("createAccessControl", () => {
     });
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi.fn(async (_ref: string, args: { resourceId: string }) => ({
         allowed: args.resourceId === "p1",
@@ -460,9 +539,9 @@ describe("createAccessControl", () => {
     });
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi.fn(async (_ref: string, args: { ancestors?: unknown[] }) => ({
         allowed: args.ancestors?.length === 1,
@@ -500,9 +579,9 @@ describe("createAccessControl", () => {
     });
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi.fn().mockResolvedValue({
         allowed: false,
@@ -534,7 +613,10 @@ describe("createAccessControl", () => {
       action: identityBuilder,
       component: component as never,
     });
-    const ctx = { auth: { getUserIdentity: vi.fn().mockResolvedValue(null) }, runQuery: vi.fn() };
+    const ctx = {
+      auth: { getUserIdentity: vi.fn().mockResolvedValue(null) },
+      runQuery: vi.fn(),
+    };
     const result = await builders.filterAuthorizedResources(ctx as never, {
       resources: [{ _id: "p1" }],
       permission: "app.project:view",
@@ -560,9 +642,9 @@ describe("createAccessControl", () => {
 
     const ctx = {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery: vi.fn(),
     };
@@ -573,7 +655,9 @@ describe("createAccessControl", () => {
 
   test("scopeFromResource reads the scope field from the loaded row", async () => {
     const extract = scopeFromResource("loans", "loanId");
-    const ctx = { db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_xyz" }) } };
+    const ctx = {
+      db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_xyz" }) },
+    };
     // The resource type defers to the checked permission's canonical catalog
     // type (sentinel substituted by the authorize gate), NOT the table name:
     // resource grants are pinned to the catalog type, so emitting the table
@@ -587,8 +671,12 @@ describe("createAccessControl", () => {
   });
 
   test("scopeFromResource accepts a custom scopeField", async () => {
-    const extract = scopeFromResource("loans", "loanId", { scopeField: "accessScopeId" });
-    const ctx = { db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_custom" }) } };
+    const extract = scopeFromResource("loans", "loanId", {
+      scopeField: "accessScopeId",
+    });
+    const ctx = {
+      db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_custom" }) },
+    };
     await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
       scopeId: "scope_custom",
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
@@ -618,18 +706,23 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
       scope: scopeFromResource("tasks", "taskId", { authorizeAgainst }),
       args: {},
       handler: async () => "ok",
-    } as never) as unknown as { handler: (ctx: unknown, args: unknown) => Promise<unknown> };
+    } as never) as unknown as {
+      handler: (ctx: unknown, args: unknown) => Promise<unknown>;
+    };
   }
 
   function makeCtx(
     runQuery: ReturnType<typeof vi.fn>,
-    row: Record<string, unknown> = { orgScopeId: "scope_1", projectId: "proj_1" },
+    row: Record<string, unknown> = {
+      orgScopeId: "scope_1",
+      projectId: "proj_1",
+    },
   ) {
     return {
       auth: {
-        getUserIdentity: vi
-          .fn()
-          .mockResolvedValue({ tokenIdentifier: "https://auth.example.com|user_1" }),
+        getUserIdentity: vi.fn().mockResolvedValue({
+          tokenIdentifier: "https://auth.example.com|user_1",
+        }),
       },
       runQuery,
       db: { get: vi.fn().mockResolvedValue(row) },
@@ -681,21 +774,23 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   });
 
   test("always sends declared ancestors even when the target itself allows", async () => {
-    const handler = makeTaskMutation((task) => [
-      { type: "app.project", id: String(task.projectId) },
-    ]);
-    const runQuery = vi
-      .fn()
-      .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] });
+    const handler = makeTaskMutation((task) => [{ type: "app.project", id: String(task.projectId) }]);
+    const runQuery = vi.fn().mockResolvedValue({
+      allowed: true,
+      reasonCode: "allowed",
+      effectiveRoleIds: [],
+    });
     await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).resolves.toBe("ok");
     expect(runQuery).toHaveBeenCalledTimes(1);
   });
 
   test("default path without authorizeAgainst makes exactly one authorize call", async () => {
     const handler = makeTaskMutation();
-    const runQuery = vi
-      .fn()
-      .mockResolvedValue({ allowed: true, reasonCode: "allowed", effectiveRoleIds: [] });
+    const runQuery = vi.fn().mockResolvedValue({
+      allowed: true,
+      reasonCode: "allowed",
+      effectiveRoleIds: [],
+    });
     await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).resolves.toBe("ok");
     expect(runQuery).toHaveBeenCalledTimes(1);
   });
@@ -707,25 +802,36 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
         id: `p${i}`,
       })),
     );
-    const runQuery = vi
-      .fn()
-      .mockResolvedValue({ allowed: false, reasonCode: "denied", effectiveRoleIds: [] });
-    await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(
-      ConvexError,
-    );
+    const runQuery = vi.fn().mockResolvedValue({
+      allowed: false,
+      reasonCode: "denied",
+      effectiveRoleIds: [],
+    });
+    await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(ConvexError);
     expect(runQuery).not.toHaveBeenCalled();
   });
 
   test("scopeFromParentResource authorizes child creation against its loaded parent", async () => {
     const extract = scopeFromParentResource("projects", "projectId", {
       parentResourceType: "app.projects",
+      authorizeAgainst: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
     });
-    const ctx = { db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_1" }) } };
+    const ctx = {
+      db: {
+        get: vi.fn().mockResolvedValue({
+          orgScopeId: "scope_1",
+          workspaceId: "workspace_1",
+        }),
+      },
+    };
 
     await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
       scopeId: "scope_1",
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
-      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+      ancestors: [
+        { resourceType: "app.projects", resourceId: "project_1" },
+        { resourceType: "app.workspaces", resourceId: "workspace_1" },
+      ],
     });
   });
 });

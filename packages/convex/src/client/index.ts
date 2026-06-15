@@ -21,7 +21,7 @@ import type { ScopeKind } from "../shared/sync";
 
 type AccessMode = "authenticated" | "permission";
 
-type AuthorizationDecision = {
+export type AuthorizationDecision = {
   allowed: boolean;
   reasonCode: string;
   explicitDeny?: boolean;
@@ -40,6 +40,9 @@ type AuthorizationArgs = {
   resourceId?: string;
   ancestors?: Array<{ resourceType: string; resourceId: string }>;
 };
+type AuthorizationCheckArgs = Omit<AuthorizationArgs, "tokenIdentifier"> & {
+  permission: string;
+};
 
 type ListMyMembershipsArgs = { tokenIdentifier?: string };
 type GetDeploymentEntryStatusArgs = { tokenIdentifier?: string };
@@ -53,7 +56,14 @@ type GetEffectivePermissionsArgs = {
 };
 
 type ListScopeArgs = { tokenIdentifier?: string; scopeId: string };
-type ListScopeMemberDirectoryArgs = ListScopeArgs & { cursor?: string; limit?: number };
+type ListScopeMemberDirectoryArgs = ListScopeArgs & {
+  cursor?: string;
+  limit?: number;
+};
+type GetScopeMemberDirectoryEntryArgs = ListScopeArgs & {
+  principalId?: string;
+  herculesAuthUserId?: string;
+};
 
 export type RoleSummary = {
   roleId: string;
@@ -151,6 +161,7 @@ export type ScopePermissionSummary = {
 };
 
 export type DirectResourceSubject = {
+  grantId: string;
   principalId: string;
   type: "user" | "group";
   herculesAuthUserId?: string;
@@ -189,6 +200,12 @@ export type AccessAuthorizationAncestor = { type: string; id: string };
 export type AccessControlComponent = {
   checks: {
     authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision>;
+    authorizeMany: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; checks: AuthorizationCheckArgs[] },
+      AuthorizationDecision[]
+    >;
   };
   queries: {
     getDeploymentEntryStatus: FunctionReference<
@@ -211,6 +228,12 @@ export type AccessControlComponent = {
       "public",
       ListScopeMemberDirectoryArgs,
       { members: ScopeMemberDirectoryEntry[]; cursor?: string }
+    >;
+    getScopeMemberDirectoryEntry: FunctionReference<
+      "query",
+      "public",
+      GetScopeMemberDirectoryEntryArgs,
+      ScopeMemberDirectoryEntry | null
     >;
     listScopeRoles: FunctionReference<"query", "public", ListScopeArgs, ScopeRoleSummary[]>;
     listScopePermissions: FunctionReference<
@@ -320,17 +343,13 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
   accessAction: AccessActionBuilder<DataModel>;
   hasPermission: (ctx: AccessContext<DataModel>, args: PermissionCheckArgs) => Promise<boolean>;
   requirePermission: (ctx: AccessContext<DataModel>, args: PermissionCheckArgs) => Promise<void>;
-  requireAnyPermission: (
+  requireAnyPermission: (ctx: AccessContext<DataModel>, args: AnyPermissionCheckArgs) => Promise<void>;
+  getEffectivePermissions: (ctx: AccessContext<DataModel>, args?: EffectivePermissionsArgs) => Promise<string[]>;
+  checkPermissions: (
     ctx: AccessContext<DataModel>,
-    args: AnyPermissionCheckArgs,
-  ) => Promise<void>;
-  getEffectivePermissions: (
-    ctx: AccessContext<DataModel>,
-    args?: EffectivePermissionsArgs,
-  ) => Promise<string[]>;
-  getDeploymentEntryStatus: (
-    ctx: AccessContext<DataModel>,
-  ) => Promise<AccessDeploymentEntryMirrorResult>;
+    checks: Array<Exclude<PermissionCheckArgs, string>>,
+  ) => Promise<AuthorizationDecision[]>;
+  getDeploymentEntryStatus: (ctx: AccessContext<DataModel>) => Promise<AccessDeploymentEntryMirrorResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
   // real `accessQuery`. Use this for "list my projects" style lists: the app
@@ -363,10 +382,15 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     ctx: AccessContext<DataModel>,
     args?: { scopeId?: string; cursor?: string; limit?: number },
   ) => Promise<ScopeMemberDirectoryPage>;
-  listScopeRoles: (
+  getScopeMemberDirectoryEntry: (
     ctx: AccessContext<DataModel>,
-    args?: { scopeId?: string },
-  ) => Promise<ScopeRoleSummary[]>;
+    args: {
+      scopeId?: string;
+      principalId?: string;
+      herculesAuthUserId?: string;
+    },
+  ) => Promise<ScopeMemberDirectoryEntry | null>;
+  listScopeRoles: (ctx: AccessContext<DataModel>, args?: { scopeId?: string }) => Promise<ScopeRoleSummary[]>;
   listScopePermissions: (
     ctx: AccessContext<DataModel>,
     args?: { scopeId?: string },
@@ -379,7 +403,12 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
   // `resourceType`.
   listDirectSubjectsForResource: (
     ctx: AccessContext<DataModel>,
-    args: { scopeId?: string; resourceType: string; resourceId: string; permission: string },
+    args: {
+      scopeId?: string;
+      resourceType: string;
+      resourceId: string;
+      permission: string;
+    },
   ) => Promise<DirectResourceSubject[]>;
 };
 
@@ -460,12 +489,14 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     requirePermission: makeRequirePermission(component),
     requireAnyPermission: makeRequireAnyPermission(component),
     getEffectivePermissions: makeGetEffectivePermissions(component),
+    checkPermissions: makeCheckPermissions(component),
     getDeploymentEntryStatus: makeGetDeploymentEntryStatus(component),
     filterAuthorizedResources: makeFilterAuthorizedResources(component),
     listMyMemberships: makeListMyMemberships(component),
     listMyRoles: makeListMyRoles(component),
     listScopeMembers: makeListScopeMembers(component),
     listScopeMemberDirectory: makeListScopeMemberDirectory(component),
+    getScopeMemberDirectoryEntry: makeGetScopeMemberDirectoryEntry(component),
     listScopeRoles: makeListScopeRoles(component),
     listScopePermissions: makeListScopePermissions(component),
     listDirectSubjectsForResource: makeListDirectSubjectsForResource(component),
@@ -650,7 +681,11 @@ export function scopeFromDefaultResource<T extends string, K extends string>(
 export function scopeFromParentResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
-  options: { scopeField?: string; parentResourceType: string },
+  options: {
+    scopeField?: string;
+    parentResourceType: string;
+    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+  },
 ) {
   const scopeField = options.scopeField ?? "orgScopeId";
   return async (
@@ -683,10 +718,17 @@ export function scopeFromParentResource<T extends string, K extends string>(
       });
     }
     const ancestors = normalizeAncestors(
-      [{ type: options.parentResourceType, id: String(id) }],
+      [
+        { type: options.parentResourceType, id: String(id) },
+        ...(options.authorizeAgainst?.(row as Record<string, unknown>) ?? []),
+      ],
       `scopeFromParentResource("${tableName}", "${argKey}")`,
     );
-    return { scopeId, resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL, ancestors: ancestors! };
+    return {
+      scopeId,
+      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
+      ancestors: ancestors!,
+    };
   };
 }
 
@@ -698,7 +740,10 @@ export function scopeFromParentResource<T extends string, K extends string>(
 export function scopeFromDefaultParentResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
-  options: { parentResourceType: string },
+  options: {
+    parentResourceType: string;
+    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+  },
 ) {
   return async (
     ctx: DbResourceCtx,
@@ -723,7 +768,10 @@ export function scopeFromDefaultParentResource<T extends string, K extends strin
       });
     }
     const ancestors = normalizeAncestors(
-      [{ type: options.parentResourceType, id: String(id) }],
+      [
+        { type: options.parentResourceType, id: String(id) },
+        ...(options.authorizeAgainst?.(row as Record<string, unknown>) ?? []),
+      ],
       `scopeFromDefaultParentResource("${tableName}", "${argKey}")`,
     );
     return {
@@ -795,7 +843,10 @@ function makeAccessBuilder<TBuilder>(
   }) as TBuilder;
 }
 
-type AccessConfig = { permission?: string; scope?: ExtractScope<AuthorizationCtx, unknown> };
+type AccessConfig = {
+  permission?: string;
+  scope?: ExtractScope<AuthorizationCtx, unknown>;
+};
 
 function wrapDefinition(
   definition: unknown,
@@ -953,6 +1004,41 @@ function makeGetEffectivePermissions(component: AccessControlComponent) {
   };
 }
 
+function makeCheckPermissions(component: AccessControlComponent) {
+  return async (
+    ctx: AccessContext,
+    checks: Array<Exclude<PermissionCheckArgs, string>>,
+  ): Promise<AuthorizationDecision[]> => {
+    if (checks.length > 50) {
+      throw new ConvexError({
+        code: "INVALID_PERMISSION_CHECKS",
+        message: "checkPermissions accepts at most 50 checks",
+      });
+    }
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) {
+      return checks.map(() => ({
+        allowed: false,
+        reasonCode: "missing_identity",
+        effectiveRoleIds: [],
+      }));
+    }
+
+    return await ctx.runQuery(component.checks.authorizeMany, {
+      tokenIdentifier,
+      checks: checks.map((check) => {
+        const normalized = normalizePermissionCheckArgs(check);
+        return {
+          scopeId: normalized.scopeId,
+          permission: normalized.permission,
+          ...resourceArgs(normalized.resource),
+          ...ancestorArgs(normalized.ancestors),
+        };
+      }),
+    });
+  };
+}
+
 function makeFilterAuthorizedResources(component: AccessControlComponent) {
   return async <T>(
     ctx: AccessContext,
@@ -994,7 +1080,9 @@ function makeListMyMemberships(component: AccessControlComponent) {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
 
-    return await ctx.runQuery(component.queries.listMyMemberships, { tokenIdentifier });
+    return await ctx.runQuery(component.queries.listMyMemberships, {
+      tokenIdentifier,
+    });
   };
 }
 
@@ -1056,6 +1144,27 @@ function makeListScopeMemberDirectory(component: AccessControlComponent) {
   };
 }
 
+function makeGetScopeMemberDirectoryEntry(component: AccessControlComponent) {
+  return async (
+    ctx: AccessContext,
+    args: {
+      scopeId?: string;
+      principalId?: string;
+      herculesAuthUserId?: string;
+    },
+  ): Promise<ScopeMemberDirectoryEntry | null> => {
+    const tokenIdentifier = await getTokenIdentifier(ctx);
+    if (!tokenIdentifier) return null;
+
+    return await ctx.runQuery(component.queries.getScopeMemberDirectoryEntry, {
+      tokenIdentifier,
+      scopeId: args.scopeId ?? DEFAULT_SCOPE_SENTINEL,
+      principalId: args.principalId,
+      herculesAuthUserId: args.herculesAuthUserId,
+    });
+  };
+}
+
 function makeListScopeRoles(component: AccessControlComponent) {
   return async (
     ctx: AccessContext,
@@ -1089,7 +1198,12 @@ function makeListScopePermissions(component: AccessControlComponent) {
 function makeListDirectSubjectsForResource(component: AccessControlComponent) {
   return async (
     ctx: AccessContext,
-    args: { scopeId?: string; resourceType: string; resourceId: string; permission: string },
+    args: {
+      scopeId?: string;
+      resourceType: string;
+      resourceId: string;
+      permission: string;
+    },
   ): Promise<DirectResourceSubject[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];

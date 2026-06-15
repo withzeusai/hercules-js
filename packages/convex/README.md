@@ -5,11 +5,11 @@ roles, permissions, and resource-level grants, enforced inside your Convex
 functions. The app reads from a local mirror that Hercules keeps in sync with
 the control plane.
 
-Start with this README and the generated wrappers in `convex/hercules.ts`,
-`convex/accessUser.ts`, and `convex/accessOrgAdmin.ts`. These are the supported
-public integration surface. Do not inspect component internals for normal app
-setup. TypeScript exposes exact signatures at the call site; public REST
-payloads are documented at https://docs-cloud.hercules.app.
+This README and the published `dist/client/index.d.ts` and
+`dist/client/access-admin.d.ts` files are the authoritative public contract.
+Use their TypeScript signatures and your local wrappers. Do not inspect package
+or component implementation internals to infer behavior. Public REST payloads
+are documented at https://docs-cloud.hercules.app.
 
 ## Setup
 
@@ -23,12 +23,27 @@ import { components } from "./_generated/api";
 import { action, mutation, query } from "./_generated/server";
 
 export const {
-  publicQuery, publicMutation, publicAction,
-  authenticatedQuery, authenticatedMutation, authenticatedAction,
-  accessQuery, accessMutation, accessAction,
-  hasPermission, requirePermission, requireAnyPermission, getEffectivePermissions,
-  listMyMemberships, listMyRoles,
-  listScopeMembers, listScopeMemberDirectory, listScopeRoles, listScopePermissions,
+  publicQuery,
+  publicMutation,
+  publicAction,
+  authenticatedQuery,
+  authenticatedMutation,
+  authenticatedAction,
+  accessQuery,
+  accessMutation,
+  accessAction,
+  hasPermission,
+  requirePermission,
+  requireAnyPermission,
+  getEffectivePermissions,
+  listMyMemberships,
+  listMyRoles,
+  listScopeMembers,
+  listScopeMemberDirectory,
+  getScopeMemberDirectoryEntry,
+  listScopeRoles,
+  listScopePermissions,
+  listDirectSubjectsForResource,
 } = createAccessControl({ query, mutation, action, components });
 
 export {
@@ -92,14 +107,37 @@ deny wins. Parent access applies only when its binding uses
 `appliesTo: "self_and_descendants"`.
 
 ```ts
-scope: scopeFromResource("tasks", "taskId", {
-  authorizeAgainst: task => [{ type: "app.projects", id: String(task.projectId) }],
-})
+export const updateTask = accessMutation({
+  permission: "app.tasks:update",
+  scope: scopeFromResource("tasks", "taskId", {
+    authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
+  }),
+  args: { taskId: v.id("tasks"), title: v.string() },
+  handler: async (ctx, args) => ctx.db.patch(args.taskId, { title: args.title }),
+});
 
-scope: scopeFromParentResource("projects", "projectId", {
-  parentResourceType: "app.projects",
-})
+export const createTask = accessMutation({
+  permission: "app.tasks:create",
+  scope: scopeFromParentResource("projects", "projectId", {
+    parentResourceType: "app.projects",
+    authorizeAgainst: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
+  }),
+  args: { projectId: v.id("projects"), title: v.string() },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (!project) throw new Error("Project not found");
+    return await ctx.db.insert("tasks", {
+      orgScopeId: project.orgScopeId,
+      projectId: args.projectId,
+      title: args.title,
+    });
+  },
+});
 ```
+
+Keep the requested permission on the child. The helper loads the trusted parent
+row, adds that parent first, then appends `authorizeAgainst` ancestors. Use the
+default-scope variants for the same recipe without an org scope column.
 
 > **Matching note:** a self-only binding targets the permission resource type.
 > A descendant-enabled binding targets the parent resource type while keeping
@@ -137,9 +175,19 @@ export const teamMembers = authenticatedQuery({
 });
 ```
 
-Service-authority access changes use `createAccessAdminActions` from
-`@usehercules/convex/access-admin`. These actions need the `HERCULES_API_KEY`
-secret and must remain internal.
+### Authority matrix
+
+| Surface                                                                          | Convex exposure                  | Authority                                                                       |
+| -------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
+| `createAccessAdminActions`, `createAccessInvitation`, `createResourceInvitation` | Internal only                    | Service via `HERCULES_API_KEY`                                                  |
+| `createAccessUserActions`                                                        | Public `authenticatedAction`     | Signed-in app user via `idToken`; the control plane applies runtime role checks |
+| `createAccessScopeAction`                                                        | Public `authenticatedAction`     | Authenticated creator after `canCreateScope`; the creator becomes Owner         |
+| `createAccessScope`                                                              | App-owned authenticated function | Authenticated creator from `ctx`; the app supplies its own product-policy gate  |
+| `acceptAccessInvitation`                                                         | App-owned authenticated function | Invitee identified by the invitation token and `idToken`                        |
+
+Never call generated `internal.accessAdmin.*` actions from an exported public,
+authenticated, or access builder, directly or through a helper. Service
+authority is only for trusted internal workflows.
 
 ```ts
 "use node";
@@ -150,39 +198,38 @@ export const { assignRole, removeRole, createInvitation } =
   createAccessAdminActions({ internalAction });
 ```
 
-For public organization or resource administration, use
-`createAccessUserActions`. Every call requires the signed-in user's nonempty
-Hercules ID token and sends `actor_mode: "app_user"`. The control plane applies
-the operation's scope, Owner, or resource-level RBAC gate; for example, a
-resource manager can share that resource without scope-wide admin authority.
+Use `createAccessUserActions` for user-initiated administration.
 
 ```ts
 "use node";
 import { createAccessUserActions } from "@usehercules/convex/access-admin";
 import { authenticatedAction } from "./hercules";
 
-export const { assignRole, createInvitation, createResourceGrant, createResourceInvitation } =
-  createAccessUserActions({ authenticatedAction });
+export const {
+  assignRole,
+  replaceMemberRoles,
+  createResourceGrant,
+  replaceResourceGrants,
+  revokeResourceGrant,
+  setResourcePermissionRules,
+  listResourceInvitations,
+  revokeInvitation,
+} = createAccessUserActions({ authenticatedAction });
 ```
 
-The actor and recipient are separate. Pass `user.id_token` as `idToken` to
-authenticate the caller. Pass `principalId` or `herculesAuthUserId` to select
-who receives the grant. There is no implicit self target, and targeting the
-caller does not bypass the normal authorization gate.
+`idToken` authenticates the actor only. In trusted Convex code, load the
+resource row to derive its scope and resource id, use its canonical `app.*`
+resource type, and resolve a selected `herculesAuthUserId` with
+`getScopeMemberDirectoryEntry`; pass the returned `principalId` as the
+recipient. Do not trust a browser-supplied principal or scope/resource pair.
 
-```ts
-await createResourceGrant({
-  scopeId,
-  resourceType: "app.projects",
-  resourceId: String(projectId),
-  roleKey: "project_manager",
-  herculesAuthUserId: user.profile.sub,
-  idToken: user.id_token,
-});
-```
-
-`user.profile.sub` is valid above only because the field explicitly asks for
-the recipient's Hercules Auth user id. Never pass it as `idToken`.
+Use `replaceMemberRoles` to atomically replace one member's direct scope roles.
+Use `replaceResourceGrants` to atomically replace direct grants for each listed
+subject; `grants: []` clears that subject. For one grant, use the `grantId`
+returned by `createResourceGrant` or `listDirectSubjectsForResource`, then call
+`revokeResourceGrant`. Use `listResourceInvitations` and `revokeInvitation` for
+pending resource invitations. `setResourcePermissionRules` atomically applies
+a rule batch; `effect: "clear"` removes a listed rule.
 
 Create organization scopes with `createAccessScopeAction` or
 `createAccessScope`. The authenticated creator is sent as the scope Owner
@@ -194,4 +241,5 @@ automatically; do not create a second self-grant.
   projection-sync window after any change. Treat `undefined` query results and
   a just-changed-but-not-yet-synced state as "loading", not "denied".
 - Run `hercules-convex-access-check convex` (the `./checker` export) in lint to
-  catch unguarded org-owned access.
+  catch deterministic source patterns. It is static and does not prove runtime
+  role decisions or control-plane writes are authorized.

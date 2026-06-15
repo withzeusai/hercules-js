@@ -30,6 +30,13 @@ const authorizationAncestorValidator = v.object({
   resourceType: v.string(),
   resourceId: v.string(),
 });
+const authorizationCheckValidator = v.object({
+  scopeId: v.optional(v.string()),
+  permission: v.string(),
+  resourceType: v.optional(v.string()),
+  resourceId: v.optional(v.string()),
+  ancestors: v.optional(v.array(authorizationAncestorValidator)),
+});
 
 export const authorize = query({
   args: {
@@ -76,6 +83,27 @@ export const authorize = query({
       resourceId: args.resourceId,
       ancestors: args.ancestors,
     });
+  },
+});
+
+export const authorizeMany = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    checks: v.array(authorizationCheckValidator),
+  },
+  handler: async (ctx, args) => {
+    if (args.checks.length > 50) {
+      throw new Error("authorizeMany accepts at most 50 checks");
+    }
+
+    return await Promise.all(
+      args.checks.map((check) =>
+        evaluatePermissionDecision(ctx, {
+          tokenIdentifier: args.tokenIdentifier,
+          ...check,
+        }),
+      ),
+    );
   },
 });
 

@@ -24,6 +24,7 @@ export type AccessControlCheckFinding = {
     | "org_row_scope_from_arg"
     | "authenticated_org_data_read"
     | "privileged_resource_permission_rule"
+    | "public_service_authority_call"
     | "noncanonical_permission_key";
   severity: "error";
   filePath: string;
@@ -50,6 +51,17 @@ export type CheckAccessControlSourceOptions = {
 };
 
 const rawBuilderNames = new Set<string>(["query", "mutation", "action"]);
+const publicBuilderNames = new Set<string>([
+  "publicQuery",
+  "publicMutation",
+  "publicAction",
+  "authenticatedQuery",
+  "authenticatedMutation",
+  "authenticatedAction",
+  "accessQuery",
+  "accessMutation",
+  "accessAction",
+]);
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const ignoredDirectories = new Set(["_generated", "node_modules", "dist", ".git"]);
 const exemptFileNames = new Set([
@@ -96,9 +108,17 @@ export function checkAccessControlSource(
   // The managed-pattern rules only apply to apps that actually wire managed
   // Access Control into their Convex functions. A plain Convex app keeps raw
   // builder behavior, so the whole check is a pass-through no-op for it.
-  const markerFiles = collectSourceFiles(convexDir, { includeExemptFiles: true });
+  const markerFiles = collectSourceFiles(convexDir, {
+    includeExemptFiles: true,
+  });
   if (!markerFiles.some((filePath) => fileUsesManagedAccessControl(filePath, convexDir))) {
-    return { ok: true, convexDir, filesChecked: markerFiles.length, fixedFiles: 0, findings: [] };
+    return {
+      ok: true,
+      convexDir,
+      filesChecked: markerFiles.length,
+      fixedFiles: 0,
+      findings: [],
+    };
   }
 
   const sourceFiles = collectSourceFiles(convexDir);
@@ -111,6 +131,7 @@ export function checkAccessControlSource(
     : 0;
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
+    ...markerFiles.flatMap((filePath) => checkPublicServiceAuthorityCalls(cwd, filePath)),
     ...markerFiles.flatMap((filePath) => checkHardcodedAccessScopeIds(cwd, filePath)),
     ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) =>
@@ -137,7 +158,7 @@ export function formatAccessControlCheckResult(result: AccessControlCheckResult)
       result.fixedFiles > 0
         ? ` ${result.fixedFiles} ${result.fixedFiles === 1 ? "file was" : "files were"} updated.`
         : "";
-    return `Hercules Access Control check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel}`;
+    return `Hercules Access Control static check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel} This static check does not prove runtime role decisions or control-plane writes are authorized.`;
   }
 
   const lines = [`Hercules Access Control check failed with ${result.findings.length} finding(s):`];
@@ -372,14 +393,22 @@ function collectManagedBuilderDefinitions(
   builderNames: string[],
 ): Array<{ node: ts.Node; text: string; definition: ts.Expression }> {
   const acceptedNames = new Set(builderNames);
-  const definitions: Array<{ node: ts.Node; text: string; definition: ts.Expression }> = [];
+  const definitions: Array<{
+    node: ts.Node;
+    text: string;
+    definition: ts.Expression;
+  }> = [];
 
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node)) {
       const target = unwrapExpression(node.expression);
       const definition = node.arguments[0];
       if (ts.isIdentifier(target) && acceptedNames.has(target.text) && definition) {
-        definitions.push({ node, text: definition.getText(sourceFile), definition });
+        definitions.push({
+          node,
+          text: definition.getText(sourceFile),
+          definition,
+        });
       }
     }
     ts.forEachChild(node, visit);
@@ -444,6 +473,150 @@ function checkPrivilegedResourcePermissionRules(
 
   visit(sourceFile);
   return findings;
+}
+
+function checkPublicServiceAuthorityCalls(cwd: string, filePath: string): AccessControlCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+  if (!hasExportedPublicBuilder(sourceFile)) {
+    return [];
+  }
+
+  const internalApiNames = collectInternalApiNames(sourceFile);
+  if (internalApiNames.size === 0) {
+    return [];
+  }
+
+  const findings: AccessControlCheckFinding[] = [];
+
+  function visit(node: ts.Node): void {
+    if (isAccessAdminReference(node, internalApiNames)) {
+      findings.push(
+        createPatternFindingAtNode({
+          cwd,
+          sourceFile,
+          node,
+          code: "public_service_authority_call",
+          message:
+            "Exported public Convex functions must not reference internal.accessAdmin service-authority actions.",
+          suggestion: "Use app-user actions for public access changes, or keep the service-authority caller internal.",
+        }),
+      );
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return findings;
+}
+
+function hasExportedPublicBuilder(sourceFile: ts.SourceFile): boolean {
+  const exportedNames = collectExportedNames(sourceFile);
+  const builderNames = collectPublicBuilderNames(sourceFile);
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement)) {
+      const isDirectExport = hasExportModifier(statement);
+      for (const declaration of statement.declarationList.declarations) {
+        if (
+          ts.isIdentifier(declaration.name) &&
+          declaration.initializer &&
+          (isDirectExport || exportedNames.has(declaration.name.text)) &&
+          isPublicBuilderCall(declaration.initializer, builderNames)
+        ) {
+          return true;
+        }
+      }
+    }
+
+    if (ts.isExportAssignment(statement) && isPublicBuilderCall(statement.expression, builderNames)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function collectPublicBuilderNames(sourceFile: ts.SourceFile): Set<string> {
+  const builderNames = new Set(publicBuilderNames);
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
+      continue;
+    }
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+      continue;
+    }
+
+    for (const importSpecifier of namedBindings.elements) {
+      const importedName = (importSpecifier.propertyName ?? importSpecifier.name).text;
+      if (publicBuilderNames.has(importedName)) {
+        builderNames.add(importSpecifier.name.text);
+      }
+    }
+  }
+
+  return builderNames;
+}
+
+function isPublicBuilderCall(initializer: ts.Expression, builderNames: Set<string>): boolean {
+  const expression = unwrapExpression(initializer);
+  if (!ts.isCallExpression(expression)) {
+    return false;
+  }
+
+  const target = unwrapExpression(expression.expression);
+  return ts.isIdentifier(target) && builderNames.has(target.text);
+}
+
+function collectInternalApiNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
+      continue;
+    }
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || !isGeneratedApiImport(statement.moduleSpecifier.text)) {
+      continue;
+    }
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+      continue;
+    }
+
+    for (const importSpecifier of namedBindings.elements) {
+      const importedName = (importSpecifier.propertyName ?? importSpecifier.name).text;
+      if (importedName === "internal") {
+        names.add(importSpecifier.name.text);
+      }
+    }
+  }
+
+  return names;
+}
+
+function isAccessAdminReference(node: ts.Node, internalApiNames: Set<string>): boolean {
+  if (ts.isPropertyAccessExpression(node)) {
+    const target = unwrapExpression(node.expression);
+    return ts.isIdentifier(target) && internalApiNames.has(target.text) && node.name.text === "accessAdmin";
+  }
+
+  if (ts.isElementAccessExpression(node)) {
+    const target = unwrapExpression(node.expression);
+    const argument = node.argumentExpression && unwrapExpression(node.argumentExpression);
+    return (
+      ts.isIdentifier(target) &&
+      internalApiNames.has(target.text) &&
+      !!argument &&
+      ts.isStringLiteralLike(argument) &&
+      argument.text === "accessAdmin"
+    );
+  }
+
+  return false;
 }
 
 function getStringProperty(
@@ -761,13 +934,21 @@ function buildImportSpecifierRemoval(
   const elements = namedImports.elements;
   const index = elements.findIndex((element) => element === specifier);
   if (index === -1) {
-    return { start: specifier.getFullStart(), end: specifier.getEnd(), text: "" };
+    return {
+      start: specifier.getFullStart(),
+      end: specifier.getEnd(),
+      text: "",
+    };
   }
 
   const previous = elements[index - 1];
   const next = elements[index + 1];
   if (next) {
-    return { start: specifier.getFullStart(), end: next.getFullStart(), text: "" };
+    return {
+      start: specifier.getFullStart(),
+      end: next.getFullStart(),
+      text: "",
+    };
   }
 
   if (previous) {
@@ -1042,6 +1223,10 @@ function isGeneratedServerImport(moduleSpecifier: string): boolean {
     moduleSpecifier.endsWith("_generated/server") ||
     moduleSpecifier.endsWith("_generated/server.js")
   );
+}
+
+function isGeneratedApiImport(moduleSpecifier: string): boolean {
+  return moduleSpecifier.endsWith("_generated/api") || moduleSpecifier.endsWith("_generated/api.js");
 }
 
 function isRawBuilderName(value: string): value is RawConvexBuilder {

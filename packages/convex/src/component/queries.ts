@@ -4,6 +4,7 @@ import {
   type GenericQueryCtx,
   type QueryBuilder,
 } from "convex/server";
+import { paginator } from "convex-helpers/server/pagination";
 import { v } from "convex/values";
 import { evaluatePermissionDecision } from "./checks";
 import {
@@ -294,7 +295,7 @@ export const listScopeMemberDirectory = query({
       throw new Error("listScopeMemberDirectory limit must be an integer from 1 to 100");
     }
 
-    const page = await ctx.db
+    const page = await paginator(ctx.db, schema)
       .query("principals")
       .withIndex("by_scope_status_type", (q) =>
         q
@@ -329,6 +330,60 @@ export const listScopeMemberDirectory = query({
     return {
       members,
       ...(page.isDone ? {} : { cursor: page.continueCursor }),
+    };
+  },
+});
+
+export const getScopeMemberDirectoryEntry = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    scopeId: v.string(),
+    principalId: v.optional(v.string()),
+    herculesAuthUserId: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<ScopeMemberDirectoryEntry | null> => {
+    if ((args.principalId === undefined) === (args.herculesAuthUserId === undefined)) {
+      throw new Error("getScopeMemberDirectoryEntry requires exactly one of principalId or herculesAuthUserId");
+    }
+    if (!(await callerHasScopePermission(ctx, args, "app.members:read"))) {
+      return null;
+    }
+    const scope = await resolveScopeRow(ctx, args.scopeId);
+    if (!scope) return null;
+
+    const principal = args.principalId
+      ? await ctx.db
+          .query("principals")
+          .withIndex("by_principal_id", (q) => q.eq("principalId", args.principalId!))
+          .unique()
+      : await ctx.db
+          .query("principals")
+          .withIndex("by_scope_auth_user", (q) =>
+            q.eq("accessScopeId", scope.accessScopeId).eq("herculesAuthUserId", args.herculesAuthUserId),
+          )
+          .unique();
+    if (
+      !principal ||
+      principal.accessScopeId !== scope.accessScopeId ||
+      principal.type !== "user" ||
+      principal.status !== "active" ||
+      !principal.herculesAuthUserId
+    ) {
+      return null;
+    }
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", principal.herculesAuthUserId!))
+      .unique();
+    if (!user) return null;
+
+    return {
+      principalId: principal.principalId,
+      herculesAuthUserId: principal.herculesAuthUserId,
+      name: user.name,
+      email: user.email,
+      ...(user.image === undefined ? {} : { image: user.image }),
     };
   },
 });
@@ -477,6 +532,7 @@ export const listScopePermissions = query({
 });
 
 type DirectResourceSubject = {
+  grantId: string;
   principalId: string;
   type: "user" | "group";
   herculesAuthUserId?: string;
@@ -553,6 +609,7 @@ export const listDirectSubjectsForResource = query({
     // bindings are reported (a role-subject permission binding has no
     // subjectPrincipalId), matching the old `if (!subjectPrincipalId) continue`.
     type ResourceBinding = {
+      grantId: string;
       subjectPrincipalId: string;
       relationKind: "role" | "direct_permission";
       roleId?: string;
@@ -563,6 +620,7 @@ export const listDirectSubjectsForResource = query({
     };
     const grants: ResourceBinding[] = [
       ...resourceRoleBindings.map((binding) => ({
+        grantId: binding.bindingId,
         subjectPrincipalId: binding.subjectPrincipalId,
         relationKind: "role" as const,
         roleId: binding.roleId,
@@ -574,6 +632,7 @@ export const listDirectSubjectsForResource = query({
         binding.subjectPrincipalId
           ? [
               {
+                grantId: binding.bindingId,
                 subjectPrincipalId: binding.subjectPrincipalId,
                 relationKind: "direct_permission" as const,
                 permissionId: binding.permissionId,
@@ -641,6 +700,7 @@ export const listDirectSubjectsForResource = query({
       }
 
       results.push({
+        grantId: grant.grantId,
         principalId: principal.principalId,
         type: principal.type,
         herculesAuthUserId: authUserId,

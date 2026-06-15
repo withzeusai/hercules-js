@@ -15,11 +15,19 @@ const authorize = makeFunctionReference<
     effectiveRoleIds: string[];
   }
 >("checks:authorize");
-const getEffectivePermissions = makeFunctionReference<
+const authorizeMany = makeFunctionReference<
   "query",
   Record<string, unknown>,
-  { permissions: string[] }
->("queries:getEffectivePermissions");
+  Array<{
+    allowed: boolean;
+    reasonCode: string;
+    explicitDeny: boolean;
+    effectiveRoleIds: string[];
+  }>
+>("checks:authorizeMany");
+const getEffectivePermissions = makeFunctionReference<"query", Record<string, unknown>, { permissions: string[] }>(
+  "queries:getEffectivePermissions",
+);
 const listScopeMemberDirectory = makeFunctionReference<
   "query",
   Record<string, unknown>,
@@ -34,6 +42,17 @@ const listScopeMemberDirectory = makeFunctionReference<
     cursor?: string;
   }
 >("queries:listScopeMemberDirectory");
+const getScopeMemberDirectoryEntry = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  {
+    principalId: string;
+    herculesAuthUserId: string;
+    name: string;
+    email: string;
+    image?: string;
+  } | null
+>("queries:getScopeMemberDirectoryEntry");
 
 const ISSUER = "https://auth.example.com";
 
@@ -498,6 +517,75 @@ describe("scope member directory", () => {
     expect(second.cursor).toBeUndefined();
   });
 
+  test("resolves an active member exactly without trusting a browser-supplied principal id", async () => {
+    const t = convexTest(schema, modules);
+    await installSnapshot(t, directorySnapshot());
+
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        scopeId: "scope_default",
+        herculesAuthUserId: "user_bob",
+      }),
+    ).resolves.toEqual({
+      principalId: "principal_bob",
+      herculesAuthUserId: "user_bob",
+      name: "Bob",
+      email: "bob@example.com",
+      image: "https://example.com/bob.png",
+    });
+  });
+
+  test("resolves an active member by trusted principal id", async () => {
+    const t = convexTest(schema, modules);
+    await installSnapshot(t, directorySnapshot());
+
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        scopeId: "scope_default",
+        principalId: "principal_bob",
+      }),
+    ).resolves.toMatchObject({
+      principalId: "principal_bob",
+      herculesAuthUserId: "user_bob",
+    });
+  });
+
+  test("rejects ambiguous lookups and hides inactive or non-user principals", async () => {
+    const t = convexTest(schema, modules);
+    await installSnapshot(t, directorySnapshot());
+
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        scopeId: "scope_default",
+      }),
+    ).rejects.toThrow("exactly one");
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        scopeId: "scope_default",
+        principalId: "principal_bob",
+        herculesAuthUserId: "user_bob",
+      }),
+    ).rejects.toThrow("exactly one");
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        scopeId: "scope_default",
+        principalId: "principal_blocked",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        scopeId: "scope_default",
+        principalId: "principal_group",
+      }),
+    ).resolves.toBeNull();
+  });
+
   test("returns an empty page when the fixed app.members:read gate fails", async () => {
     const t = convexTest(schema, modules);
     await installSnapshot(t, directorySnapshot());
@@ -508,6 +596,13 @@ describe("scope member directory", () => {
         scopeId: "scope_default",
       }),
     ).resolves.toEqual({ members: [] });
+    await expect(
+      t.query(getScopeMemberDirectoryEntry, {
+        tokenIdentifier: `${ISSUER}|user_bob`,
+        scopeId: "scope_default",
+        principalId: "principal_alice",
+      }),
+    ).resolves.toBeNull();
   });
 
   test("caps the directory limit at one hundred", async () => {
@@ -521,5 +616,59 @@ describe("scope member directory", () => {
         limit: 101,
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("batch authorization", () => {
+  test("returns ordered concrete decisions in one component query", async () => {
+    const t = convexTest(schema, modules);
+    await installSnapshot(
+      t,
+      hierarchySnapshot({
+        parentRoleAppliesTo: "self_and_descendants",
+        ancestorDeny: true,
+      }),
+    );
+
+    const decisions = await t.query(authorizeMany, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      checks: [
+        {
+          scopeId: "scope_default",
+          permission: "app.task:edit",
+          resourceType: "app.task",
+          resourceId: "task_1",
+          ancestors: [{ resourceType: "app.project", resourceId: "project_1" }],
+        },
+        {
+          scopeId: "scope_default",
+          permission: "app.task:edit",
+          resourceType: "app.task",
+          resourceId: "task_2",
+          ancestors: [{ resourceType: "app.project", resourceId: "project_2" }],
+        },
+      ],
+    });
+
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toMatchObject({ allowed: false, explicitDeny: true });
+    expect(decisions[1]).toMatchObject({ allowed: false });
+  });
+
+  test("rejects more than fifty checks", async () => {
+    const t = convexTest(schema, modules);
+    await installSnapshot(t, hierarchySnapshot({}));
+
+    await expect(
+      t.query(authorizeMany, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        checks: Array.from({ length: 51 }, (_unused, index) => ({
+          scopeId: "scope_default",
+          permission: "app.task:edit",
+          resourceType: "app.task",
+          resourceId: `task_${index}`,
+        })),
+      }),
+    ).rejects.toThrow("at most 50");
   });
 });

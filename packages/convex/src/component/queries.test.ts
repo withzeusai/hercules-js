@@ -15,7 +15,12 @@ import { componentModules as modules } from "../../test/component-modules";
 // Public-facing result shapes for the queries under test. Typing the function
 // references with these makes `t.query(...)` results concrete (rather than `{}`),
 // so the assertions below type-check without per-callback `any` annotations.
-type RoleSummary = { roleId: string; roleKey: string; roleName: string; roleKind: string };
+type RoleSummary = {
+  roleId: string;
+  roleKey: string;
+  roleName: string;
+  roleKind: string;
+};
 type MembershipSummary = {
   scopeId: string;
   name: string;
@@ -37,6 +42,7 @@ type ScopeMember = {
   roles: RoleSummary[];
 };
 type DirectSubject = {
+  grantId: string;
   principalId: string;
   type: "user" | "group";
   herculesAuthUserId?: string;
@@ -338,7 +344,11 @@ function effectiveRoleReadSnapshot(options: {
         },
       ],
       principalMemberships: [
-        { groupPrincipalId: "p_engineering", memberPrincipalId: "p_alice", updatedAt: 1 },
+        {
+          groupPrincipalId: "p_engineering",
+          memberPrincipalId: "p_alice",
+          updatedAt: 1,
+        },
       ],
       roles: options.roles,
       grants: options.grants,
@@ -490,8 +500,16 @@ describe("listMyMemberships", () => {
     expect(memberships[0]).toMatchObject({
       scopeId: "scope_acme",
       roles: [
-        { roleId: "role_field_agent", roleKey: "field_agent", roleName: "Field Agent" },
-        { roleId: "role_loan_officer", roleKey: "loan_officer", roleName: "Loan Officer" },
+        {
+          roleId: "role_field_agent",
+          roleKey: "field_agent",
+          roleName: "Field Agent",
+        },
+        {
+          roleId: "role_loan_officer",
+          roleKey: "loan_officer",
+          roleName: "Loan Officer",
+        },
       ],
     });
   });
@@ -516,7 +534,12 @@ describe("listMyMemberships", () => {
     });
 
     expect(roles).toEqual([
-      { roleId: "role_acme_admin", roleKey: "admin", roleName: "Admin", roleKind: "system" },
+      {
+        roleId: "role_acme_admin",
+        roleKey: "admin",
+        roleName: "Admin",
+        roleKind: "system",
+      },
     ]);
   });
 
@@ -524,7 +547,10 @@ describe("listMyMemberships", () => {
     const t = convexTest(schema, modules);
     await t.mutation(
       applySync,
-      effectiveRoleReadSnapshot({ roles: [engineerRole], grants: [engineerGroupGrant] }),
+      effectiveRoleReadSnapshot({
+        roles: [engineerRole],
+        grants: [engineerGroupGrant],
+      }),
     );
 
     const memberships = await t.query(listMyMemberships, {
@@ -536,7 +562,12 @@ describe("listMyMemberships", () => {
     });
 
     expect(memberships[0]?.roles).toEqual([
-      { roleId: "role_engineer", roleKey: "engineer", roleName: "Engineer", roleKind: "custom" },
+      {
+        roleId: "role_engineer",
+        roleKey: "engineer",
+        roleName: "Engineer",
+        roleKind: "custom",
+      },
     ]);
     expect(roles).toEqual(memberships[0]?.roles);
   });
@@ -780,7 +811,11 @@ describe("getEffectivePermissions", () => {
       scopeId: "scope_acme",
     });
 
-    expect(result).toMatchObject({ allowed: true, effectiveRoleIds: [], permissions: [] });
+    expect(result).toMatchObject({
+      allowed: true,
+      effectiveRoleIds: [],
+      permissions: [],
+    });
   });
 
   // Same E3 fence for the MANUAL eviction state: a removed group must confer
@@ -795,7 +830,11 @@ describe("getEffectivePermissions", () => {
       scopeId: "scope_acme",
     });
 
-    expect(result).toMatchObject({ allowed: true, effectiveRoleIds: [], permissions: [] });
+    expect(result).toMatchObject({
+      allowed: true,
+      effectiveRoleIds: [],
+      permissions: [],
+    });
   });
 });
 
@@ -883,7 +922,11 @@ function groupPermissionOrgSnapshot(
         },
       ],
       principalMemberships: [
-        { groupPrincipalId: "p_engineering", memberPrincipalId: "p_alice_acme", updatedAt: 2 },
+        {
+          groupPrincipalId: "p_engineering",
+          memberPrincipalId: "p_alice_acme",
+          updatedAt: 2,
+        },
       ],
       roles: [
         {
@@ -1851,6 +1894,7 @@ describe("listDirectSubjectsForResource", () => {
 
     expect(subjects).toEqual([
       expect.objectContaining({
+        grantId: "grant_alice_report_123_read",
         principalId: "p_alice_acme",
         permissionKey: "reports.read",
         effect: "allow",
@@ -2103,7 +2147,11 @@ describe("group principal names", () => {
       permission: "reports:read",
     });
     expect(subjects).toEqual([
-      expect.objectContaining({ principalId: "p_engineering", type: "group", name: "Engineering" }),
+      expect.objectContaining({
+        principalId: "p_engineering",
+        type: "group",
+        name: "Engineering",
+      }),
     ]);
   });
 });

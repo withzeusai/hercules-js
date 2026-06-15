@@ -102,7 +102,10 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root, fixAuthenticated: true });
+    const result = checkAccessControlSource({
+      cwd: root,
+      fixAuthenticated: true,
+    });
     const source = readFileSync(join(root, "convex/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 0, findings: [] });
@@ -186,6 +189,141 @@ describe("checkAccessControlSource", () => {
     expect(result).toMatchObject({ ok: true, filesChecked: 1, findings: [] });
   });
 
+  test("reports service-authority actions referenced by exported managed builders", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projectMembers.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction, publicAction } from "./hercules";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx) =>
+            ctx.runAction(internal.accessAdmin.assignRole, {
+              scopeId: "scope_1",
+            }),
+        });
+
+        const removeMember = publicAction({
+          args: {},
+          handler: async (ctx) =>
+            ctx.runAction(internal.accessAdmin.removeRole, {
+              scopeId: "scope_1",
+            }),
+        });
+
+        export { removeMember };
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/projectMembers.ts",
+        }),
+      ]),
+    );
+    expect(result.findings.filter((finding) => finding.code === "public_service_authority_call")).toHaveLength(2);
+  });
+
+  test("reports service-authority references hidden behind same-file helpers", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { internal } from "./_generated/api";
+        import { accessAction } from "./hercules";
+
+        async function replaceAccess(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.setResourcePermissionRules, args);
+        }
+
+        export const share = accessAction({
+          permission: "app.projects:share",
+          args: {},
+          handler: async (ctx, args) => replaceAccess(ctx, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "public_service_authority_call",
+          filePath: "convex/projects.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("does not infer public service-authority calls across files or from internal-only files", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        import { internal } from "./_generated/api";
+
+        export async function assignRole(ctx, args) {
+          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+        }
+      `,
+      "convex/projectMembers.ts": `
+        import { authenticatedAction } from "./hercules";
+        import { assignRole } from "./accessHelpers";
+
+        export const addMember = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => assignRole(ctx, args),
+        });
+      `,
+      "convex/repairs.ts": `
+        import { internal } from "./_generated/api";
+        import { internalAction } from "./_generated/server";
+
+        export const repair = internalAction({
+          args: {},
+          handler: async (ctx, args) =>
+            ctx.runAction(internal.accessAdmin.assignRole, args),
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("describes successful checks as static and limited", () => {
+    const root = createFixture({
+      "convex/hercules.ts": `
+        export { createAccessControl } from "@usehercules/convex";
+      `,
+      "convex/projects.ts": `
+        import { authenticatedQuery } from "./hercules";
+
+        export const list = authenticatedQuery({
+          args: {},
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const message = formatAccessControlCheckResult(checkAccessControlSource({ cwd: root }));
+
+    expect(message).toContain("static check passed");
+    expect(message).toContain("does not prove runtime role decisions or control-plane writes are authorized");
+  });
+
   test("reports a missing Convex directory", () => {
     const root = createFixture({});
     const result = checkAccessControlSource({ cwd: root });
@@ -218,7 +356,10 @@ describe("checkAccessControlSource", () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
-      { code: "placeholder_access_scope_id", filePath: "convex/organizations.ts" },
+      {
+        code: "placeholder_access_scope_id",
+        filePath: "convex/organizations.ts",
+      },
     ]);
     expect(formatAccessControlCheckResult(result)).toContain(
       "Create a Hercules Access Control scope first",
@@ -246,7 +387,10 @@ describe("checkAccessControlSource", () => {
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "hardcoded_access_scope_id", filePath: "convex/access.ts" }),
+        expect.objectContaining({
+          code: "hardcoded_access_scope_id",
+          filePath: "convex/access.ts",
+        }),
       ]),
     );
     expect(formatAccessControlCheckResult(result)).toContain("Do not hardcode Access Control scope ids");
@@ -316,7 +460,10 @@ describe("checkAccessControlSource", () => {
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "optional_org_scope_id", filePath: "convex/schema.ts" }),
+        expect.objectContaining({
+          code: "optional_org_scope_id",
+          filePath: "convex/schema.ts",
+        }),
         expect.objectContaining({
           code: "org_scoped_global_slug_lookup",
           filePath: "convex/posts.ts",
@@ -347,7 +494,10 @@ describe("checkAccessControlSource", () => {
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "org_row_scope_from_arg", filePath: "convex/posts.ts" }),
+        expect.objectContaining({
+          code: "org_row_scope_from_arg",
+          filePath: "convex/posts.ts",
+        }),
       ]),
     );
     expect(formatAccessControlCheckResult(result)).toContain("scopeFromResource");
@@ -551,7 +701,9 @@ describe("checkAccessControlSource", () => {
       });
     `;
 
-    const missingCatalogRoot = createFixture({ "convex/projects.ts": builderSource });
+    const missingCatalogRoot = createFixture({
+      "convex/projects.ts": builderSource,
+    });
     const invalidCatalogRoot = createFixture({
       "hercules/iam.jsonc": "{ broken",
       "convex/projects.ts": builderSource,
@@ -593,7 +745,10 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root, fixAuthenticated: true });
+    const result = checkAccessControlSource({
+      cwd: root,
+      fixAuthenticated: true,
+    });
     const source = readFileSync(join(root, "convex/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
@@ -621,7 +776,10 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root, fixAuthenticated: true });
+    const result = checkAccessControlSource({
+      cwd: root,
+      fixAuthenticated: true,
+    });
     const source = readFileSync(join(root, "convex/admin/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });

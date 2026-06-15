@@ -104,6 +104,7 @@ type ScopePermissionSummary = {
 };
 
 type DirectResourceSubject = {
+  grantId: string;
   principalId: string;
   type: "user" | "group";
   herculesAuthUserId?: string;
@@ -112,6 +113,7 @@ type DirectResourceSubject = {
   email?: string;
   image?: string;
   effect: "allow" | "deny";
+  appliesTo: "self" | "self_and_descendants";
   expiresAt?: number;
   roleId?: string;
   roleKey?: string;
@@ -171,6 +173,16 @@ type EffectivePermissionsResult = {
 export type ComponentApi<Name extends string | undefined = string | undefined> = {
   checks: {
     authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision, Name>;
+    authorizeMany: FunctionReference<
+      "query",
+      "public",
+      {
+        tokenIdentifier?: string;
+        checks: Array<Omit<AuthorizationArgs, "tokenIdentifier"> & { permission: string }>;
+      },
+      AuthorizationDecision[],
+      Name
+    >;
   };
   queries: {
     getDeploymentEntryStatus: FunctionReference<
@@ -200,6 +212,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "public",
       ListScopeMemberDirectoryArgs,
       ScopeMemberDirectoryPage,
+      Name
+    >;
+    getScopeMemberDirectoryEntry: FunctionReference<
+      "query",
+      "public",
+      ListScopeArgs & { principalId?: string; herculesAuthUserId?: string },
+      ScopeMemberDirectoryEntry | null,
       Name
     >;
     listScopeMembers: FunctionReference<"query", "public", ListScopeArgs, ScopeMember[], Name>;
