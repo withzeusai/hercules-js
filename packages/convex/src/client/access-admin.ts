@@ -10,6 +10,7 @@ import { ConvexError, v } from "convex/values";
 import type {
   AccessDeploymentEntryMirrorResult,
   Membership,
+  ScopeRoleSummary,
 } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
@@ -52,6 +53,20 @@ export type AccessMemberRolesReplaceResult = {
   changed: boolean;
   sourceVersion: number;
   projectionIds: string[];
+};
+
+export type AccessGrantableRoleTarget =
+  | { type: "scope" }
+  | {
+      type: "resource";
+      resourceType: string;
+      resourceId: string;
+      appliesTo?: AccessBindingAppliesTo;
+    };
+
+export type AccessGrantableRoleListResult = {
+  accessScopeId: string;
+  roles: ScopeRoleSummary[];
 };
 
 export type AccessScopeCreateResult = {
@@ -305,6 +320,15 @@ const accountEntryModeValidator = v.union(
 const bindingAppliesToValidator = v.union(
   v.literal("self"),
   v.literal("self_and_descendants"),
+);
+const grantableRoleTargetValidator = v.union(
+  v.object({ type: v.literal("scope") }),
+  v.object({
+    type: v.literal("resource"),
+    resourceType: v.string(),
+    resourceId: v.string(),
+    appliesTo: v.optional(bindingAppliesToValidator),
+  }),
 );
 const MAX_MEMBER_ROLE_REPLACEMENT_ENTRIES = 500;
 const MIN_RESOURCE_GRANT_REPLACEMENT_SUBJECTS = 1;
@@ -1121,6 +1145,42 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
           "/v1/access-control/invitations/revoke",
           body,
         );
+      },
+    }),
+
+    /**
+     * Lists only roles the signed-in actor may assign at the exact target.
+     * Use this for role pickers; `listScopeRoles` is the complete mirrored
+     * catalog and can include roles the actor is not authorized to confer.
+     * `subjectType` must match the intended user or group recipient.
+     */
+    listGrantableRoles: authenticatedAction({
+      args: {
+        scopeId: v.string(),
+        subjectType: v.union(v.literal("user"), v.literal("group")),
+        target: grantableRoleTargetValidator,
+        idToken: v.string(),
+      },
+      handler: async (_ctx, args) => {
+        const target =
+          args.target.type === "scope"
+            ? { type: "scope" as const }
+            : {
+                type: "resource" as const,
+                resource_type: args.target.resourceType,
+                resource_id: args.target.resourceId,
+                applies_to: args.target.appliesTo ?? "self",
+              };
+        const result = await callAccessControlApi(
+          "/v1/access-control/roles/list-grantable",
+          {
+            scope_id: args.scopeId,
+            subject_type: args.subjectType,
+            target,
+            ...appUserActor(args.idToken),
+          },
+        );
+        return normalizeAccessGrantableRoleListResult(result);
       },
     }),
 
@@ -2382,6 +2442,29 @@ function normalizeAccessGroupListResult(
       createdAt: requiredString(group, "created_at", "groups[].createdAt"),
       updatedAt: requiredString(group, "updated_at", "groups[].updatedAt"),
     })),
+  };
+}
+
+function normalizeAccessGrantableRoleListResult(
+  result: WriteResult,
+): AccessGrantableRoleListResult {
+  return {
+    accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
+    roles: requiredRecordArray(result, "roles", "roles").map((role) => {
+      const roleKind = requiredString(role, "role_kind", "roles[].roleKind");
+      if (roleKind !== "system" && roleKind !== "custom") {
+        throw new Error(
+          "Access Control API response has invalid roles[].roleKind.",
+        );
+      }
+      return {
+        roleId: requiredString(role, "role_id", "roles[].roleId"),
+        roleKey: requiredString(role, "role_key", "roles[].roleKey"),
+        roleName: requiredString(role, "role_name", "roles[].roleName"),
+        roleKind,
+        shared: requiredBoolean(role, "shared", "roles[].shared"),
+      };
+    }),
   };
 }
 

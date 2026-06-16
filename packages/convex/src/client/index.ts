@@ -471,9 +471,11 @@ type BuilderCaller = (definition: unknown) => unknown;
  * - `getCurrentHerculesAuthUserId`: the verified OIDC subject for linking
  *   app-owned domain rows. Do not parse `tokenIdentifier`.
  * - `listMyMemberships`/`listMyRoles`: the caller's own scopes/roles.
- * - `listScopeMembers`/`listScopeRoles`/`listScopePermissions`: admin reads
- *   for an in-app management screen. Each self-gates on the matching
- *   `system.*:read` permission and returns `[]` when the caller lacks it.
+ * - `listScopeMembers`/`listScopeRoles`/`listScopePermissions`: complete
+ *   mirrored admin reads for an in-app management screen. Each self-gates on
+ *   the matching `system.*:read` permission and returns `[]` when the caller
+ *   lacks it. Use `createAccessUserActions().listGrantableRoles` instead when
+ *   choosing a role for a write at an exact target.
  *
  * Reads resolve against the app's local Access Control mirror, which lags the
  * control plane by a short projection-sync window after any change.

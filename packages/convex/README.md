@@ -310,6 +310,7 @@ import { authenticatedAction } from "./hercules";
 export const {
   assignRole,
   replaceMemberRoles,
+  listGrantableRoles,
   createResourceGrant,
   replaceResourceGrants,
   revokeResourceGrant,
@@ -324,6 +325,28 @@ resource row to derive its scope and resource id, use its canonical `app.*`
 resource type, and resolve a selected `herculesAuthUserId` with
 `getScopeMemberDirectoryEntry`; pass the returned `principalId` as the
 recipient. Do not trust a browser-supplied principal or scope/resource pair.
+
+Use `listGrantableRoles` for role pickers. It returns only roles the current
+actor may confer at the exact scope or resource target. Set `subjectType` to
+match the intended user or group recipient:
+
+```ts
+await ctx.runAction(api.accessUser.listGrantableRoles, {
+  scopeId,
+  subjectType: "user",
+  target: {
+    type: "resource",
+    resourceType: "app.documents",
+    resourceId: String(documentId),
+    appliesTo: "self",
+  },
+  idToken,
+});
+```
+
+Do not use `listScopeRoles` for a write picker. It is the complete mirrored
+catalog for administrators and may include roles the current actor cannot
+assign at that target. The write still reauthorizes after a picker result.
 
 Common public action calls:
 

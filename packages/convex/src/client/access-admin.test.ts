@@ -1613,6 +1613,179 @@ describe("createAccessUserActions", () => {
       });
     }
   });
+
+  test("lists roles grantable at an exact resource target", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      roles: [
+        {
+          role_id: "role_reviewer",
+          role_key: "reviewer",
+          role_name: "Reviewer",
+          role_kind: "custom",
+          shared: false,
+        },
+      ],
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+
+    await expect(
+      getHandler(actions.listGrantableRoles)(
+        {},
+        {
+          scopeId: "scope_1",
+          subjectType: "user",
+          target: {
+            type: "resource",
+            resourceType: "app.documents",
+            resourceId: "document_1",
+          },
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).resolves.toEqual({
+      accessScopeId: "scope_1",
+      roles: [
+        {
+          roleId: "role_reviewer",
+          roleKey: "reviewer",
+          roleName: "Reviewer",
+          roleKind: "custom",
+          shared: false,
+        },
+      ],
+    });
+
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/roles/list-grantable",
+      {
+        body: {
+          scope_id: "scope_1",
+          subject_type: "user",
+          target: {
+            type: "resource",
+            resource_type: "app.documents",
+            resource_id: "document_1",
+            applies_to: "self",
+          },
+          actor_mode: "app_user",
+          id_token: ID_TOKEN,
+        },
+      },
+    );
+  });
+
+  test("lists roles grantable to a group at the scope target", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      roles: [],
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+
+    await expect(
+      getHandler(actions.listGrantableRoles)(
+        {},
+        {
+          scopeId: "scope_1",
+          subjectType: "group",
+          target: { type: "scope" },
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).resolves.toEqual({ accessScopeId: "scope_1", roles: [] });
+
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/roles/list-grantable",
+      {
+        body: {
+          scope_id: "scope_1",
+          subject_type: "group",
+          target: { type: "scope" },
+          actor_mode: "app_user",
+          id_token: ID_TOKEN,
+        },
+      },
+    );
+  });
+
+  test("preserves descendant applicability for an exact resource target", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      roles: [],
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+
+    await getHandler(actions.listGrantableRoles)(
+      {},
+      {
+        scopeId: "scope_1",
+        subjectType: "user",
+        target: {
+          type: "resource",
+          resourceType: "app.projects",
+          resourceId: "project_1",
+          appliesTo: "self_and_descendants",
+        },
+        idToken: ID_TOKEN,
+      },
+    );
+
+    expect(post).toHaveBeenCalledWith(
+      "/v1/access-control/roles/list-grantable",
+      {
+        body: expect.objectContaining({
+          target: {
+            type: "resource",
+            resource_type: "app.projects",
+            resource_id: "project_1",
+            applies_to: "self_and_descendants",
+          },
+        }),
+      },
+    );
+  });
+
+  test("rejects malformed grantable-role responses", async () => {
+    const post = vi.fn().mockResolvedValue({
+      access_scope_id: "scope_1",
+      roles: [
+        {
+          role_id: "role_1",
+          role_key: "reviewer",
+          role_name: "Reviewer",
+          role_kind: "iam",
+          shared: false,
+        },
+      ],
+    });
+    const actions = createAccessUserActions({
+      authenticatedAction: identityBuilder,
+      client: { post },
+    });
+
+    await expect(
+      getHandler(actions.listGrantableRoles)(
+        {},
+        {
+          scopeId: "scope_1",
+          subjectType: "user",
+          target: { type: "scope" },
+          idToken: ID_TOKEN,
+        },
+      ),
+    ).rejects.toThrow(
+      "Access Control API response has invalid roles[].roleKind.",
+    );
+  });
 });
 
 describe("createResourceInvitation", () => {
@@ -2390,6 +2563,7 @@ describe("app-user delegation for the admin surface", () => {
       member_principal_id: "principal_1",
       groups: [],
       invitations: [],
+      roles: [],
       role_id: "role_member",
       principal_id: "principal_1",
       overrides: [],
@@ -2493,6 +2667,15 @@ describe("app-user delegation for the admin surface", () => {
       {},
       { scopeId: "scope_1", idToken: ID_TOKEN },
     );
+    await getHandler(actions.listGrantableRoles)(
+      {},
+      {
+        scopeId: "scope_1",
+        subjectType: "user",
+        target: { type: "scope" },
+        idToken: ID_TOKEN,
+      },
+    );
     await getHandler(actions.setResourcePermissionRules)(
       {},
       {
@@ -2528,6 +2711,7 @@ describe("app-user delegation for the admin surface", () => {
       "/v1/access-control/groups/members/add",
       "/v1/access-control/groups/members/remove",
       "/v1/access-control/invitations/list-resource",
+      "/v1/access-control/roles/list-grantable",
       "/v1/access-control/resource-rules/replace",
       "/v1/access-control/role-overrides/get",
       "/v1/access-control/user-exceptions/get",
