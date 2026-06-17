@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/convex",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "Convex Access Control utilities for Hercules applications",
   "type": "module",
   "sideEffects": false,
