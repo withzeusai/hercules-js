@@ -43,10 +43,10 @@ vi.mock("convex/react", () => ({
   },
 }));
 
-// Token expiring in 4 minutes (inside the refresh threshold).
-const EXPIRING_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 4 * 60);
-// Normal server-issued token with almost its full one-hour lifetime remaining.
-const FRESH_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 55 * 60);
+// Token expiring in 30 minutes (within the one-hour refresh threshold).
+const EXPIRING_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
+// Token expiring in two hours (outside the one-hour refresh threshold).
+const LONG_LIVED_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 2 * 60 * 60);
 
 function setAuthState(overrides: Record<string, unknown>) {
   mockAuthState = {
@@ -111,8 +111,8 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(mockSigninSilent).not.toHaveBeenCalled();
   });
 
-  it("skips refresh for a freshly issued one-hour token", async () => {
-    setAuthState({ user: { id_token: FRESH_TOKEN } });
+  it("skips refresh when token expires more than one hour from now", async () => {
+    setAuthState({ user: { id_token: LONG_LIVED_TOKEN } });
 
     const { result } = renderUseAuth();
 
@@ -120,7 +120,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
       forceRefreshToken: true,
     });
 
-    expect(token).toBe(FRESH_TOKEN);
+    expect(token).toBe(LONG_LIVED_TOKEN);
     expect(mockSigninSilent).not.toHaveBeenCalled();
   });
 

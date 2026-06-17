@@ -1,17 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AuthProvider as ReactAuthProvider,
   type AuthProviderUserManagerProps,
-  useAuth as useOidcAuth,
+  useAuth,
 } from "react-oidc-context";
 import {
   UserManager,
   WebStorageStateStore,
   type UserManagerSettings,
 } from "oidc-client-ts";
-import { createContext, useContext } from "react";
+import { withRefreshLock } from "../internal/refresh-lock";
 import {
   clearHerculesImpersonationParamsFromUrl,
   getHerculesImpersonationStorageKey,
@@ -20,6 +27,9 @@ import {
   rememberHerculesImpersonationSession,
 } from "./impersonation-core";
 
+const RECOVERY_TIMEOUT_MS = 10_000;
+const LOCK_GRACE_MS = 5_000;
+
 export type HerculesAuthProviderProps = Omit<
   AuthProviderUserManagerProps,
   "userManager"
@@ -27,6 +37,7 @@ export type HerculesAuthProviderProps = Omit<
   userManagerSettings?: Partial<UserManagerSettings>;
   authority: string;
   client_id: string;
+  loadingFallback?: ReactNode;
 };
 
 function onSigninCallback() {
@@ -58,6 +69,66 @@ export function useHerculesAuthProvider() {
   return context;
 }
 
+function AuthRecoveryGate({
+  children,
+  loadingFallback,
+  skipRecovery,
+}: {
+  children: ReactNode;
+  loadingFallback: ReactNode;
+  skipRecovery: boolean;
+}) {
+  const { user, isLoading, signinSilent } = useAuth();
+  const userExpired = user?.expired === true;
+  const hasAttempted = useRef(false);
+  const signinSilentRef = useRef(signinSilent);
+  signinSilentRef.current = signinSilent;
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+
+  useEffect(() => {
+    if (skipRecovery) {
+      hasAttempted.current = true;
+      setRecoveryDone(true);
+      return;
+    }
+    if (isLoading) return;
+    if (hasAttempted.current) return;
+    hasAttempted.current = true;
+
+    if (!user || !userExpired) {
+      setRecoveryDone(true);
+      return;
+    }
+
+    setRecovering(true);
+    const finish = () => {
+      setRecovering(false);
+      setRecoveryDone(true);
+    };
+    setTimeout(finish, RECOVERY_TIMEOUT_MS);
+
+    void withRefreshLock(async () => {
+      await Promise.race([
+        signinSilentRef.current().catch(() => undefined),
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, RECOVERY_TIMEOUT_MS + LOCK_GRACE_MS),
+        ),
+      ]);
+    }).finally(finish);
+  }, [isLoading, skipRecovery, userExpired]);
+
+  const shouldBlock =
+    !skipRecovery &&
+    (recovering || (!recoveryDone && !isLoading && userExpired));
+
+  if (shouldBlock) {
+    return <>{loadingFallback}</>;
+  }
+
+  return <>{children}</>;
+}
+
 /**
  * A wrapper React component which provides a {@link ReactAuthProvider}
  * configured with Hercules Auth.
@@ -69,8 +140,11 @@ export function HerculesAuthProvider({
   userManagerSettings,
   authority,
   client_id,
+  loadingFallback = null,
   ...props
 }: HerculesAuthProviderProps) {
+  const automaticSilentRenewExplicit =
+    userManagerSettings?.automaticSilentRenew === true;
   const [{ userManager, impersonationStorageKey }] = useState(() => {
     const effectiveAuthority = userManagerSettings?.authority ?? authority;
     const effectiveClientId = userManagerSettings?.client_id ?? client_id;
@@ -93,6 +167,11 @@ export function HerculesAuthProvider({
         userStore:
           userManagerSettings?.userStore ??
           new WebStorageStateStore({ store: window.localStorage }),
+        automaticSilentRenew:
+          userManagerSettings?.automaticSilentRenew ?? false,
+        silentRequestTimeoutInSeconds:
+          userManagerSettings?.silentRequestTimeoutInSeconds ??
+          RECOVERY_TIMEOUT_MS / 1000,
       }),
       impersonationStorageKey: getHerculesImpersonationStorageKey(
         effectiveAuthority,
@@ -100,6 +179,56 @@ export function HerculesAuthProvider({
       ),
     };
   });
+
+  useEffect(() => {
+    if (automaticSilentRenewExplicit) return;
+    let retryTimerId: ReturnType<typeof setTimeout> | null = null;
+    let timeoutRetryCount = 0;
+    let stopped = false;
+    const events = userManager.events as unknown as {
+      _raiseSilentRenewError?: (e: Error) => void;
+    };
+    const tryRenew = () => {
+      if (stopped) return;
+      void withRefreshLock(async () => {
+        if (stopped) return;
+        try {
+          await userManager.signinSilent();
+          timeoutRetryCount = 0;
+        } catch (err) {
+          if (stopped) return;
+          const isTimeout = err instanceof Error && err.name === "ErrorTimeout";
+          if (isTimeout) {
+            timeoutRetryCount++;
+            const maxRetries = (
+              userManager.settings as {
+                maxSilentRenewTimeoutRetries?: number;
+              }
+            ).maxSilentRenewTimeoutRetries;
+            if (maxRetries !== undefined && timeoutRetryCount > maxRetries) {
+              timeoutRetryCount = 0;
+              events._raiseSilentRenewError?.(err as Error);
+              return;
+            }
+            retryTimerId = setTimeout(() => {
+              retryTimerId = null;
+              tryRenew();
+            }, 5000);
+          } else {
+            timeoutRetryCount = 0;
+            events._raiseSilentRenewError?.(err as Error);
+          }
+        }
+      });
+    };
+    const onExpiring = () => tryRenew();
+    userManager.events.addAccessTokenExpiring(onExpiring);
+    return () => {
+      stopped = true;
+      userManager.events.removeAccessTokenExpiring(onExpiring);
+      if (retryTimerId !== null) clearTimeout(retryTimerId);
+    };
+  }, [userManager, automaticSilentRenewExplicit]);
 
   return (
     <HerculesAuthProviderContext.Provider
@@ -111,14 +240,19 @@ export function HerculesAuthProvider({
         {...props}
       >
         <HerculesImpersonationHandoff storageKey={impersonationStorageKey} />
-        {children}
+        <AuthRecoveryGate
+          loadingFallback={loadingFallback}
+          skipRecovery={hasCompleteImpersonationHandoff()}
+        >
+          {children}
+        </AuthRecoveryGate>
       </ReactAuthProvider>
     </HerculesAuthProviderContext.Provider>
   );
 }
 
 function HerculesImpersonationHandoff({ storageKey }: { storageKey: string }) {
-  const auth = useOidcAuth();
+  const auth = useAuth();
   const hasStartedRef = useRef(false);
 
   useEffect(() => {
@@ -165,4 +299,14 @@ function HerculesImpersonationHandoff({ storageKey }: { storageKey: string }) {
   }, [auth, storageKey]);
 
   return null;
+}
+
+function hasCompleteImpersonationHandoff(): boolean {
+  if (typeof window === "undefined") return false;
+
+  const params = new URL(window.location.href).searchParams;
+  return (
+    params.has(HERCULES_IMPERSONATION_SESSION_ID_PARAM) &&
+    params.has(HERCULES_IMPERSONATION_TOKEN_PARAM)
+  );
 }
