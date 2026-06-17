@@ -111,4 +111,8 @@ export type SyncResponse =
         | "issuer_mismatch"
         | "default_scope_required";
     }
-  | { ok: false; status: "not_ready" | "reset_required"; currentVersion: number };
+  | {
+      ok: false;
+      status: "not_ready" | "reset_required";
+      currentVersion: number;
+    };

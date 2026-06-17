@@ -28,6 +28,7 @@ Examples of **correct** code:
 <Select value="">OK for Select</Select>
 ```
 
-**Messages**: 
+**Messages**:
+
 - `SelectItem value must not be an empty string`
 - `SelectItem must have a value prop`

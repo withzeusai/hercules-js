@@ -32,9 +32,9 @@
   },
   "dependencies": {
     "jwt-decode": "^4.0.0",
-    "oidc-client-ts": "^3.4.1",
+    "oidc-client-ts": "^3.5.0",
     "react-oidc-context": "^3.3.1",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "convex": "^1.29.0",
@@ -43,14 +43,14 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@types/react": "^19.2.14",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "convex": "^1.38.0",
+    "convex": "^1.41.0",
     "jsdom": "^28.1.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "tsdown": "^0.18.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.8"
   }
 }

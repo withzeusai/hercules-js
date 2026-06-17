@@ -72,8 +72,7 @@ export class Analytics {
 
   constructor(config: AnalyticsConfig) {
     this.config = {
-      apiEndpoint:
-        config.apiEndpoint ?? "https://analytics-ingest.hercules.app",
+      apiEndpoint: config.apiEndpoint ?? "https://analytics-ingest.hercules.app",
       debug: config.debug ?? false,
       enabled: config.enabled ?? true,
       bufferSize: config.bufferSize ?? 10,
@@ -126,13 +125,7 @@ export class Analytics {
     let visitorId = getCookie("_hrc_vid");
     if (!visitorId) {
       visitorId = generateId();
-      setCookie(
-        "_hrc_vid",
-        visitorId,
-        365 * 2,
-        this.config.cookieDomain,
-        this.config.cookiePath,
-      );
+      setCookie("_hrc_vid", visitorId, 365 * 2, this.config.cookieDomain, this.config.cookiePath);
     }
     return visitorId;
   }
@@ -227,11 +220,7 @@ export class Analytics {
       const target = e.target as HTMLElement;
       const tagName = target.tagName.toLowerCase();
 
-      if (
-        tagName === "a" ||
-        tagName === "button" ||
-        target.getAttribute("data-track-click")
-      ) {
+      if (tagName === "a" || tagName === "button" || target.getAttribute("data-track-click")) {
         const properties: Record<string, any> = {
           element: tagName,
           text: target.textContent?.substring(0, 100) || "",
@@ -486,10 +475,7 @@ export class Analytics {
         ...this.providers.map((provider) =>
           provider.send(events).catch((err) => {
             if (this.config.debug) {
-              console.error(
-                `[Hercules Analytics] Provider '${provider.name}' error:`,
-                err,
-              );
+              console.error(`[Hercules Analytics] Provider '${provider.name}' error:`, err);
             }
           }),
         ),
@@ -502,9 +488,7 @@ export class Analytics {
       ]);
 
       if (this.config.debug) {
-        console.log(
-          `[Hercules Analytics] Flushed ${events.length} events`,
-        );
+        console.log(`[Hercules Analytics] Flushed ${events.length} events`);
       }
     } catch (error) {
       if (this.config.debug) {

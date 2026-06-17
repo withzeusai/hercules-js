@@ -71,7 +71,11 @@ type CatalogPermission = {
 // folded with that scope's overrides. `rawAllow` tracks ONLY the allow rows and
 // is the narrowing signal for a `default` (Admin) role — a deny-only override
 // leaves it empty, so Admin stays wildcard-default.
-type RoleContribution = { allow: Set<string>; deny: Set<string>; rawAllow: Set<string> };
+type RoleContribution = {
+  allow: Set<string>;
+  deny: Set<string>;
+  rawAllow: Set<string>;
+};
 
 async function evaluate(
   t: ConvexTest,
@@ -297,7 +301,11 @@ describe("v3 golden snapshot — ingest + decision parity", () => {
   test("the golden snapshot ingests cleanly through applySync", async () => {
     const t = convexTest(schema, modules);
     const result = await t.mutation(applySync, snapshotFixture as never);
-    expect(result).toMatchObject({ ok: true, status: "applied", acknowledgedVersion: 7 });
+    expect(result).toMatchObject({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 7,
+    });
 
     // Spot-check the install landed in the v3 tables.
     const counts = await t.run(async (ctx) => ({
@@ -587,13 +595,25 @@ describe("C1 narrowing parity", () => {
 
     // Same three decisions through the real authorize() gate.
     await expect(
-      c1Authorize(t, { authUserId: "u_admin", scopeId: "as_default", action: "write" }),
+      c1Authorize(t, {
+        authUserId: "u_admin",
+        scopeId: "as_default",
+        action: "write",
+      }),
     ).resolves.toBe("allow");
     await expect(
-      c1Authorize(t, { authUserId: "u_admin", scopeId: "as_org", action: "read" }),
+      c1Authorize(t, {
+        authUserId: "u_admin",
+        scopeId: "as_org",
+        action: "read",
+      }),
     ).resolves.toBe("allow");
     await expect(
-      c1Authorize(t, { authUserId: "u_admin", scopeId: "as_org", action: "write" }),
+      c1Authorize(t, {
+        authUserId: "u_admin",
+        scopeId: "as_org",
+        action: "write",
+      }),
     ).resolves.toBe("deny");
   });
 
@@ -639,13 +659,25 @@ describe("C1 narrowing parity", () => {
 
     // Same three decisions through the real authorize() gate.
     await expect(
-      c1Authorize(t, { authUserId: "u_admin", scopeId: "as_org", action: "read" }),
+      c1Authorize(t, {
+        authUserId: "u_admin",
+        scopeId: "as_org",
+        action: "read",
+      }),
     ).resolves.toBe("allow");
     await expect(
-      c1Authorize(t, { authUserId: "u_admin", scopeId: "as_org", action: "write" }),
+      c1Authorize(t, {
+        authUserId: "u_admin",
+        scopeId: "as_org",
+        action: "write",
+      }),
     ).resolves.toBe("deny");
     await expect(
-      c1Authorize(t, { authUserId: "u_admin", scopeId: "as_default", action: "write" }),
+      c1Authorize(t, {
+        authUserId: "u_admin",
+        scopeId: "as_default",
+        action: "write",
+      }),
     ).resolves.toBe("allow");
   });
 });
@@ -656,7 +688,11 @@ describe("C1 narrowing parity", () => {
 
 async function ingestSnapshot(t: ConvexTest) {
   const result = await t.mutation(applySync, snapshotFixture as never);
-  expect(result).toMatchObject({ ok: true, status: "applied", acknowledgedVersion: 7 });
+  expect(result).toMatchObject({
+    ok: true,
+    status: "applied",
+    acknowledgedVersion: 7,
+  });
 }
 
 // The golden events form a strict version chain on top of the v7 snapshot:
@@ -694,7 +730,11 @@ describe("v3 event application", () => {
     await ingestSnapshot(t);
 
     const result = await t.mutation(applySync, eventCatalog as never);
-    expect(result).toMatchObject({ ok: true, status: "applied", acknowledgedVersion: 8 });
+    expect(result).toMatchObject({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 8,
+    });
 
     const state = await t.run(async (ctx) => ({
       permission: await ctx.db
@@ -728,7 +768,10 @@ describe("v3 event application", () => {
         .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", "u_alice"))
         .unique(),
     );
-    expect(user).toMatchObject({ name: "Alice Carter", updatedAt: 1780358400000 });
+    expect(user).toMatchObject({
+      name: "Alice Carter",
+      updatedAt: 1780358400000,
+    });
   });
 
   test("event-scope blocks the principal and deletes its permission binding at v10", async () => {
@@ -819,13 +862,21 @@ describe("v3 event application", () => {
   test("an event before any snapshot is not_ready", async () => {
     const t = convexTest(schema, modules);
     const result = await t.mutation(applySync, eventCatalog as never);
-    expect(result).toMatchObject({ ok: false, status: "not_ready", currentVersion: 0 });
+    expect(result).toMatchObject({
+      ok: false,
+      status: "not_ready",
+      currentVersion: 0,
+    });
   });
 
   test("re-delivering the snapshot eventId is an idempotent duplicate ack", async () => {
     const t = convexTest(schema, modules);
     await ingestSnapshot(t);
     const result = await t.mutation(applySync, snapshotFixture as never);
-    expect(result).toMatchObject({ ok: true, status: "duplicate", acknowledgedVersion: 7 });
+    expect(result).toMatchObject({
+      ok: true,
+      status: "duplicate",
+      acknowledgedVersion: 7,
+    });
   });
 });

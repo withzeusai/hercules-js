@@ -28,10 +28,7 @@ describe("action taxonomy", () => {
   });
 
   test("the reserved Access Control action set is centralized", () => {
-    expect([...RESERVED_ACCESS_CONTROL_ACTIONS]).toEqual([
-      "manage_members",
-      "manage_access",
-    ]);
+    expect([...RESERVED_ACCESS_CONTROL_ACTIONS]).toEqual(["manage_members", "manage_access"]);
   });
 
   test("actionMatches: wildcard matches current and future product actions", () => {
@@ -79,26 +76,16 @@ describe("owner-only levers (cross-repo invariant)", () => {
   });
 
   test("concrete-verb levers fence only that verb", () => {
-    expect(
-      isOwnerOnlyLever({ resourceType: "system.app", action: "delete" }),
-    ).toBe(true);
-    expect(
-      isOwnerOnlyLever({ resourceType: "system.app", action: "read" }),
-    ).toBe(false);
+    expect(isOwnerOnlyLever({ resourceType: "system.app", action: "delete" })).toBe(true);
+    expect(isOwnerOnlyLever({ resourceType: "system.app", action: "read" })).toBe(false);
   });
 
   test("manage levers fence ALL canonical CRUD on the resourceType, not just :manage", () => {
     for (const verb of CANONICAL_ACTIONS) {
-      expect(
-        isOwnerOnlyLever({ resourceType: "system.billing", action: verb }),
-      ).toBe(true);
-      expect(
-        isOwnerOnlyLever({ resourceType: "system.access.owner", action: verb }),
-      ).toBe(true);
+      expect(isOwnerOnlyLever({ resourceType: "system.billing", action: verb })).toBe(true);
+      expect(isOwnerOnlyLever({ resourceType: "system.access.owner", action: verb })).toBe(true);
     }
-    expect(
-      isOwnerOnlyLever({ resourceType: "system.billing", action: "export" }),
-    ).toBe(false);
+    expect(isOwnerOnlyLever({ resourceType: "system.billing", action: "export" })).toBe(false);
   });
 });
 
@@ -213,9 +200,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
       classification: "owner_only" as const,
     };
 
-    expect(evaluateAccess({ wildcard: "default", entries: [], request })).toBe(
-      "deny",
-    );
+    expect(evaluateAccess({ wildcard: "default", entries: [], request })).toBe("deny");
     expect(
       evaluateAccess({
         wildcard: "none",
@@ -223,9 +208,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
         request,
       }),
     ).toBe("deny");
-    expect(
-      evaluateAccess({ wildcard: "immutable", entries: [], request }),
-    ).toBe("allow");
+    expect(evaluateAccess({ wildcard: "immutable", entries: [], request })).toBe("allow");
   });
 
   test("catalog delegable classification remains conferrable", () => {
@@ -235,9 +218,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
       classification: "delegable" as const,
     };
 
-    expect(evaluateAccess({ wildcard: "default", entries: [], request })).toBe(
-      "allow",
-    );
+    expect(evaluateAccess({ wildcard: "default", entries: [], request })).toBe("allow");
     expect(
       evaluateAccess({
         wildcard: "none",

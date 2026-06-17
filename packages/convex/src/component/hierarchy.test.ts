@@ -25,9 +25,11 @@ const authorizeMany = makeFunctionReference<
     effectiveRoleIds: string[];
   }>
 >("checks:authorizeMany");
-const getEffectivePermissions = makeFunctionReference<"query", Record<string, unknown>, { permissions: string[] }>(
-  "queries:getEffectivePermissions",
-);
+const getEffectivePermissions = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  { permissions: string[] }
+>("queries:getEffectivePermissions");
 const listScopeMemberDirectory = makeFunctionReference<
   "query",
   Record<string, unknown>,
@@ -372,10 +374,7 @@ describe("hierarchical authorization", () => {
 
   test("a parent role can confer the requested child permission", async () => {
     const t = convexTest(schema, modules);
-    await installSnapshot(
-      t,
-      hierarchySnapshot({ parentRoleAppliesTo: "self_and_descendants" }),
-    );
+    await installSnapshot(t, hierarchySnapshot({ parentRoleAppliesTo: "self_and_descendants" }));
 
     await expect(
       checkTask(t, [{ resourceType: "app.project", resourceId: "project_1" }]),
@@ -391,7 +390,10 @@ describe("hierarchical authorization", () => {
 
     await expect(
       checkTask(t, [{ resourceType: "app.project", resourceId: "project_1" }]),
-    ).resolves.toMatchObject({ allowed: false, reasonCode: "permission_denied" });
+    ).resolves.toMatchObject({
+      allowed: false,
+      reasonCode: "permission_denied",
+    });
   });
 
   test("an applicable ancestor deny overrides a child allow", async () => {
@@ -451,10 +453,7 @@ describe("hierarchical authorization", () => {
 
   test("effective permissions support create-child checks against a parent", async () => {
     const t = convexTest(schema, modules);
-    await installSnapshot(
-      t,
-      hierarchySnapshot({ parentRoleAppliesTo: "self_and_descendants" }),
-    );
+    await installSnapshot(t, hierarchySnapshot({ parentRoleAppliesTo: "self_and_descendants" }));
 
     await expect(
       t.query(getEffectivePermissions, {

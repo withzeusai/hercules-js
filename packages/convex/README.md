@@ -72,10 +72,7 @@ exceptions, and resource access.
     "app.documents:update": { "name": "Update documents" },
     "app.documents:manage_members": { "name": "Share documents" },
   },
-  "orgAdminGrantablePermissions": [
-    "app.documents:read",
-    "app.documents:update",
-  ],
+  "orgAdminGrantablePermissions": ["app.documents:read", "app.documents:update"],
   "roles": {
     "owner": { "type": "built_in" },
     "admin": { "type": "built_in" },
@@ -114,12 +111,7 @@ sign-in.
 
 ```ts
 import { v } from "convex/values";
-import {
-  accessQuery,
-  accessMutation,
-  scopeFromArg,
-  scopeFromResource,
-} from "./hercules";
+import { accessQuery, accessMutation, scopeFromArg, scopeFromResource } from "./hercules";
 
 // Read: scope from an arg. "view" is a real permission; grant it to every role
 // that should see the data, including a read-only role.
@@ -140,8 +132,7 @@ export const archiveProject = accessMutation({
   permission: "app.project:archive",
   scope: scopeFromResource("projects", "projectId"),
   args: { projectId: v.id("projects") },
-  handler: async (ctx, args) =>
-    ctx.db.patch(args.projectId, { status: "archived" }),
+  handler: async (ctx, args) => ctx.db.patch(args.projectId, { status: "archived" }),
 });
 ```
 
@@ -161,22 +152,17 @@ deny wins. Parent access applies only when its binding uses
 export const updateTask = accessMutation({
   permission: "app.tasks:update",
   scope: scopeFromResource("tasks", "taskId", {
-    authorizeAgainst: (task) => [
-      { type: "app.projects", id: String(task.projectId) },
-    ],
+    authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
   }),
   args: { taskId: v.id("tasks"), title: v.string() },
-  handler: async (ctx, args) =>
-    ctx.db.patch(args.taskId, { title: args.title }),
+  handler: async (ctx, args) => ctx.db.patch(args.taskId, { title: args.title }),
 });
 
 export const createTask = accessMutation({
   permission: "app.tasks:create",
   scope: scopeFromParentResource("projects", "projectId", {
     parentResourceType: "app.projects",
-    authorizeAgainst: (project) => [
-      { type: "app.workspaces", id: String(project.workspaceId) },
-    ],
+    authorizeAgainst: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
   }),
   args: { projectId: v.id("projects"), title: v.string() },
   handler: async (ctx, args) => {
@@ -205,9 +191,7 @@ scope id to each row:
 
 ```ts
 scope: scopeFromDefaultResource("tasks", "taskId", {
-  authorizeAgainst: (task) => [
-    { type: "app.projects", id: String(task.projectId) },
-  ],
+  authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
 });
 
 scope: scopeFromDefaultParentResource("projects", "projectId", {
@@ -229,9 +213,7 @@ export const getMyProfile = accessQuery({
     if (!herculesAuthUserId) throw new Error("Authentication required");
     return await ctx.db
       .query("profiles")
-      .withIndex("by_auth_user", (q) =>
-        q.eq("herculesAuthUserId", herculesAuthUserId),
-      )
+      .withIndex("by_auth_user", (q) => q.eq("herculesAuthUserId", herculesAuthUserId))
       .unique();
   },
 });
@@ -264,7 +246,10 @@ authoritative effective scope-role keys.
 export const teamMembers = authenticatedQuery({
   args: { scopeId: v.string() },
   handler: async (ctx, args) => {
-    const page = await listScopeMemberDirectory(ctx, { scopeId: args.scopeId, limit: 50 });
+    const page = await listScopeMemberDirectory(ctx, {
+      scopeId: args.scopeId,
+      limit: 50,
+    });
     return {
       ...page,
       members: page.members.filter((member) => member.roleKeys.includes("reviewer")),
@@ -296,8 +281,9 @@ authority is only for trusted internal workflows.
 import { createAccessAdminActions } from "@usehercules/convex/access-admin";
 import { internalAction } from "./_generated/server";
 
-export const { assignRole, removeRole, createInvitation } =
-  createAccessAdminActions({ internalAction });
+export const { assignRole, removeRole, createInvitation } = createAccessAdminActions({
+  internalAction,
+});
 ```
 
 Use `createAccessUserActions` for user-initiated administration.
@@ -400,27 +386,23 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { authenticatedAction, listMyMemberships } from "./hercules";
 
-export const bootstrapProjectCreator =
-  createResourceCreatorBootstrapAction({
-    authenticatedAction,
-    resourceType: "app.projects",
-    managerRoleKey: "project_manager",
-    appliesTo: "self_and_descendants",
-    listMyMemberships,
-    getBootstrapTarget: async (ctx, { resourceId }) =>
-      await ctx.runQuery(internal.projects.getCreatorBootstrapTarget, {
-        projectId: resourceId as Id<"projects">,
-      }),
-    activateResource: async (
-      ctx,
-      { resourceId, creatorHerculesAuthUserId },
-    ) => {
-      await ctx.runMutation(internal.projects.activateCreatorBootstrap, {
-        projectId: resourceId as Id<"projects">,
-        creatorHerculesAuthUserId,
-      });
-    },
-  });
+export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
+  authenticatedAction,
+  resourceType: "app.projects",
+  managerRoleKey: "project_manager",
+  appliesTo: "self_and_descendants",
+  listMyMemberships,
+  getBootstrapTarget: async (ctx, { resourceId }) =>
+    await ctx.runQuery(internal.projects.getCreatorBootstrapTarget, {
+      projectId: resourceId as Id<"projects">,
+    }),
+  activateResource: async (ctx, { resourceId, creatorHerculesAuthUserId }) => {
+    await ctx.runMutation(internal.projects.activateCreatorBootstrap, {
+      projectId: resourceId as Id<"projects">,
+      creatorHerculesAuthUserId,
+    });
+  },
+});
 ```
 
 The internal query returns only `{ scopeId, resourceId,

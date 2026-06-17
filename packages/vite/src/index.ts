@@ -1,9 +1,6 @@
 import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
-import {
-  componentTaggerPlugin,
-  type ComponentTaggerOptions,
-} from "./component-tagger";
+import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
 import {
   dynamicComponentCreatorPlugin,
@@ -89,9 +86,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     plugins.push(
       componentTaggerPlugin({
         debug,
-        dataAttribute: visualEditor.enabled
-          ? "data-hercules-id"
-          : "data-component-id",
+        dataAttribute: visualEditor.enabled ? "data-hercules-id" : "data-component-id",
         ...componentTagger,
       }),
     );
@@ -226,11 +221,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 
     generateBundle(_options, bundle) {
       if (debug) {
-        console.log(
-          "[Hercules Plugin] Bundle generated with",
-          Object.keys(bundle).length,
-          "files",
-        );
+        console.log("[Hercules Plugin] Bundle generated with", Object.keys(bundle).length, "files");
       }
     },
 

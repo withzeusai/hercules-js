@@ -11,10 +11,7 @@ import { v } from "convex/values";
 // (role membership) and `permission_bindings` (direct permission authority).
 
 const effectValidator = v.union(v.literal("allow"), v.literal("deny"));
-const bindingAppliesToValidator = v.union(
-  v.literal("self"),
-  v.literal("self_and_descendants"),
-);
+const bindingAppliesToValidator = v.union(v.literal("self"), v.literal("self_and_descendants"));
 const wildcardValidator = v.union(v.literal("none"), v.literal("immutable"), v.literal("default"));
 const scopeKindValidator = v.union(v.literal("default"), v.literal("org"), v.literal("suite"));
 const scopeStatusValidator = v.union(v.literal("active"), v.literal("disabled"));

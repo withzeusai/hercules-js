@@ -39,10 +39,7 @@ function useUseAuthFromHercules() {
       if (!forceRefreshToken) {
         return currentToken ?? null;
       }
-      if (
-        currentToken != null &&
-        !tokenExpiresWithin(currentToken, REFRESH_THRESHOLD_MS)
-      ) {
+      if (currentToken != null && !tokenExpiresWithin(currentToken, REFRESH_THRESHOLD_MS)) {
         return currentToken;
       }
       if (inFlightRefresh.current) {
@@ -50,10 +47,7 @@ function useUseAuthFromHercules() {
       }
       const refresh = withRefreshLock(async () => {
         const tokenAfterLock = idTokenRef.current;
-        if (
-          tokenAfterLock != null &&
-          !tokenExpiresWithin(tokenAfterLock, REFRESH_THRESHOLD_MS)
-        ) {
+        if (tokenAfterLock != null && !tokenExpiresWithin(tokenAfterLock, REFRESH_THRESHOLD_MS)) {
           return tokenAfterLock;
         }
         try {

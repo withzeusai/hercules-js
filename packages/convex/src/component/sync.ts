@@ -116,7 +116,11 @@ export const applySync = mutation({
 
     if (payload.type === "access.projection.event") {
       if (!state) {
-        return { ok: false as const, status: "not_ready" as const, currentVersion: 0 };
+        return {
+          ok: false as const,
+          status: "not_ready" as const,
+          currentVersion: 0,
+        };
       }
       // Contract point 1: events apply strictly at currentVersion + 1.
       const expectedVersion = state.sourceVersion + 1;
@@ -139,7 +143,11 @@ export const applySync = mutation({
         };
       }
       if (payload.mode === "reset" && !state) {
-        return { ok: false as const, status: "not_ready" as const, currentVersion: 0 };
+        return {
+          ok: false as const,
+          status: "not_ready" as const,
+          currentVersion: 0,
+        };
       }
       if (state && state.expectedIssuer !== payload.expectedIssuer) {
         return { ok: false as const, status: "issuer_mismatch" as const };
@@ -654,7 +662,11 @@ export const applySync = mutation({
 
     async function upsertMembership(
       accessScopeId: string,
-      membership: { groupPrincipalId: string; memberPrincipalId: string; updatedAt: number },
+      membership: {
+        groupPrincipalId: string;
+        memberPrincipalId: string;
+        updatedAt: number;
+      },
     ) {
       const existing = await ctx.db
         .query("principal_memberships")

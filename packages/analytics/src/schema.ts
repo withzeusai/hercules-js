@@ -1,12 +1,6 @@
 import * as z from "zod/mini";
 
-export const EventTypeEnum = z.enum([
-  "pageview",
-  "pageleave",
-  "web_vitals",
-  "click",
-  "custom",
-]);
+export const EventTypeEnum = z.enum(["pageview", "pageleave", "web_vitals", "click", "custom"]);
 export type EventType = z.infer<typeof EventTypeEnum>;
 
 export const HerculesEventSchema = z.object({

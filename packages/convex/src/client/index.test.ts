@@ -140,15 +140,13 @@ describe("createAccessControl", () => {
           tokenIdentifier: "https://auth.example.com|user_1",
         }),
       },
-      runQuery: vi
-        .fn()
-        .mockResolvedValue({
-          allowed: true,
-          reasonCode: "allowed",
-          sourceVersion: 1,
-          principalId: "principal_1",
-          effectiveRoleIds: ["role_member"],
-        }),
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        sourceVersion: 1,
+        principalId: "principal_1",
+        effectiveRoleIds: ["role_member"],
+      }),
     };
 
     await expect(handler.handler(ctx, {})).resolves.toBe("ok");
@@ -177,13 +175,11 @@ describe("createAccessControl", () => {
           tokenIdentifier: "https://auth.example.com|user_1",
         }),
       },
-      runQuery: vi
-        .fn()
-        .mockResolvedValue({
-          allowed: false,
-          reasonCode: "unexpected_issuer",
-          effectiveRoleIds: [],
-        }),
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: false,
+        reasonCode: "unexpected_issuer",
+        effectiveRoleIds: [],
+      }),
     };
 
     await expect(handler.handler(ctx)).rejects.toBeInstanceOf(ConvexError);
@@ -214,15 +210,13 @@ describe("createAccessControl", () => {
           tokenIdentifier: "https://auth.example.com|user_1",
         }),
       },
-      runQuery: vi
-        .fn()
-        .mockResolvedValue({
-          allowed: true,
-          reasonCode: "allowed",
-          sourceVersion: 1,
-          principalId: "principal_1",
-          effectiveRoleIds: ["role_member"],
-        }),
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        sourceVersion: 1,
+        principalId: "principal_1",
+        effectiveRoleIds: ["role_member"],
+      }),
     };
 
     await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
@@ -509,15 +503,13 @@ describe("createAccessControl", () => {
           tokenIdentifier: "https://auth.example.com|user_1",
         }),
       },
-      runQuery: vi
-        .fn()
-        .mockResolvedValue({
-          allowed: true,
-          reasonCode: "allowed",
-          sourceVersion: 1,
-          principalId: "principal_1",
-          effectiveRoleIds: ["role_member"],
-        }),
+      runQuery: vi.fn().mockResolvedValue({
+        allowed: true,
+        reasonCode: "allowed",
+        sourceVersion: 1,
+        principalId: "principal_1",
+        effectiveRoleIds: ["role_member"],
+      }),
     };
 
     await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
@@ -814,7 +806,9 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   });
 
   test("always sends declared ancestors even when the target itself allows", async () => {
-    const handler = makeTaskMutation((task) => [{ type: "app.project", id: String(task.projectId) }]);
+    const handler = makeTaskMutation((task) => [
+      { type: "app.project", id: String(task.projectId) },
+    ]);
     const runQuery = vi.fn().mockResolvedValue({
       allowed: true,
       reasonCode: "allowed",
@@ -847,7 +841,9 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
       reasonCode: "denied",
       effectiveRoleIds: [],
     });
-    await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(ConvexError);
+    await expect(handler.handler(makeCtx(runQuery), { taskId: "task_1" })).rejects.toBeInstanceOf(
+      ConvexError,
+    );
     expect(runQuery).not.toHaveBeenCalled();
   });
 
@@ -894,9 +890,7 @@ describe("default-scope resource extractors", () => {
 
   test("scopeFromDefaultResource includes trusted ancestors from the loaded row", async () => {
     const extract = scopeFromDefaultResource("tasks", "taskId", {
-      authorizeAgainst: (task) => [
-        { type: "app.projects", id: String(task.projectId) },
-      ],
+      authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
     });
     const ctx = {
       db: {

@@ -2,10 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import {
-  checkAccessControlSource,
-  formatAccessControlCheckResult,
-} from "./index";
+import { checkAccessControlSource, formatAccessControlCheckResult } from "./index";
 
 describe("checkAccessControlSource", () => {
   test("reports exported raw Convex builders", () => {
@@ -233,9 +230,7 @@ describe("checkAccessControlSource", () => {
       ]),
     );
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
@@ -338,9 +333,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
@@ -456,9 +449,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
@@ -530,9 +521,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -594,9 +583,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -643,9 +630,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
@@ -862,9 +847,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -909,9 +892,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -988,9 +969,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -1029,9 +1008,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
@@ -1114,9 +1091,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
@@ -1153,9 +1128,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -1217,9 +1190,7 @@ describe("checkAccessControlSource", () => {
     const result = checkAccessControlSource({ cwd: root });
 
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -1393,9 +1364,7 @@ describe("checkAccessControlSource", () => {
     // their arguments. Passing a statically dangerous callable from a public
     // handler is itself treated as service-authority exposure.
     expect(
-      result.findings.filter(
-        (finding) => finding.code === "public_service_authority_call",
-      ),
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(1);
   });
 
@@ -1485,9 +1454,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const message = formatAccessControlCheckResult(
-      checkAccessControlSource({ cwd: root }),
-    );
+    const message = formatAccessControlCheckResult(checkAccessControlSource({ cwd: root }));
 
     expect(message).toContain("static check passed");
     expect(message).toContain(
@@ -1673,9 +1640,7 @@ describe("checkAccessControlSource", () => {
         }),
       ]),
     );
-    expect(formatAccessControlCheckResult(result)).toContain(
-      "scopeFromResource",
-    );
+    expect(formatAccessControlCheckResult(result)).toContain("scopeFromResource");
   });
 
   test("reports authenticated reads of org-owned tables", () => {
@@ -1884,18 +1849,14 @@ describe("checkAccessControlSource", () => {
       "convex/projects.ts": builderSource,
     });
 
-    expect(checkAccessControlSource({ cwd: missingCatalogRoot })).toMatchObject(
-      {
-        ok: true,
-        findings: [],
-      },
-    );
-    expect(checkAccessControlSource({ cwd: invalidCatalogRoot })).toMatchObject(
-      {
-        ok: true,
-        findings: [],
-      },
-    );
+    expect(checkAccessControlSource({ cwd: missingCatalogRoot })).toMatchObject({
+      ok: true,
+      findings: [],
+    });
+    expect(checkAccessControlSource({ cwd: invalidCatalogRoot })).toMatchObject({
+      ok: true,
+      findings: [],
+    });
   });
 
   test("can rewrite exported raw builders to authenticated builders", () => {
@@ -1936,9 +1897,7 @@ describe("checkAccessControlSource", () => {
     );
     expect(source).toContain("export const list = authenticatedQuery({");
     expect(source).toContain("export const create = authenticatedMutation({");
-    expect(source).toContain(
-      'import { internalMutation } from "./_generated/server";',
-    );
+    expect(source).toContain('import { internalMutation } from "./_generated/server";');
     expect(source).toContain("export const repair = internalMutation({");
   });
 
@@ -1964,9 +1923,7 @@ describe("checkAccessControlSource", () => {
     const source = readFileSync(join(root, "convex/admin/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
-    expect(source).toContain(
-      'import { authenticatedQuery } from "../hercules";',
-    );
+    expect(source).toContain('import { authenticatedQuery } from "../hercules";');
     expect(source).toContain("export const list = authenticatedQuery({");
   });
 });

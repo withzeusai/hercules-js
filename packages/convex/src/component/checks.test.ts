@@ -125,7 +125,9 @@ describe("authorize", () => {
     // No mutation: sync_state row does not exist yet. Authenticated mode
     // (no permission requested) should still allow on token presence so
     // the user's first updateCurrentUser call can run.
-    const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_alice` });
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+    });
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCode).toBe("allowed");
   });
@@ -156,7 +158,9 @@ describe("authorize", () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
 
-    const decision = await t.query(authorize, { tokenIdentifier: `${ISSUER}|user_anyone` });
+    const decision = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_anyone`,
+    });
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCode).toBe("allowed");
   });
@@ -332,7 +336,11 @@ describe("authorize", () => {
         ],
       },
     });
-    expect(ingest).toMatchObject({ ok: true, status: "applied", acknowledgedVersion: 2 });
+    expect(ingest).toMatchObject({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 2,
+    });
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
@@ -488,7 +496,9 @@ describe("authorize — wildcard roles", () => {
   test("catalog owner_only classification is enforced end to end", async () => {
     const t = convexTest(schema, modules);
     const snapshot = wildcardSnapshot();
-    Object.assign(snapshot.entities.permissions[0]!, { classification: "owner_only" });
+    Object.assign(snapshot.entities.permissions[0]!, {
+      classification: "owner_only",
+    });
     await t.mutation(applySync, snapshot);
 
     const admin = await t.query(authorize, {
@@ -677,7 +687,10 @@ describe("authorize — wildcard roles", () => {
         scopeId: "scope_org",
         permission: "app.loans:read",
       }),
-    ).resolves.toMatchObject({ allowed: false, reasonCode: "permission_denied" });
+    ).resolves.toMatchObject({
+      allowed: false,
+      reasonCode: "permission_denied",
+    });
   });
 
   test("manage role row expands to every canonical CRUD verb, not custom verbs", async () => {

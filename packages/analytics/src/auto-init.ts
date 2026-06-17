@@ -19,9 +19,7 @@ function parseUrlConfig() {
     return {
       apiEndpoint: params.get("apiEndpoint") ?? undefined,
       debug: params.has("debug") ? params.get("debug") === "true" : undefined,
-      trackClicks: params.has("trackClicks")
-        ? params.get("trackClicks") === "true"
-        : undefined,
+      trackClicks: params.has("trackClicks") ? params.get("trackClicks") === "true" : undefined,
       trackPerformance: params.has("trackPerformance")
         ? params.get("trackPerformance") !== "false"
         : undefined,

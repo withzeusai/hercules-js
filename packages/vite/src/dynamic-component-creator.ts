@@ -43,11 +43,7 @@ export function dynamicComponentCreatorPlugin(
       order: "pre",
       handler: async (source, importer, _options) => {
         // Only handle relative imports and specific extensions
-        if (
-          !source.startsWith("./") &&
-          !source.startsWith("../") &&
-          !source.startsWith("@/")
-        )
+        if (!source.startsWith("./") && !source.startsWith("../") && !source.startsWith("@/"))
           return null;
         if (!source.endsWith(".tsx")) return null;
 
@@ -68,16 +64,16 @@ export function dynamicComponentCreatorPlugin(
           await mkdir(path.dirname(resolvedPath), { recursive: true });
 
           // Extract file name without extension and convert to component name
-          const fileName = path.basename(resolvedPath, '.tsx');
+          const fileName = path.basename(resolvedPath, ".tsx");
 
           const toComponentName = (name: string): string => {
-            if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name.replace(/[-]/g, ''))) {
-              return 'Component';
+            if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name.replace(/[-]/g, ""))) {
+              return "Component";
             }
             return name
               .split(/[-_]/)
-              .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-              .join('');
+              .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+              .join("");
           };
 
           const componentName = toComponentName(fileName);
@@ -87,12 +83,12 @@ export function dynamicComponentCreatorPlugin(
             await writeFile(
               resolvedPath,
               `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
-              { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL },
+              {
+                flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+              },
             );
             if (debug) {
-              const importType = source.startsWith("@/")
-                ? "@/ alias"
-                : "relative";
+              const importType = source.startsWith("@/") ? "@/ alias" : "relative";
               console.log(
                 `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,
               );
