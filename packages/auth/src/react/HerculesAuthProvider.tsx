@@ -19,6 +19,13 @@ import {
   type UserManagerSettings,
 } from "oidc-client-ts";
 import { withRefreshLock } from "../internal/refresh-lock";
+import {
+  clearHerculesImpersonationParamsFromUrl,
+  getHerculesImpersonationStorageKey,
+  HERCULES_IMPERSONATION_SESSION_ID_PARAM,
+  HERCULES_IMPERSONATION_TOKEN_PARAM,
+  rememberHerculesImpersonationSession,
+} from "./impersonation-core";
 
 const RECOVERY_TIMEOUT_MS = 10_000;
 const LOCK_GRACE_MS = 5_000;
@@ -48,6 +55,7 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
 
 interface HerculesAuthProviderContext {
   userManager: UserManager;
+  impersonationStorageKey: string;
 }
 
 const HerculesAuthProviderContext =
@@ -64,9 +72,11 @@ export function useHerculesAuthProvider() {
 function AuthRecoveryGate({
   children,
   loadingFallback,
+  skipRecovery,
 }: {
   children: ReactNode;
   loadingFallback: ReactNode;
+  skipRecovery: boolean;
 }) {
   const { user, isLoading, signinSilent } = useAuth();
   const userExpired = user?.expired === true;
@@ -77,6 +87,11 @@ function AuthRecoveryGate({
   const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
+    if (skipRecovery) {
+      hasAttempted.current = true;
+      setRecoveryDone(true);
+      return;
+    }
     if (isLoading) return;
     if (hasAttempted.current) return;
     hasAttempted.current = true;
@@ -101,10 +116,11 @@ function AuthRecoveryGate({
         ),
       ]);
     }).finally(finish);
-  }, [isLoading, userExpired]);
+  }, [isLoading, skipRecovery, userExpired]);
 
   const shouldBlock =
-    recovering || (!recoveryDone && !isLoading && userExpired);
+    !skipRecovery &&
+    (recovering || (!recoveryDone && !isLoading && userExpired));
 
   if (shouldBlock) {
     return <>{loadingFallback}</>;
@@ -129,12 +145,15 @@ export function HerculesAuthProvider({
 }: HerculesAuthProviderProps) {
   const automaticSilentRenewExplicit =
     userManagerSettings?.automaticSilentRenew === true;
-  const [userManager] = useState(
-    () =>
-      new UserManager({
+  const [{ userManager, impersonationStorageKey }] = useState(() => {
+    const effectiveAuthority = userManagerSettings?.authority ?? authority;
+    const effectiveClientId = userManagerSettings?.client_id ?? client_id;
+
+    return {
+      userManager: new UserManager({
         ...userManagerSettings,
-        authority: userManagerSettings?.authority ?? authority,
-        client_id: userManagerSettings?.client_id ?? client_id,
+        authority: effectiveAuthority,
+        client_id: effectiveClientId,
         prompt: userManagerSettings?.prompt ?? "select_account",
         response_type: userManagerSettings?.response_type ?? "code",
         scope:
@@ -154,7 +173,12 @@ export function HerculesAuthProvider({
           userManagerSettings?.silentRequestTimeoutInSeconds ??
           RECOVERY_TIMEOUT_MS / 1000,
       }),
-  );
+      impersonationStorageKey: getHerculesImpersonationStorageKey(
+        effectiveAuthority,
+        effectiveClientId,
+      ),
+    };
+  });
 
   useEffect(() => {
     if (automaticSilentRenewExplicit) return;
@@ -173,8 +197,7 @@ export function HerculesAuthProvider({
           timeoutRetryCount = 0;
         } catch (err) {
           if (stopped) return;
-          const isTimeout =
-            err instanceof Error && err.name === "ErrorTimeout";
+          const isTimeout = err instanceof Error && err.name === "ErrorTimeout";
           if (isTimeout) {
             timeoutRetryCount++;
             const maxRetries = (
@@ -208,16 +231,82 @@ export function HerculesAuthProvider({
   }, [userManager, automaticSilentRenewExplicit]);
 
   return (
-    <HerculesAuthProviderContext.Provider value={{ userManager }}>
+    <HerculesAuthProviderContext.Provider
+      value={{ userManager, impersonationStorageKey }}
+    >
       <ReactAuthProvider
         userManager={userManager}
         {...DEFAULT_AUTH_CONFIG}
         {...props}
       >
-        <AuthRecoveryGate loadingFallback={loadingFallback}>
+        <HerculesImpersonationHandoff storageKey={impersonationStorageKey} />
+        <AuthRecoveryGate
+          loadingFallback={loadingFallback}
+          skipRecovery={hasCompleteImpersonationHandoff()}
+        >
           {children}
         </AuthRecoveryGate>
       </ReactAuthProvider>
     </HerculesAuthProviderContext.Provider>
+  );
+}
+
+function HerculesImpersonationHandoff({ storageKey }: { storageKey: string }) {
+  const auth = useAuth();
+  const hasStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasStartedRef.current || typeof window === "undefined") return;
+
+    const url = new URL(window.location.href);
+    const impersonationSessionId = url.searchParams.get(
+      HERCULES_IMPERSONATION_SESSION_ID_PARAM,
+    );
+    const impersonationToken = url.searchParams.get(
+      HERCULES_IMPERSONATION_TOKEN_PARAM,
+    );
+    if (!impersonationSessionId && !impersonationToken) return;
+    if (!impersonationSessionId || !impersonationToken) {
+      window.history.replaceState(
+        {},
+        document.title,
+        clearHerculesImpersonationParamsFromUrl(url).toString(),
+      );
+      return;
+    }
+    if (auth.isLoading) return;
+
+    hasStartedRef.current = true;
+    rememberHerculesImpersonationSession(storageKey, impersonationSessionId);
+    window.history.replaceState(
+      {},
+      document.title,
+      clearHerculesImpersonationParamsFromUrl(url).toString(),
+    );
+
+    void (async () => {
+      if (auth.isAuthenticated) {
+        await auth.removeUser();
+      }
+
+      await auth.signinRedirect({
+        extraQueryParams: {
+          [HERCULES_IMPERSONATION_SESSION_ID_PARAM]: impersonationSessionId,
+          [HERCULES_IMPERSONATION_TOKEN_PARAM]: impersonationToken,
+        },
+      });
+    })();
+  }, [auth, storageKey]);
+
+  return null;
+}
+
+function hasCompleteImpersonationHandoff(): boolean {
+  if (typeof window === "undefined") return false;
+
+  const params = new URL(window.location.href).searchParams;
+  return (
+    params.has(HERCULES_IMPERSONATION_SESSION_ID_PARAM) &&
+    params.has(HERCULES_IMPERSONATION_TOKEN_PARAM)
   );
 }

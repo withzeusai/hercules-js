@@ -1,0 +1,244 @@
+{
+  "type": "access.projection.snapshot",
+  "schemaVersion": 3,
+  "eventId": "evt_snapshot_cd_demo_0001",
+  "mode": "initialize",
+  "sourceVersion": 7,
+  "expectedIssuer": "hercules-platform:cd_demo",
+  "catalog": {
+    "roles": [
+      {
+        "roleId": "role_owner",
+        "key": "owner",
+        "source": "system",
+        "name": "Owner",
+        "baseWildcard": "immutable",
+        "updatedAt": 1767225600000
+      },
+      {
+        "roleId": "role_admin",
+        "key": "admin",
+        "source": "system",
+        "name": "Admin",
+        "baseWildcard": "default",
+        "updatedAt": 1767225600000
+      },
+      {
+        "roleId": "role_member",
+        "key": "member",
+        "source": "system",
+        "name": "Member",
+        "baseWildcard": "none",
+        "updatedAt": 1767225600000
+      },
+      {
+        "roleId": "role_editor",
+        "key": "editor",
+        "source": "iam",
+        "name": "Editor",
+        "baseWildcard": "none",
+        "updatedAt": 1767225600000
+      }
+    ],
+    "permissions": [
+      {
+        "permissionId": "perm_sys_recovery",
+        "key": "system.recovery:manage",
+        "resourceType": "system.recovery",
+        "action": "manage",
+        "classification": "owner_only",
+        "tenantAssignable": false,
+        "updatedAt": 1767225600000
+      },
+      {
+        "permissionId": "perm_sys_members",
+        "key": "system.members:manage",
+        "resourceType": "system.members",
+        "action": "manage",
+        "classification": "delegable",
+        "tenantAssignable": true,
+        "updatedAt": 1767225600000
+      },
+      {
+        "permissionId": "perm_docs_read",
+        "key": "app.docs:read",
+        "resourceType": "app.docs",
+        "action": "read",
+        "classification": "delegable",
+        "tenantAssignable": true,
+        "updatedAt": 1767225600000
+      },
+      {
+        "permissionId": "perm_docs_write",
+        "key": "app.docs:write",
+        "resourceType": "app.docs",
+        "action": "write",
+        "classification": "delegable",
+        "tenantAssignable": true,
+        "updatedAt": 1767225600000
+      }
+    ],
+    "rolePermissions": [
+      {
+        "roleId": "role_member",
+        "permissionId": "perm_docs_read",
+        "effect": "allow",
+        "updatedAt": 1767225600000
+      },
+      {
+        "roleId": "role_editor",
+        "permissionId": "perm_docs_read",
+        "effect": "allow",
+        "updatedAt": 1767225600000
+      },
+      {
+        "roleId": "role_editor",
+        "permissionId": "perm_docs_write",
+        "effect": "allow",
+        "updatedAt": 1767225600000
+      }
+    ]
+  },
+  "users": [
+    {
+      "herculesAuthUserId": "u_alice",
+      "name": "Alice Anderson",
+      "email": "alice@cd-demo.example",
+      "emailVerified": true,
+      "phoneVerified": false,
+      "updatedAt": 1767225600000
+    },
+    {
+      "herculesAuthUserId": "u_bob",
+      "name": "Bob Brown",
+      "email": "bob@cd-demo.example",
+      "emailVerified": true,
+      "phoneVerified": false,
+      "updatedAt": 1767225600000
+    }
+  ],
+  "scopes": [
+    {
+      "scope": {
+        "accessScopeId": "as_default",
+        "name": "cd_demo",
+        "kind": "default",
+        "status": "active",
+        "accountEntryMode": "open",
+        "defaultRoleId": "role_member",
+        "updatedAt": 1767225600000
+      },
+      "principals": [
+        {
+          "principalId": "pr_default_alice",
+          "type": "user",
+          "herculesAuthUserId": "u_alice",
+          "status": "active",
+          "joinedAt": 1767225600000,
+          "updatedAt": 1767225600000
+        },
+        {
+          "principalId": "pr_default_bob",
+          "type": "user",
+          "herculesAuthUserId": "u_bob",
+          "status": "active",
+          "joinedAt": 1767225600000,
+          "updatedAt": 1767225600000
+        }
+      ],
+      "principalMemberships": [],
+      "roles": [],
+      "rolePermissionOverrides": [],
+      "roleBindings": [
+        {
+          "bindingId": "rb_default_alice_admin",
+          "subjectPrincipalId": "pr_default_alice",
+          "roleId": "role_admin",
+          "accessScopeId": "as_default",
+          "appliesTo": "self",
+          "updatedAt": 1767225600000
+        },
+        {
+          "bindingId": "rb_default_bob_member",
+          "subjectPrincipalId": "pr_default_bob",
+          "roleId": "role_member",
+          "accessScopeId": "as_default",
+          "appliesTo": "self",
+          "updatedAt": 1767225600000
+        }
+      ],
+      "permissionBindings": [
+        {
+          "bindingId": "pb_default_bob_docswrite",
+          "subjectPrincipalId": "pr_default_bob",
+          "permissionId": "perm_docs_write",
+          "effect": "allow",
+          "accessScopeId": "as_default",
+          "appliesTo": "self",
+          "updatedAt": 1767225600000
+        }
+      ]
+    },
+    {
+      "scope": {
+        "accessScopeId": "as_org1",
+        "name": "Acme Org",
+        "kind": "org",
+        "status": "active",
+        "accountEntryMode": "invite_only",
+        "defaultRoleId": "role_member",
+        "updatedAt": 1767225600000
+      },
+      "principals": [
+        {
+          "principalId": "pr_org1_alice",
+          "type": "user",
+          "herculesAuthUserId": "u_alice",
+          "status": "active",
+          "joinedAt": 1767225600000,
+          "updatedAt": 1767225600000
+        }
+      ],
+      "principalMemberships": [],
+      "roles": [
+        {
+          "roleId": "role_org_lead",
+          "accessScopeId": "as_org1",
+          "key": "org_lead",
+          "source": "tenant",
+          "name": "Org Lead",
+          "baseWildcard": "none",
+          "updatedAt": 1767225600000
+        }
+      ],
+      "rolePermissionOverrides": [
+        {
+          "accessScopeId": "as_org1",
+          "roleId": "role_admin",
+          "permissionId": "perm_docs_write",
+          "effect": "deny",
+          "updatedAt": 1767225600000
+        }
+      ],
+      "roleBindings": [
+        {
+          "bindingId": "rb_org1_alice_lead",
+          "subjectPrincipalId": "pr_org1_alice",
+          "roleId": "role_org_lead",
+          "accessScopeId": "as_org1",
+          "appliesTo": "self",
+          "updatedAt": 1767225600000
+        },
+        {
+          "bindingId": "rb_org1_alice_admin",
+          "subjectPrincipalId": "pr_org1_alice",
+          "roleId": "role_admin",
+          "accessScopeId": "as_org1",
+          "appliesTo": "self",
+          "updatedAt": 1767225600000
+        }
+      ],
+      "permissionBindings": []
+    }
+  ]
+}

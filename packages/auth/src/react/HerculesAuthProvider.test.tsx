@@ -1,14 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor, configure } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  waitFor,
+  configure,
+} from "@testing-library/react";
 import { HerculesAuthProvider } from "./HerculesAuthProvider.js";
 
 configure({ reactStrictMode: false });
 
 const mockSigninSilent = vi.fn();
+const mockSigninRedirect = vi.fn();
+const mockRemoveUser = vi.fn();
 let mockAuthState: Record<string, unknown> = {};
+const localStorageMock = createMemoryStorage();
+
+Object.defineProperty(window, "localStorage", {
+  value: localStorageMock,
+  configurable: true,
+});
 
 vi.mock("react-oidc-context", () => ({
-  AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  AuthProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
   useAuth: () => mockAuthState,
 }));
 
@@ -41,8 +57,12 @@ function setAuthState(overrides: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
+  window.localStorage.clear();
   setAuthState({});
   mockSigninSilent.mockReset();
+  mockSigninRedirect.mockReset();
+  mockRemoveUser.mockReset();
 });
 
 function renderProvider(
@@ -63,7 +83,10 @@ function renderProvider(
 describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
   it("registers the lock-wrapped renewal listener by default", () => {
     render(
-      <HerculesAuthProvider authority="https://auth.example.com" client_id="test-client">
+      <HerculesAuthProvider
+        authority="https://auth.example.com"
+        client_id="test-client"
+      >
         <div data-testid="app">app</div>
       </HerculesAuthProvider>,
     );
@@ -84,7 +107,56 @@ describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
   });
 });
 
+function createMemoryStorage(): Storage {
+  const store = new Map<string, string>();
+
+  return {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, value);
+    },
+  };
+}
+
 describe("HerculesAuthProvider AuthRecoveryGate", () => {
+  it("prioritizes an impersonation handoff over expired-session recovery", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?hercules_impersonation_session_id=session_1&hercules_impersonation_token=token_1",
+    );
+    setAuthState({
+      isAuthenticated: true,
+      removeUser: mockRemoveUser.mockResolvedValue(undefined),
+      signinRedirect: mockSigninRedirect.mockResolvedValue(undefined),
+      user: { expired: true, id_token: "stale" },
+    });
+
+    renderProvider(<div data-testid="loading">loading</div>);
+
+    expect(screen.getByTestId("app")).toBeDefined();
+    expect(screen.queryByTestId("loading")).toBeNull();
+    await waitFor(() => {
+      expect(mockSigninRedirect).toHaveBeenCalledTimes(1);
+    });
+    expect(mockRemoveUser).toHaveBeenCalledTimes(1);
+    expect(mockSigninSilent).not.toHaveBeenCalled();
+  });
+
   it("renders children (not loadingFallback) while isLoading is true", async () => {
     setAuthState({ isLoading: true, user: null });
     renderProvider(<div data-testid="loading">loading</div>);
@@ -95,7 +167,10 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
 
   it("blocks children on the very first commit when user is already expired", () => {
     mockSigninSilent.mockImplementation(() => new Promise<void>(() => {}));
-    setAuthState({ isLoading: false, user: { expired: true, id_token: "stale" } });
+    setAuthState({
+      isLoading: false,
+      user: { expired: true, id_token: "stale" },
+    });
     renderProvider(<div data-testid="loading">loading</div>);
     expect(screen.getByTestId("loading")).toBeDefined();
     expect(screen.queryByTestId("app")).toBeNull();
@@ -109,14 +184,22 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
           resolveSilent = resolve;
         }),
     );
-    setAuthState({ isLoading: false, user: { expired: true, id_token: "stale" } });
-    const { rerender } = renderProvider(<div data-testid="loading">loading</div>);
+    setAuthState({
+      isLoading: false,
+      user: { expired: true, id_token: "stale" },
+    });
+    const { rerender } = renderProvider(
+      <div data-testid="loading">loading</div>,
+    );
     expect(screen.getByTestId("loading")).toBeDefined();
     await waitFor(() => {
       expect(mockSigninSilent).toHaveBeenCalledTimes(1);
     });
 
-    setAuthState({ isLoading: true, user: { expired: true, id_token: "stale" } });
+    setAuthState({
+      isLoading: true,
+      user: { expired: true, id_token: "stale" },
+    });
     rerender(
       <HerculesAuthProvider
         authority="https://auth.example.com"
