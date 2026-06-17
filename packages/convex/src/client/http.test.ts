@@ -66,7 +66,13 @@ const event: AccessProjectionEvent = {
   eventId: "evt_2",
   sourceVersion: 2,
   catalog: {
-    changes: [{ entityType: "permission", permissionId: "permission_1", operation: "upsert" }],
+    changes: [
+      {
+        entityType: "permission",
+        permissionId: "permission_1",
+        operation: "upsert",
+      },
+    ],
     roles: [],
     permissions: [
       {
@@ -90,9 +96,11 @@ describe("registerAccessControlRoutes", () => {
 
   test("applies a signed snapshot", async () => {
     const route = registerRouteForTest();
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
 
     const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
 
@@ -107,9 +115,11 @@ describe("registerAccessControlRoutes", () => {
 
   test("applies a signed incremental event", async () => {
     const route = registerRouteForTest();
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 2 });
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 2,
+    });
 
     const response = await route.handler({ runMutation }, signedRequest(JSON.stringify(event)));
 
@@ -128,9 +138,11 @@ describe("registerAccessControlRoutes", () => {
       httpAction: (handler) => handler as never,
       components: { hercules: { sync: { applySync: "herculesApplySync" } } },
     });
-    const runMutation = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: "applied", acknowledgedVersion: 1 });
+    const runMutation = vi.fn().mockResolvedValue({
+      ok: true,
+      status: "applied",
+      acknowledgedVersion: 1,
+    });
 
     await routes[0]!.handler({ runMutation }, signedRequest(JSON.stringify(snapshot)));
 
@@ -143,10 +155,16 @@ describe("registerAccessControlRoutes", () => {
 
     const response = await route.handler(
       { runMutation },
-      new Request("https://example.com", { method: "POST", body: JSON.stringify(snapshot) }),
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify(snapshot),
+      }),
     );
 
-    await expect(response.json()).resolves.toEqual({ ok: false, status: "invalid_signature" });
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      status: "invalid_signature",
+    });
     expect(response.status).toBe(401);
     expect(runMutation).not.toHaveBeenCalled();
   });
@@ -160,7 +178,10 @@ describe("registerAccessControlRoutes", () => {
       signedRequest(JSON.stringify({ type: "unexpected" })),
     );
 
-    await expect(response.json()).resolves.toEqual({ ok: false, status: "invalid_payload" });
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      status: "invalid_payload",
+    });
     expect(response.status).toBe(400);
     expect(runMutation).not.toHaveBeenCalled();
   });

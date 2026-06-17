@@ -2,7 +2,13 @@
 import { checkAccessControlSource, formatAccessControlCheckResult } from "./index.js";
 
 type ParsedArgs =
-  | { ok: true; convexDir?: string; json: boolean; fixAuthenticated: boolean; help: boolean }
+  | {
+      ok: true;
+      convexDir?: string;
+      json: boolean;
+      fixAuthenticated: boolean;
+      help: boolean;
+    }
   | { ok: false; message: string };
 
 const parsedArgs = parseArgs(process.argv.slice(2));

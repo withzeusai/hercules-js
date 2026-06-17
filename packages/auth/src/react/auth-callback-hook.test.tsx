@@ -120,9 +120,7 @@ describe("useAuthCallback", () => {
       vi.useFakeTimers();
 
       try {
-        const { result } = renderHook(() =>
-          useAuthCallback({ timeoutMs: 5000 }),
-        );
+        const { result } = renderHook(() => useAuthCallback({ timeoutMs: 5000 }));
 
         expect(result.current.status).toBe("processing-oauth");
 
@@ -131,9 +129,7 @@ describe("useAuthCallback", () => {
         });
 
         expect(result.current.status).toBe("error");
-        expect(result.current.error).toBe(
-          "Authentication timed out. Please try again.",
-        );
+        expect(result.current.error).toBe("Authentication timed out. Please try again.");
         expect(result.current.isError).toBe(true);
         expect(result.current.isLoading).toBe(false);
       } finally {
@@ -269,9 +265,7 @@ describe("useAuthCallback", () => {
     it("goes straight to success when onSync is omitted", async () => {
       setAuthState({ isLoading: false, isAuthenticated: true });
 
-      const { result } = renderHook(() =>
-        useAuthCallback({ isBackendAuthenticated: true }),
-      );
+      const { result } = renderHook(() => useAuthCallback({ isBackendAuthenticated: true }));
 
       await waitFor(() => {
         expect(result.current.status).toBe("success");

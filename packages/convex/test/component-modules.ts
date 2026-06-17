@@ -10,10 +10,7 @@
 // tsconfig, which does not include that directory.
 /// <reference path="./test-env.d.ts" />
 
-const componentFiles = import.meta.glob([
-  "/src/component/**/*.ts",
-  "!/src/component/**/*.test.ts",
-  ]);
+const componentFiles = import.meta.glob(["/src/component/**/*.ts", "!/src/component/**/*.test.ts"]);
 // convex-test anchors the module root at the directory containing _generated.
 const generatedFiles = import.meta.glob(["/src/_generated/**/*.ts"]);
 

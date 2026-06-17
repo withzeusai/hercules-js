@@ -35,7 +35,9 @@ const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
 type ConvexTest = TestConvex<typeof schema>;
 
 async function ingestGolden(t: ConvexTest): Promise<void> {
-  const result = (await t.mutation(applySync, snapshotFixture as never)) as { ok: boolean };
+  const result = (await t.mutation(applySync, snapshotFixture as never)) as {
+    ok: boolean;
+  };
   expect(result.ok).toBe(true);
 }
 
@@ -205,7 +207,10 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
     // that grants the Admin role inside as_org1 (a foreign scope). applySync must
     // reject it (invalid_payload) and install NOTHING.
     const escalation = structuredClone(snapshotFixture) as {
-      scopes: { scope: { accessScopeId: string }; roleBindings: { accessScopeId: string }[] }[];
+      scopes: {
+        scope: { accessScopeId: string };
+        roleBindings: { accessScopeId: string }[];
+      }[];
     };
     escalation.scopes[0]!.roleBindings[0]!.accessScopeId = "as_org1";
 
@@ -306,7 +311,10 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
       ],
     };
 
-    const result = (await t.mutation(applySync, event as never)) as { ok: boolean; status: string };
+    const result = (await t.mutation(applySync, event as never)) as {
+      ok: boolean;
+      status: string;
+    };
     expect(result.ok).toBe(false);
     expect(result.status).toBe("invalid_payload");
 
@@ -365,7 +373,9 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
       ],
     };
 
-    const result = (await t.mutation(applySync, event as never)) as { ok: boolean };
+    const result = (await t.mutation(applySync, event as never)) as {
+      ok: boolean;
+    };
     expect(result.ok).toBe(true);
 
     const written = await t.run(async (ctx) => {
@@ -392,7 +402,12 @@ describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
       scopeId: DEFAULT_SCOPE_SENTINEL,
     });
     expect(roles).toEqual([
-      { roleId: "role_admin", roleKey: "admin", roleName: "Admin", roleKind: "system" },
+      {
+        roleId: "role_admin",
+        roleKey: "admin",
+        roleName: "Admin",
+        roleKind: "system",
+      },
     ]);
   });
 

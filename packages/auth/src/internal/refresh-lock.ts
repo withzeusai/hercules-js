@@ -7,10 +7,7 @@ type Queue = {
 
 const mutexes = new Map<string, Queue>();
 
-async function manualMutex<T>(
-  key: string,
-  callback: () => Promise<T>,
-): Promise<T> {
+async function manualMutex<T>(key: string, callback: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const wrapped = () =>
       callback()
@@ -40,9 +37,7 @@ async function manualMutex<T>(
   });
 }
 
-export async function withRefreshLock<T>(
-  callback: () => Promise<T>,
-): Promise<T> {
+export async function withRefreshLock<T>(callback: () => Promise<T>): Promise<T> {
   if (typeof navigator !== "undefined" && navigator.locks) {
     return navigator.locks.request(REFRESH_LOCK_KEY, callback);
   }

@@ -25,13 +25,7 @@
 // ---------------------------------------------------------------------------
 
 /** The canonical CRUD-ish core. `list` is intentionally distinct from `read`. */
-export const CANONICAL_ACTIONS = [
-  "read",
-  "create",
-  "update",
-  "delete",
-  "list",
-] as const;
+export const CANONICAL_ACTIONS = ["read", "create", "update", "delete", "list"] as const;
 export type CanonicalAction = (typeof CANONICAL_ACTIONS)[number];
 
 /** `manage` is the formal CRUD superset, expanded at eval time — never stored. */
@@ -63,10 +57,7 @@ export function expandAction(action: string): string[] {
  *   `manage`  → also matches any canonical CRUD verb.
  *   else      → matches only the identical verb.
  */
-export function actionMatches(
-  grantedAction: string,
-  requestedAction: string,
-): boolean {
+export function actionMatches(grantedAction: string, requestedAction: string): boolean {
   // Identity first: a grant of an action always satisfies a request for that
   // same action — including `manage` for a `manage`-action permission, which
   // the CRUD-only manage branch below would otherwise reject.
@@ -136,8 +127,7 @@ export function isOwnerOnlyLever(request: {
     request.classification === "owner_only" ||
     OWNER_ONLY_LEVERS.some(
       (lever) =>
-        lever.resourceType === request.resourceType &&
-        actionMatches(lever.action, request.action),
+        lever.resourceType === request.resourceType && actionMatches(lever.action, request.action),
     )
   );
 }
@@ -173,15 +163,9 @@ export type ApplicableEntry = {
   objectId?: string;
 };
 
-function entryMatches(
-  entry: ApplicableEntry,
-  request: RequestedAccess,
-): boolean {
+function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean {
   // resourceType: exact match or wildcard resourceType.
-  if (
-    entry.resourceType !== WILDCARD_ACTION &&
-    entry.resourceType !== request.resourceType
-  ) {
+  if (entry.resourceType !== WILDCARD_ACTION && entry.resourceType !== request.resourceType) {
     return false;
   }
   // action: after manage/wildcard expansion.
@@ -194,13 +178,8 @@ function entryMatches(
   return true;
 }
 
-export function hasExplicitDeny(
-  entries: ApplicableEntry[],
-  request: RequestedAccess,
-): boolean {
-  return entries.some(
-    (entry) => entry.effect === "deny" && entryMatches(entry, request),
-  );
+export function hasExplicitDeny(entries: ApplicableEntry[], request: RequestedAccess): boolean {
+  return entries.some((entry) => entry.effect === "deny" && entryMatches(entry, request));
 }
 
 /**
@@ -246,10 +225,7 @@ export function evaluateAccess(args: {
   // Owner (step 1) — never by an explicit allow grant, mirroring the Admin
   // wildcard fence in step 4. This keeps the invariant even if such a permission
   // is somehow created and granted.
-  if (
-    !isOwnerOnlyLever(request) &&
-    matching.some((entry) => entry.effect === "allow")
-  ) {
+  if (!isOwnerOnlyLever(request) && matching.some((entry) => entry.effect === "allow")) {
     return "allow";
   }
 

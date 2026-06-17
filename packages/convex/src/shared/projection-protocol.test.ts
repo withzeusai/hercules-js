@@ -127,7 +127,9 @@ describe("Access Control projection v3 consumer schemas", () => {
   });
 
   test("an upsert change with a missing row fails the integrity superRefine", () => {
-    const event = loadFixture("event-scope.json") as { scopes: { principals: unknown[] }[] };
+    const event = loadFixture("event-scope.json") as {
+      scopes: { principals: unknown[] }[];
+    };
     // Drop the row the principal upsert change points at; the change now matches
     // zero rows, so the C3 integrity rule must reject the event.
     const corrupted = structuredClone(event);
@@ -198,7 +200,10 @@ describe("Access Control projection v3 consumer schemas", () => {
   // targeting scope B must be rejected at parse.
   test("a snapshot scope embedding a foreign-scope role binding is rejected", () => {
     const snapshot = loadFixture("snapshot.json") as {
-      scopes: { scope: { accessScopeId: string }; roleBindings: { accessScopeId: string }[] }[];
+      scopes: {
+        scope: { accessScopeId: string };
+        roleBindings: { accessScopeId: string }[];
+      }[];
     };
     const corrupted = structuredClone(snapshot);
     // The default scope (index 0) ships a role binding; re-point it at the org

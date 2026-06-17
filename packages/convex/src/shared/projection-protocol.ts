@@ -21,13 +21,8 @@ import { z } from "zod";
 export const accessProjectionEffectSchema = z.enum(["allow", "deny"]);
 export type AccessProjectionEffect = z.infer<typeof accessProjectionEffectSchema>;
 
-export const accessProjectionApplicabilitySchema = z.enum([
-  "self",
-  "self_and_descendants",
-]);
-export type AccessProjectionApplicability = z.infer<
-  typeof accessProjectionApplicabilitySchema
->;
+export const accessProjectionApplicabilitySchema = z.enum(["self", "self_and_descendants"]);
+export type AccessProjectionApplicability = z.infer<typeof accessProjectionApplicabilitySchema>;
 
 export const accessProjectionWildcardModeSchema = z.enum(["none", "immutable", "default"]);
 export type AccessProjectionWildcardMode = z.infer<typeof accessProjectionWildcardModeSchema>;
@@ -206,28 +201,30 @@ export type ProjectionScopeRolePermissionOverride = z.infer<
 
 // A role assigned to a principal. (resourceType, resourceId) target:
 // (∅,∅)=scope, (type,∅)=type-wide, (type,id)=one exact resource.
-export const projectionScopeRoleBindingSchema = z.strictObject({
-  bindingId: z.string().min(1),
-  subjectPrincipalId: z.string().min(1),
-  roleId: z.string().min(1),
-  accessScopeId: z.string().min(1),
-  resourceType: z.string().min(1).optional(),
-  resourceId: z.string().min(1).optional(),
-  appliesTo: accessProjectionApplicabilitySchema.default("self"),
-  expiresAt: z.number().int().nonnegative().optional(),
-  updatedAt: z.number().int().nonnegative(),
-}).superRefine((binding, ctx) => {
-  if (
-    binding.appliesTo === "self_and_descendants" &&
-    (binding.resourceType === undefined || binding.resourceId === undefined)
-  ) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["appliesTo"],
-      message: "Descendant applicability requires an exact resource",
-    });
-  }
-});
+export const projectionScopeRoleBindingSchema = z
+  .strictObject({
+    bindingId: z.string().min(1),
+    subjectPrincipalId: z.string().min(1),
+    roleId: z.string().min(1),
+    accessScopeId: z.string().min(1),
+    resourceType: z.string().min(1).optional(),
+    resourceId: z.string().min(1).optional(),
+    appliesTo: accessProjectionApplicabilitySchema.default("self"),
+    expiresAt: z.number().int().nonnegative().optional(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .superRefine((binding, ctx) => {
+    if (
+      binding.appliesTo === "self_and_descendants" &&
+      (binding.resourceType === undefined || binding.resourceId === undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["appliesTo"],
+        message: "Descendant applicability requires an exact resource",
+      });
+    }
+  });
 export type ProjectionScopeRoleBinding = z.infer<typeof projectionScopeRoleBindingSchema>;
 
 // Direct permission authority. Exactly one subject: subjectPrincipalId XOR

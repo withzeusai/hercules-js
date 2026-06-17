@@ -8,10 +8,7 @@ import {
 
 configure({ reactStrictMode: true });
 
-const storageKey = getHerculesImpersonationStorageKey(
-  "https://auth.example.com",
-  "client_1",
-);
+const storageKey = getHerculesImpersonationStorageKey("https://auth.example.com", "client_1");
 const mockSignoutRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 const mockGetEndSessionEndpoint = vi.fn();

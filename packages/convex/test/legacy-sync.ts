@@ -148,7 +148,9 @@ function baseWildcardFor(role: LegacyRole): "none" | "immutable" | "default" {
 export type WithV3SyncFixtures<T extends { mutation: (...args: never[]) => unknown }> = Omit<
   T,
   "mutation"
-> & { mutation: T["mutation"] & ((reference: never, payload: LegacyPayload) => Promise<unknown>) };
+> & {
+  mutation: T["mutation"] & ((reference: never, payload: LegacyPayload) => Promise<unknown>);
+};
 
 /**
  * Keeps pre-v3 behavioral fixtures useful while exercising the v3-only runtime.
@@ -526,7 +528,11 @@ function translateChange(change: Record<string, unknown>): Record<string, unknow
       // binding kind carried on the change when present.
       const kind =
         change.relationKind === "direct_permission" ? "permission_binding" : "role_binding";
-      return { entityType: kind, bindingId: String(change.entityId), operation };
+      return {
+        entityType: kind,
+        bindingId: String(change.entityId),
+        operation,
+      };
     }
     default:
       return null;

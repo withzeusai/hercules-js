@@ -7,11 +7,7 @@ import {
 import { paginator } from "convex-helpers/server/pagination";
 import { v } from "convex/values";
 import { evaluatePermissionDecision } from "./checks";
-import {
-  collectPrincipalIds,
-  enumeratePermissions,
-  evaluateEffectiveAccess,
-} from "./effective";
+import { collectPrincipalIds, enumeratePermissions, evaluateEffectiveAccess } from "./effective";
 import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
@@ -250,9 +246,7 @@ export const getEffectivePermissions = query({
     scopeId: v.string(),
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
-    ancestors: v.optional(
-      v.array(v.object({ resourceType: v.string(), resourceId: v.string() })),
-    ),
+    ancestors: v.optional(v.array(v.object({ resourceType: v.string(), resourceId: v.string() }))),
   },
   handler: async (ctx, args): Promise<EffectivePermissionsResult> => {
     const evaluation = await evaluateEffectiveAccess(ctx, args);
@@ -300,10 +294,7 @@ export const listScopeMemberDirectory = query({
     const page = await paginator(ctx.db, schema)
       .query("principals")
       .withIndex("by_scope_status_type", (q) =>
-        q
-          .eq("accessScopeId", scope.accessScopeId)
-          .eq("status", "active")
-          .eq("type", "user"),
+        q.eq("accessScopeId", scope.accessScopeId).eq("status", "active").eq("type", "user"),
       )
       .paginate({ cursor: args.cursor ?? null, numItems: limit });
 
@@ -350,7 +341,9 @@ export const getScopeMemberDirectoryEntry = query({
   },
   handler: async (ctx, args): Promise<ScopeMemberDirectoryEntry | null> => {
     if ((args.principalId === undefined) === (args.herculesAuthUserId === undefined)) {
-      throw new Error("getScopeMemberDirectoryEntry requires exactly one of principalId or herculesAuthUserId");
+      throw new Error(
+        "getScopeMemberDirectoryEntry requires exactly one of principalId or herculesAuthUserId",
+      );
     }
     if (!(await callerHasScopePermission(ctx, args, "app.members:read"))) {
       return null;
@@ -358,17 +351,20 @@ export const getScopeMemberDirectoryEntry = query({
     const scope = await resolveScopeRow(ctx, args.scopeId);
     if (!scope) return null;
 
-    const principal = args.principalId !== undefined
-      ? await ctx.db
-          .query("principals")
-          .withIndex("by_principal_id", (q) => q.eq("principalId", args.principalId!))
-          .unique()
-      : await ctx.db
-          .query("principals")
-          .withIndex("by_scope_auth_user", (q) =>
-            q.eq("accessScopeId", scope.accessScopeId).eq("herculesAuthUserId", args.herculesAuthUserId),
-          )
-          .unique();
+    const principal =
+      args.principalId !== undefined
+        ? await ctx.db
+            .query("principals")
+            .withIndex("by_principal_id", (q) => q.eq("principalId", args.principalId!))
+            .unique()
+        : await ctx.db
+            .query("principals")
+            .withIndex("by_scope_auth_user", (q) =>
+              q
+                .eq("accessScopeId", scope.accessScopeId)
+                .eq("herculesAuthUserId", args.herculesAuthUserId),
+            )
+            .unique();
     if (
       !principal ||
       principal.accessScopeId !== scope.accessScopeId ||
@@ -381,7 +377,9 @@ export const getScopeMemberDirectoryEntry = query({
 
     const user = await ctx.db
       .query("users")
-      .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", principal.herculesAuthUserId!))
+      .withIndex("by_auth_user_id", (q) =>
+        q.eq("herculesAuthUserId", principal.herculesAuthUserId!),
+      )
       .unique();
     if (!user) return null;
     const roles = await collectPrincipalScopeRoles(ctx, {

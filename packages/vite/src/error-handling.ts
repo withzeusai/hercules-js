@@ -4,8 +4,7 @@ import type { ViteDevServer } from "vite";
  * Format Vite error objects into a consistent structure
  */
 function formatViteError(error: any): any {
-  if (!error)
-    return { message: "Unknown error", timestamp: new Date().toISOString() };
+  if (!error) return { message: "Unknown error", timestamp: new Date().toISOString() };
 
   // Extract the most relevant error information
   const formatted: any = {
@@ -59,10 +58,7 @@ export function setupErrorHandling(server: ViteDevServer, debug: boolean) {
       console.error("[Vite Server Error]", formatViteError(error));
 
       if (debug) {
-        console.log(
-          "[Hercules Plugin] Intercepted middleware error:",
-          error.message,
-        );
+        console.log("[Hercules Plugin] Intercepted middleware error:", error.message);
       }
     }
     next(error);
@@ -78,10 +74,7 @@ export function setupErrorHandling(server: ViteDevServer, debug: boolean) {
       console.error("[Vite Error]", formatViteError(error));
 
       if (debug) {
-        console.log(
-          "[Hercules Plugin] Intercepted error overlay:",
-          error?.message,
-        );
+        console.log("[Hercules Plugin] Intercepted error overlay:", error?.message);
       }
     } else if (payload.type === "update" && payload.updates) {
       // Check for errors in module updates
@@ -105,13 +98,7 @@ export function setupErrorHandling(server: ViteDevServer, debug: boolean) {
       originalCode?: string,
     ) {
       try {
-        return await originalSsrTransform.call(
-          this,
-          code,
-          map,
-          url,
-          originalCode,
-        );
+        return await originalSsrTransform.call(this, code, map, url, originalCode);
       } catch (error: any) {
         console.error("[Vite Transform Error]", {
           message: error.message,

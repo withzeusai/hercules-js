@@ -1,10 +1,4 @@
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 
@@ -69,12 +63,7 @@ const publicBuilderNames = new Set<string>([
   "accessAction",
 ]);
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
-const ignoredDirectories = new Set([
-  "_generated",
-  "node_modules",
-  "dist",
-  ".git",
-]);
+const ignoredDirectories = new Set(["_generated", "node_modules", "dist", ".git"]);
 const exemptFileNames = new Set([
   "access.ts",
   "access.tsx",
@@ -92,10 +81,7 @@ const accessAdminPackageNames = new Set([
   `${accessControlPackageName}/access-admin`,
   `${accessControlPackageName}/access-admin.js`,
 ]);
-const serviceAuthorityHelperNames = new Set([
-  "createAccessInvitation",
-  "createResourceInvitation",
-]);
+const serviceAuthorityHelperNames = new Set(["createAccessInvitation", "createResourceInvitation"]);
 const accessAdminActionNames = new Set([
   "archiveScope",
   "setDefaultRole",
@@ -154,8 +140,7 @@ export function checkAccessControlSource(
           line: 1,
           column: 1,
           message: `Convex directory not found: ${displayPath}`,
-          suggestion:
-            "Run this command from the app root or pass the Convex directory path.",
+          suggestion: "Run this command from the app root or pass the Convex directory path.",
         },
       ],
     };
@@ -167,11 +152,7 @@ export function checkAccessControlSource(
   const markerFiles = collectSourceFiles(convexDir, {
     includeExemptFiles: true,
   });
-  if (
-    !markerFiles.some((filePath) =>
-      fileUsesManagedAccessControl(filePath, convexDir),
-    )
-  ) {
+  if (!markerFiles.some((filePath) => fileUsesManagedAccessControl(filePath, convexDir))) {
     return {
       ok: true,
       convexDir,
@@ -194,24 +175,14 @@ export function checkAccessControlSource(
   const orgOwnedTables = collectOrgOwnedTables(sourceFiles);
   const catalogPermissionKeys = loadCatalogPermissionKeys(cwd);
   const fixedFiles = options.fixAuthenticated
-    ? sourceFiles.filter((filePath) =>
-        fixSourceFileToAuthenticatedBuilders(filePath, convexDir),
-      ).length
+    ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir))
+        .length
     : 0;
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
-    ...checkPublicServiceAuthorityCalls(
-      cwd,
-      convexDir,
-      markerFiles,
-      authoritySourceFiles,
-    ),
-    ...markerFiles.flatMap((filePath) =>
-      checkHardcodedAccessScopeIds(cwd, filePath),
-    ),
-    ...markerFiles.flatMap((filePath) =>
-      checkPrivilegedResourcePermissionRules(cwd, filePath),
-    ),
+    ...checkPublicServiceAuthorityCalls(cwd, convexDir, markerFiles, authoritySourceFiles),
+    ...markerFiles.flatMap((filePath) => checkHardcodedAccessScopeIds(cwd, filePath)),
+    ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) =>
       checkCanonicalPermissionKeys(cwd, filePath, catalogPermissionKeys),
     ),
@@ -229,9 +200,7 @@ export function checkAccessControlSource(
   };
 }
 
-export function formatAccessControlCheckResult(
-  result: AccessControlCheckResult,
-): string {
+export function formatAccessControlCheckResult(result: AccessControlCheckResult): string {
   if (result.ok) {
     const fileLabel = result.filesChecked === 1 ? "file" : "files";
     const fixedLabel =
@@ -241,14 +210,10 @@ export function formatAccessControlCheckResult(
     return `Hercules Access Control static check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel} This static check does not prove runtime role decisions or control-plane writes are authorized.`;
   }
 
-  const lines = [
-    `Hercules Access Control check failed with ${result.findings.length} finding(s):`,
-  ];
+  const lines = [`Hercules Access Control check failed with ${result.findings.length} finding(s):`];
 
   for (const finding of result.findings) {
-    lines.push(
-      `- ${finding.filePath}:${finding.line}:${finding.column} ${finding.message}`,
-    );
+    lines.push(`- ${finding.filePath}:${finding.line}:${finding.column} ${finding.message}`);
     if (finding.suggestion) {
       lines.push(`  ${finding.suggestion}`);
     }
@@ -257,10 +222,7 @@ export function formatAccessControlCheckResult(
   return lines.join("\n");
 }
 
-function fixSourceFileToAuthenticatedBuilders(
-  filePath: string,
-  convexDir: string,
-): boolean {
+function fixSourceFileToAuthenticatedBuilders(filePath: string, convexDir: string): boolean {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
   const rawBuilderImports = collectRawBuilderImports(sourceFile);
@@ -270,14 +232,8 @@ function fixSourceFileToAuthenticatedBuilders(
 
   const exportedNames = collectExportedNames(sourceFile);
   const candidates = collectRawBuilderCandidates(sourceFile, rawBuilderImports)
-    .filter(
-      (candidate) =>
-        candidate.isDirectExport || exportedNames.has(candidate.functionName),
-    )
-    .filter(
-      (candidate) =>
-        !hasLocalExemption(sourceFile, sourceText, candidate.declaration),
-    );
+    .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
+    .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration));
   if (candidates.length === 0) {
     return false;
   }
@@ -287,20 +243,9 @@ function fixSourceFileToAuthenticatedBuilders(
     end: candidate.builderNode.getEnd(),
     text: authenticatedBuilderName(candidate.builder),
   }));
-  const accessImports = new Set(
-    replacements.map((replacement) => replacement.text),
-  );
-  replacements.push(
-    ...buildGeneratedServerImportRemovals(sourceFile, sourceText, candidates),
-  );
-  replacements.push(
-    buildAccessImportReplacement(
-      sourceFile,
-      sourceText,
-      accessImports,
-      convexDir,
-    ),
-  );
+  const accessImports = new Set(replacements.map((replacement) => replacement.text));
+  replacements.push(...buildGeneratedServerImportRemovals(sourceFile, sourceText, candidates));
+  replacements.push(buildAccessImportReplacement(sourceFile, sourceText, accessImports, convexDir));
 
   const nextSourceText = applyTextReplacements(sourceText, replacements);
   if (nextSourceText === sourceText) {
@@ -353,10 +298,7 @@ function collectAppSourceFiles(
   return collectSourceFiles(srcDir, options);
 }
 
-function checkSourceFile(
-  cwd: string,
-  filePath: string,
-): AccessControlCheckFinding[] {
+function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
   const rawBuilderImports = collectRawBuilderImports(sourceFile);
@@ -367,14 +309,8 @@ function checkSourceFile(
   const exportedNames = collectExportedNames(sourceFile);
   const candidates = collectRawBuilderCandidates(sourceFile, rawBuilderImports);
   return candidates
-    .filter(
-      (candidate) =>
-        candidate.isDirectExport || exportedNames.has(candidate.functionName),
-    )
-    .filter(
-      (candidate) =>
-        !hasLocalExemption(sourceFile, sourceText, candidate.declaration),
-    )
+    .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
+    .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration))
     .map((candidate) => createFinding(cwd, sourceFile, candidate));
 }
 
@@ -406,10 +342,8 @@ function checkAccessControlOrgPatterns(
     filePath,
     sourceText,
     code: "local_org_membership_table",
-    pattern:
-      /\b(?:memberships|membership|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
-    message:
-      "Managed Access Control apps should not define app-local org membership tables.",
+    pattern: /\b(?:memberships|membership|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
+    message: "Managed Access Control apps should not define app-local org membership tables.",
     suggestion:
       "Use Hercules Access Control scopes, principals, and role grants. Store only org metadata in app tables.",
   });
@@ -426,10 +360,7 @@ function checkAccessControlOrgPatterns(
       "Backfill existing rows during conversion, then store orgScopeId as v.string() on org-owned tables.",
   });
 
-  if (
-    /\borgScopeId\b/.test(sourceText) &&
-    /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)
-  ) {
+  if (/\borgScopeId\b/.test(sourceText) && /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)) {
     addPatternFinding({
       findings,
       cwd,
@@ -437,8 +368,7 @@ function checkAccessControlOrgPatterns(
       sourceText,
       code: "org_scoped_global_slug_lookup",
       pattern: /\.withIndex\s*\(\s*["']by_slug["']/,
-      message:
-        "Org-scoped slug lookups must include the org scope id in the index.",
+      message: "Org-scoped slug lookups must include the org scope id in the index.",
       suggestion:
         'Use an index such as by_org_and_slug on ["orgScopeId", "slug"] and query both values together.',
     });
@@ -451,9 +381,7 @@ function checkAccessControlOrgPatterns(
   ])) {
     if (
       /\bscopeFromArg\s*\(\s*["']orgScopeId["']\s*\)/.test(definition.text) &&
-      /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(
-        definition.text,
-      )
+      /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text)
     ) {
       findings.push(
         createPatternFindingAtNode({
@@ -470,18 +398,12 @@ function checkAccessControlOrgPatterns(
     }
   }
 
-  for (const definition of collectManagedBuilderDefinitions(sourceFile, [
-    "authenticatedQuery",
-  ])) {
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, ["authenticatedQuery"])) {
     const readsOrgOwnedTable = [...orgOwnedTables].some((tableName) => {
       const escapedName = escapeRegExp(tableName);
       return (
-        new RegExp(`\\.query\\s*\\(\\s*["']${escapedName}["']`).test(
-          definition.text,
-        ) ||
-        (new RegExp(`v\\.id\\s*\\(\\s*["']${escapedName}["']`).test(
-          definition.text,
-        ) &&
+        new RegExp(`\\.query\\s*\\(\\s*["']${escapedName}["']`).test(definition.text) ||
+        (new RegExp(`v\\.id\\s*\\(\\s*["']${escapedName}["']`).test(definition.text) &&
           /\bctx\.db\.get\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text))
       );
     });
@@ -492,8 +414,7 @@ function checkAccessControlOrgPatterns(
           sourceFile,
           node: definition.node,
           code: "authenticated_org_data_read",
-          message:
-            "Authenticated reads of org-owned data do not prove organization membership.",
+          message: "Authenticated reads of org-owned data do not prove organization membership.",
           suggestion:
             "Use accessQuery for private organization data. Use publicQuery only for explicitly public rows filtered to public state.",
         }),
@@ -510,8 +431,7 @@ function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
     if (!/^schema\.(?:ts|tsx|js|jsx)$/.test(basename(filePath))) continue;
 
     const sourceText = readFileSync(filePath, "utf8");
-    const tablePattern =
-      /\b([A-Za-z_$][\w$]*)\s*:\s*defineTable\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
+    const tablePattern = /\b([A-Za-z_$][\w$]*)\s*:\s*defineTable\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
     for (const match of sourceText.matchAll(tablePattern)) {
       if (/\borgScopeId\s*:/.test(match[2] ?? "")) {
         tableNames.add(match[1]!);
@@ -536,11 +456,7 @@ function collectManagedBuilderDefinitions(
     if (ts.isCallExpression(node)) {
       const target = unwrapExpression(node.expression);
       const definition = node.arguments[0];
-      if (
-        ts.isIdentifier(target) &&
-        acceptedNames.has(target.text) &&
-        definition
-      ) {
+      if (ts.isIdentifier(target) && acceptedNames.has(target.text) && definition) {
         definitions.push({
           node,
           text: definition.getText(sourceFile),
@@ -555,10 +471,7 @@ function collectManagedBuilderDefinitions(
   return definitions;
 }
 
-function checkHardcodedAccessScopeIds(
-  cwd: string,
-  filePath: string,
-): AccessControlCheckFinding[] {
+function checkHardcodedAccessScopeIds(cwd: string, filePath: string): AccessControlCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const findings: AccessControlCheckFinding[] = [];
 
@@ -673,11 +586,7 @@ type StaticValue =
   | { kind: "module"; target: ModuleTarget }
   | {
       kind: "known";
-      value:
-        | "publicBuilder"
-        | "serviceAuthority"
-        | "accessAdminFactory"
-        | "accessAdminActions";
+      value: "publicBuilder" | "serviceAuthority" | "accessAdminFactory" | "accessAdminActions";
     };
 
 function checkPublicServiceAuthorityCalls(
@@ -688,10 +597,7 @@ function checkPublicServiceAuthorityCalls(
 ): AccessControlCheckFinding[] {
   const sourceFiles = new Map<string, CheckerSourceFile>();
   for (const filePath of filePaths) {
-    const sourceFile = createSourceFile(
-      filePath,
-      readFileSync(filePath, "utf8"),
-    );
+    const sourceFile = createSourceFile(filePath, readFileSync(filePath, "utf8"));
     sourceFiles.set(filePath, {
       filePath,
       sourceFile,
@@ -799,9 +705,7 @@ function checkPublicServiceAuthorityCalls(
       nextResolving,
     );
     for (const propertyName of binding.value.propertyPath) {
-      values = values.flatMap((value) =>
-        resolvePropertyValues(value, propertyName, nextResolving),
-      );
+      values = values.flatMap((value) => resolvePropertyValues(value, propertyName, nextResolving));
     }
     return values;
   }
@@ -813,9 +717,7 @@ function checkPublicServiceAuthorityCalls(
   ): StaticValue[] {
     if (target.kind === "local") {
       const targetInfo = sourceFiles.get(target.filePath);
-      return targetInfo
-        ? resolveExportedValues(targetInfo, exportedName, resolving)
-        : [];
+      return targetInfo ? resolveExportedValues(targetInfo, exportedName, resolving) : [];
     }
     if (!accessAdminPackageNames.has(target.moduleSpecifier)) return [];
     if (serviceAuthorityHelperNames.has(exportedName)) {
@@ -851,11 +753,7 @@ function checkPublicServiceAuthorityCalls(
       }
       const imported = info.imports.get(localName);
       if (imported) {
-        return resolveModuleExportValues(
-          imported.target,
-          imported.exportedName,
-          nextResolving,
-        );
+        return resolveModuleExportValues(imported.target, imported.exportedName, nextResolving);
       }
       const namespaceImport = info.namespaceImports.get(localName);
       if (namespaceImport) {
@@ -865,11 +763,7 @@ function checkPublicServiceAuthorityCalls(
 
     const reExport = info.reExports.get(exportedName);
     if (reExport) {
-      return resolveModuleExportValues(
-        reExport.target,
-        reExport.exportedName,
-        nextResolving,
-      );
+      return resolveModuleExportValues(reExport.target, reExport.exportedName, nextResolving);
     }
 
     const namespaceReExport = info.namespaceReExports.get(exportedName);
@@ -879,9 +773,7 @@ function checkPublicServiceAuthorityCalls(
 
     const values: StaticValue[] = [];
     for (const target of info.exportAllTargets) {
-      values.push(
-        ...resolveModuleExportValues(target, exportedName, nextResolving),
-      );
+      values.push(...resolveModuleExportValues(target, exportedName, nextResolving));
     }
     return values;
   }
@@ -893,11 +785,7 @@ function checkPublicServiceAuthorityCalls(
     scope: LexicalScope | null,
     resolving: Set<string>,
   ): StaticValue[] {
-    for (
-      let index = objectLiteral.properties.length - 1;
-      index >= 0;
-      index -= 1
-    ) {
+    for (let index = objectLiteral.properties.length - 1; index >= 0; index -= 1) {
       const property = objectLiteral.properties[index]!;
       if (ts.isSpreadAssignment(property)) {
         const spreadValues = resolveStaticValues(
@@ -905,17 +793,13 @@ function checkPublicServiceAuthorityCalls(
           property.expression,
           scope,
           resolving,
-        ).flatMap((value) =>
-          resolvePropertyValues(value, propertyName, resolving),
-        );
+        ).flatMap((value) => resolvePropertyValues(value, propertyName, resolving));
         if (spreadValues.length > 0) return spreadValues;
         continue;
       }
       const name = property.name;
       const nameText =
-        name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name))
-          ? name.text
-          : null;
+        name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) ? name.text : null;
       if (nameText !== propertyName) continue;
 
       if (ts.isMethodDeclaration(property)) {
@@ -929,12 +813,7 @@ function checkPublicServiceAuthorityCalls(
         ];
       }
       if (ts.isPropertyAssignment(property)) {
-        return resolveStaticValues(
-          info,
-          property.initializer,
-          scope,
-          resolving,
-        );
+        return resolveStaticValues(info, property.initializer, scope, resolving);
       }
       if (ts.isShorthandPropertyAssignment(property)) {
         return resolveStaticValues(info, property.name, scope, resolving);
@@ -952,8 +831,7 @@ function checkPublicServiceAuthorityCalls(
       return resolveModuleExportValues(value.target, propertyName, resolving);
     }
     if (value.kind === "known") {
-      return value.value === "accessAdminActions" &&
-        accessAdminActionNames.has(propertyName)
+      return value.value === "accessAdminActions" && accessAdminActionNames.has(propertyName)
         ? [{ kind: "known", value: "serviceAuthority" }]
         : [];
     }
@@ -971,12 +849,7 @@ function checkPublicServiceAuthorityCalls(
       if (!Number.isInteger(index) || index < 0) return [];
       const element = value.node.elements[index];
       return element && !ts.isOmittedExpression(element)
-        ? resolveStaticValues(
-            value.info,
-            element,
-            value.declarationScope,
-            resolving,
-          )
+        ? resolveStaticValues(value.info, element, value.declarationScope, resolving)
         : [];
     }
     return [];
@@ -992,10 +865,7 @@ function checkPublicServiceAuthorityCalls(
     if (isCallableNode(target)) {
       return [{ kind: "node", info, node: target, declarationScope: scope }];
     }
-    if (
-      ts.isObjectLiteralExpression(target) ||
-      ts.isArrayLiteralExpression(target)
-    ) {
+    if (ts.isObjectLiteralExpression(target) || ts.isArrayLiteralExpression(target)) {
       return [{ kind: "node", info, node: target, declarationScope: scope }];
     }
     if (ts.isAwaitExpression(target)) {
@@ -1003,18 +873,8 @@ function checkPublicServiceAuthorityCalls(
     }
     if (ts.isConditionalExpression(target)) {
       return [
-        ...resolveStaticValues(
-          info,
-          target.whenTrue,
-          scope,
-          new Set(resolving),
-        ),
-        ...resolveStaticValues(
-          info,
-          target.whenFalse,
-          scope,
-          new Set(resolving),
-        ),
+        ...resolveStaticValues(info, target.whenTrue, scope, new Set(resolving)),
+        ...resolveStaticValues(info, target.whenFalse, scope, new Set(resolving)),
       ];
     }
 
@@ -1035,11 +895,7 @@ function checkPublicServiceAuthorityCalls(
 
       const imported = info.imports.get(target.text);
       if (imported) {
-        return resolveModuleExportValues(
-          imported.target,
-          imported.exportedName,
-          nextResolving,
-        );
+        return resolveModuleExportValues(imported.target, imported.exportedName, nextResolving);
       }
 
       const namespaceImport = info.namespaceImports.get(target.text);
@@ -1058,28 +914,16 @@ function checkPublicServiceAuthorityCalls(
         return resolveStaticValues(info, target.expression, scope, resolving);
       }
 
-      const objectValues = resolveStaticValues(
-        info,
-        target.expression,
-        scope,
-        resolving,
-      );
+      const objectValues = resolveStaticValues(info, target.expression, scope, resolving);
       return objectValues.flatMap((value) =>
         resolvePropertyValues(value, target.name.text, resolving),
       );
     }
 
     if (ts.isElementAccessExpression(target)) {
-      const argument =
-        target.argumentExpression &&
-        unwrapExpression(target.argumentExpression);
+      const argument = target.argumentExpression && unwrapExpression(target.argumentExpression);
       if (!argument || !ts.isStringLiteralLike(argument)) return [];
-      const objectValues = resolveStaticValues(
-        info,
-        target.expression,
-        scope,
-        resolving,
-      );
+      const objectValues = resolveStaticValues(info, target.expression, scope, resolving);
       return objectValues.flatMap((value) =>
         resolvePropertyValues(value, argument.text, resolving),
       );
@@ -1087,34 +931,16 @@ function checkPublicServiceAuthorityCalls(
 
     if (ts.isCallExpression(target)) {
       const callTarget = unwrapExpression(target.expression);
-      if (
-        ts.isPropertyAccessExpression(callTarget) &&
-        callTarget.name.text === "bind"
-      ) {
-        return resolveStaticValues(
-          info,
-          callTarget.expression,
-          scope,
-          resolving,
-        );
+      if (ts.isPropertyAccessExpression(callTarget) && callTarget.name.text === "bind") {
+        return resolveStaticValues(info, callTarget.expression, scope, resolving);
       }
 
       const values: StaticValue[] = [];
-      for (const callable of resolveStaticValues(
-        info,
-        target.expression,
-        scope,
-        resolving,
-      )) {
-        if (
-          callable.kind === "known" &&
-          callable.value === "accessAdminFactory"
-        ) {
+      for (const callable of resolveStaticValues(info, target.expression, scope, resolving)) {
+        if (callable.kind === "known" && callable.value === "accessAdminFactory") {
           values.push({ kind: "known", value: "accessAdminActions" });
         } else if (callable.kind === "node" && isCallableNode(callable.node)) {
-          values.push(
-            ...resolveCallableReturnValues(callable, new Set(resolving)),
-          );
+          values.push(...resolveCallableReturnValues(callable, new Set(resolving)));
         }
       }
       return values;
@@ -1149,26 +975,14 @@ function checkPublicServiceAuthorityCalls(
     }
 
     if (!ts.isBlock(callable.node.body)) {
-      return resolveStaticValues(
-        callable.info,
-        callable.node.body,
-        functionScope,
-        nextResolving,
-      );
+      return resolveStaticValues(callable.info, callable.node.body, functionScope, nextResolving);
     }
 
     const values: StaticValue[] = [];
     const collectReturns = (node: ts.Node, scope: LexicalScope): void => {
       if (ts.isReturnStatement(node)) {
         if (node.expression) {
-          values.push(
-            ...resolveStaticValues(
-              callable.info,
-              node.expression,
-              scope,
-              nextResolving,
-            ),
-          );
+          values.push(...resolveStaticValues(callable.info, node.expression, scope, nextResolving));
         }
         return;
       }
@@ -1195,10 +1009,7 @@ function checkPublicServiceAuthorityCalls(
         mergeBindingValues(before, [afterThen, afterElse]);
         return;
       }
-      if (
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-      ) {
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
         assignBindingExpression(node.left, node.right, scope);
         return;
       }
@@ -1235,13 +1046,9 @@ function checkPublicServiceAuthorityCalls(
     if (exportedPath.length === 0) return false;
     let values = resolveExportedValues(moduleInfo, exportedPath[0]!, new Set());
     for (const propertyName of exportedPath.slice(1)) {
-      values = values.flatMap((value) =>
-        resolvePropertyValues(value, propertyName, new Set()),
-      );
+      values = values.flatMap((value) => resolvePropertyValues(value, propertyName, new Set()));
     }
-    return values.some(
-      (value) => value.kind === "known" && value.value === "serviceAuthority",
-    );
+    return values.some((value) => value.kind === "known" && value.value === "serviceAuthority");
   }
 
   const visitCallableReference = (
@@ -1250,12 +1057,7 @@ function checkPublicServiceAuthorityCalls(
     scope: LexicalScope | null,
     resolving: Set<string> = new Set(),
   ): void => {
-    for (const value of resolveStaticValues(
-      info,
-      expression,
-      scope,
-      resolving,
-    )) {
+    for (const value of resolveStaticValues(info, expression, scope, resolving)) {
       if (value.kind === "known" && value.value === "serviceAuthority") {
         addFinding(info, expression);
       } else if (value.kind === "node" && isCallableNode(value.node)) {
@@ -1368,10 +1170,7 @@ function checkPublicServiceAuthorityCalls(
       return;
     }
 
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    ) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       visitReachable(info, node.right, scope);
       assignBindingExpression(node.left, node.right, scope);
       return;
@@ -1395,19 +1194,13 @@ function checkPublicServiceAuthorityCalls(
     ts.forEachChild(node, (child) => visitReachable(info, child, scope));
   };
 
-  const collectPublicBuilderRoots = (
-    info: CheckerSourceFile,
-  ): ts.CallExpression[] => {
+  const collectPublicBuilderRoots = (info: CheckerSourceFile): ts.CallExpression[] => {
     const roots: ts.CallExpression[] = [];
     const exportedNames = collectExportedNames(info.sourceFile);
     const addRoot = (expression: ts.Expression): void => {
       const target = unwrapExpression(expression);
       if (!ts.isCallExpression(target)) return;
-      const isPublicBuilder = resolveStaticValues(
-        info,
-        target.expression,
-        null,
-      ).some(
+      const isPublicBuilder = resolveStaticValues(info, target.expression, null).some(
         (value) => value.kind === "known" && value.value === "publicBuilder",
       );
       if (isPublicBuilder) roots.push(target);
@@ -1441,11 +1234,7 @@ function checkPublicServiceAuthorityCalls(
     for (let index = config.properties.length - 1; index >= 0; index -= 1) {
       const property = config.properties[index]!;
       if (ts.isSpreadAssignment(property)) {
-        const objectValues = resolveStaticValues(
-          info,
-          property.expression,
-          scope,
-        ).filter(
+        const objectValues = resolveStaticValues(info, property.expression, scope).filter(
           (value): value is Extract<StaticValue, { kind: "node" }> =>
             value.kind === "node" && ts.isObjectLiteralExpression(value.node),
         );
@@ -1505,10 +1294,7 @@ function checkPublicServiceAuthorityCalls(
       for (const argument of root.arguments) {
         let resolvedObject = false;
         for (const value of resolveStaticValues(info, argument, null)) {
-          if (
-            value.kind === "node" &&
-            ts.isObjectLiteralExpression(value.node)
-          ) {
+          if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
             resolvedObject = true;
             visitConfigObject(value.info, value.node, value.declarationScope);
           }
@@ -1523,9 +1309,7 @@ function checkPublicServiceAuthorityCalls(
   return findings;
 }
 
-function collectTopLevelBindings(
-  sourceFile: ts.SourceFile,
-): Map<string, ScopedBinding> {
+function collectTopLevelBindings(sourceFile: ts.SourceFile): Map<string, ScopedBinding> {
   const bindings = new Map<string, ScopedBinding>();
   for (const statement of sourceFile.statements) {
     if (ts.isFunctionDeclaration(statement)) {
@@ -1560,13 +1344,7 @@ function collectTopLevelBindings(
     }
     if (!ts.isVariableStatement(statement)) continue;
     for (const declaration of statement.declarationList.declarations) {
-      addBindingNamesToMap(
-        bindings,
-        declaration.name,
-        declaration,
-        null,
-        declaration.initializer,
-      );
+      addBindingNamesToMap(bindings, declaration.name, declaration, null, declaration.initializer);
     }
   }
   return bindings;
@@ -1594,21 +1372,14 @@ function collectExportBindings(sourceFile: ts.SourceFile): Map<string, string> {
     }
     if (ts.isExportAssignment(statement)) {
       const expression = unwrapExpression(statement.expression);
-      bindings.set(
-        "default",
-        ts.isIdentifier(expression) ? expression.text : "default",
-      );
+      bindings.set("default", ts.isIdentifier(expression) ? expression.text : "default");
       continue;
     }
-    if (!ts.isExportDeclaration(statement) || statement.moduleSpecifier)
-      continue;
+    if (!ts.isExportDeclaration(statement) || statement.moduleSpecifier) continue;
     const exportClause = statement.exportClause;
     if (!exportClause || !ts.isNamedExports(exportClause)) continue;
     for (const specifier of exportClause.elements) {
-      bindings.set(
-        specifier.name.text,
-        (specifier.propertyName ?? specifier.name).text,
-      );
+      bindings.set(specifier.name.text, (specifier.propertyName ?? specifier.name).text);
     }
   }
   return bindings;
@@ -1713,11 +1484,7 @@ function resolveModuleTarget(
   sourceFiles: Map<string, CheckerSourceFile>,
 ): ModuleTarget | null {
   if (moduleSpecifier.startsWith(".")) {
-    const targetFilePath = resolveLocalSourceFile(
-      fromFilePath,
-      moduleSpecifier,
-      sourceFiles,
-    );
+    const targetFilePath = resolveLocalSourceFile(fromFilePath, moduleSpecifier, sourceFiles);
     return targetFilePath ? { kind: "local", filePath: targetFilePath } : null;
   }
   return { kind: "external", moduleSpecifier };
@@ -1736,12 +1503,8 @@ function resolveLocalSourceFile(
     : basePath;
   const candidates = [
     basePath,
-    ...[...sourceExtensions].map(
-      (extension) => `${extensionlessBasePath}${extension}`,
-    ),
-    ...[...sourceExtensions].map((extension) =>
-      join(extensionlessBasePath, `index${extension}`),
-    ),
+    ...[...sourceExtensions].map((extension) => `${extensionlessBasePath}${extension}`),
+    ...[...sourceExtensions].map((extension) => join(extensionlessBasePath, `index${extension}`)),
   ];
   return candidates.find((candidate) => sourceFiles.has(candidate)) ?? null;
 }
@@ -1755,17 +1518,11 @@ function isCallableNode(node: ts.Node): node is ts.FunctionLikeDeclaration {
   );
 }
 
-function collectDirectBlockBindings(
-  block: ts.Block,
-  scope: LexicalScope,
-): void {
+function collectDirectBlockBindings(block: ts.Block, scope: LexicalScope): void {
   collectDirectStatementBindings(block.statements, scope);
 }
 
-function collectDirectCaseBlockBindings(
-  caseBlock: ts.CaseBlock,
-  scope: LexicalScope,
-): void {
+function collectDirectCaseBlockBindings(caseBlock: ts.CaseBlock, scope: LexicalScope): void {
   for (const clause of caseBlock.clauses) {
     collectDirectStatementBindings(clause.statements, scope);
   }
@@ -1836,13 +1593,7 @@ function addBindingNamesToMap(
   if (ts.isObjectBindingPattern(name)) {
     for (const element of name.elements) {
       if (element.dotDotDotToken) {
-        addBindingNamesToMap(
-          bindings,
-          element.name,
-          element,
-          declarationScope,
-          undefined,
-        );
+        addBindingNamesToMap(bindings, element.name, element, declarationScope, undefined);
         continue;
       }
       const propertyName = bindingElementPropertyName(element);
@@ -1861,23 +1612,13 @@ function addBindingNamesToMap(
   name.elements.forEach((element, index) => {
     if (ts.isOmittedExpression(element)) return;
     if (element.dotDotDotToken) {
-      addBindingNamesToMap(
-        bindings,
-        element.name,
-        element,
-        declarationScope,
-        undefined,
-      );
+      addBindingNamesToMap(bindings, element.name, element, declarationScope, undefined);
       return;
     }
-    addBindingNamesToMap(
-      bindings,
-      element.name,
-      node,
-      declarationScope,
-      initializer,
-      [...propertyPath, String(index)],
-    );
+    addBindingNamesToMap(bindings, element.name, node, declarationScope, initializer, [
+      ...propertyPath,
+      String(index),
+    ]);
   });
 }
 
@@ -1940,17 +1681,10 @@ function restoreBindingValues(snapshot: BindingSnapshot): void {
   }
 }
 
-function mergeBindingValues(
-  before: BindingSnapshot,
-  alternatives: BindingSnapshot[],
-): void {
+function mergeBindingValues(before: BindingSnapshot, alternatives: BindingSnapshot[]): void {
   for (const [binding, initialValue] of before) {
-    const values = alternatives.map(
-      (alternative) => alternative.get(binding) ?? initialValue,
-    );
-    binding.value = values.every((value) =>
-      bindingValuesEqual(value, values[0]!),
-    )
+    const values = alternatives.map((alternative) => alternative.get(binding) ?? initialValue);
+    binding.value = values.every((value) => bindingValuesEqual(value, values[0]!))
       ? values[0]!
       : { kind: "unknown" };
   }
@@ -1967,28 +1701,20 @@ function bindingValuesEqual(left: BindingValue, right: BindingValue): boolean {
       left.expression === right.expression &&
       left.scope === right.scope &&
       left.propertyPath.length === right.propertyPath.length &&
-      left.propertyPath.every(
-        (propertyName, index) => propertyName === right.propertyPath[index],
-      )
+      left.propertyPath.every((propertyName, index) => propertyName === right.propertyPath[index])
     );
   }
   return false;
 }
 
-function collectForInitializerBindings(
-  initializer: ts.ForInitializer,
-  scope: LexicalScope,
-): void {
+function collectForInitializerBindings(initializer: ts.ForInitializer, scope: LexicalScope): void {
   if (!ts.isVariableDeclarationList(initializer)) return;
   for (const declaration of initializer.declarations) {
     addBindingNames(scope, declaration.name, declaration, scope);
   }
 }
 
-function findLexicalBinding(
-  scope: LexicalScope | null,
-  name: string,
-): ScopedBinding | null {
+function findLexicalBinding(scope: LexicalScope | null, name: string): ScopedBinding | null {
   let current = scope;
   while (current) {
     const binding = current.bindings.get(name);
@@ -2002,10 +1728,7 @@ function collectInternalApiNames(sourceFile: ts.SourceFile): Set<string> {
   const names = new Set<string>();
 
   for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      statement.importClause?.isTypeOnly
-    ) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
       continue;
     }
     if (
@@ -2021,9 +1744,7 @@ function collectInternalApiNames(sourceFile: ts.SourceFile): Set<string> {
     }
 
     for (const importSpecifier of namedBindings.elements) {
-      const importedName = (
-        importSpecifier.propertyName ?? importSpecifier.name
-      ).text;
+      const importedName = (importSpecifier.propertyName ?? importSpecifier.name).text;
       if (importedName === "internal") {
         names.add(importSpecifier.name.text);
       }
@@ -2049,11 +1770,7 @@ function getInternalApiReferencePath(
     if (resolving.has(key)) return null;
     const binding = info.bindings.get(node.text);
     if (binding) {
-      return getInternalApiPathFromBinding(
-        binding,
-        info,
-        new Set(resolving).add(key),
-      );
+      return getInternalApiPathFromBinding(binding, info, new Set(resolving).add(key));
     }
 
     return info.internalApiNames.has(node.text) ? [] : null;
@@ -2070,8 +1787,7 @@ function getInternalApiReferencePath(
   }
 
   if (ts.isElementAccessExpression(node)) {
-    const argument =
-      node.argumentExpression && unwrapExpression(node.argumentExpression);
+    const argument = node.argumentExpression && unwrapExpression(node.argumentExpression);
     if (!argument || !ts.isStringLiteralLike(argument)) return null;
     const parent = getInternalApiReferencePath(
       unwrapExpression(node.expression),
@@ -2111,14 +1827,10 @@ function getStringProperty(
   for (const property of objectLiteral.properties) {
     if (!ts.isPropertyAssignment(property)) continue;
     const name = property.name;
-    const nameText =
-      ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
+    const nameText = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
     if (nameText !== propertyName) continue;
     const value = unwrapExpression(property.initializer);
-    if (
-      ts.isStringLiteral(value) ||
-      ts.isNoSubstitutionTemplateLiteral(value)
-    ) {
+    if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
       return { value: value.text, node: value };
     }
   }
@@ -2129,13 +1841,8 @@ function isPrivilegedResourceRuleKey(permissionKey: string): boolean {
   if (permissionKey.startsWith("system.")) return true;
   if (!permissionKey.startsWith("app.")) return false;
   const actionSeparatorIndex = permissionKey.lastIndexOf(":");
-  const action =
-    actionSeparatorIndex === -1
-      ? ""
-      : permissionKey.slice(actionSeparatorIndex + 1);
-  return (
-    action === "*" || action === "manage_members" || action === "manage_access"
-  );
+  const action = actionSeparatorIndex === -1 ? "" : permissionKey.slice(actionSeparatorIndex + 1);
+  return action === "*" || action === "manage_members" || action === "manage_access";
 }
 
 // The IAM catalog is file-only: hercules/iam.jsonc at the app root declares
@@ -2151,20 +1858,12 @@ function loadCatalogPermissionKeys(cwd: string): Set<string> | null {
 
   // parseConfigFileTextToJson parses JSONC (comments and trailing commas),
   // matching how the build applies the catalog file.
-  const parsed = ts.parseConfigFileTextToJson(
-    iamFilePath,
-    readFileSync(iamFilePath, "utf8"),
-  );
+  const parsed = ts.parseConfigFileTextToJson(iamFilePath, readFileSync(iamFilePath, "utf8"));
   if (parsed.error) {
     return null;
   }
-  const permissions = (parsed.config as { permissions?: unknown } | undefined)
-    ?.permissions;
-  if (
-    typeof permissions !== "object" ||
-    permissions === null ||
-    Array.isArray(permissions)
-  ) {
+  const permissions = (parsed.config as { permissions?: unknown } | undefined)?.permissions;
+  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) {
     return null;
   }
   return new Set(Object.keys(permissions));
@@ -2195,10 +1894,7 @@ function checkCanonicalPermissionKeys(
   ])) {
     const permission = getLiteralPermissionProperty(definition.definition);
     if (!permission) continue;
-    if (
-      catalogPermissionKeys.has(permission.key) ||
-      permission.key.startsWith("system.")
-    ) {
+    if (catalogPermissionKeys.has(permission.key) || permission.key.startsWith("system.")) {
       continue;
     }
 
@@ -2231,8 +1927,7 @@ function getLiteralPermissionProperty(
   for (const property of objectLiteral.properties) {
     if (!ts.isPropertyAssignment(property)) continue;
     const name = property.name;
-    const nameText =
-      ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
+    const nameText = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : null;
     if (nameText !== "permission") continue;
 
     const initializer = unwrapExpression(property.initializer);
@@ -2295,10 +1990,7 @@ function addPatternFinding(args: {
   });
 }
 
-function lineAndColumnAt(
-  sourceText: string,
-  index: number,
-): { line: number; column: number } {
+function lineAndColumnAt(sourceText: string, index: number): { line: number; column: number } {
   let line = 1;
   let column = 1;
   for (let offset = 0; offset < index; offset += 1) {
@@ -2318,22 +2010,15 @@ function createSourceFile(filePath: string, sourceText: string): ts.SourceFile {
     sourceText,
     ts.ScriptTarget.Latest,
     true,
-    filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-      ? ts.ScriptKind.TSX
-      : ts.ScriptKind.TS,
+    filePath.endsWith(".tsx") || filePath.endsWith(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
 }
 
-function collectRawBuilderImports(
-  sourceFile: ts.SourceFile,
-): Map<string, RawConvexBuilder> {
+function collectRawBuilderImports(sourceFile: ts.SourceFile): Map<string, RawConvexBuilder> {
   const imports = new Map<string, RawConvexBuilder>();
 
   for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      statement.importClause?.isTypeOnly
-    ) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
       continue;
     }
     if (
@@ -2349,9 +2034,7 @@ function collectRawBuilderImports(
     }
 
     for (const importSpecifier of namedBindings.elements) {
-      const importedName = (
-        importSpecifier.propertyName ?? importSpecifier.name
-      ).text;
+      const importedName = (importSpecifier.propertyName ?? importSpecifier.name).text;
       if (isRawBuilderName(importedName)) {
         imports.set(importSpecifier.name.text, importedName);
       }
@@ -2369,21 +2052,13 @@ function buildGeneratedServerImportRemovals(
   const builderNodeStarts = new Set(
     candidates.map((candidate) => candidate.builderNode.getStart(sourceFile)),
   );
-  const builderNamesToReplace = new Set(
-    candidates.map((candidate) => candidate.builderNode.text),
-  );
-  const identifierUses = collectIdentifierUses(
-    sourceFile,
-    builderNamesToReplace,
-  );
+  const builderNamesToReplace = new Set(candidates.map((candidate) => candidate.builderNode.text));
+  const identifierUses = collectIdentifierUses(sourceFile, builderNamesToReplace);
   const removableNames = new Set<string>();
 
   for (const name of builderNamesToReplace) {
     const uses = identifierUses.get(name) ?? [];
-    if (
-      uses.length > 0 &&
-      uses.every((position) => builderNodeStarts.has(position))
-    ) {
+    if (uses.length > 0 && uses.every((position) => builderNodeStarts.has(position))) {
       removableNames.add(name);
     }
   }
@@ -2394,10 +2069,7 @@ function buildGeneratedServerImportRemovals(
 
   const replacements: Array<{ start: number; end: number; text: string }> = [];
   for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      statement.importClause?.isTypeOnly
-    ) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
       continue;
     }
     if (
@@ -2496,18 +2168,11 @@ function buildAccessImportReplacement(
   const sortedImports = [...accessImports].sort();
   const accessImport = findAccessImport(sourceFile, convexDir);
 
-  if (
-    accessImport?.namedBindings &&
-    ts.isNamedImports(accessImport.namedBindings)
-  ) {
+  if (accessImport?.namedBindings && ts.isNamedImports(accessImport.namedBindings)) {
     const existingNames = new Set(
-      accessImport.namedBindings.elements.map(
-        (specifier) => specifier.name.text,
-      ),
+      accessImport.namedBindings.elements.map((specifier) => specifier.name.text),
     );
-    const missingNames = sortedImports.filter(
-      (name) => !existingNames.has(name),
-    );
+    const missingNames = sortedImports.filter((name) => !existingNames.has(name));
     if (missingNames.length === 0) {
       return { start: 0, end: 0, text: "" };
     }
@@ -2523,9 +2188,7 @@ function buildAccessImportReplacement(
 
   const accessImportPath = buildAccessImportPath(sourceFile, convexDir);
   const importLine = `import { ${sortedImports.join(", ")} } from "${accessImportPath}";\n`;
-  const lastImport = sourceFile.statements
-    .filter(ts.isImportDeclaration)
-    .at(-1);
+  const lastImport = sourceFile.statements.filter(ts.isImportDeclaration).at(-1);
   if (!lastImport) {
     return { start: 0, end: 0, text: importLine };
   }
@@ -2542,10 +2205,7 @@ function findAccessImport(
   convexDir: string,
 ): { namedBindings?: ts.NamedImportBindings } | null {
   for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      statement.importClause?.isTypeOnly
-    ) {
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) {
       continue;
     }
     if (
@@ -2561,10 +2221,7 @@ function findAccessImport(
   return null;
 }
 
-function buildAccessImportPath(
-  sourceFile: ts.SourceFile,
-  convexDir: string,
-): string {
+function buildAccessImportPath(sourceFile: ts.SourceFile, convexDir: string): string {
   const relativePath = normalizePath(
     relative(dirname(sourceFile.fileName), join(convexDir, "hercules")),
   );
@@ -2581,19 +2238,14 @@ function isAccessImport(
   }
 
   return (
-    stripKnownModuleExtension(
-      resolve(dirname(sourceFile.fileName), moduleSpecifier),
-    ) === join(convexDir, "hercules") ||
-    stripKnownModuleExtension(
-      resolve(dirname(sourceFile.fileName), moduleSpecifier),
-    ) === join(convexDir, "access")
+    stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
+      join(convexDir, "hercules") ||
+    stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
+      join(convexDir, "access")
   );
 }
 
-function isAccessWiringSourceFile(
-  filePath: string | undefined,
-  convexDir: string,
-): boolean {
+function isAccessWiringSourceFile(filePath: string | undefined, convexDir: string): boolean {
   if (!filePath) return false;
   const extensionlessPath = stripKnownModuleExtension(filePath);
   return (
@@ -2606,18 +2258,12 @@ function isAccessWiringSourceFile(
 // @usehercules/convex SDK (including subpaths such as /access-admin and
 // /convex.config) or the local convex/hercules or convex/access wiring module
 // the managed builders are re-exported from.
-function fileUsesManagedAccessControl(
-  filePath: string,
-  convexDir: string,
-): boolean {
+function fileUsesManagedAccessControl(filePath: string, convexDir: string): boolean {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
 
   for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) &&
-      !ts.isExportDeclaration(statement)
-    ) {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) {
       continue;
     }
     const moduleSpecifier = statement.moduleSpecifier;
@@ -2671,10 +2317,7 @@ function collectRawBuilderCandidates(
           continue;
         }
 
-        const rawCall = getRawBuilderCall(
-          declaration.initializer,
-          rawBuilderImports,
-        );
+        const rawCall = getRawBuilderCall(declaration.initializer, rawBuilderImports);
         if (rawCall) {
           candidates.push({
             ...rawCall,
@@ -2688,10 +2331,7 @@ function collectRawBuilderCandidates(
     }
 
     if (ts.isExportAssignment(statement)) {
-      const rawCall = getRawBuilderCall(
-        statement.expression,
-        rawBuilderImports,
-      );
+      const rawCall = getRawBuilderCall(statement.expression, rawBuilderImports);
       if (rawCall) {
         candidates.push({
           ...rawCall,
@@ -2767,9 +2407,7 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 function hasExportModifier(node: ts.Node): boolean {
   return (
     ts.canHaveModifiers(node) &&
-    ts
-      .getModifiers(node)
-      ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ===
+    ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ===
       true
   );
 }
@@ -2777,9 +2415,7 @@ function hasExportModifier(node: ts.Node): boolean {
 function hasDefaultModifier(node: ts.Node): boolean {
   return (
     ts.canHaveModifiers(node) &&
-    ts
-      .getModifiers(node)
-      ?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ===
+    ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ===
       true
   );
 }
@@ -2809,8 +2445,7 @@ function isGeneratedServerImport(moduleSpecifier: string): boolean {
 
 function isGeneratedApiImport(moduleSpecifier: string): boolean {
   return (
-    moduleSpecifier.endsWith("_generated/api") ||
-    moduleSpecifier.endsWith("_generated/api.js")
+    moduleSpecifier.endsWith("_generated/api") || moduleSpecifier.endsWith("_generated/api.js")
   );
 }
 
@@ -2855,18 +2490,12 @@ function applyTextReplacements(
   replacements: Array<{ start: number; end: number; text: string }>,
 ): string {
   const sorted = replacements
-    .filter(
-      (replacement) =>
-        replacement.start !== replacement.end || replacement.text.length > 0,
-    )
+    .filter((replacement) => replacement.start !== replacement.end || replacement.text.length > 0)
     .sort((left, right) => right.start - left.start);
   let result = sourceText;
 
   for (const replacement of sorted) {
-    result =
-      result.slice(0, replacement.start) +
-      replacement.text +
-      result.slice(replacement.end);
+    result = result.slice(0, replacement.start) + replacement.text + result.slice(replacement.end);
   }
 
   return result;

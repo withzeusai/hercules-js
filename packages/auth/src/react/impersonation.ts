@@ -34,19 +34,14 @@ export function useHerculesImpersonation(): HerculesImpersonationState {
       ? profile.hercules_impersonation_session_id
       : null;
   const actorSub =
-    typeof profile.hercules_actor_sub === "string"
-      ? profile.hercules_actor_sub
-      : null;
+    typeof profile.hercules_actor_sub === "string" ? profile.hercules_actor_sub : null;
   const sessionId = auth.isAuthenticated ? profileSessionId : storedSessionId;
 
   useEffect(() => {
     if (!auth.isAuthenticated) return;
 
     if (profileSessionId) {
-      rememberHerculesImpersonationSession(
-        impersonationStorageKey,
-        profileSessionId,
-      );
+      rememberHerculesImpersonationSession(impersonationStorageKey, profileSessionId);
       setStoredSessionId(profileSessionId);
       return;
     }

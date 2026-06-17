@@ -5,13 +5,7 @@
 import { ulid } from "ulid";
 import { onCLS, onFCP, onLCP, onTTFB, onINP, type Metric } from "web-vitals";
 import Bowser from "bowser";
-import type {
-  BrowserInfo,
-  OSInfo,
-  ReferrerInfo,
-  UTMParams,
-  PerformanceMetrics,
-} from "./types";
+import type { BrowserInfo, OSInfo, ReferrerInfo, UTMParams, PerformanceMetrics } from "./types";
 
 /**
  * Generate a unique ID using ULID
@@ -214,10 +208,7 @@ export function getPerformanceMetrics(): PerformanceMetrics {
   }
 
   // Try to use modern Navigation Timing API (Level 2) first
-  if (
-    window.performance &&
-    typeof window.performance.getEntriesByType === "function"
-  ) {
+  if (window.performance && typeof window.performance.getEntriesByType === "function") {
     try {
       // Get navigation timing using modern API
       const navigationEntries = performance.getEntriesByType(
@@ -228,8 +219,7 @@ export function getPerformanceMetrics(): PerformanceMetrics {
         if (navTiming) {
           // Calculate metrics from PerformanceNavigationTiming
           const pageLoadTime = navTiming.loadEventEnd - navTiming.fetchStart;
-          const domInteractive =
-            navTiming.domInteractive - navTiming.fetchStart;
+          const domInteractive = navTiming.domInteractive - navTiming.fetchStart;
           const ttfb = navTiming.responseStart - navTiming.requestStart;
 
           if (pageLoadTime > 0 && isFinite(pageLoadTime)) {
@@ -267,17 +257,10 @@ export function getPerformanceMetrics(): PerformanceMetrics {
   }
 
   // Get paint metrics (these use the modern Paint Timing API)
-  if (
-    window.performance &&
-    typeof window.performance.getEntriesByType === "function"
-  ) {
+  if (window.performance && typeof window.performance.getEntriesByType === "function") {
     try {
-      const paintEntries = performance.getEntriesByType(
-        "paint",
-      ) as PerformanceEntry[];
-      const fcpEntry = paintEntries.find(
-        (entry) => entry.name === "first-contentful-paint",
-      );
+      const paintEntries = performance.getEntriesByType("paint") as PerformanceEntry[];
+      const fcpEntry = paintEntries.find((entry) => entry.name === "first-contentful-paint");
       if (fcpEntry) {
         metrics.first_contentful_paint = Math.round(fcpEntry.startTime);
       }
@@ -292,9 +275,7 @@ export function getPerformanceMetrics(): PerformanceMetrics {
 /**
  * Observe Core Web Vitals using the web-vitals library
  */
-export function observeWebVitals(
-  callback: (metrics: PerformanceMetrics) => void,
-): void {
+export function observeWebVitals(callback: (metrics: PerformanceMetrics) => void): void {
   if (typeof window === "undefined") {
     return;
   }
@@ -354,10 +335,7 @@ export function observeWebVitals(
 
   // Also get page load time from Navigation Timing API
   // This will be called once the page is fully loaded
-  if (
-    window.performance &&
-    typeof window.performance.getEntriesByType === "function"
-  ) {
+  if (window.performance && typeof window.performance.getEntriesByType === "function") {
     // Use a small delay to ensure load event has fired
     const checkPageLoad = () => {
       try {
@@ -372,8 +350,7 @@ export function observeWebVitals(
               updateMetrics("page_load_time", pageLoadTime);
             }
             // Also update dom_interactive while we're here
-            const domInteractive =
-              navTiming.domInteractive - navTiming.fetchStart;
+            const domInteractive = navTiming.domInteractive - navTiming.fetchStart;
             if (domInteractive > 0 && isFinite(domInteractive)) {
               updateMetrics("dom_interactive", domInteractive);
             }
@@ -462,8 +439,7 @@ export function safeStringify(obj: any): string {
 export function getBrowserInfo(): Record<string, any> {
   if (typeof window === "undefined") return {};
 
-  const { browser, os, deviceType, deviceVendor, deviceModel, isBot } =
-    parseUserAgent();
+  const { browser, os, deviceType, deviceVendor, deviceModel, isBot } = parseUserAgent();
   const parser = Bowser.getParser(navigator.userAgent);
 
   // Get additional browser capabilities
@@ -502,4 +478,3 @@ export function getBrowserInfo(): Record<string, any> {
     ...browserFeatures,
   };
 }
-

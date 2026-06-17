@@ -11,8 +11,7 @@ type TSESLintRule =
   | typeof noEmptySelectValue
   | typeof noOutlineButtonColorOverride
   | typeof requireTypeImportForConvex;
-const toESLintRule = (rule: TSESLintRule): Rule.RuleModule =>
-  rule as unknown as Rule.RuleModule;
+const toESLintRule = (rule: TSESLintRule): Rule.RuleModule => rule as unknown as Rule.RuleModule;
 
 const plugin: ESLint.Plugin = {
   meta: {
@@ -21,12 +20,8 @@ const plugin: ESLint.Plugin = {
   },
   rules: {
     "no-empty-select-value": toESLintRule(noEmptySelectValue),
-    "no-outline-button-color-override": toESLintRule(
-      noOutlineButtonColorOverride,
-    ),
-    "require-type-import-for-convex": toESLintRule(
-      requireTypeImportForConvex,
-    ),
+    "no-outline-button-color-override": toESLintRule(noOutlineButtonColorOverride),
+    "require-type-import-for-convex": toESLintRule(requireTypeImportForConvex),
   },
 };
 

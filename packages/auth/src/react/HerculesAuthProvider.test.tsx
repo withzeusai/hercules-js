@@ -1,11 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  act,
-  render,
-  screen,
-  waitFor,
-  configure,
-} from "@testing-library/react";
+import { act, render, screen, waitFor, configure } from "@testing-library/react";
 import { HerculesAuthProvider } from "./HerculesAuthProvider.js";
 
 configure({ reactStrictMode: false });
@@ -22,9 +16,7 @@ Object.defineProperty(window, "localStorage", {
 });
 
 vi.mock("react-oidc-context", () => ({
-  AuthProvider: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   useAuth: () => mockAuthState,
 }));
 
@@ -83,10 +75,7 @@ function renderProvider(
 describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
   it("registers the lock-wrapped renewal listener by default", () => {
     render(
-      <HerculesAuthProvider
-        authority="https://auth.example.com"
-        client_id="test-client"
-      >
+      <HerculesAuthProvider authority="https://auth.example.com" client_id="test-client">
         <div data-testid="app">app</div>
       </HerculesAuthProvider>,
     );
@@ -188,9 +177,7 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
       isLoading: false,
       user: { expired: true, id_token: "stale" },
     });
-    const { rerender } = renderProvider(
-      <div data-testid="loading">loading</div>,
-    );
+    const { rerender } = renderProvider(<div data-testid="loading">loading</div>);
     expect(screen.getByTestId("loading")).toBeDefined();
     await waitFor(() => {
       expect(mockSigninSilent).toHaveBeenCalledTimes(1);
@@ -357,10 +344,7 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
     });
     setAuthState({ user: { expired: true, id_token: "stale-2" } });
     rerender(
-      <HerculesAuthProvider
-        authority="https://auth.example.com"
-        client_id="test-client"
-      >
+      <HerculesAuthProvider authority="https://auth.example.com" client_id="test-client">
         <div data-testid="app">app content</div>
       </HerculesAuthProvider>,
     );

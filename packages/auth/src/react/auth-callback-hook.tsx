@@ -117,9 +117,7 @@ export interface UseAuthCallbackResult {
  *
  * @public
  */
-export function useAuthCallback(
-  options: UseAuthCallbackOptions = {},
-): UseAuthCallbackResult {
+export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCallbackResult {
   const {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     isBackendAuthenticated = true,
@@ -187,11 +185,7 @@ export function useAuthCallback(
     }
 
     // OIDC is done loading and authenticated - move to waiting for backend
-    if (
-      !isAuthLoading &&
-      isOidcAuthenticated &&
-      status === "processing-oauth"
-    ) {
+    if (!isAuthLoading && isOidcAuthenticated && status === "processing-oauth") {
       setStatus("waiting-backend");
       return;
     }

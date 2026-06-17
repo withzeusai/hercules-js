@@ -71,9 +71,7 @@ describe("useAuth", () => {
 
   describe("signout", () => {
     it("calls signoutRedirect when end session endpoint exists", async () => {
-      mockGetEndSessionEndpoint.mockResolvedValue(
-        "https://auth.example.com/logout",
-      );
+      mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
       mockSignoutRedirect.mockResolvedValue(undefined);
 
       const { result } = renderHook(() => useAuth());

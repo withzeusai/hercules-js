@@ -52,10 +52,7 @@ export function createRuleTester(
                     },
                   },
                   rules: {
-                    [`test/${ruleName}`]: [
-                      "error",
-                      ...(testCase.options || []),
-                    ],
+                    [`test/${ruleName}`]: ["error", ...(testCase.options || [])],
                   },
                 },
               ];
@@ -91,10 +88,7 @@ export function createRuleTester(
                     },
                   },
                   rules: {
-                    [`test/${ruleName}`]: [
-                      "error",
-                      ...(testCase.options || []),
-                    ],
+                    [`test/${ruleName}`]: ["error", ...(testCase.options || [])],
                   },
                 },
               ];
@@ -113,10 +107,7 @@ export function createRuleTester(
                 if (expectedError.data) {
                   // Check that the message contains the expected data values
                   Object.values(expectedError.data).forEach((value) => {
-                    if (
-                      typeof value === "string" ||
-                      typeof value === "number"
-                    ) {
+                    if (typeof value === "string" || typeof value === "number") {
                       expect(actualError.message).toContain(String(value));
                     }
                   });

@@ -28,7 +28,9 @@ describe("permission binding expiration", () => {
     const t = convexTest(schema, modules);
 
     await t.mutation(applySync, snapshotWithBinding(NOW + 1_000, 1));
-    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({ allowed: true });
+    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({
+      allowed: true,
+    });
 
     vi.advanceTimersByTime(1_000);
     await t.finishInProgressScheduledFunctions();
@@ -56,7 +58,9 @@ describe("permission binding expiration", () => {
       expiresAt: NOW + 2_000,
       updatedAt: 2,
     });
-    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({ allowed: true });
+    await expect(authorizeTasksCreate(t)).resolves.toMatchObject({
+      allowed: true,
+    });
 
     vi.advanceTimersByTime(1_000);
     await t.finishInProgressScheduledFunctions();
@@ -176,7 +180,11 @@ function bindingEvent(expiresAt: number, updatedAt: number): AccessProjectionEve
       {
         accessScopeId: "scope_default",
         changes: [
-          { entityType: "permission_binding", bindingId: "pb_tasks_create", operation: "upsert" },
+          {
+            entityType: "permission_binding",
+            bindingId: "pb_tasks_create",
+            operation: "upsert",
+          },
         ],
         principals: [],
         principalMemberships: [],

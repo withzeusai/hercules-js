@@ -512,9 +512,7 @@ async function collectGrantContributions(
   }
   const effectiveRoleIds = [...scopeRoleIds].filter((roleId) => validRoleIds.has(roleId));
   const resourceRoleIds = new Set(
-    resourceRoleGrants
-      .map((grant) => grant.roleId)
-      .filter((roleId) => validRoleIds.has(roleId)),
+    resourceRoleGrants.map((grant) => grant.roleId).filter((roleId) => validRoleIds.has(roleId)),
   );
 
   // Resource-scoped roles participate in role-subject rules for the bounded
@@ -690,7 +688,11 @@ async function resolvePrincipalWildcard(
 
 async function collectRolePermissionEntries(
   ctx: GenericQueryCtx<DataModel>,
-  args: { roleIds: string[]; targetScopeId: string; permissionById: PermissionLookup },
+  args: {
+    roleIds: string[];
+    targetScopeId: string;
+    permissionById: PermissionLookup;
+  },
 ): Promise<RuntimeEntry[]> {
   const entries: RuntimeEntry[] = [];
 
@@ -857,7 +859,11 @@ async function collectResourceRoleEntries(
 // canonical RolePermissionContribution {allow, deny} model (query.ts). rawAllow
 // records every allow row seen (base + override) regardless of later deny, so
 // the narrowed-Admin downgrade can key on the PRESENCE of an allow row.
-type RoleContribution = { allow: Set<string>; deny: Set<string>; rawAllow: Set<string> };
+type RoleContribution = {
+  allow: Set<string>;
+  deny: Set<string>;
+  rawAllow: Set<string>;
+};
 
 /**
  * Resolve a role's net permission contribution for the target scope: the role's
@@ -876,7 +882,11 @@ async function resolveRoleNetPermissionIds(
     .unique();
   if (!role) return null;
 
-  const contribution: RoleContribution = { allow: new Set(), deny: new Set(), rawAllow: new Set() };
+  const contribution: RoleContribution = {
+    allow: new Set(),
+    deny: new Set(),
+    rawAllow: new Set(),
+  };
   // Base map (deployment-wide).
   await applyBaseRolePermissionRows(ctx, { roleId: args.roleId, contribution });
   // Per-scope override, layered on top of the base (preserves per-scope
@@ -913,7 +923,11 @@ async function applyBaseRolePermissionRows(
  */
 async function applyRolePermissionOverrideRows(
   ctx: GenericQueryCtx<DataModel>,
-  args: { accessScopeId: string; roleId: string; contribution: RoleContribution },
+  args: {
+    accessScopeId: string;
+    roleId: string;
+    contribution: RoleContribution;
+  },
 ) {
   const rows = await ctx.db
     .query("role_permission_overrides")

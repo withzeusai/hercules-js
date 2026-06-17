@@ -344,8 +344,14 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
   accessAction: AccessActionBuilder<DataModel>;
   hasPermission: (ctx: AccessContext<DataModel>, args: PermissionCheckArgs) => Promise<boolean>;
   requirePermission: (ctx: AccessContext<DataModel>, args: PermissionCheckArgs) => Promise<void>;
-  requireAnyPermission: (ctx: AccessContext<DataModel>, args: AnyPermissionCheckArgs) => Promise<void>;
-  getEffectivePermissions: (ctx: AccessContext<DataModel>, args?: EffectivePermissionsArgs) => Promise<string[]>;
+  requireAnyPermission: (
+    ctx: AccessContext<DataModel>,
+    args: AnyPermissionCheckArgs,
+  ) => Promise<void>;
+  getEffectivePermissions: (
+    ctx: AccessContext<DataModel>,
+    args?: EffectivePermissionsArgs,
+  ) => Promise<string[]>;
   checkPermissions: (
     ctx: AccessContext<DataModel>,
     checks: Array<Exclude<PermissionCheckArgs, string>>,
@@ -355,10 +361,10 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
    * verified Convex identity. Use this to link app-owned profile or domain
    * rows to the signed-in user instead of parsing `tokenIdentifier`.
    */
-  getCurrentHerculesAuthUserId: (
+  getCurrentHerculesAuthUserId: (ctx: AccessContext<DataModel>) => Promise<string | undefined>;
+  getDeploymentEntryStatus: (
     ctx: AccessContext<DataModel>,
-  ) => Promise<string | undefined>;
-  getDeploymentEntryStatus: (ctx: AccessContext<DataModel>) => Promise<AccessDeploymentEntryMirrorResult>;
+  ) => Promise<AccessDeploymentEntryMirrorResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
   // real `accessQuery`. Use this for "list my projects" style lists: the app
@@ -399,7 +405,10 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
       herculesAuthUserId?: string;
     },
   ) => Promise<ScopeMemberDirectoryEntry | null>;
-  listScopeRoles: (ctx: AccessContext<DataModel>, args?: { scopeId?: string }) => Promise<ScopeRoleSummary[]>;
+  listScopeRoles: (
+    ctx: AccessContext<DataModel>,
+    args?: { scopeId?: string },
+  ) => Promise<ScopeRoleSummary[]>;
   listScopePermissions: (
     ctx: AccessContext<DataModel>,
     args?: { scopeId?: string },
@@ -924,9 +933,7 @@ async function getTokenIdentifier(ctx: AccessContext): Promise<string | undefine
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
 }
 
-async function getCurrentHerculesAuthUserId(
-  ctx: AccessContext,
-): Promise<string | undefined> {
+async function getCurrentHerculesAuthUserId(ctx: AccessContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
@@ -1077,10 +1084,7 @@ function makeFilterAuthorizedResources(component: AccessControlComponent) {
     const allowed: T[] = [];
     for (const item of args.resources) {
       const ref = args.resource(item);
-      const ancestors = normalizeAncestors(
-        args.ancestors?.(item),
-        "filterAuthorizedResources",
-      );
+      const ancestors = normalizeAncestors(args.ancestors?.(item), "filterAuthorizedResources");
       const decision = await ctx.runQuery(component.checks.authorize, {
         tokenIdentifier,
         scopeId,

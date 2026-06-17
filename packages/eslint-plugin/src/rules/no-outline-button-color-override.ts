@@ -22,8 +22,7 @@ export default createRule<Options, MessageIds>({
   meta: {
     type: "problem",
     docs: {
-      description:
-        'Disallow text/bg color classes on Button components with variant="outline"',
+      description: 'Disallow text/bg color classes on Button components with variant="outline"',
     },
     schema: [], // No configuration options
     messages: {
@@ -48,10 +47,7 @@ export default createRule<Options, MessageIds>({
         let classNameAttribute: TSESTree.JSXAttribute | undefined;
 
         for (const attr of node.attributes) {
-          if (
-            attr.type === "JSXAttribute" &&
-            attr.name.type === "JSXIdentifier"
-          ) {
+          if (attr.type === "JSXAttribute" && attr.name.type === "JSXIdentifier") {
             if (attr.name.name === "variant") {
               variantAttribute = attr;
             } else if (attr.name.name === "className") {
@@ -69,8 +65,7 @@ export default createRule<Options, MessageIds>({
 
         // Check if variant is literally "outline"
         const isOutlineVariant =
-          (variantValue?.type === "Literal" &&
-            variantValue.value === "outline") ||
+          (variantValue?.type === "Literal" && variantValue.value === "outline") ||
           (variantValue?.type === "TemplateLiteral" &&
             variantValue.quasis.length === 1 &&
             variantValue.quasis[0].value.raw === "outline");
@@ -87,10 +82,7 @@ export default createRule<Options, MessageIds>({
         const classNameValue = getJSXAttributeValue(classNameAttribute);
 
         // Check string literal className
-        if (
-          classNameValue?.type === "Literal" &&
-          typeof classNameValue.value === "string"
-        ) {
+        if (classNameValue?.type === "Literal" && typeof classNameValue.value === "string") {
           if (containsTailwindColor(classNameValue.value)) {
             context.report({
               node: classNameAttribute,

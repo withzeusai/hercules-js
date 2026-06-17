@@ -26,8 +26,7 @@ export default createRule<Options, MessageIds>({
   meta: {
     type: "problem",
     docs: {
-      description:
-        "Require 'type' keyword when importing from convex/_generated/dataModel",
+      description: "Require 'type' keyword when importing from convex/_generated/dataModel",
     },
     schema: [], // No configuration options
     messages: {
@@ -41,10 +40,7 @@ export default createRule<Options, MessageIds>({
     return {
       ImportDeclaration(node: TSESTree.ImportDeclaration) {
         // Check if the import is from convex/_generated/dataModel
-        if (
-          typeof node.source.value === "string" &&
-          isConvexDataModelImport(node.source.value)
-        ) {
+        if (typeof node.source.value === "string" && isConvexDataModelImport(node.source.value)) {
           // Check if it's not a type import
           if (node.importKind !== "type") {
             context.report({

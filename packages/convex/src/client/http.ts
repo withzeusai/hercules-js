@@ -14,7 +14,9 @@ type ApplySyncReference = FunctionReference<
   SyncResponse
 >;
 
-export type AccessControlSyncComponent = { sync: { applySync: ApplySyncReference } };
+export type AccessControlSyncComponent = {
+  sync: { applySync: ApplySyncReference };
+};
 
 export type RegisterAccessControlRoutesOptions = {
   httpAction: HttpActionBuilder;
@@ -102,7 +104,10 @@ function verifyWebhookPayload(secret: string, rawBody: string, headers: Headers)
   }
 
   try {
-    return { ok: true as const, payload: new Webhook(secret).verify(rawBody, webhookHeaders) };
+    return {
+      ok: true as const,
+      payload: new Webhook(secret).verify(rawBody, webhookHeaders),
+    };
   } catch (error) {
     if (error instanceof WebhookVerificationError) {
       return { ok: false as const };
