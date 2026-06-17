@@ -1,5 +1,11 @@
 # @usehercules/auth
 
+## 1.1.0
+
+### Minor Changes
+
+- [#40](https://github.com/withzeusai/hercules-js/pull/40) [`3037113`](https://github.com/withzeusai/hercules-js/commit/30371131ec9d1fb3faca6813d5025eb576c0107d) Thanks [@karanthakkar1996](https://github.com/karanthakkar1996)! - Add Hercules Auth impersonation handoff handling and React state helpers.
+
 ## 1.0.46
 
 ### Patch Changes
