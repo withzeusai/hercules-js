@@ -1,4 +1,4 @@
-// Hercules Access Control projection wire protocol — v3 (schemaVersion 3).
+// Hercules IAM projection wire protocol — v3 (schemaVersion 3).
 //
 // CONSUMER side. This module mirrors, as zod schemas, the producer-side source of
 // truth at packages/backend-shared/src/access-control/projection-protocol.ts in the

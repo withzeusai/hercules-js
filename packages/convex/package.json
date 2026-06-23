@@ -1,7 +1,7 @@
 {
   "name": "@usehercules/convex",
   "version": "1.0.0",
-  "description": "Convex Access Control utilities for Hercules applications",
+  "description": "Convex IAM utilities for Hercules applications",
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -9,21 +9,21 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
-    "./access-management": {
-      "types": "./dist/client/access-management.d.ts",
-      "default": "./dist/client/access-management.js"
+    "./iam-management": {
+      "types": "./dist/client/iam-management.d.ts",
+      "default": "./dist/client/iam-management.js"
     },
-    "./access-management.js": {
-      "types": "./dist/client/access-management.d.ts",
-      "default": "./dist/client/access-management.js"
+    "./iam-management.js": {
+      "types": "./dist/client/iam-management.d.ts",
+      "default": "./dist/client/iam-management.js"
     },
-    "./access-service": {
-      "types": "./dist/client/access-service.d.ts",
-      "default": "./dist/client/access-service.js"
+    "./iam-service": {
+      "types": "./dist/client/iam-service.d.ts",
+      "default": "./dist/client/iam-service.js"
     },
-    "./access-service.js": {
-      "types": "./dist/client/access-service.d.ts",
-      "default": "./dist/client/access-service.js"
+    "./iam-service.js": {
+      "types": "./dist/client/iam-service.d.ts",
+      "default": "./dist/client/iam-service.js"
     },
     "./http": {
       "types": "./dist/client/http.d.ts",
@@ -52,7 +52,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "hercules-convex-access-check": "./dist/checker/cli.js"
+    "hercules-convex-iam-check": "./dist/checker/cli.js"
   },
   "author": "Hercules Team",
   "license": "MIT",

@@ -27,7 +27,7 @@ describe("action taxonomy", () => {
     expect(expandAction(WILDCARD_ACTION)).toEqual([WILDCARD_ACTION]);
   });
 
-  test("the reserved Access Control action set is centralized", () => {
+  test("the reserved IAM action set is centralized", () => {
     expect([...RESERVED_ACCESS_CONTROL_ACTIONS]).toEqual(["manage_members", "manage_access"]);
   });
 
@@ -37,7 +37,7 @@ describe("action taxonomy", () => {
     expect(actionMatches(WILDCARD_ACTION, "future_product_action")).toBe(true);
   });
 
-  test("actionMatches: wildcard excludes reserved Access Control actions", () => {
+  test("actionMatches: wildcard excludes reserved IAM actions", () => {
     for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
       expect(actionMatches(WILDCARD_ACTION, action)).toBe(false);
     }
@@ -135,7 +135,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     ).toBe("allow");
   });
 
-  test("owner and admin wildcard modes retain reserved Access Control authority", () => {
+  test("owner and admin wildcard modes retain reserved IAM authority", () => {
     for (const wildcard of ["immutable", "default"] as const) {
       for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
         expect(
@@ -275,7 +275,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     ).toBe("deny");
   });
 
-  test("explicit reserved allows confer reserved Access Control authority", () => {
+  test("explicit reserved allows confer reserved IAM authority", () => {
     for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
       expect(
         evaluateAccess({

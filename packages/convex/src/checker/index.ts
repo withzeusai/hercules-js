@@ -12,7 +12,7 @@ type RawBuilderCandidate = {
   declaration: ts.Node;
 };
 
-export type AccessControlCheckFinding = {
+export type IamCheckFinding = {
   code:
     | "convex_dir_missing"
     | "raw_exported_convex_builder"
@@ -37,15 +37,15 @@ export type AccessControlCheckFinding = {
   suggestion?: string;
 };
 
-export type AccessControlCheckResult = {
+export type IamCheckResult = {
   ok: boolean;
   convexDir: string;
   filesChecked: number;
   fixedFiles: number;
-  findings: AccessControlCheckFinding[];
+  findings: IamCheckFinding[];
 };
 
-export type CheckAccessControlSourceOptions = {
+export type CheckIamSourceOptions = {
   cwd?: string;
   convexDir?: string;
   fixAuthenticated?: boolean;
@@ -59,31 +59,28 @@ const publicBuilderNames = new Set<string>([
   "authenticatedQuery",
   "authenticatedMutation",
   "authenticatedAction",
-  "accessQuery",
-  "accessMutation",
-  "accessAction",
+  "iamQuery",
+  "iamMutation",
+  "iamAction",
 ]);
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const ignoredDirectories = new Set(["_generated", "node_modules", "dist", ".git"]);
 const exemptFileNames = new Set([
-  "access.ts",
-  "access.tsx",
+  "iam.ts",
+  "iam.tsx",
   "hercules.ts",
   "hercules.tsx",
   "http.ts",
   "convex.config.ts",
 ]);
-const exemptionMarkers = [
-  "hercules-access-control: allow-raw-builder",
-  "hercules-access-control: allow-raw-builders",
-];
-const accessControlPackageName = "@usehercules/convex";
-const accessServicePackageNames = new Set([
-  `${accessControlPackageName}/access-service`,
-  `${accessControlPackageName}/access-service.js`,
+const exemptionMarkers = ["hercules-iam: allow-raw-builder", "hercules-iam: allow-raw-builders"];
+const iamPackageName = "@usehercules/convex";
+const iamServicePackageNames = new Set([
+  `${iamPackageName}/iam-service`,
+  `${iamPackageName}/iam-service.js`,
 ]);
-const serviceAuthorityHelperNames = new Set(["createAccessInvitation", "createResourceInvitation"]);
-const accessServiceActionNames = new Set([
+const serviceAuthorityHelperNames = new Set(["createIamInvitation", "createResourceInvitation"]);
+const iamServiceActionNames = new Set([
   "archiveScope",
   "setDefaultRole",
   "createInvitation",
@@ -120,9 +117,7 @@ const accessServiceActionNames = new Set([
   "getUserExceptions",
 ]);
 
-export function checkAccessControlSource(
-  options: CheckAccessControlSourceOptions = {},
-): AccessControlCheckResult {
+export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckResult {
   const cwd = resolve(options.cwd ?? process.cwd());
   const convexDir = resolve(cwd, options.convexDir ?? "convex");
 
@@ -148,12 +143,12 @@ export function checkAccessControlSource(
   }
 
   // The managed-pattern rules only apply to apps that actually wire managed
-  // Access Control into their Convex functions. A plain Convex app keeps raw
+  // IAM into their Convex functions. A plain Convex app keeps raw
   // builder behavior, so the whole check is a pass-through no-op for it.
   const markerFiles = collectSourceFiles(convexDir, {
     includeExemptFiles: true,
   });
-  if (!markerFiles.some((filePath) => fileUsesManagedAccessControl(filePath, convexDir))) {
+  if (!markerFiles.some((filePath) => fileUsesManagedIam(filePath, convexDir))) {
     return {
       ok: true,
       convexDir,
@@ -189,7 +184,7 @@ export function checkAccessControlSource(
       checkCanonicalPermissionKeys(cwd, filePath, catalogPermissionKeys),
     ),
     ...[...sourceFiles, ...appSourceFiles].flatMap((filePath) =>
-      checkAccessControlOrgPatterns(cwd, filePath, orgOwnedTables),
+      checkIamOrgPatterns(cwd, filePath, orgOwnedTables),
     ),
   ];
 
@@ -202,17 +197,17 @@ export function checkAccessControlSource(
   };
 }
 
-export function formatAccessControlCheckResult(result: AccessControlCheckResult): string {
+export function formatIamCheckResult(result: IamCheckResult): string {
   if (result.ok) {
     const fileLabel = result.filesChecked === 1 ? "file" : "files";
     const fixedLabel =
       result.fixedFiles > 0
         ? ` ${result.fixedFiles} ${result.fixedFiles === 1 ? "file was" : "files were"} updated.`
         : "";
-    return `Hercules Access Control static check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel} This static check does not prove runtime role decisions or control-plane writes are authorized.`;
+    return `Hercules IAM static check passed (${result.filesChecked} ${fileLabel} checked).${fixedLabel} This static check does not prove runtime role decisions or control-plane writes are authorized.`;
   }
 
-  const lines = [`Hercules Access Control check failed with ${result.findings.length} finding(s):`];
+  const lines = [`Hercules IAM check failed with ${result.findings.length} finding(s):`];
 
   for (const finding of result.findings) {
     lines.push(`- ${finding.filePath}:${finding.line}:${finding.column} ${finding.message}`);
@@ -245,9 +240,9 @@ function fixSourceFileToAuthenticatedBuilders(filePath: string, convexDir: strin
     end: candidate.builderNode.getEnd(),
     text: authenticatedBuilderName(candidate.builder),
   }));
-  const accessImports = new Set(replacements.map((replacement) => replacement.text));
+  const iamImports = new Set(replacements.map((replacement) => replacement.text));
   replacements.push(...buildGeneratedServerImportRemovals(sourceFile, sourceText, candidates));
-  replacements.push(buildAccessImportReplacement(sourceFile, sourceText, accessImports, convexDir));
+  replacements.push(buildIamImportReplacement(sourceFile, sourceText, iamImports, convexDir));
 
   const nextSourceText = applyTextReplacements(sourceText, replacements);
   if (nextSourceText === sourceText) {
@@ -300,7 +295,7 @@ function collectAppSourceFiles(
   return collectSourceFiles(srcDir, options);
 }
 
-function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFinding[] {
+function checkSourceFile(cwd: string, filePath: string): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
   const rawBuilderImports = collectRawBuilderImports(sourceFile);
@@ -316,14 +311,14 @@ function checkSourceFile(cwd: string, filePath: string): AccessControlCheckFindi
     .map((candidate) => createFinding(cwd, sourceFile, candidate));
 }
 
-function checkAccessControlOrgPatterns(
+function checkIamOrgPatterns(
   cwd: string,
   filePath: string,
   orgOwnedTables: Set<string>,
-): AccessControlCheckFinding[] {
+): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
-  const findings: AccessControlCheckFinding[] = [];
+  const findings: IamCheckFinding[] = [];
 
   addPatternFinding({
     findings,
@@ -333,9 +328,9 @@ function checkAccessControlOrgPatterns(
     code: "placeholder_access_scope_id",
     pattern: /\b(?:herculesScopeId|accessScopeId|orgScopeId)\s*:\s*["']{2}/,
     message:
-      "Do not store a blank Hercules Access Control scope id. Create a Hercules Access Control scope first, then persist the returned accessScopeId.",
+      "Do not store a blank Hercules IAM scope id. Create a Hercules IAM scope first, then persist the returned accessScopeId.",
     suggestion:
-      "Use createAccessScope from @usehercules/convex/access-management before inserting org metadata.",
+      "Use createIamScope from @usehercules/convex/iam-management before inserting org metadata.",
   });
 
   addPatternFinding({
@@ -345,9 +340,9 @@ function checkAccessControlOrgPatterns(
     sourceText,
     code: "local_org_membership_table",
     pattern: /\b(?:memberships|membership|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
-    message: "Managed Access Control apps should not define app-local org membership tables.",
+    message: "Managed IAM apps should not define app-local org membership tables.",
     suggestion:
-      "Use Hercules Access Control scopes, principals, and role grants. Store only org metadata in app tables.",
+      "Use Hercules IAM scopes, principals, and role grants. Store only org metadata in app tables.",
   });
 
   addPatternFinding({
@@ -377,9 +372,9 @@ function checkAccessControlOrgPatterns(
   }
 
   for (const definition of collectManagedBuilderDefinitions(sourceFile, [
-    "accessQuery",
-    "accessMutation",
-    "accessAction",
+    "iamQuery",
+    "iamMutation",
+    "iamAction",
   ])) {
     if (
       /\bscopeFromArg\s*\(\s*["']orgScopeId["']\s*\)/.test(definition.text) &&
@@ -418,7 +413,7 @@ function checkAccessControlOrgPatterns(
           code: "authenticated_org_data_read",
           message: "Authenticated reads of org-owned data do not prove organization membership.",
           suggestion:
-            "Use accessQuery for private organization data. Use publicQuery only for explicitly public rows filtered to public state.",
+            "Use iamQuery for private organization data. Use publicQuery only for explicitly public rows filtered to public state.",
         }),
       );
     }
@@ -473,9 +468,9 @@ function collectManagedBuilderDefinitions(
   return definitions;
 }
 
-function checkHardcodedAccessScopeIds(cwd: string, filePath: string): AccessControlCheckFinding[] {
+function checkHardcodedAccessScopeIds(cwd: string, filePath: string): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
-  const findings: AccessControlCheckFinding[] = [];
+  const findings: IamCheckFinding[] = [];
 
   addPatternFinding({
     findings,
@@ -485,21 +480,18 @@ function checkHardcodedAccessScopeIds(cwd: string, filePath: string): AccessCont
     code: "hardcoded_access_scope_id",
     pattern:
       /\b(?:[A-Z][A-Z0-9_]*_)?(?:ACCESS_)?SCOPE_ID\b\s*=\s*["']01[A-Z0-9]{24}["']|\bscopeId\s*:\s*["']01[A-Z0-9]{24}["']/,
-    message: "Do not hardcode Access Control scope ids.",
+    message: "Do not hardcode IAM scope ids.",
     suggestion:
-      'Use the "default" scope sentinel for the app scope, or store org scope ids returned by createAccessScope/createOrgScope on app rows and load them from the row.',
+      'Use the "default" scope sentinel for the app scope, or store org scope ids returned by createIamScope/createOrgScope on app rows and load them from the row.',
   });
 
   return findings;
 }
 
-function checkPrivilegedResourcePermissionRules(
-  cwd: string,
-  filePath: string,
-): AccessControlCheckFinding[] {
+function checkPrivilegedResourcePermissionRules(cwd: string, filePath: string): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
-  const findings: AccessControlCheckFinding[] = [];
+  const findings: IamCheckFinding[] = [];
 
   function visit(node: ts.Node): void {
     if (ts.isObjectLiteralExpression(node)) {
@@ -588,7 +580,7 @@ type StaticValue =
   | { kind: "module"; target: ModuleTarget }
   | {
       kind: "known";
-      value: "publicBuilder" | "serviceAuthority" | "accessServiceFactory" | "accessServiceActions";
+      value: "publicBuilder" | "serviceAuthority" | "iamServiceFactory" | "iamServiceActions";
     };
 
 function checkPublicServiceAuthorityCalls(
@@ -596,7 +588,7 @@ function checkPublicServiceAuthorityCalls(
   convexDir: string,
   rootFilePaths: string[],
   filePaths: string[],
-): AccessControlCheckFinding[] {
+): IamCheckFinding[] {
   const sourceFiles = new Map<string, CheckerSourceFile>();
   for (const filePath of filePaths) {
     const sourceFile = createSourceFile(filePath, readFileSync(filePath, "utf8"));
@@ -630,7 +622,7 @@ function checkPublicServiceAuthorityCalls(
     if (relativePath.startsWith("../")) continue;
     convexModules.set(stripKnownModuleExtension(relativePath), info);
   }
-  const findings: AccessControlCheckFinding[] = [];
+  const findings: IamCheckFinding[] = [];
   const findingKeys = new Set<string>();
   const visitedCallables = new Set<string>();
 
@@ -644,10 +636,9 @@ function checkPublicServiceAuthorityCalls(
         sourceFile: info.sourceFile,
         node,
         code: "public_service_authority_call",
-        message:
-          "Exported public Convex functions must not call service-authority Access Control actions.",
+        message: "Exported public Convex functions must not call service-authority IAM actions.",
         suggestion:
-          "Use createAccessManagementActions for public access changes, or keep the createAccessServiceActions caller internal.",
+          "Use createIamManagementActions for public IAM changes, or keep the createIamServiceActions caller internal.",
       }),
     );
   };
@@ -721,12 +712,12 @@ function checkPublicServiceAuthorityCalls(
       const targetInfo = sourceFiles.get(target.filePath);
       return targetInfo ? resolveExportedValues(targetInfo, exportedName, resolving) : [];
     }
-    if (!accessServicePackageNames.has(target.moduleSpecifier)) return [];
+    if (!iamServicePackageNames.has(target.moduleSpecifier)) return [];
     if (serviceAuthorityHelperNames.has(exportedName)) {
       return [{ kind: "known", value: "serviceAuthority" }];
     }
-    if (exportedName === "createAccessServiceActions") {
-      return [{ kind: "known", value: "accessServiceFactory" }];
+    if (exportedName === "createIamServiceActions") {
+      return [{ kind: "known", value: "iamServiceFactory" }];
     }
     return [];
   }
@@ -740,10 +731,7 @@ function checkPublicServiceAuthorityCalls(
     if (resolving.has(symbolKey)) return [];
     const nextResolving = new Set(resolving).add(symbolKey);
 
-    if (
-      isAccessWiringSourceFile(info.filePath, convexDir) &&
-      publicBuilderNames.has(exportedName)
-    ) {
+    if (isIamWiringSourceFile(info.filePath, convexDir) && publicBuilderNames.has(exportedName)) {
       return [{ kind: "known", value: "publicBuilder" }];
     }
 
@@ -833,7 +821,7 @@ function checkPublicServiceAuthorityCalls(
       return resolveModuleExportValues(value.target, propertyName, resolving);
     }
     if (value.kind === "known") {
-      return value.value === "accessServiceActions" && accessServiceActionNames.has(propertyName)
+      return value.value === "iamServiceActions" && iamServiceActionNames.has(propertyName)
         ? [{ kind: "known", value: "serviceAuthority" }]
         : [];
     }
@@ -939,8 +927,8 @@ function checkPublicServiceAuthorityCalls(
 
       const values: StaticValue[] = [];
       for (const callable of resolveStaticValues(info, target.expression, scope, resolving)) {
-        if (callable.kind === "known" && callable.value === "accessServiceFactory") {
-          values.push({ kind: "known", value: "accessServiceActions" });
+        if (callable.kind === "known" && callable.value === "iamServiceFactory") {
+          values.push({ kind: "known", value: "iamServiceActions" });
         } else if (callable.kind === "node" && isCallableNode(callable.node)) {
           values.push(...resolveCallableReturnValues(callable, new Set(resolving)));
         }
@@ -1041,7 +1029,7 @@ function checkPublicServiceAuthorityCalls(
     }
 
     if (!moduleInfo) {
-      return path[0] === "accessService";
+      return path[0] === "iamService";
     }
 
     const exportedPath = path.slice(moduleSegmentCount);
@@ -1847,18 +1835,15 @@ function isPrivilegedResourceRuleKey(permissionKey: string): boolean {
   return action === "*" || action === "manage_members" || action === "manage_access";
 }
 
-function checkRuntimeSupersetPermissionKeys(
-  cwd: string,
-  filePath: string,
-): AccessControlCheckFinding[] {
+function checkRuntimeSupersetPermissionKeys(cwd: string, filePath: string): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
-  const findings: AccessControlCheckFinding[] = [];
+  const findings: IamCheckFinding[] = [];
 
   for (const definition of collectManagedBuilderDefinitions(sourceFile, [
-    "accessQuery",
-    "accessMutation",
-    "accessAction",
+    "iamQuery",
+    "iamMutation",
+    "iamAction",
   ])) {
     const permission = getLiteralPermissionProperty(definition.definition);
     if (!permission) continue;
@@ -1916,19 +1901,19 @@ function checkCanonicalPermissionKeys(
   cwd: string,
   filePath: string,
   catalogPermissionKeys: Set<string> | null,
-): AccessControlCheckFinding[] {
+): IamCheckFinding[] {
   if (!catalogPermissionKeys) {
     return [];
   }
 
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
-  const findings: AccessControlCheckFinding[] = [];
+  const findings: IamCheckFinding[] = [];
 
   for (const definition of collectManagedBuilderDefinitions(sourceFile, [
-    "accessQuery",
-    "accessMutation",
-    "accessAction",
+    "iamQuery",
+    "iamMutation",
+    "iamAction",
   ])) {
     const permission = getLiteralPermissionProperty(definition.definition);
     if (!permission) continue;
@@ -1981,10 +1966,10 @@ function createPatternFindingAtNode(args: {
   cwd: string;
   sourceFile: ts.SourceFile;
   node: ts.Node;
-  code: AccessControlCheckFinding["code"];
+  code: IamCheckFinding["code"];
   message: string;
   suggestion: string;
-}): AccessControlCheckFinding {
+}): IamCheckFinding {
   const position = args.sourceFile.getLineAndCharacterOfPosition(
     args.node.getStart(args.sourceFile),
   );
@@ -2004,11 +1989,11 @@ function escapeRegExp(value: string): string {
 }
 
 function addPatternFinding(args: {
-  findings: AccessControlCheckFinding[];
+  findings: IamCheckFinding[];
   cwd: string;
   filePath: string;
   sourceText: string;
-  code: AccessControlCheckFinding["code"];
+  code: IamCheckFinding["code"];
   pattern: RegExp;
   message: string;
   suggestion: string;
@@ -2197,26 +2182,26 @@ function buildImportSpecifierRemoval(
   return { start: specifier.getFullStart(), end: specifier.getEnd(), text: "" };
 }
 
-function buildAccessImportReplacement(
+function buildIamImportReplacement(
   sourceFile: ts.SourceFile,
   sourceText: string,
-  accessImports: Set<string>,
+  iamImports: Set<string>,
   convexDir: string,
 ): { start: number; end: number; text: string } {
-  const sortedImports = [...accessImports].sort();
-  const accessImport = findAccessImport(sourceFile, convexDir);
+  const sortedImports = [...iamImports].sort();
+  const iamImport = findIamImport(sourceFile, convexDir);
 
-  if (accessImport?.namedBindings && ts.isNamedImports(accessImport.namedBindings)) {
+  if (iamImport?.namedBindings && ts.isNamedImports(iamImport.namedBindings)) {
     const existingNames = new Set(
-      accessImport.namedBindings.elements.map((specifier) => specifier.name.text),
+      iamImport.namedBindings.elements.map((specifier) => specifier.name.text),
     );
     const missingNames = sortedImports.filter((name) => !existingNames.has(name));
     if (missingNames.length === 0) {
       return { start: 0, end: 0, text: "" };
     }
 
-    const closingBraceStart = accessImport.namedBindings.getEnd() - 1;
-    const prefix = accessImport.namedBindings.elements.length > 0 ? ", " : "";
+    const closingBraceStart = iamImport.namedBindings.getEnd() - 1;
+    const prefix = iamImport.namedBindings.elements.length > 0 ? ", " : "";
     return {
       start: closingBraceStart,
       end: closingBraceStart,
@@ -2224,8 +2209,8 @@ function buildAccessImportReplacement(
     };
   }
 
-  const accessImportPath = buildAccessImportPath(sourceFile, convexDir);
-  const importLine = `import { ${sortedImports.join(", ")} } from "${accessImportPath}";\n`;
+  const iamImportPath = buildIamImportPath(sourceFile, convexDir);
+  const importLine = `import { ${sortedImports.join(", ")} } from "${iamImportPath}";\n`;
   const lastImport = sourceFile.statements.filter(ts.isImportDeclaration).at(-1);
   if (!lastImport) {
     return { start: 0, end: 0, text: importLine };
@@ -2238,7 +2223,7 @@ function buildAccessImportReplacement(
   };
 }
 
-function findAccessImport(
+function findIamImport(
   sourceFile: ts.SourceFile,
   convexDir: string,
 ): { namedBindings?: ts.NamedImportBindings } | null {
@@ -2248,7 +2233,7 @@ function findAccessImport(
     }
     if (
       !ts.isStringLiteral(statement.moduleSpecifier) ||
-      !isAccessImport(sourceFile, statement.moduleSpecifier.text, convexDir)
+      !isIamImport(sourceFile, statement.moduleSpecifier.text, convexDir)
     ) {
       continue;
     }
@@ -2259,14 +2244,14 @@ function findAccessImport(
   return null;
 }
 
-function buildAccessImportPath(sourceFile: ts.SourceFile, convexDir: string): string {
+function buildIamImportPath(sourceFile: ts.SourceFile, convexDir: string): string {
   const relativePath = normalizePath(
-    relative(dirname(sourceFile.fileName), join(convexDir, "hercules")),
+    relative(dirname(sourceFile.fileName), join(convexDir, "iam")),
   );
   return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
-function isAccessImport(
+function isIamImport(
   sourceFile: ts.SourceFile,
   moduleSpecifier: string,
   convexDir: string,
@@ -2279,24 +2264,24 @@ function isAccessImport(
     stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
       join(convexDir, "hercules") ||
     stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
-      join(convexDir, "access")
+      join(convexDir, "iam")
   );
 }
 
-function isAccessWiringSourceFile(filePath: string | undefined, convexDir: string): boolean {
+function isIamWiringSourceFile(filePath: string | undefined, convexDir: string): boolean {
   if (!filePath) return false;
   const extensionlessPath = stripKnownModuleExtension(filePath);
   return (
     extensionlessPath === join(convexDir, "hercules") ||
-    extensionlessPath === join(convexDir, "access")
+    extensionlessPath === join(convexDir, "iam")
   );
 }
 
-// A Convex function file uses managed Access Control when it imports the
-// @usehercules/convex SDK (including subpaths such as /access-management and
-// /convex.config) or the local convex/hercules or convex/access wiring module
+// A Convex function file uses managed IAM when it imports the
+// @usehercules/convex SDK (including subpaths such as /iam-management and
+// /convex.config) or the local convex/hercules or convex/iam wiring module
 // the managed builders are re-exported from.
-function fileUsesManagedAccessControl(filePath: string, convexDir: string): boolean {
+function fileUsesManagedIam(filePath: string, convexDir: string): boolean {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
 
@@ -2309,9 +2294,9 @@ function fileUsesManagedAccessControl(filePath: string, convexDir: string): bool
       continue;
     }
     if (
-      moduleSpecifier.text === accessControlPackageName ||
-      moduleSpecifier.text.startsWith(`${accessControlPackageName}/`) ||
-      isAccessImport(sourceFile, moduleSpecifier.text, convexDir)
+      moduleSpecifier.text === iamPackageName ||
+      moduleSpecifier.text.startsWith(`${iamPackageName}/`) ||
+      isIamImport(sourceFile, moduleSpecifier.text, convexDir)
     ) {
       return true;
     }
@@ -2410,7 +2395,7 @@ function createFinding(
   cwd: string,
   sourceFile: ts.SourceFile,
   candidate: RawBuilderCandidate,
-): AccessControlCheckFinding {
+): IamCheckFinding {
   const position = sourceFile.getLineAndCharacterOfPosition(
     candidate.builderNode.getStart(sourceFile),
   );
@@ -2425,7 +2410,7 @@ function createFinding(
     functionName: candidate.functionName,
     builder: candidate.builder,
     message: `Exported Convex function "${candidate.functionName}" uses raw ${candidate.builder}().`,
-    suggestion: `Import from ./access and choose public${builderSuffix}, authenticated${builderSuffix}, or access${builderSuffix}.`,
+    suggestion: `Import from ./iam and choose public${builderSuffix}, authenticated${builderSuffix}, or iam${builderSuffix}.`,
   };
 }
 

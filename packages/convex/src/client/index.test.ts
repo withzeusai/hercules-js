@@ -4,13 +4,13 @@ import type { ComponentApi } from "../_generated/component";
 import {
   DEFAULT_SCOPE_SENTINEL,
   PERMISSION_RESOURCE_TYPE_SENTINEL,
-  createAccessControl,
+  createIam,
   scopeFromArg,
   scopeFromDefaultParentResource,
   scopeFromDefaultResource,
   scopeFromParentResource,
   scopeFromResource,
-  type AccessControlComponent,
+  type IamComponent,
 } from "./index";
 
 // A stand-in for Convex's query/mutation/action builders: returns the function
@@ -31,9 +31,9 @@ const component = {
   },
 };
 
-describe("createAccessControl", () => {
+describe("createIam", () => {
   test("accepts the generated component API type", () => {
-    expectTypeOf<ComponentApi<"hercules">>().toMatchTypeOf<AccessControlComponent>();
+    expectTypeOf<ComponentApi<"hercules">>().toMatchTypeOf<IamComponent>();
   });
 
   test("resolves the Hercules-mounted component by default", () => {
@@ -41,7 +41,7 @@ describe("createAccessControl", () => {
       ...component,
       checks: { authorize: "herculesAuthorize" },
     };
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -69,8 +69,8 @@ describe("createAccessControl", () => {
     });
   });
 
-  test("requires access builders to declare a permission", () => {
-    const builders = createAccessControl({
+  test("requires IAM builders to declare a permission", () => {
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -78,16 +78,16 @@ describe("createAccessControl", () => {
     });
 
     expect(() =>
-      builders.accessMutation({
+      builders.iamMutation({
         args: {},
         scope: scopeFromArg("scopeId"),
         handler: async () => null,
       } as never),
-    ).toThrow("access* builders require a non-empty permission.");
+    ).toThrow("iam* builders require a non-empty permission.");
   });
 
   test("returns the canonical Hercules Auth user id from the verified identity", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -108,7 +108,7 @@ describe("createAccessControl", () => {
   });
 
   test("returns undefined when there is no authenticated user", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -122,14 +122,14 @@ describe("createAccessControl", () => {
     await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBeUndefined();
   });
 
-  test("defaults access builders to the app scope", async () => {
-    const builders = createAccessControl({
+  test("defaults IAM builders to the app scope", async () => {
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
       component: component as never,
     });
-    const handler = builders.accessMutation({
+    const handler = builders.iamMutation({
       permission: "tasks:create",
       args: {},
       handler: async () => "ok",
@@ -158,7 +158,7 @@ describe("createAccessControl", () => {
   });
 
   test("authenticated builders fail closed when authorization denies", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -190,14 +190,14 @@ describe("createAccessControl", () => {
     });
   });
 
-  test("access builders pass the extracted scope and permission to the component check", async () => {
-    const builders = createAccessControl({
+  test("IAM builders pass the extracted scope and permission to the component check", async () => {
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
       component: component as never,
     });
-    const handler = builders.accessMutation({
+    const handler = builders.iamMutation({
       permission: "appointments:create",
       scope: scopeFromArg("orgScopeId"),
       args: {},
@@ -227,8 +227,8 @@ describe("createAccessControl", () => {
     });
   });
 
-  test("read helpers use the configured access component", async () => {
-    const builders = createAccessControl({
+  test("read helpers use the configured IAM component", async () => {
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -452,7 +452,7 @@ describe("createAccessControl", () => {
   });
 
   test("hasPermission forwards a bounded explicit ancestor chain atomically", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -491,7 +491,7 @@ describe("createAccessControl", () => {
   });
 
   test("hasPermission accepts a permission key and defaults to the app scope", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -521,7 +521,7 @@ describe("createAccessControl", () => {
   });
 
   test("filterAuthorizedResources keeps only the rows the caller can access", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -563,7 +563,7 @@ describe("createAccessControl", () => {
   });
 
   test("filterAuthorizedResources includes rows allowed by an ancestor", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -603,7 +603,7 @@ describe("createAccessControl", () => {
   });
 
   test("filterAuthorizedResources excludes rows denied by an ancestor", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -639,7 +639,7 @@ describe("createAccessControl", () => {
   });
 
   test("filterAuthorizedResources returns [] when the caller is unauthenticated", async () => {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
@@ -658,14 +658,14 @@ describe("createAccessControl", () => {
     expect(ctx.runQuery).not.toHaveBeenCalled();
   });
 
-  test("access builders surface a ConvexError when scope extraction returns no scope", async () => {
-    const builders = createAccessControl({
+  test("IAM builders surface a ConvexError when scope extraction returns no scope", async () => {
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
       component: component as never,
     });
-    const handler = builders.accessMutation({
+    const handler = builders.iamMutation({
       permission: "appointments:create",
       scope: scopeFromArg("orgScopeId"),
       args: {},
@@ -727,13 +727,13 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   function makeTaskMutation(
     authorizeAgainst?: (row: Record<string, unknown>) => Array<{ type: string; id: string }>,
   ) {
-    const builders = createAccessControl({
+    const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
       action: identityBuilder,
       component: component as never,
     });
-    return builders.accessMutation({
+    return builders.iamMutation({
       permission: "app.task:edit",
       scope: scopeFromResource("tasks", "taskId", { authorizeAgainst }),
       args: {},

@@ -2,14 +2,14 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { checkAccessControlSource, formatAccessControlCheckResult } from "./index";
+import { checkIamSource, formatIamCheckResult } from "./index";
 
-describe("checkAccessControlSource", () => {
+describe("checkIamSource", () => {
   test("reports exported raw Convex builders", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        import { createAccessControl } from "@usehercules/convex";
-        export const builders = createAccessControl;
+        import { createIam } from "@usehercules/convex";
+        export const builders = createIam;
       `,
       "convex/posts.ts": `
         import { query, mutation as rawMutation, internalMutation } from "./_generated/server";
@@ -34,7 +34,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
@@ -51,12 +51,12 @@ describe("checkAccessControlSource", () => {
         builder: "mutation",
       },
     ]);
-    expect(formatAccessControlCheckResult(result)).toContain(
-      "Import from ./access and choose publicQuery, authenticatedQuery, or accessQuery.",
+    expect(formatIamCheckResult(result)).toContain(
+      "Import from ./iam and choose publicQuery, authenticatedQuery, or iamQuery.",
     );
   });
 
-  test("passes apps that do not use managed Access Control", () => {
+  test("passes apps that do not use managed IAM", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { query, mutation } from "./_generated/server";
@@ -85,12 +85,12 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
-  test("does not rewrite raw builders in apps that do not use managed Access Control", () => {
+  test("does not rewrite raw builders in apps that do not use managed IAM", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { query } from "./_generated/server";
@@ -102,7 +102,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({
+    const result = checkIamSource({
       cwd: root,
       fixAuthenticated: true,
     });
@@ -113,14 +113,14 @@ describe("checkAccessControlSource", () => {
     expect(source).toContain("export const list = query({");
   });
 
-  test("still reports raw unguarded builders when Access Control is wired through convex.config.ts", () => {
+  test("still reports raw unguarded builders when IAM is wired through convex.config.ts", () => {
     const root = createFixture({
       "convex/convex.config.ts": `
         import { defineApp } from "convex/server";
-        import accessControl from "@usehercules/convex/convex.config";
+        import iam from "@usehercules/convex/convex.config";
 
         const app = defineApp();
-        app.use(accessControl);
+        app.use(iam);
         export default app;
       `,
       "convex/posts.ts": `
@@ -133,7 +133,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
@@ -155,14 +155,14 @@ describe("checkAccessControlSource", () => {
       `,
       "convex/tasks.ts": `
         import { internalAction, mutation } from "./_generated/server";
-        import { accessMutation, authenticatedQuery } from "./hercules";
+        import { iamMutation, authenticatedQuery } from "./hercules";
 
         export const list = authenticatedQuery({
           args: {},
           handler: async () => [],
         });
 
-        export const create = accessMutation({
+        export const create = iamMutation({
           permission: "tasks:create",
           args: {},
           handler: async () => null,
@@ -173,7 +173,7 @@ describe("checkAccessControlSource", () => {
           handler: async () => null,
         });
 
-        // hercules-access-control: allow-raw-builder
+        // hercules-iam: allow-raw-builder
         export const bootstrap = mutation({
           args: {},
           handler: async () => null,
@@ -184,7 +184,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, filesChecked: 1, findings: [] });
   });
@@ -192,7 +192,7 @@ describe("checkAccessControlSource", () => {
   test("reports service-authority actions referenced by exported managed builders", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -201,7 +201,7 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx) =>
-            ctx.runAction(internal.accessService.assignRole, {
+            ctx.runAction(internal.iamService.assignRole, {
               scopeId: "scope_1",
             }),
         });
@@ -209,7 +209,7 @@ describe("checkAccessControlSource", () => {
         const removeMember = publicAction({
           args: {},
           handler: async (ctx) =>
-            ctx.runAction(internal.accessService.removeRole, {
+            ctx.runAction(internal.iamService.removeRole, {
               scopeId: "scope_1",
             }),
         });
@@ -218,7 +218,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
@@ -237,17 +237,17 @@ describe("checkAccessControlSource", () => {
   test("reports service-authority references hidden behind same-file helpers", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { accessAction } from "./hercules";
+        import { iamAction } from "./hercules";
 
         async function replaceAccess(ctx, args) {
-          return await ctx.runAction(internal.accessService.setResourcePermissionRules, args);
+          return await ctx.runAction(internal.iamService.setResourcePermissionRules, args);
         }
 
-        export const share = accessAction({
+        export const share = iamAction({
           permission: "app.projects:share",
           args: {},
           handler: async (ctx, args) => replaceAccess(ctx, args),
@@ -255,7 +255,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -270,13 +270,13 @@ describe("checkAccessControlSource", () => {
   test("reports service-authority calls hidden behind imported local helpers", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projectMembers.ts": `
@@ -290,7 +290,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -305,7 +305,7 @@ describe("checkAccessControlSource", () => {
   test("reports service-authority calls behind aliased and namespace public builders", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/aliased.ts": `
         import { internal } from "./_generated/api";
@@ -315,7 +315,7 @@ describe("checkAccessControlSource", () => {
         export const addMember = auth({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessService.assignRole, args),
+            ctx.runAction(internal.iamService.assignRole, args),
         });
       `,
       "convex/namespaced.ts": `
@@ -325,12 +325,12 @@ describe("checkAccessControlSource", () => {
         export const removeMember = access.authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessService.removeRole, args),
+            ctx.runAction(internal.iamService.removeRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -340,17 +340,17 @@ describe("checkAccessControlSource", () => {
   test("reports imported helper aliases through barrels and emitted js specifiers", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/helpers/access.ts": `
+      "convex/helpers/iam.ts": `
         import { internal } from "../_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/helpers/index.ts": `
-        export { assignRole } from "./access.js";
+        export { assignRole } from "./iam.js";
       `,
       "convex/projectMembers.ts": `
         import { authenticatedAction } from "./hercules";
@@ -364,13 +364,13 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: "public_service_authority_call",
-          filePath: "convex/helpers/access.ts",
+          filePath: "convex/helpers/iam.ts",
         }),
       ]),
     );
@@ -379,13 +379,13 @@ describe("checkAccessControlSource", () => {
   test("reports service-authority calls through namespace-imported local helpers", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projectMembers.ts": `
@@ -399,7 +399,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -411,16 +411,16 @@ describe("checkAccessControlSource", () => {
     );
   });
 
-  test("reports standalone service-authority helpers imported from access-service", () => {
+  test("reports standalone service-authority helpers imported from iam-service", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
         import {
-          createAccessInvitation as inviteMember,
-        } from "@usehercules/convex/access-service";
-        import * as accessService from "@usehercules/convex/access-service";
+          createIamInvitation as inviteMember,
+        } from "@usehercules/convex/iam-service";
+        import * as iamService from "@usehercules/convex/iam-service";
         import { authenticatedAction } from "./hercules";
 
         export const invite = authenticatedAction({
@@ -435,7 +435,7 @@ describe("checkAccessControlSource", () => {
         export const inviteToProject = authenticatedAction({
           args: {},
           handler: async () =>
-            accessService.createResourceInvitation({
+            iamService.createResourceInvitation({
               scopeId: "scope_1",
               email: "member@example.com",
               resourceType: "app.projects",
@@ -446,7 +446,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -456,21 +456,21 @@ describe("checkAccessControlSource", () => {
   test("resolves builders and service helpers through src namespace barrels", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/accessBuilders.ts": `
+      "convex/iamBuilders.ts": `
         export { authenticatedAction } from "./hercules";
       `,
       "src/access/service.ts": `
         export {
-          createAccessInvitation as inviteMember,
-        } from "@usehercules/convex/access-service";
+          createIamInvitation as inviteMember,
+        } from "@usehercules/convex/iam-service";
       `,
       "src/access/index.ts": `
         export * as service from "./service";
       `,
       "convex/projectMembers.ts": `
-        import * as access from "./accessBuilders";
+        import * as access from "./iamBuilders";
         import { service } from "../src/access";
 
         export const invite = access.authenticatedAction({
@@ -484,7 +484,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -499,14 +499,14 @@ describe("checkAccessControlSource", () => {
   test("resolves bound handlers from non-inline builder configs", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         const definition = {
@@ -518,7 +518,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -528,14 +528,14 @@ describe("checkAccessControlSource", () => {
   test("uses final static config properties after object spreads", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         const serviceConfig = {
@@ -551,7 +551,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -559,14 +559,14 @@ describe("checkAccessControlSource", () => {
   test("resolves statically returned handler callbacks", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.removeRole, args);
+          return await ctx.runAction(internal.iamService.removeRole, args);
         }
 
         function makeHandler() {
@@ -580,7 +580,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -590,18 +590,18 @@ describe("checkAccessControlSource", () => {
   test("resolves destructured aliases and deterministic outer reassignments", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.removeRole, args);
+          return await ctx.runAction(internal.iamService.removeRole, args);
         }
 
         const helpers = { assignRole };
@@ -627,7 +627,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -637,14 +637,14 @@ describe("checkAccessControlSource", () => {
   test("uses the latest deterministic lexical assignment", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         export const update = authenticatedAction({
@@ -660,7 +660,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -668,14 +668,14 @@ describe("checkAccessControlSource", () => {
   test("does not infer branch-only callable reassignments", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         export const update = authenticatedAction({
@@ -691,7 +691,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -699,14 +699,14 @@ describe("checkAccessControlSource", () => {
   test("does not infer switch or loop-only callable reassignments", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         export const throughSwitch = authenticatedAction({
@@ -735,21 +735,21 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
-  test("detects renamed modules built with createAccessServiceActions", () => {
+  test("detects renamed modules built with createIamServiceActions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/services/accessService.ts": `
-        import { createAccessServiceActions } from "@usehercules/convex/access-service";
+      "convex/services/iamService.ts": `
+        import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = createAccessServiceActions({ internalAction });
+        export const { assignRole } = createIamServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -758,12 +758,12 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.assignRole, args),
+            ctx.runAction(internal.services.iamService.assignRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -778,13 +778,13 @@ describe("checkAccessControlSource", () => {
   test("detects service modules built through a namespace package import", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/services/accessService.ts": `
-        import * as accessService from "@usehercules/convex/access-service";
+      "convex/services/iamService.ts": `
+        import * as iamService from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = accessService.createAccessServiceActions({ internalAction });
+        export const { assignRole } = iamService.createIamServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -793,12 +793,12 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.assignRole, args),
+            ctx.runAction(internal.services.iamService.assignRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -810,16 +810,16 @@ describe("checkAccessControlSource", () => {
     );
   });
 
-  test("marks only exports derived from createAccessServiceActions", () => {
+  test("marks only exports derived from createIamServiceActions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/services/accessService.ts": `
-        import { createAccessServiceActions } from "@usehercules/convex/access-service";
+      "convex/services/iamService.ts": `
+        import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        const actions = createAccessServiceActions({ internalAction });
+        const actions = createIamServiceActions({ internalAction });
         export const { assignRole } = actions;
         export const health = internalAction({
           args: {},
@@ -833,18 +833,18 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.assignRole, args),
+            ctx.runAction(internal.services.iamService.assignRole, args),
         });
 
         export const health = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.health, args),
+            ctx.runAction(internal.services.iamService.health, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -854,10 +854,10 @@ describe("checkAccessControlSource", () => {
   test("keeps safe properties separate when spreading admin actions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/services/accessService.ts": `
-        import { createAccessServiceActions } from "@usehercules/convex/access-service";
+      "convex/services/iamService.ts": `
+        import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
         const health = internalAction({
@@ -866,7 +866,7 @@ describe("checkAccessControlSource", () => {
         });
         const actions = {
           health,
-          ...createAccessServiceActions({ internalAction }),
+          ...createIamServiceActions({ internalAction }),
         };
 
         export const { assignRole, health: exportedHealth } = actions;
@@ -878,18 +878,18 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.assignRole, args),
+            ctx.runAction(internal.services.iamService.assignRole, args),
         });
 
         export const health = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.exportedHealth, args),
+            ctx.runAction(internal.services.iamService.exportedHealth, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -899,13 +899,13 @@ describe("checkAccessControlSource", () => {
   test("ignores shadowed helpers and uncalled nested functions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -920,7 +920,7 @@ describe("checkAccessControlSource", () => {
             await assignRole();
 
             async function unused(ctx, args) {
-              return await ctx.runAction(internal.accessService.removeRole, args);
+              return await ctx.runAction(internal.iamService.removeRole, args);
             }
 
             return [];
@@ -929,7 +929,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -937,14 +937,14 @@ describe("checkAccessControlSource", () => {
   test("reports direct object-property and Function.call/apply indirections", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
 
         const helpers = { assignRole };
@@ -966,7 +966,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -976,52 +976,52 @@ describe("checkAccessControlSource", () => {
   test("reports aliases of generated service-authority modules", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/services/accessService.ts": `
-        import { createAccessServiceActions } from "@usehercules/convex/access-service";
+      "convex/services/iamService.ts": `
+        import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = createAccessServiceActions({ internalAction });
+        export const { assignRole } = createIamServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
-        const rootAccessService = internal.accessService;
-        const nestedAccessService = internal.services.accessService;
+        const rootIamService = internal.iamService;
+        const nestedIamService = internal.services.iamService;
 
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(rootAccessService.assignRole, args),
+            ctx.runAction(rootIamService.assignRole, args),
         });
 
         export const addProjectMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(nestedAccessService.assignRole, args),
+            ctx.runAction(nestedIamService.assignRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
     ).toHaveLength(2);
   });
 
-  test("detects aliased createAccessServiceActions factories", () => {
+  test("detects aliased createIamServiceActions factories", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/services/accessService.ts": `
-        import { createAccessServiceActions } from "@usehercules/convex/access-service";
+      "convex/services/iamService.ts": `
+        import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        const createServiceActions = createAccessServiceActions;
+        const createServiceActions = createIamServiceActions;
         export const { assignRole } = createServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
@@ -1031,12 +1031,12 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.accessService.assignRole, args),
+            ctx.runAction(internal.services.iamService.assignRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -1051,20 +1051,20 @@ describe("checkAccessControlSource", () => {
   test("resolves default exports and import-then-export barrels", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/defaultHelper.ts": `
         import { internal } from "./_generated/api";
 
         export default async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/namedHelper.ts": `
         import { internal } from "./_generated/api";
 
         export async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.removeRole, args);
+          return await ctx.runAction(internal.iamService.removeRole, args);
         }
       `,
       "convex/barrel.ts": `
@@ -1088,7 +1088,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -1098,13 +1098,13 @@ describe("checkAccessControlSource", () => {
   test("keeps dangerous closure bindings from declaration scope", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1125,7 +1125,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -1135,13 +1135,13 @@ describe("checkAccessControlSource", () => {
   test("keeps safe closure bindings from declaration scope", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1163,7 +1163,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1171,14 +1171,14 @@ describe("checkAccessControlSource", () => {
   test("reports service-authority calls through shorthand handler properties", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
         const handler = async (ctx, args) =>
-          ctx.runAction(internal.accessService.assignRole, args);
+          ctx.runAction(internal.iamService.assignRole, args);
 
         export const update = authenticatedAction({
           args: {},
@@ -1187,7 +1187,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(
       result.findings.filter((finding) => finding.code === "public_service_authority_call"),
@@ -1197,13 +1197,13 @@ describe("checkAccessControlSource", () => {
   test("ignores namespace helper imports shadowed in callable scope", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1217,7 +1217,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1225,7 +1225,7 @@ describe("checkAccessControlSource", () => {
   test("terminates on cyclic local callable aliases", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { authenticatedAction } from "./hercules";
@@ -1241,7 +1241,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1249,13 +1249,13 @@ describe("checkAccessControlSource", () => {
   test("ignores loop and generated-internal lexical shadows", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1272,11 +1272,11 @@ describe("checkAccessControlSource", () => {
 
             {
               const internal = {
-                accessService: {
+                iamService: {
                   assignRole: async () => null,
                 },
               };
-              await internal.accessService.assignRole();
+              await internal.iamService.assignRole();
             }
 
             return [];
@@ -1285,7 +1285,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1293,7 +1293,7 @@ describe("checkAccessControlSource", () => {
   test("ignores generated-internal lexical shadows in switch clauses", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
@@ -1305,11 +1305,11 @@ describe("checkAccessControlSource", () => {
             switch (value) {
               case "safe":
                 const internal = {
-                  accessService: {
+                  iamService: {
                     assignRole: async () => null,
                   },
                 };
-                await internal.accessService.assignRole();
+                await internal.iamService.assignRole();
                 break;
             }
           },
@@ -1317,7 +1317,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1325,13 +1325,13 @@ describe("checkAccessControlSource", () => {
   test("treats passing a known dangerous callable as public exposure", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessService.assignRole, args);
+          return await ctx.runAction(internal.iamService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1358,7 +1358,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     // The checker does not infer whether arbitrary higher-order functions call
     // their arguments. Passing a statically dangerous callable from a public
@@ -1371,7 +1371,7 @@ describe("checkAccessControlSource", () => {
   test("does not treat unrelated builder-shaped imports as public roots", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/fakeBuilders.ts": `
         export const authenticatedAction = (definition) => definition;
@@ -1382,7 +1382,7 @@ describe("checkAccessControlSource", () => {
 
         export const run = authenticatedAction({
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessService.assignRole, args),
+            ctx.runAction(internal.iamService.assignRole, args),
         });
       `,
       "convex/namespaced.ts": `
@@ -1391,12 +1391,12 @@ describe("checkAccessControlSource", () => {
 
         export const run = fakeBuilders.authenticatedAction({
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessService.assignRole, args),
+            ctx.runAction(internal.iamService.assignRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1404,7 +1404,7 @@ describe("checkAccessControlSource", () => {
   test("ignores unreachable service references in internal-only functions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
@@ -1419,7 +1419,7 @@ describe("checkAccessControlSource", () => {
         export const repair = internalAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessService.assignRole, args),
+            ctx.runAction(internal.iamService.assignRole, args),
         });
       `,
       "convex/repairs.ts": `
@@ -1429,12 +1429,12 @@ describe("checkAccessControlSource", () => {
         export const repair = internalAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessService.assignRole, args),
+            ctx.runAction(internal.iamService.assignRole, args),
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1442,7 +1442,7 @@ describe("checkAccessControlSource", () => {
   test("describes successful checks as static and limited", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { authenticatedQuery } from "./hercules";
@@ -1454,7 +1454,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const message = formatAccessControlCheckResult(checkAccessControlSource({ cwd: root }));
+    const message = formatIamCheckResult(checkIamSource({ cwd: root }));
 
     expect(message).toContain("static check passed");
     expect(message).toContain(
@@ -1464,7 +1464,7 @@ describe("checkAccessControlSource", () => {
 
   test("reports a missing Convex directory", () => {
     const root = createFixture({});
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({
       ok: false,
@@ -1476,7 +1476,7 @@ describe("checkAccessControlSource", () => {
   test("reports placeholder Hercules org scope ids", () => {
     const root = createFixture({
       "convex/organizations.ts": `
-        import { authenticatedMutation } from "./access";
+        import { authenticatedMutation } from "./iam";
 
         export const create = authenticatedMutation({
           args: {},
@@ -1490,7 +1490,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
@@ -1499,17 +1499,15 @@ describe("checkAccessControlSource", () => {
         filePath: "convex/organizations.ts",
       },
     ]);
-    expect(formatAccessControlCheckResult(result)).toContain(
-      "Create a Hercules Access Control scope first",
-    );
+    expect(formatIamCheckResult(result)).toContain("Create a Hercules IAM scope first");
   });
 
-  test("reports hardcoded Access Control scope ids in source", () => {
+  test("reports hardcoded IAM scope ids in source", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
-      "convex/access.ts": `
+      "convex/iam.ts": `
         import { getEffectivePermissions } from "./hercules";
 
         export const CLINIC_SCOPE_ID = "01KTYRQ825E43T3PFRPZZESTPJ";
@@ -1520,26 +1518,24 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           code: "hardcoded_access_scope_id",
-          filePath: "convex/access.ts",
+          filePath: "convex/iam.ts",
         }),
       ]),
     );
-    expect(formatAccessControlCheckResult(result)).toContain(
-      "Do not hardcode Access Control scope ids",
-    );
+    expect(formatIamCheckResult(result)).toContain("Do not hardcode IAM scope ids");
   });
 
-  test("reports app-local org membership tables in managed Access Control apps", () => {
+  test("reports app-local org membership tables in managed IAM apps", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/schema.ts": `
         import { defineSchema, defineTable } from "convex/server";
@@ -1555,7 +1551,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
@@ -1578,9 +1574,9 @@ describe("checkAccessControlSource", () => {
       `,
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { accessQuery, scopeFromArg } from "./access";
+        import { iamQuery, scopeFromArg } from "./iam";
 
-        export const getBySlug = accessQuery({
+        export const getBySlug = iamQuery({
           permission: "posts.read",
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string(), slug: v.string() },
@@ -1595,7 +1591,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
@@ -1616,9 +1612,9 @@ describe("checkAccessControlSource", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { accessMutation, scopeFromArg } from "./hercules";
+        import { iamMutation, scopeFromArg } from "./hercules";
 
-        export const update = accessMutation({
+        export const update = iamMutation({
           permission: "posts.update",
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string(), postId: v.id("posts"), title: v.string() },
@@ -1629,7 +1625,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
@@ -1640,7 +1636,7 @@ describe("checkAccessControlSource", () => {
         }),
       ]),
     );
-    expect(formatAccessControlCheckResult(result)).toContain("scopeFromResource");
+    expect(formatIamCheckResult(result)).toContain("scopeFromResource");
   });
 
   test("reports authenticated reads of org-owned tables", () => {
@@ -1672,7 +1668,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
@@ -1687,9 +1683,9 @@ describe("checkAccessControlSource", () => {
 
   test("allows role-name comparisons because syntax cannot prove authorization intent", () => {
     const root = createFixture({
-      "convex/access.ts": `
-        import { createAccessControl } from "@usehercules/convex";
-        export const marker = createAccessControl;
+      "convex/iam.ts": `
+        import { createIam } from "@usehercules/convex";
+        export const marker = createIam;
       `,
       "src/hooks/use-org.tsx": `
         export function useOrg() {
@@ -1699,7 +1695,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(true);
     expect(result.findings).toEqual([]);
@@ -1708,13 +1704,13 @@ describe("checkAccessControlSource", () => {
   test("reports privileged permissions in resource permission rules", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
         import { api } from "./_generated/api";
 
         export async function promote(ctx, args) {
-          await ctx.runAction(api.accessManagement.setResourcePermissionRule, {
+          await ctx.runAction(api.iamManagement.setResourcePermissionRule, {
             scopeId: args.scopeId,
             subject: { type: "principal", principalId: args.principalId },
             resourceType: "app.projects",
@@ -1728,7 +1724,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toEqual(
@@ -1739,7 +1735,7 @@ describe("checkAccessControlSource", () => {
         }),
       ]),
     );
-    expect(formatAccessControlCheckResult(result)).toContain(
+    expect(formatIamCheckResult(result)).toContain(
       "Do not grant manage_members, manage_access, system.*, or wildcard permissions through resource permission rules",
     );
   });
@@ -1755,16 +1751,16 @@ describe("checkAccessControlSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { accessQuery, accessMutation, scopeFromArg } from "./hercules";
+        import { iamQuery, iamMutation, scopeFromArg } from "./hercules";
 
-        export const list = accessQuery({
+        export const list = iamQuery({
           permission: "projects:read",
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string() },
           handler: async (ctx) => ctx.db.query("projects").collect(),
         });
 
-        export const rename = accessMutation({
+        export const rename = iamMutation({
           permission: "app.projects:update",
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string(), name: v.string() },
@@ -1773,18 +1769,16 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
       { code: "noncanonical_permission_key", filePath: "convex/projects.ts" },
     ]);
-    expect(formatAccessControlCheckResult(result)).toContain(
+    expect(formatIamCheckResult(result)).toContain(
       'Permission key "projects:read" is not declared in hercules/iam.jsonc.',
     );
-    expect(formatAccessControlCheckResult(result)).toContain(
-      'Use the catalog key "app.projects:read"',
-    );
+    expect(formatIamCheckResult(result)).toContain('Use the catalog key "app.projects:read"');
   });
 
   test("reports catalog grouping keys used as runtime permissions", () => {
@@ -1796,21 +1790,21 @@ describe("checkAccessControlSource", () => {
         },
       }`,
       "convex/projects.ts": `
-        import { accessMutation, accessQuery } from "./access";
+        import { iamMutation, iamQuery } from "./iam";
 
-        export const list = accessQuery({
+        export const list = iamQuery({
           permission: "app.projects:*",
           handler: async () => [],
         });
 
-        export const update = accessMutation({
+        export const update = iamMutation({
           permission: "app.projects:manage",
           handler: async () => null,
         });
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
@@ -1823,9 +1817,7 @@ describe("checkAccessControlSource", () => {
         filePath: "convex/projects.ts",
       },
     ]);
-    expect(formatAccessControlCheckResult(result)).toContain(
-      "Check a concrete permission action at runtime",
-    );
+    expect(formatIamCheckResult(result)).toContain("Check a concrete permission action at runtime");
   });
 
   test("passes catalog, system, and dynamic access builder permission keys", () => {
@@ -1837,25 +1829,25 @@ describe("checkAccessControlSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { accessQuery, scopeFromArg } from "./hercules";
+        import { iamQuery, scopeFromArg } from "./hercules";
 
         const AUDIT_PERMISSION = "app.audit:read";
 
-        export const list = accessQuery({
+        export const list = iamQuery({
           permission: "app.projects:read",
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string() },
           handler: async (ctx) => ctx.db.query("projects").collect(),
         });
 
-        export const members = accessQuery({
+        export const members = iamQuery({
           permission: "system.members:read",
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string() },
           handler: async () => [],
         });
 
-        export const audit = accessQuery({
+        export const audit = iamQuery({
           permission: AUDIT_PERMISSION,
           scope: scopeFromArg("orgScopeId"),
           args: { orgScopeId: v.string() },
@@ -1864,7 +1856,7 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({ cwd: root });
+    const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
@@ -1872,9 +1864,9 @@ describe("checkAccessControlSource", () => {
   test("skips the catalog permission check when hercules/iam.jsonc is missing or invalid", () => {
     const builderSource = `
       import { v } from "convex/values";
-      import { accessQuery, scopeFromArg } from "./hercules";
+      import { iamQuery, scopeFromArg } from "./hercules";
 
-      export const list = accessQuery({
+      export const list = iamQuery({
         permission: "projects:read",
         scope: scopeFromArg("orgScopeId"),
         args: { orgScopeId: v.string() },
@@ -1890,11 +1882,11 @@ describe("checkAccessControlSource", () => {
       "convex/projects.ts": builderSource,
     });
 
-    expect(checkAccessControlSource({ cwd: missingCatalogRoot })).toMatchObject({
+    expect(checkIamSource({ cwd: missingCatalogRoot })).toMatchObject({
       ok: true,
       findings: [],
     });
-    expect(checkAccessControlSource({ cwd: invalidCatalogRoot })).toMatchObject({
+    expect(checkIamSource({ cwd: invalidCatalogRoot })).toMatchObject({
       ok: true,
       findings: [],
     });
@@ -1903,7 +1895,7 @@ describe("checkAccessControlSource", () => {
   test("can rewrite exported raw builders to authenticated builders", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/posts.ts": `
         import { query, mutation as rawMutation, internalMutation } from "./_generated/server";
@@ -1926,16 +1918,14 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({
+    const result = checkIamSource({
       cwd: root,
       fixAuthenticated: true,
     });
     const source = readFileSync(join(root, "convex/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
-    expect(source).toContain(
-      'import { authenticatedMutation, authenticatedQuery } from "./hercules";',
-    );
+    expect(source).toContain('import { authenticatedMutation, authenticatedQuery } from "./iam";');
     expect(source).toContain("export const list = authenticatedQuery({");
     expect(source).toContain("export const create = authenticatedMutation({");
     expect(source).toContain('import { internalMutation } from "./_generated/server";');
@@ -1945,7 +1935,7 @@ describe("checkAccessControlSource", () => {
   test("rewrites nested files with a relative Hercules import", () => {
     const root = createFixture({
       "convex/hercules.ts": `
-        export { createAccessControl } from "@usehercules/convex";
+        export { createIam } from "@usehercules/convex";
       `,
       "convex/admin/posts.ts": `
         import { query } from "../_generated/server";
@@ -1957,14 +1947,14 @@ describe("checkAccessControlSource", () => {
       `,
     });
 
-    const result = checkAccessControlSource({
+    const result = checkIamSource({
       cwd: root,
       fixAuthenticated: true,
     });
     const source = readFileSync(join(root, "convex/admin/posts.ts"), "utf8");
 
     expect(result).toMatchObject({ ok: true, fixedFiles: 1, findings: [] });
-    expect(source).toContain('import { authenticatedQuery } from "../hercules";');
+    expect(source).toContain('import { authenticatedQuery } from "../iam";');
     expect(source).toContain("export const list = authenticatedQuery({");
   });
 });

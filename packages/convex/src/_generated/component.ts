@@ -167,7 +167,7 @@ type EffectivePermissionsResult = {
 };
 
 /**
- * A utility for referencing the Hercules Access Control component's exposed API.
+ * A utility for referencing the Hercules IAM component's exposed API.
  *
  * Useful when expecting a parameter like `components.hercules`.
  */

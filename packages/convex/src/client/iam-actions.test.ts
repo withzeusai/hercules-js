@@ -1,18 +1,18 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
 import {
-  acceptAccessInvitation,
-  createAccessScope,
-  createAccessScopeAction,
-  createAccessManagementActions,
+  acceptIamInvitation,
+  createIamScope,
+  createIamScopeAction,
+  createIamManagementActions,
   createDeploymentEntryAction,
   createResourceCreatorBootstrapAction,
-} from "./access-management";
+} from "./iam-management";
 import {
-  createAccessInvitation,
-  createAccessServiceActions,
+  createIamInvitation,
+  createIamServiceActions,
   createResourceInvitation,
-} from "./access-service";
+} from "./iam-service";
 
 // A structurally valid (unsigned-content) OIDC ID token fixture: the SDK
 // requires the JWT shape of three dot-separated base64url segments before it
@@ -26,18 +26,18 @@ const RESOURCE_GRANT_RESULT = {
   projection_ids: ["projection_2"],
 };
 
-describe("access action runtime", () => {
+describe("IAM action runtime", () => {
   test("does not force the Node.js runtime", async () => {
-    const source = await readFile(new URL("./access-actions.ts", import.meta.url), "utf8");
+    const source = await readFile(new URL("./iam-actions.ts", import.meta.url), "utf8");
 
     expect(source).not.toMatch(/^\s*["']use node["'];?/m);
   });
 });
 
-describe("createAccessServiceActions", () => {
+describe("createIamServiceActions", () => {
   test("posts role assignment writes", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -53,7 +53,7 @@ describe("createAccessServiceActions", () => {
       ),
     ).resolves.toEqual({ changed: true });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/roles/assign", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/roles/assign", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "user_1",
@@ -66,7 +66,7 @@ describe("createAccessServiceActions", () => {
 
   test("posts user exception writes", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -83,7 +83,7 @@ describe("createAccessServiceActions", () => {
       ),
     ).resolves.toEqual({ changed: true });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/user-exceptions/set", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/user-exceptions/set", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "user_1",
@@ -97,7 +97,7 @@ describe("createAccessServiceActions", () => {
   test("requires the Hercules API key by default", async () => {
     const previous = process.env["HERCULES_API_KEY"];
     delete process.env["HERCULES_API_KEY"];
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
     });
 
@@ -121,7 +121,7 @@ describe("createAccessServiceActions", () => {
 
   test("sends scope_id for grant revoke and expiry writes", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -132,14 +132,14 @@ describe("createAccessServiceActions", () => {
       { scopeId: "scope_1", grantId: "grant_1", expiresAt: null },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/resource-grants/revoke", {
       body: {
         scope_id: "scope_1",
         grant_id: "grant_1",
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/expiries/set", {
       body: {
         scope_id: "scope_1",
         grant_id: "grant_1",
@@ -151,7 +151,7 @@ describe("createAccessServiceActions", () => {
 
   test("sets resource permission rules for a role", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -170,7 +170,7 @@ describe("createAccessServiceActions", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-rules/set", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-rules/set", {
       body: {
         scope_id: "scope_1",
         subject: { type: "role", role_key: "member" },
@@ -187,7 +187,7 @@ describe("createAccessServiceActions", () => {
 
   test("sets multiple resource permission rules atomically as the service", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -207,7 +207,7 @@ describe("createAccessServiceActions", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-rules/replace", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-rules/replace", {
       body: {
         scope_id: "scope_1",
         subject: { type: "principal", principal_id: "principal_1" },
@@ -233,28 +233,28 @@ describe("createAccessServiceActions", () => {
 
   test("wraps scope lifecycle writes", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
 
     await getHandler(actions.archiveScope)({}, { scopeId: "scope_1" });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/archive", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/scopes/archive", {
       body: { scope_id: "scope_1" },
     });
   });
 
   test("sets the default role for future members of a scope", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
 
     await getHandler(actions.setDefaultRole)({}, { scopeId: "scope_1", roleKey: "viewer" });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/set-default-role", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/scopes/set-default-role", {
       body: {
         scope_id: "scope_1",
         role_id: undefined,
@@ -264,7 +264,7 @@ describe("createAccessServiceActions", () => {
     });
   });
 
-  test("creates invitations from an access-service action and normalizes the result", async () => {
+  test("creates invitations from an iam-service action and normalizes the result", async () => {
     const post = vi.fn().mockResolvedValue({
       access_scope_id: "scope_1",
       invitation_id: "invite_1",
@@ -276,7 +276,7 @@ describe("createAccessServiceActions", () => {
       source_version: 9,
       projection_ids: [],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -298,7 +298,7 @@ describe("createAccessServiceActions", () => {
       projectionIds: [],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/create", {
       body: {
         scope_id: "scope_1",
         email: "test@example.com",
@@ -329,7 +329,7 @@ describe("createAccessServiceActions", () => {
     };
 
     await expect(
-      acceptAccessInvitation(ctx, { token: "token_1", idToken: ID_TOKEN }, { client: { post } }),
+      acceptIamInvitation(ctx, { token: "token_1", idToken: ID_TOKEN }, { client: { post } }),
     ).resolves.toEqual({
       accessScopeId: "scope_1",
       invitationId: "invite_1",
@@ -340,14 +340,14 @@ describe("createAccessServiceActions", () => {
       projectionIds: ["projection_1"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/accept", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/accept", {
       body: { token: "token_1", id_token: ID_TOKEN },
     });
   });
 
-  test("revokes invitations from an access-service action", async () => {
+  test("revokes invitations from an iam-service action", async () => {
     const post = vi.fn().mockResolvedValue({ invitation_id: "invite_1", revoked: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -356,7 +356,7 @@ describe("createAccessServiceActions", () => {
       getHandler(actions.revokeInvitation)({}, { scopeId: "scope_1", invitationId: "invite_1" }),
     ).resolves.toEqual({ invitation_id: "invite_1", revoked: true });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/revoke", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/revoke", {
       body: {
         scope_id: "scope_1",
         invitation_id: "invite_1",
@@ -373,7 +373,7 @@ describe("createAccessServiceActions", () => {
       projection_ids: ["projection_1"],
     });
     const canCreateScope = vi.fn().mockResolvedValue(true);
-    const action = createAccessScopeAction({
+    const action = createIamScopeAction({
       authenticatedAction: identityBuilder,
       canCreateScope,
       client: { post },
@@ -404,7 +404,7 @@ describe("createAccessServiceActions", () => {
       defaultRoleKey: "member",
       accountEntryMode: "allowlisted_only",
     });
-    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/scopes/create", {
       body: {
         name: "Acme",
         default_role_key: "member",
@@ -416,7 +416,7 @@ describe("createAccessServiceActions", () => {
 
   test("does not call the API when scope creation policy denies", async () => {
     const post = vi.fn();
-    const action = createAccessScopeAction({
+    const action = createIamScopeAction({
       authenticatedAction: identityBuilder,
       canCreateScope: vi.fn().mockResolvedValue(false),
       client: { post },
@@ -449,7 +449,7 @@ describe("createAccessServiceActions", () => {
     };
 
     await expect(
-      createAccessScope(ctx, { name: "Beta", defaultRoleKey: "member" }, { client: { post } }),
+      createIamScope(ctx, { name: "Beta", defaultRoleKey: "member" }, { client: { post } }),
     ).resolves.toEqual({
       accessScopeId: "scope_2",
       created: true,
@@ -457,7 +457,7 @@ describe("createAccessServiceActions", () => {
       projectionIds: ["projection_2"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/scopes/create", {
       body: {
         name: "Beta",
         default_role_key: "member",
@@ -481,7 +481,7 @@ describe("createAccessServiceActions", () => {
     });
 
     await expect(
-      createAccessInvitation(
+      createIamInvitation(
         {
           scopeId: "scope_2",
           email: "admin@example.com",
@@ -501,7 +501,7 @@ describe("createAccessServiceActions", () => {
       projectionIds: ["projection_2"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/create", {
       body: {
         scope_id: "scope_2",
         email: "admin@example.com",
@@ -596,7 +596,7 @@ describe("createResourceCreatorBootstrapAction", () => {
       resourceId: "project_1",
     });
     expect(listMyMemberships).toHaveBeenCalledWith(ctx);
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-grants/create", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "auth_user_1",
@@ -758,7 +758,7 @@ function getHandler(value: unknown) {
 describe("actor_mode on resource-grant writes", () => {
   test("createResourceGrant defaults to service mode without an id_token", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -782,7 +782,7 @@ describe("actor_mode on resource-grant writes", () => {
       projectionIds: ["projection_2"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-grants/create", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "auth_user_2",
@@ -825,7 +825,7 @@ describe("actor_mode on resource-grant writes", () => {
       source_version: 9,
       projection_ids: ["projection_9"],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -879,7 +879,7 @@ describe("actor_mode on resource-grant writes", () => {
       projectionIds: ["projection_9"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/replace", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-grants/replace", {
       body: {
         scope_id: "scope_1",
         resource_type: "app.projects",
@@ -917,7 +917,7 @@ describe("actor_mode on resource-grant writes", () => {
       source_version: 9,
       projection_ids: ["projection_9"],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -969,11 +969,11 @@ describe("actor_mode on resource-grant writes", () => {
       source_version: 9,
       projection_ids: ["projection_9"],
     });
-    const managementActions = createAccessManagementActions({
+    const managementActions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
-    const serviceActions = createAccessServiceActions({
+    const serviceActions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1020,11 +1020,11 @@ describe("actor_mode on resource-grant writes", () => {
 
   test("replaceResourceGrants requires one exact resource", async () => {
     const post = vi.fn();
-    const managementActions = createAccessManagementActions({
+    const managementActions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
-    const serviceActions = createAccessServiceActions({
+    const serviceActions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1058,7 +1058,7 @@ describe("actor_mode on resource-grant writes", () => {
       source_version: 10,
       projection_ids: ["projection_10"],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1082,7 +1082,7 @@ describe("actor_mode on resource-grant writes", () => {
       projectionIds: ["projection_10"],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/roles/replace", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/roles/replace", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "user_2",
@@ -1102,7 +1102,7 @@ describe("actor_mode on resource-grant writes", () => {
       source_version: 10,
       projection_ids: ["projection_10"],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1138,7 +1138,7 @@ describe("actor_mode on resource-grant writes", () => {
 
   test("createResourceGrant requires one exact resource", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1158,7 +1158,7 @@ describe("actor_mode on resource-grant writes", () => {
 
   test("createResourceGrant delegates as app_user when an id_token is passed", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1175,7 +1175,7 @@ describe("actor_mode on resource-grant writes", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-grants/create", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "auth_user_2",
@@ -1192,7 +1192,7 @@ describe("actor_mode on resource-grant writes", () => {
 
   test("createResourceGrant forwards descendant applicability for an exact resource", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1209,7 +1209,7 @@ describe("actor_mode on resource-grant writes", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/resource-grants/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/resource-grants/create", {
       body: expect.objectContaining({
         resource_id: "project_1",
         applies_to: "self_and_descendants",
@@ -1219,7 +1219,7 @@ describe("actor_mode on resource-grant writes", () => {
 
   test("createResourceGrant rejects descendant applicability without an exact resource", async () => {
     const post = vi.fn();
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1242,7 +1242,7 @@ describe("actor_mode on resource-grant writes", () => {
 
   test("revokeResourceGrant and setGrantExpiry forward the app_user id_token when delegated", async () => {
     const post = vi.fn().mockResolvedValue(RESOURCE_GRANT_RESULT);
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1261,7 +1261,7 @@ describe("actor_mode on resource-grant writes", () => {
       },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/resource-grants/revoke", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/resource-grants/revoke", {
       body: {
         scope_id: "scope_1",
         grant_id: "grant_1",
@@ -1269,7 +1269,7 @@ describe("actor_mode on resource-grant writes", () => {
         id_token: ID_TOKEN,
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/expiries/set", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/expiries/set", {
       body: {
         scope_id: "scope_1",
         grant_id: "grant_1",
@@ -1281,7 +1281,7 @@ describe("actor_mode on resource-grant writes", () => {
   });
 });
 
-describe("deployment entry and access management", () => {
+describe("deployment entry and IAM management", () => {
   test("uses an active principal from the local mirror without calling the API", async () => {
     const post = vi.fn();
     const getDeploymentEntryStatus = vi.fn().mockResolvedValue({
@@ -1339,7 +1339,7 @@ describe("deployment entry and access management", () => {
         stateVersion: 9,
         changed: false,
       });
-      expect(post).toHaveBeenCalledWith("/v1/access-control/entry", {
+      expect(post).toHaveBeenCalledWith("/v1/iam/entry", {
         body: { id_token: ID_TOKEN },
       });
     },
@@ -1371,7 +1371,7 @@ describe("deployment entry and access management", () => {
       stateVersion: 8,
       changed: true,
     });
-    expect(post).toHaveBeenCalledWith("/v1/access-control/entry", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/entry", {
       body: { id_token: ID_TOKEN },
     });
   });
@@ -1398,7 +1398,7 @@ describe("deployment entry and access management", () => {
       stateVersion: 7,
       changed: true,
     });
-    expect(post).toHaveBeenCalledWith("/v1/access-control/entry", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/entry", {
       body: { id_token: ID_TOKEN },
     });
   });
@@ -1444,7 +1444,7 @@ describe("deployment entry and access management", () => {
       authenticatedAction: identityBuilder,
       client: { post },
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1472,11 +1472,7 @@ describe("deployment entry and access management", () => {
       ),
     ).rejects.toThrow("OIDC ID token");
     await expect(
-      acceptAccessInvitation(
-        ctx,
-        { token: "token_1", idToken: "user_2abc123" },
-        { client: { post } },
-      ),
+      acceptIamInvitation(ctx, { token: "token_1", idToken: "user_2abc123" }, { client: { post } }),
     ).rejects.toThrow("OIDC ID token");
     expect(post).not.toHaveBeenCalled();
   });
@@ -1493,7 +1489,7 @@ describe("deployment entry and access management", () => {
       source_version: 1,
       projection_ids: [],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1537,10 +1533,10 @@ describe("deployment entry and access management", () => {
     );
 
     expect(post.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/access-control/roles/assign",
-      "/v1/access-control/invitations/create",
-      "/v1/access-control/roles/create-org-custom",
-      "/v1/access-control/role-overrides/set",
+      "/v1/iam/roles/assign",
+      "/v1/iam/invitations/create",
+      "/v1/iam/roles/create-org-custom",
+      "/v1/iam/role-overrides/set",
     ]);
     for (const [, request] of post.mock.calls as Array<
       [string, { body: Record<string, unknown> }]
@@ -1565,7 +1561,7 @@ describe("deployment entry and access management", () => {
         },
       ],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1597,7 +1593,7 @@ describe("deployment entry and access management", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/roles/list-grantable", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/roles/list-grantable", {
       body: {
         scope_id: "scope_1",
         subject_type: "user",
@@ -1618,7 +1614,7 @@ describe("deployment entry and access management", () => {
       access_scope_id: "scope_1",
       roles: [],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1635,7 +1631,7 @@ describe("deployment entry and access management", () => {
       ),
     ).resolves.toEqual({ accessScopeId: "scope_1", roles: [] });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/roles/list-grantable", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/roles/list-grantable", {
       body: {
         scope_id: "scope_1",
         subject_type: "group",
@@ -1651,7 +1647,7 @@ describe("deployment entry and access management", () => {
       access_scope_id: "scope_1",
       roles: [],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1671,7 +1667,7 @@ describe("deployment entry and access management", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/roles/list-grantable", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/roles/list-grantable", {
       body: expect.objectContaining({
         target: {
           type: "resource",
@@ -1696,7 +1692,7 @@ describe("deployment entry and access management", () => {
         },
       ],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1711,7 +1707,7 @@ describe("deployment entry and access management", () => {
           idToken: ID_TOKEN,
         },
       ),
-    ).rejects.toThrow("Access Control API response has invalid roles[].roleKind.");
+    ).rejects.toThrow("IAM API response has invalid roles[].roleKind.");
   });
 });
 
@@ -1757,7 +1753,7 @@ describe("createResourceInvitation", () => {
       ),
     ).resolves.toEqual(parsedResult);
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/create-resource", {
       body: {
         scope_id: "scope_1",
         email: "pm@example.com",
@@ -1774,7 +1770,7 @@ describe("createResourceInvitation", () => {
 
   test("public app-user action requires an id_token and sends a single permission_key", async () => {
     const post = vi.fn().mockResolvedValue(writeResult);
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1791,7 +1787,7 @@ describe("createResourceInvitation", () => {
       },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/create-resource", {
       body: {
         scope_id: "scope_1",
         email: "pm@example.com",
@@ -1806,9 +1802,9 @@ describe("createResourceInvitation", () => {
     });
   });
 
-  test("is exposed as an access-service action", async () => {
+  test("is exposed as an iam-service action", async () => {
     const post = vi.fn().mockResolvedValue(writeResult);
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1826,7 +1822,7 @@ describe("createResourceInvitation", () => {
       ),
     ).resolves.toEqual(parsedResult);
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/create-resource", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/create-resource", {
       body: {
         scope_id: "scope_1",
         email: "pm@example.com",
@@ -1842,7 +1838,7 @@ describe("createResourceInvitation", () => {
 
   test("rejects an empty app-user id token before calling the API", async () => {
     const post = vi.fn();
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -1867,7 +1863,7 @@ describe("createResourceInvitation", () => {
 describe("member lifecycle and admission administration", () => {
   test("adds and restores members as the service", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1888,7 +1884,7 @@ describe("member lifecycle and admission administration", () => {
       { scopeId: "scope_1", herculesAuthUserId: "auth_user_2" },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/members/add", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/members/add", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "auth_user_1",
@@ -1897,7 +1893,7 @@ describe("member lifecycle and admission administration", () => {
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/members/add", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/members/add", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "auth_user_2",
@@ -1917,7 +1913,7 @@ describe("member lifecycle and admission administration", () => {
 
   test("suspends, removes, and approves members as the service", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1929,7 +1925,7 @@ describe("member lifecycle and admission administration", () => {
     await getHandler(actions.removeMember)({}, { scopeId: "scope_1", principalId: "principal_1" });
     await getHandler(actions.approveMember)({}, { scopeId: "scope_1", principalId: "principal_2" });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/members/status", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/members/status", {
       body: {
         scope_id: "scope_1",
         principal_id: "principal_1",
@@ -1937,14 +1933,14 @@ describe("member lifecycle and admission administration", () => {
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/members/remove", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/members/remove", {
       body: {
         scope_id: "scope_1",
         principal_id: "principal_1",
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(3, "/v1/access-control/members/approve", {
+    expect(post).toHaveBeenNthCalledWith(3, "/v1/iam/members/approve", {
       body: {
         scope_id: "scope_1",
         principal_id: "principal_2",
@@ -1955,7 +1951,7 @@ describe("member lifecycle and admission administration", () => {
 
   test("upserts and archives admission rules as the service", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -1972,7 +1968,7 @@ describe("member lifecycle and admission administration", () => {
     );
     await getHandler(actions.archiveAdmissionRule)({}, { scopeId: "scope_1", ruleId: "rule_1" });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/admission-rules/upsert", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/admission-rules/upsert", {
       body: {
         scope_id: "scope_1",
         effect: "deny",
@@ -1982,14 +1978,14 @@ describe("member lifecycle and admission administration", () => {
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/admission-rules/archive", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/admission-rules/archive", {
       body: { scope_id: "scope_1", rule_id: "rule_1", actor_mode: "service" },
     });
   });
 
   test("sets the account entry mode including the invite and approval modes", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2003,14 +1999,14 @@ describe("member lifecycle and admission administration", () => {
       { scopeId: "scope_1", accountEntryMode: "approval_required" },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/entry-mode/set", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/entry-mode/set", {
       body: {
         scope_id: "scope_1",
         account_entry_mode: "invite_only",
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/entry-mode/set", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/entry-mode/set", {
       body: {
         scope_id: "scope_1",
         account_entry_mode: "approval_required",
@@ -2034,13 +2030,13 @@ describe("member lifecycle and admission administration", () => {
       },
     };
 
-    await createAccessScope(
+    await createIamScope(
       ctx,
       { name: "Gamma", accountEntryMode: "invite_only" },
       { client: { post } },
     );
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/scopes/create", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/scopes/create", {
       body: {
         name: "Gamma",
         default_role_key: undefined,
@@ -2060,7 +2056,7 @@ describe("group administration", () => {
       source_version: 4,
       projection_ids: ["projection_1"],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2084,14 +2080,14 @@ describe("group administration", () => {
       getHandler(actions.archiveGroup)({}, { scopeId: "scope_1", groupPrincipalId: "group_1" }),
     ).resolves.toMatchObject({ groupPrincipalId: "group_1" });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/groups/create", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/groups/create", {
       body: {
         scope_id: "scope_1",
         name: "Moderators",
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/groups/rename", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/groups/rename", {
       body: {
         scope_id: "scope_1",
         group_principal_id: "group_1",
@@ -2099,7 +2095,7 @@ describe("group administration", () => {
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(3, "/v1/access-control/groups/archive", {
+    expect(post).toHaveBeenNthCalledWith(3, "/v1/iam/groups/archive", {
       body: {
         scope_id: "scope_1",
         group_principal_id: "group_1",
@@ -2118,7 +2114,7 @@ describe("group administration", () => {
       source_version: 5,
       projection_ids: ["projection_1"],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2155,7 +2151,7 @@ describe("group administration", () => {
       memberPrincipalId: "principal_1",
     });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/groups/members/add", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/groups/members/add", {
       body: {
         scope_id: "scope_1",
         group_principal_id: "group_1",
@@ -2163,7 +2159,7 @@ describe("group administration", () => {
         actor_mode: "service",
       },
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/groups/members/remove", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/groups/members/remove", {
       body: {
         scope_id: "scope_1",
         group_principal_id: "group_1",
@@ -2197,7 +2193,7 @@ describe("group administration", () => {
         },
       ],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2228,7 +2224,7 @@ describe("group administration", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/groups/list", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/groups/list", {
       body: {
         scope_id: "scope_1",
         include_archived: true,
@@ -2238,7 +2234,7 @@ describe("group administration", () => {
   });
 });
 
-describe("raw access reads", () => {
+describe("raw IAM reads", () => {
   test("lists resource invitations and normalizes the rows", async () => {
     const post = vi.fn().mockResolvedValue({
       access_scope_id: "scope_1",
@@ -2257,7 +2253,7 @@ describe("raw access reads", () => {
         },
       ],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2283,7 +2279,7 @@ describe("raw access reads", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/invitations/list-resource", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/invitations/list-resource", {
       body: { scope_id: "scope_1", actor_mode: "service" },
     });
   });
@@ -2305,7 +2301,7 @@ describe("raw access reads", () => {
         },
       ],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2329,7 +2325,7 @@ describe("raw access reads", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/role-overrides/get", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/role-overrides/get", {
       body: {
         scope_id: "scope_1",
         role_id: undefined,
@@ -2358,7 +2354,7 @@ describe("raw access reads", () => {
         },
       ],
     });
-    const actions = createAccessServiceActions({
+    const actions = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
@@ -2390,7 +2386,7 @@ describe("raw access reads", () => {
       ],
     });
 
-    expect(post).toHaveBeenCalledWith("/v1/access-control/user-exceptions/get", {
+    expect(post).toHaveBeenCalledWith("/v1/iam/user-exceptions/get", {
       body: {
         scope_id: "scope_1",
         hercules_auth_user_id: "user_1",
@@ -2416,7 +2412,7 @@ describe("app-user delegation for the management surface", () => {
       source_version: 1,
       projection_ids: ["projection_1"],
     });
-    const actions = createAccessManagementActions({
+    const actions = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -2547,24 +2543,24 @@ describe("app-user delegation for the management surface", () => {
     );
 
     expect(post.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/access-control/members/add",
-      "/v1/access-control/members/status",
-      "/v1/access-control/members/remove",
-      "/v1/access-control/members/approve",
-      "/v1/access-control/admission-rules/upsert",
-      "/v1/access-control/admission-rules/archive",
-      "/v1/access-control/entry-mode/set",
-      "/v1/access-control/groups/create",
-      "/v1/access-control/groups/rename",
-      "/v1/access-control/groups/archive",
-      "/v1/access-control/groups/list",
-      "/v1/access-control/groups/members/add",
-      "/v1/access-control/groups/members/remove",
-      "/v1/access-control/invitations/list-resource",
-      "/v1/access-control/roles/list-grantable",
-      "/v1/access-control/resource-rules/replace",
-      "/v1/access-control/role-overrides/get",
-      "/v1/access-control/user-exceptions/get",
+      "/v1/iam/members/add",
+      "/v1/iam/members/status",
+      "/v1/iam/members/remove",
+      "/v1/iam/members/approve",
+      "/v1/iam/admission-rules/upsert",
+      "/v1/iam/admission-rules/archive",
+      "/v1/iam/entry-mode/set",
+      "/v1/iam/groups/create",
+      "/v1/iam/groups/rename",
+      "/v1/iam/groups/archive",
+      "/v1/iam/groups/list",
+      "/v1/iam/groups/members/add",
+      "/v1/iam/groups/members/remove",
+      "/v1/iam/invitations/list-resource",
+      "/v1/iam/roles/list-grantable",
+      "/v1/iam/resource-rules/replace",
+      "/v1/iam/role-overrides/get",
+      "/v1/iam/user-exceptions/get",
     ]);
     for (const [, request] of post.mock.calls as Array<
       [string, { body: Record<string, unknown> }]

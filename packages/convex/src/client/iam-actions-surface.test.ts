@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { createAccessManagementActions, createDeploymentEntryAction } from "./access-management";
-import { createAccessServiceActions } from "./access-service";
+import { createIamManagementActions, createDeploymentEntryAction } from "./iam-management";
+import { createIamServiceActions } from "./iam-service";
 
 const ID_TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.c2lnbmF0dXJl";
 const identityBuilder = ((definition: unknown) => definition) as never;
@@ -13,8 +13,8 @@ function getHandler(value: unknown) {
   ).handler;
 }
 
-describe("Access Control action surfaces", () => {
-  test("keeps deployment entry separate from access management", async () => {
+describe("IAM action surfaces", () => {
+  test("keeps deployment entry separate from IAM management", async () => {
     const post = vi.fn().mockResolvedValue({
       allowed: true,
       reason: "open_allowed",
@@ -28,7 +28,7 @@ describe("Access Control action surfaces", () => {
       authenticatedAction: identityBuilder,
       client: { post },
     });
-    const management = createAccessManagementActions({
+    const management = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -43,11 +43,11 @@ describe("Access Control action surfaces", () => {
 
   test("maps explicit user and principal recipients", async () => {
     const post = vi.fn().mockResolvedValue({ changed: true });
-    const service = createAccessServiceActions({
+    const service = createIamServiceActions({
       internalAction: identityBuilder,
       client: { post },
     });
-    const management = createAccessManagementActions({
+    const management = createIamManagementActions({
       authenticatedAction: identityBuilder,
       client: { post },
     });
@@ -70,13 +70,13 @@ describe("Access Control action surfaces", () => {
       },
     );
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/access-control/roles/assign", {
+    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/roles/assign", {
       body: expect.objectContaining({
         hercules_auth_user_id: "user_1",
         actor_mode: "service",
       }),
     });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/access-control/roles/assign", {
+    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/roles/assign", {
       body: expect.objectContaining({
         principal_id: "principal_1",
         actor_mode: "app_user",

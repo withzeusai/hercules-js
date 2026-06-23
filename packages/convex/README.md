@@ -1,12 +1,12 @@
 # @usehercules/convex
 
-Convex component for Hercules **managed Access Control**: multi-tenant scopes,
+Convex component for Hercules **managed IAM**: multi-tenant scopes,
 roles, permissions, and resource-level grants, enforced inside your Convex
 functions. The app reads from a local mirror that Hercules keeps in sync with
 the control plane.
 
 This README and the published `dist/client/index.d.ts`,
-`dist/client/access-management.d.ts`, and `dist/client/access-service.d.ts`
+`dist/client/iam-management.d.ts`, and `dist/client/iam-service.d.ts`
 files are the authoritative public contract. Use their TypeScript signatures
 and your local wrappers. Do not inspect package or component implementation
 internals to infer behavior. Public REST payloads are documented at
@@ -14,12 +14,12 @@ https://docs-cloud.hercules.app.
 
 ## Setup
 
-Call `createAccessControl` once in `convex/access.ts` and re-export the
+Call `createIam` once in `convex/iam.ts` and re-export the
 builders. Use these builders instead of the raw `./_generated/server` ones for
 anything permissioned.
 
 ```ts
-import { createAccessControl } from "@usehercules/convex";
+import { createIam } from "@usehercules/convex";
 import { components } from "./_generated/api";
 import { action, mutation, query } from "./_generated/server";
 
@@ -30,9 +30,9 @@ export const {
   authenticatedQuery,
   authenticatedMutation,
   authenticatedAction,
-  accessQuery,
-  accessMutation,
-  accessAction,
+  iamQuery,
+  iamMutation,
+  iamAction,
   hasPermission,
   requirePermission,
   requireAnyPermission,
@@ -46,7 +46,7 @@ export const {
   listScopeRoles,
   listScopePermissions,
   listDirectSubjectsForResource,
-} = createAccessControl({ query, mutation, action, components });
+} = createIam({ query, mutation, action, components });
 
 export {
   scopeFromArg,
@@ -97,7 +97,7 @@ exceptions, and resource access.
 
 ## Enforcing access
 
-`accessQuery` / `accessMutation` / `accessAction` take a `permission` and a
+`iamQuery` / `iamMutation` / `iamAction` take a `permission` and a
 `scope`. Choose the scope helper from the app shape:
 
 | App shape           | Create/list    | Existing row               | Child create                     |
@@ -112,11 +112,11 @@ sign-in.
 
 ```ts
 import { v } from "convex/values";
-import { accessQuery, accessMutation, scopeFromArg, scopeFromResource } from "./access";
+import { iamQuery, iamMutation, scopeFromArg, scopeFromResource } from "./iam";
 
 // Read: scope from an arg. "view" is a real permission; grant it to every role
 // that should see the data, including a read-only role.
-export const listProjects = accessQuery({
+export const listProjects = iamQuery({
   permission: "app.project:view",
   scope: scopeFromArg("orgScopeId"),
   args: { orgScopeId: v.string() },
@@ -129,7 +129,7 @@ export const listProjects = accessQuery({
 
 // Write on a specific row: scope from the resource, so the caller cannot pair
 // their scope with another org's row.
-export const archiveProject = accessMutation({
+export const archiveProject = iamMutation({
   permission: "app.project:archive",
   scope: scopeFromResource("projects", "projectId"),
   args: { projectId: v.id("projects") },
@@ -150,7 +150,7 @@ deny wins. Parent access applies only when its binding uses
 `appliesTo: "self_and_descendants"`.
 
 ```ts
-export const updateTask = accessMutation({
+export const updateTask = iamMutation({
   permission: "app.tasks:update",
   scope: scopeFromResource("tasks", "taskId", {
     authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
@@ -159,7 +159,7 @@ export const updateTask = accessMutation({
   handler: async (ctx, args) => ctx.db.patch(args.taskId, { title: args.title }),
 });
 
-export const createTask = accessMutation({
+export const createTask = iamMutation({
   permission: "app.tasks:create",
   scope: scopeFromParentResource("projects", "projectId", {
     parentResourceType: "app.projects",
@@ -206,7 +206,7 @@ Use `getCurrentHerculesAuthUserId` for the stable Hercules Auth user id. It
 returns the verified OIDC `sub`; never parse `tokenIdentifier`.
 
 ```ts
-export const getMyProfile = accessQuery({
+export const getMyProfile = iamQuery({
   permission: "app.profiles:read",
   args: {},
   handler: async (ctx) => {
@@ -221,10 +221,10 @@ export const getMyProfile = accessQuery({
 ```
 
 Application tables own product relationships such as owner, assignee,
-attending user, or linked profile. Access Control owns capabilities. Enforce
+attending user, or linked profile. IAM owns capabilities. Enforce
 both:
 
-1. Gate the function with a concrete Access Control permission.
+1. Gate the function with a concrete IAM permission.
 2. Load the trusted application row.
 3. Apply any relationship-based row or field restriction.
 
@@ -251,7 +251,7 @@ For a default-scope app, select the membership by kind rather than array order:
 
 ```ts
 const membership = (await listMyMemberships(ctx)).find(({ kind }) => kind === "default");
-if (!membership) throw new Error("Default access scope not found");
+if (!membership) throw new Error("Default IAM scope not found");
 ```
 
 For member-facing pickers, use `listScopeMemberDirectory`. It is gated by
@@ -280,29 +280,29 @@ membership. Do not copy it into an app-owned role table.
 
 ### Authority matrix
 
-| Surface                                                                            | Convex exposure                  | Authority                                                                       |
-| ---------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
-| `createAccessServiceActions`, `createAccessInvitation`, `createResourceInvitation` | Internal only                    | Service via `HERCULES_API_KEY`                                                  |
-| `createAccessManagementActions`                                                    | Public `authenticatedAction`     | Signed-in app user via `idToken`; the control plane applies runtime role checks |
-| `createDeploymentEntryAction`                                                      | Public `authenticatedAction`     | Signed-in app user entering the current deployment                              |
-| `createAccessScopeAction`                                                          | Public `authenticatedAction`     | Authenticated creator after `canCreateScope`; the creator becomes Owner         |
-| `createAccessScope`                                                                | App-owned authenticated function | Authenticated creator from `ctx`; the app supplies its own product-policy gate  |
-| `createResourceCreatorBootstrapAction`                                             | Public `authenticatedAction`     | Trusted resource creator; one fixed initial resource role                       |
-| `acceptAccessInvitation`                                                           | App-owned authenticated function | Invitee identified by the invitation token and `idToken`                        |
+| Surface                                                                      | Convex exposure                  | Authority                                                                       |
+| ---------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
+| `createIamServiceActions`, `createIamInvitation`, `createResourceInvitation` | Internal only                    | Service via `HERCULES_API_KEY`                                                  |
+| `createIamManagementActions`                                                 | Public `authenticatedAction`     | Signed-in app user via `idToken`; the control plane applies runtime role checks |
+| `createDeploymentEntryAction`                                                | Public `authenticatedAction`     | Signed-in app user entering the current deployment                              |
+| `createIamScopeAction`                                                       | Public `authenticatedAction`     | Authenticated creator after `canCreateScope`; the creator becomes Owner         |
+| `createIamScope`                                                             | App-owned authenticated function | Authenticated creator from `ctx`; the app supplies its own product-policy gate  |
+| `createResourceCreatorBootstrapAction`                                       | Public `authenticatedAction`     | Trusted resource creator; one fixed initial resource role                       |
+| `acceptIamInvitation`                                                        | App-owned authenticated function | Invitee identified by the invitation token and `idToken`                        |
 
-Never call generated `internal.accessService.*` actions from an exported
-public, authenticated, or access builder, directly or through a helper.
+Never call generated `internal.iamService.*` actions from an exported
+public, authenticated, or IAM builder, directly or through a helper.
 Service authority is only for trusted internal workflows.
 
-Access Control actions run in Convex's default runtime. Do not add the
+IAM actions run in Convex's default runtime. Do not add the
 `"use node"` directive to these files.
 
 ```ts
-// convex/accessService.ts
-import { createAccessServiceActions } from "@usehercules/convex/access-service";
+// convex/iamService.ts
+import { createIamServiceActions } from "@usehercules/convex/iam-service";
 import { internalAction } from "./_generated/server";
 
-export const { assignRole, removeRole, createInvitation } = createAccessServiceActions({
+export const { assignRole, removeRole, createInvitation } = createIamServiceActions({
   internalAction,
 });
 ```
@@ -312,9 +312,9 @@ user-initiated administration, create an app-owned management module and
 export only the actions the app uses.
 
 ```ts
-// convex/accessManagement.ts
-import { createAccessManagementActions } from "@usehercules/convex/access-management";
-import { authenticatedAction } from "./access";
+// convex/iamManagement.ts
+import { createIamManagementActions } from "@usehercules/convex/iam-management";
+import { authenticatedAction } from "./iam";
 
 export const {
   assignRole,
@@ -326,18 +326,18 @@ export const {
   setResourcePermissionRules,
   listResourceInvitations,
   revokeInvitation,
-} = createAccessManagementActions({ authenticatedAction });
+} = createIamManagementActions({ authenticatedAction });
 ```
 
-Every export from `createAccessManagementActions` is a Convex action. Frontend
+Every export from `createIamManagementActions` is a Convex action. Frontend
 code must call these functions with `useAction`, not `useMutation`. Keep the
 control disabled until `user.id_token` exists; never send an empty token.
 
-Keep deployment entry in the baseline access module rather than creating the
+Keep deployment entry in the baseline IAM module rather than creating the
 management collection only for auth synchronization:
 
 ```ts
-import { createDeploymentEntryAction } from "@usehercules/convex/access-management";
+import { createDeploymentEntryAction } from "@usehercules/convex/iam-management";
 
 export const enterDeployment = createDeploymentEntryAction({
   authenticatedAction,
@@ -358,7 +358,7 @@ actor may confer at the exact scope or resource target. Set `subjectType` to
 match the intended user or group recipient:
 
 ```ts
-await ctx.runAction(api.accessManagement.listGrantableRoles, {
+await ctx.runAction(api.iamManagement.listGrantableRoles, {
   scopeId,
   subjectType: "user",
   target: {
@@ -378,21 +378,21 @@ assign at that target. The write still reauthorizes after a picker result.
 Common public action calls:
 
 ```ts
-await ctx.runAction(api.accessManagement.replaceMemberRoles, {
+await ctx.runAction(api.iamManagement.replaceMemberRoles, {
   scopeId,
   recipient: { type: "user", herculesAuthUserId },
   roleKeys: ["reviewer"],
   idToken,
 });
 
-await ctx.runAction(api.accessManagement.createInvitation, {
+await ctx.runAction(api.iamManagement.createInvitation, {
   scopeId,
   email,
   roleKeys: ["member"],
   idToken,
 });
 
-await ctx.runAction(api.accessManagement.replaceResourceGrants, {
+await ctx.runAction(api.iamManagement.replaceResourceGrants, {
   scopeId,
   resourceType: "app.documents",
   resourceId: String(documentId),
@@ -424,11 +424,11 @@ Create the app row as `provisioning`, record its creator with
 queries. Then expose one action:
 
 ```ts
-// convex/accessManagement.ts
-import { createResourceCreatorBootstrapAction } from "@usehercules/convex/access-management";
+// convex/iamManagement.ts
+import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-management";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { authenticatedAction, listMyMemberships } from "./access";
+import { authenticatedAction, listMyMemberships } from "./iam";
 
 export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
   authenticatedAction,
@@ -474,7 +474,7 @@ if (!recipient) throw new Error("Active member not found");
 Do not ask the browser to supply `recipient.principalId`.
 
 Grant `app.members:read` to roles that may use a member-facing directory.
-Access-administration screens should use `listScopeMembers`, which requires
+IAM administration screens should use `listScopeMembers`, which requires
 `system.members:read`.
 
 Use `replaceMemberRoles` to atomically replace up to 500 direct scope roles for
@@ -490,8 +490,8 @@ returned `grantId` or
 invitations. `setResourcePermissionRules` atomically applies a rule batch;
 `effect: "clear"` removes a listed rule.
 
-Create organization scopes with `createAccessScopeAction` or
-`createAccessScope`. The authenticated creator is sent as the scope Owner
+Create organization scopes with `createIamScopeAction` or
+`createIamScope`. The authenticated creator is sent as the scope Owner
 automatically; do not create a second self-grant.
 
 ## Notes
@@ -499,7 +499,7 @@ automatically; do not create a second self-grant.
 - Reads come from the local mirror, which lags the control plane by a short
   projection-sync window after any change. Treat `undefined` query results and
   a just-changed-but-not-yet-synced state as "loading", not "denied".
-- Run `hercules-convex-access-check convex` (the `./checker` export) in lint to
+- Run `hercules-convex-iam-check convex` (the `./checker` export) in lint to
   catch deterministic source patterns. It is static and does not prove runtime
   role decisions or control-plane writes are authorized.
 - Before claiming completion, exercise at least one intended allow, one denied

@@ -1,7 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// Access Control projection mirror — v3 deployment-scoped storage.
+// IAM projection mirror — v3 deployment-scoped storage.
 //
 // The deployment-wide catalog (reusable roles, permissions, base role
 // permissions) and deployment-wide users are stored ONCE (never duplicated per

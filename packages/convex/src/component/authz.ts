@@ -1,4 +1,4 @@
-// Canonical access-control authorization algebra (ported from the monorepo).
+// Canonical IAM authorization algebra (ported from the monorepo).
 //
 // SOURCE OF TRUTH: packages/backend-shared/src/access-control/authz.ts in the
 // herculesai monorepo. This file is a near-verbatim copy of the PURE algebra

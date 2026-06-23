@@ -41,9 +41,9 @@ const expirePermissionBindingReference = makeFunctionReference<
 // with a clear payload failure rather than letting the mutation abort opaquely.
 const MAX_SNAPSHOT_DOCUMENTS = 16_000;
 
-type AccessBindingAppliesTo = "self" | "self_and_descendants";
+type IamBindingAppliesTo = "self" | "self_and_descendants";
 
-function bindingAppliesTo(binding: object): AccessBindingAppliesTo {
+function bindingAppliesTo(binding: object): IamBindingAppliesTo {
   if (
     "appliesTo" in binding &&
     (binding.appliesTo === "self" || binding.appliesTo === "self_and_descendants")
@@ -892,7 +892,7 @@ export const applySync = mutation({
         accessScopeId: string;
         resourceType?: string;
         resourceId?: string;
-        appliesTo?: AccessBindingAppliesTo;
+        appliesTo?: IamBindingAppliesTo;
         expiresAt?: number;
         updatedAt: number;
       },
@@ -930,7 +930,7 @@ export const applySync = mutation({
         accessScopeId: string;
         resourceType?: string;
         resourceId?: string;
-        appliesTo?: AccessBindingAppliesTo;
+        appliesTo?: IamBindingAppliesTo;
         expiresAt?: number;
         updatedAt: number;
       },

@@ -19,7 +19,7 @@ import { ConvexError } from "convex/values";
 import type { GenericValidator, PropertyValidators, Validator } from "convex/values";
 import type { ScopeKind } from "../shared/sync";
 
-type AccessMode = "authenticated" | "permission";
+type IamMode = "authenticated" | "permission";
 
 export type AuthorizationDecision = {
   allowed: boolean;
@@ -82,18 +82,18 @@ export type Membership = {
   status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 };
 
-export type AccessPrincipalStatus =
+export type IamPrincipalStatus =
   | "active"
   | "blocked"
   | "suspended"
   | "pending_approval"
   | "removed";
 
-export type AccessDeploymentEntryMirrorResult =
+export type IamDeploymentEntryMirrorResult =
   | {
       kind: "principal";
       principalId: string;
-      status: AccessPrincipalStatus;
+      status: IamPrincipalStatus;
       stateVersion: number;
     }
   | {
@@ -194,15 +194,15 @@ type ListDirectSubjectsArgs = {
   permission: string;
 };
 
-export type AccessContext<DataModel extends GenericDataModel = any> =
+export type IamContext<DataModel extends GenericDataModel = any> =
   | Pick<GenericQueryCtx<DataModel>, "auth" | "runQuery">
   | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery">
   | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">;
 
-export type AccessResourceRef = { type: string; id?: string };
-export type AccessAuthorizationAncestor = { type: string; id: string };
+export type IamResourceRef = { type: string; id?: string };
+export type IamAuthorizationAncestor = { type: string; id: string };
 
-export type AccessControlComponent = {
+export type IamComponent = {
   checks: {
     authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision>;
     authorizeMany: FunctionReference<
@@ -217,7 +217,7 @@ export type AccessControlComponent = {
       "query",
       "public",
       GetDeploymentEntryStatusArgs,
-      AccessDeploymentEntryMirrorResult
+      IamDeploymentEntryMirrorResult
     >;
     listMyMemberships: FunctionReference<"query", "public", ListMyMembershipsArgs, Membership[]>;
     listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[]>;
@@ -256,12 +256,12 @@ export type AccessControlComponent = {
   };
 };
 
-export type CreateAccessControlOptions<DataModel extends GenericDataModel> = {
+export type CreateIamOptions<DataModel extends GenericDataModel> = {
   query: QueryBuilder<DataModel, "public">;
   mutation: MutationBuilder<DataModel, "public">;
   action: ActionBuilder<DataModel, "public">;
   components?: Record<string, unknown>;
-  component?: AccessControlComponent;
+  component?: IamComponent;
   componentName?: string;
 };
 
@@ -288,7 +288,7 @@ export type ExtractScope<Ctx, Args> = (
 // (folder/file, project/task/comment) while bounding the per-call check count.
 const MAX_AUTHORIZE_CHAIN = 10;
 
-export type AccessQueryBuilder<DataModel extends GenericDataModel> = {
+export type IamQueryBuilder<DataModel extends GenericDataModel> = {
   <
     ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
     ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
@@ -304,7 +304,7 @@ export type AccessQueryBuilder<DataModel extends GenericDataModel> = {
   }): RegisteredQuery<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 };
 
-export type AccessMutationBuilder<DataModel extends GenericDataModel> = {
+export type IamMutationBuilder<DataModel extends GenericDataModel> = {
   <
     ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
     ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
@@ -320,7 +320,7 @@ export type AccessMutationBuilder<DataModel extends GenericDataModel> = {
   }): RegisteredMutation<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 };
 
-export type AccessActionBuilder<DataModel extends GenericDataModel> = {
+export type IamActionBuilder<DataModel extends GenericDataModel> = {
   <
     ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
     ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
@@ -336,28 +336,25 @@ export type AccessActionBuilder<DataModel extends GenericDataModel> = {
   }): RegisteredAction<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 };
 
-export type AccessControlBuilders<DataModel extends GenericDataModel> = {
+export type IamBuilders<DataModel extends GenericDataModel> = {
   publicQuery: QueryBuilder<DataModel, "public">;
   publicMutation: MutationBuilder<DataModel, "public">;
   publicAction: ActionBuilder<DataModel, "public">;
   authenticatedQuery: QueryBuilder<DataModel, "public">;
   authenticatedMutation: MutationBuilder<DataModel, "public">;
   authenticatedAction: ActionBuilder<DataModel, "public">;
-  accessQuery: AccessQueryBuilder<DataModel>;
-  accessMutation: AccessMutationBuilder<DataModel>;
-  accessAction: AccessActionBuilder<DataModel>;
-  hasPermission: (ctx: AccessContext<DataModel>, args: PermissionCheckArgs) => Promise<boolean>;
-  requirePermission: (ctx: AccessContext<DataModel>, args: PermissionCheckArgs) => Promise<void>;
-  requireAnyPermission: (
-    ctx: AccessContext<DataModel>,
-    args: AnyPermissionCheckArgs,
-  ) => Promise<void>;
+  iamQuery: IamQueryBuilder<DataModel>;
+  iamMutation: IamMutationBuilder<DataModel>;
+  iamAction: IamActionBuilder<DataModel>;
+  hasPermission: (ctx: IamContext<DataModel>, args: PermissionCheckArgs) => Promise<boolean>;
+  requirePermission: (ctx: IamContext<DataModel>, args: PermissionCheckArgs) => Promise<void>;
+  requireAnyPermission: (ctx: IamContext<DataModel>, args: AnyPermissionCheckArgs) => Promise<void>;
   getEffectivePermissions: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args?: EffectivePermissionsArgs,
   ) => Promise<string[]>;
   checkPermissions: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     checks: Array<Exclude<PermissionCheckArgs, string>>,
   ) => Promise<AuthorizationDecision[]>;
   /**
@@ -365,44 +362,39 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
    * verified Convex identity. Use this to link app-owned profile or domain
    * rows to the signed-in user instead of parsing `tokenIdentifier`.
    */
-  getCurrentHerculesAuthUserId: (ctx: AccessContext<DataModel>) => Promise<string | undefined>;
-  getDeploymentEntryStatus: (
-    ctx: AccessContext<DataModel>,
-  ) => Promise<AccessDeploymentEntryMirrorResult>;
+  getCurrentHerculesAuthUserId: (ctx: IamContext<DataModel>) => Promise<string | undefined>;
+  getDeploymentEntryStatus: (ctx: IamContext<DataModel>) => Promise<IamDeploymentEntryMirrorResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
-  // real `accessQuery`. Use this for "list my projects" style lists: the app
+  // real `iamQuery`. Use this for "list my projects" style lists: the app
   // owns and paginates its rows, Hercules never enumerates them. Pass a bounded
   // page, not an entire table (it runs one check per item).
   filterAuthorizedResources: <T>(
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args: {
       resources: T[];
       permission: string;
       scopeId?: string;
-      resource: (item: T) => AccessResourceRef;
-      ancestors?: (item: T) => AccessAuthorizationAncestor[];
+      resource: (item: T) => IamResourceRef;
+      ancestors?: (item: T) => IamAuthorizationAncestor[];
     },
   ) => Promise<T[]>;
-  listMyMemberships: (ctx: AccessContext<DataModel>) => Promise<Membership[]>;
-  listMyRoles: (
-    ctx: AccessContext<DataModel>,
-    args?: { scopeId?: string },
-  ) => Promise<RoleSummary[]>;
+  listMyMemberships: (ctx: IamContext<DataModel>) => Promise<Membership[]>;
+  listMyRoles: (ctx: IamContext<DataModel>, args?: { scopeId?: string }) => Promise<RoleSummary[]>;
   // Scope-admin reads for an in-app management screen. Each requires the caller
   // to hold the matching read permission (system.members:read / system.roles:read
   // / system.permissions:read) in the scope; otherwise they resolve to an empty
-  // list. Reads come from the local mirror, like every other access query.
+  // list. Reads come from the local mirror, like every other IAM query.
   listScopeMembers: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args?: { scopeId?: string },
   ) => Promise<ScopeMember[]>;
   listScopeMemberDirectory: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args?: { scopeId?: string; cursor?: string; limit?: number },
   ) => Promise<ScopeMemberDirectoryPage>;
   getScopeMemberDirectoryEntry: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args: {
       scopeId?: string;
       principalId?: string;
@@ -410,11 +402,11 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
     },
   ) => Promise<ScopeMemberDirectoryEntry | null>;
   listScopeRoles: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args?: { scopeId?: string },
   ) => Promise<ScopeRoleSummary[]>;
   listScopePermissions: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args?: { scopeId?: string },
   ) => Promise<ScopePermissionSummary[]>;
   // "Who has a DIRECT grant on this resource" for an in-app membership panel.
@@ -424,7 +416,7 @@ export type AccessControlBuilders<DataModel extends GenericDataModel> = {
   // the caller is not allowed. `permission`'s resourceType should match
   // `resourceType`.
   listDirectSubjectsForResource: (
-    ctx: AccessContext<DataModel>,
+    ctx: IamContext<DataModel>,
     args: {
       scopeId?: string;
       resourceType: string;
@@ -439,8 +431,8 @@ export type PermissionCheckArgs =
   | {
       scopeId?: string;
       permission: string;
-      resource?: AccessResourceRef;
-      ancestors?: AccessAuthorizationAncestor[];
+      resource?: IamResourceRef;
+      ancestors?: IamAuthorizationAncestor[];
     };
 
 export type AnyPermissionCheckArgs =
@@ -448,14 +440,14 @@ export type AnyPermissionCheckArgs =
   | {
       scopeId?: string;
       permissions: string[];
-      resource?: AccessResourceRef;
-      ancestors?: AccessAuthorizationAncestor[];
+      resource?: IamResourceRef;
+      ancestors?: IamAuthorizationAncestor[];
     };
 
 export type EffectivePermissionsArgs = {
   scopeId?: string;
-  resource?: AccessResourceRef;
-  ancestors?: AccessAuthorizationAncestor[];
+  resource?: IamResourceRef;
+  ancestors?: IamAuthorizationAncestor[];
 };
 
 type ConvexDefinitionObject<Ctx> = {
@@ -467,14 +459,14 @@ type ConvexDefinitionObject<Ctx> = {
 type BuilderCaller = (definition: unknown) => unknown;
 
 /**
- * Wires Hercules managed Access Control into a Convex app. Call once in
- * `convex/access.ts`, passing the generated `query`/`mutation`/`action`
+ * Wires Hercules managed IAM into a Convex app. Call once in
+ * `convex/iam.ts`, passing the generated `query`/`mutation`/`action`
  * builders and `components`, then re-export the returned builders.
  *
  * Returned builders:
  * - `publicQuery`/`publicMutation`/`publicAction`: no auth.
  * - `authenticatedQuery`/`...Mutation`/`...Action`: require sign-in only.
- * - `accessQuery`/`accessMutation`/`accessAction`: enforce a permission in a
+ * - `iamQuery`/`iamMutation`/`iamAction`: enforce a permission in a
  *   scope. Pass `{ permission, scope }`; resolve `scope` with `scopeFromArg`
  *   or `scopeFromResource`. Use these for all org-owned reads and writes.
  * - `hasPermission`/`requirePermission`/`requireAnyPermission`/
@@ -487,15 +479,15 @@ type BuilderCaller = (definition: unknown) => unknown;
  * - `listScopeMembers`/`listScopeRoles`/`listScopePermissions`: complete
  *   mirrored admin reads for an in-app management screen. Each self-gates on
  *   the matching `system.*:read` permission and returns `[]` when the caller
- *   lacks it. Use `createAccessManagementActions().listGrantableRoles`
+ *   lacks it. Use `createIamManagementActions().listGrantableRoles`
  *   instead when choosing a role for a write at an exact target.
  *
- * Reads resolve against the app's local Access Control mirror, which lags the
+ * Reads resolve against the app's local IAM mirror, which lags the
  * control plane by a short projection-sync window after any change.
  */
-export function createAccessControl<DataModel extends GenericDataModel>(
-  options: CreateAccessControlOptions<DataModel>,
-): AccessControlBuilders<DataModel> {
+export function createIam<DataModel extends GenericDataModel>(
+  options: CreateIamOptions<DataModel>,
+): IamBuilders<DataModel> {
   const component = resolveComponent(options);
 
   return {
@@ -505,12 +497,9 @@ export function createAccessControl<DataModel extends GenericDataModel>(
     authenticatedQuery: makeAuthenticatedBuilder(options.query, component),
     authenticatedMutation: makeAuthenticatedBuilder(options.mutation, component),
     authenticatedAction: makeAuthenticatedBuilder(options.action, component),
-    accessQuery: makeAccessBuilder(options.query, component) as AccessQueryBuilder<DataModel>,
-    accessMutation: makeAccessBuilder(
-      options.mutation,
-      component,
-    ) as AccessMutationBuilder<DataModel>,
-    accessAction: makeAccessBuilder(options.action, component) as AccessActionBuilder<DataModel>,
+    iamQuery: makeIamBuilder(options.query, component) as IamQueryBuilder<DataModel>,
+    iamMutation: makeIamBuilder(options.mutation, component) as IamMutationBuilder<DataModel>,
+    iamAction: makeIamBuilder(options.action, component) as IamActionBuilder<DataModel>,
     hasPermission: makeHasPermission(component),
     requirePermission: makeRequirePermission(component),
     requireAnyPermission: makeRequireAnyPermission(component),
@@ -551,7 +540,7 @@ export const defaultScope: ExtractScope<unknown, unknown> = () => DEFAULT_SCOPE_
 export const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
 
 /**
- * Resolves the scope for an `access*` builder from a string arg the caller
+ * Resolves the scope for an `iam*` builder from a string arg the caller
  * passes (e.g. the active org id). Use for list/create handlers where the
  * frontend already knows the scope. Throws if the arg is missing or empty.
  *
@@ -575,7 +564,7 @@ export function scopeFromArg<K extends string>(argKey: K) {
 type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
 
 /**
- * Resolves the scope from a referenced row for an `access*` builder. Reads
+ * Resolves the scope from a referenced row for an `iam*` builder. Reads
  * the row named by `argKey`, returns the row's scope plus the resource id,
  * and lets `authorize` apply resource-level grants on top of the scope check.
  * Use for any read/update/delete that receives an org-owned row id.
@@ -601,7 +590,7 @@ export function scopeFromResource<T extends string, K extends string>(
   argKey: K,
   options: {
     scopeField?: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   } = {},
 ) {
   const scopeField = options.scopeField ?? "orgScopeId";
@@ -661,7 +650,7 @@ export function scopeFromDefaultResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
-    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   } = {},
 ) {
   return async (
@@ -711,7 +700,7 @@ export function scopeFromParentResource<T extends string, K extends string>(
   options: {
     scopeField?: string;
     parentResourceType: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   },
 ) {
   const scopeField = options.scopeField ?? "orgScopeId";
@@ -769,7 +758,7 @@ export function scopeFromDefaultParentResource<T extends string, K extends strin
   argKey: K,
   options: {
     parentResourceType: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => AccessAuthorizationAncestor[];
+    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   },
 ) {
   return async (
@@ -810,8 +799,8 @@ export function scopeFromDefaultParentResource<T extends string, K extends strin
 }
 
 function resolveComponent<DataModel extends GenericDataModel>(
-  options: CreateAccessControlOptions<DataModel>,
-): AccessControlComponent {
+  options: CreateIamOptions<DataModel>,
+): IamComponent {
   if (options.component) {
     return options.component;
   }
@@ -821,45 +810,36 @@ function resolveComponent<DataModel extends GenericDataModel>(
 
   if (!component) {
     throw new Error(
-      "Missing Hercules Access Control component. Install @usehercules/convex in convex/convex.config.ts.",
+      "Missing Hercules IAM component. Install @usehercules/convex in convex/convex.config.ts.",
     );
   }
 
-  return component as AccessControlComponent;
+  return component as IamComponent;
 }
 
-function makeAuthenticatedBuilder<TBuilder>(
-  builder: TBuilder,
-  component: AccessControlComponent,
-): TBuilder {
+function makeAuthenticatedBuilder<TBuilder>(builder: TBuilder, component: IamComponent): TBuilder {
   return ((definition: unknown) => {
     return (builder as BuilderCaller)(wrapDefinition(definition, component, "authenticated"));
   }) as TBuilder;
 }
 
-function makeAccessBuilder<TBuilder>(
-  builder: TBuilder,
-  component: AccessControlComponent,
-): TBuilder {
+function makeIamBuilder<TBuilder>(builder: TBuilder, component: IamComponent): TBuilder {
   return ((definition: unknown) => {
     if (typeof definition !== "object" || definition === null || !("handler" in definition)) {
-      throw new Error("access* builders require an object definition with a permission.");
+      throw new Error("iam* builders require an object definition with a permission.");
     }
 
-    const accessDefinition = definition as ConvexDefinitionObject<AuthorizationCtx> & {
+    const iamDefinition = definition as ConvexDefinitionObject<AuthorizationCtx> & {
       permission?: unknown;
       scope?: unknown;
     };
-    if (
-      typeof accessDefinition.permission !== "string" ||
-      accessDefinition.permission.length === 0
-    ) {
-      throw new Error("access* builders require a non-empty permission.");
+    if (typeof iamDefinition.permission !== "string" || iamDefinition.permission.length === 0) {
+      throw new Error("iam* builders require a non-empty permission.");
     }
-    if (accessDefinition.scope !== undefined && typeof accessDefinition.scope !== "function") {
-      throw new Error("access* builders require scope to be a function.");
+    if (iamDefinition.scope !== undefined && typeof iamDefinition.scope !== "function") {
+      throw new Error("iam* builders require scope to be a function.");
     }
-    const { permission, scope, ...convexDefinition } = accessDefinition;
+    const { permission, scope, ...convexDefinition } = iamDefinition;
     const scopeExtractor = (scope ?? defaultScope) as ExtractScope<AuthorizationCtx, unknown>;
     return (builder as BuilderCaller)(
       wrapDefinition(convexDefinition, component, "permission", {
@@ -870,20 +850,20 @@ function makeAccessBuilder<TBuilder>(
   }) as TBuilder;
 }
 
-type AccessConfig = {
+type IamConfig = {
   permission?: string;
   scope?: ExtractScope<AuthorizationCtx, unknown>;
 };
 
 function wrapDefinition(
   definition: unknown,
-  component: AccessControlComponent,
-  mode: AccessMode,
-  access?: AccessConfig,
+  component: IamComponent,
+  mode: IamMode,
+  iam?: IamConfig,
 ) {
   if (typeof definition === "function") {
     return async (ctx: AuthorizationCtx, ...args: never[]) => {
-      await ensureAuthorized(ctx, component, mode, access, args[0]);
+      await ensureAuthorized(ctx, component, mode, iam, args[0]);
       return (definition as (ctx: AuthorizationCtx, ...rest: never[]) => unknown)(ctx, ...args);
     };
   }
@@ -892,7 +872,7 @@ function wrapDefinition(
   return {
     ...objectDefinition,
     handler: async (ctx: AuthorizationCtx, ...args: never[]) => {
-      await ensureAuthorized(ctx, component, mode, access, args[0]);
+      await ensureAuthorized(ctx, component, mode, iam, args[0]);
       return objectDefinition.handler(ctx, ...args);
     },
   };
@@ -903,7 +883,7 @@ type AuthorizationCtx =
   | GenericMutationCtx<GenericDataModel>
   | GenericActionCtx<GenericDataModel>;
 
-function resourceArgs(resource?: AccessResourceRef) {
+function resourceArgs(resource?: IamResourceRef) {
   return { resourceType: resource?.type, resourceId: resource?.id };
 }
 
@@ -912,7 +892,7 @@ function ancestorArgs(ancestors?: Array<{ resourceType: string; resourceId: stri
 }
 
 function normalizeAncestors(
-  ancestors: AccessAuthorizationAncestor[] | undefined,
+  ancestors: IamAuthorizationAncestor[] | undefined,
   source = "authorization check",
 ): Array<{ resourceType: string; resourceId: string }> | undefined {
   if (!ancestors || ancestors.length === 0) return undefined;
@@ -933,11 +913,11 @@ function normalizeAncestors(
   });
 }
 
-async function getTokenIdentifier(ctx: AccessContext): Promise<string | undefined> {
+async function getTokenIdentifier(ctx: IamContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
 }
 
-async function getCurrentHerculesAuthUserId(ctx: AccessContext): Promise<string | undefined> {
+async function getCurrentHerculesAuthUserId(ctx: IamContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
@@ -983,8 +963,8 @@ function normalizeEffectivePermissionsArgs(args: EffectivePermissionsArgs | unde
   };
 }
 
-function makeHasPermission(component: AccessControlComponent) {
-  return async (ctx: AccessContext, args: PermissionCheckArgs): Promise<boolean> => {
+function makeHasPermission(component: IamComponent) {
+  return async (ctx: IamContext, args: PermissionCheckArgs): Promise<boolean> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return false;
     const normalized = normalizePermissionCheckArgs(args);
@@ -1000,17 +980,17 @@ function makeHasPermission(component: AccessControlComponent) {
   };
 }
 
-function makeRequirePermission(component: AccessControlComponent) {
+function makeRequirePermission(component: IamComponent) {
   const hasPermission = makeHasPermission(component);
-  return async (ctx: AccessContext, args: PermissionCheckArgs): Promise<void> => {
+  return async (ctx: IamContext, args: PermissionCheckArgs): Promise<void> => {
     if (await hasPermission(ctx, args)) return;
     throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
   };
 }
 
-function makeRequireAnyPermission(component: AccessControlComponent) {
+function makeRequireAnyPermission(component: IamComponent) {
   const hasPermission = makeHasPermission(component);
-  return async (ctx: AccessContext, args: AnyPermissionCheckArgs): Promise<void> => {
+  return async (ctx: IamContext, args: AnyPermissionCheckArgs): Promise<void> => {
     const normalized = normalizeAnyPermissionCheckArgs(args);
     for (const permission of normalized.permissions) {
       if (await hasPermission(ctx, { ...normalized, permission })) return;
@@ -1019,8 +999,8 @@ function makeRequireAnyPermission(component: AccessControlComponent) {
   };
 }
 
-function makeGetEffectivePermissions(component: AccessControlComponent) {
-  return async (ctx: AccessContext, args?: EffectivePermissionsArgs): Promise<string[]> => {
+function makeGetEffectivePermissions(component: IamComponent) {
+  return async (ctx: IamContext, args?: EffectivePermissionsArgs): Promise<string[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
     const normalized = normalizeEffectivePermissionsArgs(args);
@@ -1035,9 +1015,9 @@ function makeGetEffectivePermissions(component: AccessControlComponent) {
   };
 }
 
-function makeCheckPermissions(component: AccessControlComponent) {
+function makeCheckPermissions(component: IamComponent) {
   return async (
-    ctx: AccessContext,
+    ctx: IamContext,
     checks: Array<Exclude<PermissionCheckArgs, string>>,
   ): Promise<AuthorizationDecision[]> => {
     if (checks.length > 50) {
@@ -1070,15 +1050,15 @@ function makeCheckPermissions(component: AccessControlComponent) {
   };
 }
 
-function makeFilterAuthorizedResources(component: AccessControlComponent) {
+function makeFilterAuthorizedResources(component: IamComponent) {
   return async <T>(
-    ctx: AccessContext,
+    ctx: IamContext,
     args: {
       resources: T[];
       permission: string;
       scopeId?: string;
-      resource: (item: T) => AccessResourceRef;
-      ancestors?: (item: T) => AccessAuthorizationAncestor[];
+      resource: (item: T) => IamResourceRef;
+      ancestors?: (item: T) => IamAuthorizationAncestor[];
     },
   ): Promise<T[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -1103,8 +1083,8 @@ function makeFilterAuthorizedResources(component: AccessControlComponent) {
   };
 }
 
-function makeListMyMemberships(component: AccessControlComponent) {
-  return async (ctx: AccessContext): Promise<Membership[]> => {
+function makeListMyMemberships(component: IamComponent) {
+  return async (ctx: IamContext): Promise<Membership[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
 
@@ -1114,8 +1094,8 @@ function makeListMyMemberships(component: AccessControlComponent) {
   };
 }
 
-function makeGetDeploymentEntryStatus(component: AccessControlComponent) {
-  return async (ctx: AccessContext): Promise<AccessDeploymentEntryMirrorResult> => {
+function makeGetDeploymentEntryStatus(component: IamComponent) {
+  return async (ctx: IamContext): Promise<IamDeploymentEntryMirrorResult> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) {
       return { kind: "fallback", reason: "identity_missing" };
@@ -1127,8 +1107,8 @@ function makeGetDeploymentEntryStatus(component: AccessControlComponent) {
   };
 }
 
-function makeListMyRoles(component: AccessControlComponent) {
-  return async (ctx: AccessContext, args: { scopeId?: string } = {}): Promise<RoleSummary[]> => {
+function makeListMyRoles(component: IamComponent) {
+  return async (ctx: IamContext, args: { scopeId?: string } = {}): Promise<RoleSummary[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
 
@@ -1139,8 +1119,8 @@ function makeListMyRoles(component: AccessControlComponent) {
   };
 }
 
-function makeListScopeMembers(component: AccessControlComponent) {
-  return async (ctx: AccessContext, args: { scopeId?: string } = {}): Promise<ScopeMember[]> => {
+function makeListScopeMembers(component: IamComponent) {
+  return async (ctx: IamContext, args: { scopeId?: string } = {}): Promise<ScopeMember[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
 
@@ -1151,9 +1131,9 @@ function makeListScopeMembers(component: AccessControlComponent) {
   };
 }
 
-function makeListScopeMemberDirectory(component: AccessControlComponent) {
+function makeListScopeMemberDirectory(component: IamComponent) {
   return async (
-    ctx: AccessContext,
+    ctx: IamContext,
     args: { scopeId?: string; cursor?: string; limit?: number } = {},
   ): Promise<ScopeMemberDirectoryPage> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -1172,9 +1152,9 @@ function makeListScopeMemberDirectory(component: AccessControlComponent) {
   };
 }
 
-function makeGetScopeMemberDirectoryEntry(component: AccessControlComponent) {
+function makeGetScopeMemberDirectoryEntry(component: IamComponent) {
   return async (
-    ctx: AccessContext,
+    ctx: IamContext,
     args: {
       scopeId?: string;
       principalId?: string;
@@ -1193,11 +1173,8 @@ function makeGetScopeMemberDirectoryEntry(component: AccessControlComponent) {
   };
 }
 
-function makeListScopeRoles(component: AccessControlComponent) {
-  return async (
-    ctx: AccessContext,
-    args: { scopeId?: string } = {},
-  ): Promise<ScopeRoleSummary[]> => {
+function makeListScopeRoles(component: IamComponent) {
+  return async (ctx: IamContext, args: { scopeId?: string } = {}): Promise<ScopeRoleSummary[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
 
@@ -1208,9 +1185,9 @@ function makeListScopeRoles(component: AccessControlComponent) {
   };
 }
 
-function makeListScopePermissions(component: AccessControlComponent) {
+function makeListScopePermissions(component: IamComponent) {
   return async (
-    ctx: AccessContext,
+    ctx: IamContext,
     args: { scopeId?: string } = {},
   ): Promise<ScopePermissionSummary[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -1223,9 +1200,9 @@ function makeListScopePermissions(component: AccessControlComponent) {
   };
 }
 
-function makeListDirectSubjectsForResource(component: AccessControlComponent) {
+function makeListDirectSubjectsForResource(component: IamComponent) {
   return async (
-    ctx: AccessContext,
+    ctx: IamContext,
     args: {
       scopeId?: string;
       resourceType: string;
@@ -1248,9 +1225,9 @@ function makeListDirectSubjectsForResource(component: AccessControlComponent) {
 
 async function ensureAuthorized(
   ctx: AuthorizationCtx,
-  component: AccessControlComponent,
-  mode: AccessMode,
-  access: AccessConfig | undefined,
+  component: IamComponent,
+  mode: IamMode,
+  iam: IamConfig | undefined,
   callerArgs: unknown,
 ) {
   const identity = await ctx.auth.getUserIdentity();
@@ -1272,7 +1249,7 @@ async function ensureAuthorized(
   let ancestors: Array<{ resourceType: string; resourceId: string }> | undefined;
   if (mode === "permission") {
     try {
-      const extracted = await (access?.scope ?? defaultScope)(ctx, callerArgs);
+      const extracted = await (iam?.scope ?? defaultScope)(ctx, callerArgs);
       if (typeof extracted === "string") {
         scopeId = extracted;
       } else {
@@ -1294,7 +1271,7 @@ async function ensureAuthorized(
   const decision = await ctx.runQuery(component.checks.authorize, {
     tokenIdentifier: identity.tokenIdentifier,
     scopeId,
-    permission: mode === "permission" ? access?.permission : undefined,
+    permission: mode === "permission" ? iam?.permission : undefined,
     resourceType,
     resourceId,
     ...ancestorArgs(ancestors),

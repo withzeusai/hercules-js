@@ -2,4 +2,4 @@
 "@usehercules/convex": patch
 ---
 
-Keep Access Control actions in Convex's default runtime.
+Keep IAM actions in Convex's default runtime.

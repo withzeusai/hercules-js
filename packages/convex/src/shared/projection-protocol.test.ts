@@ -13,7 +13,7 @@ function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(`${fixturesDir}${name}`, "utf8"));
 }
 
-describe("Access Control projection v3 consumer schemas", () => {
+describe("IAM projection v3 consumer schemas", () => {
   test("snapshot.json parses under the snapshot schema", () => {
     const snapshot = loadFixture("snapshot.json");
 

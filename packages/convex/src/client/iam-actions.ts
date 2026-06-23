@@ -1,15 +1,15 @@
 import { Hercules } from "@usehercules/sdk";
 import type { ActionBuilder, GenericActionCtx, GenericDataModel } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import type { AccessDeploymentEntryMirrorResult, Membership, ScopeRoleSummary } from "./index";
+import type { IamDeploymentEntryMirrorResult, Membership, ScopeRoleSummary } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
-const DEFAULT_ACCESS_CONTROL_API_KEY_ENV_VAR = "HERCULES_API_KEY";
+const DEFAULT_IAM_API_KEY_ENV_VAR = "HERCULES_API_KEY";
 
 type WriteResult = Record<string, unknown>;
-export type AccessBindingAppliesTo = "self" | "self_and_descendants";
+export type IamBindingAppliesTo = "self" | "self_and_descendants";
 
-export type AccessResourceGrantWriteResult = {
+export type IamResourceGrantWriteResult = {
   accessScopeId: string;
   grantId: string;
   changed: boolean;
@@ -17,7 +17,7 @@ export type AccessResourceGrantWriteResult = {
   projectionIds: string[];
 };
 
-export type AccessResourceGrantsReplaceResult = {
+export type IamResourceGrantsReplaceResult = {
   accessScopeId: string;
   resourceType: string;
   resourceId: string;
@@ -27,7 +27,7 @@ export type AccessResourceGrantsReplaceResult = {
       grantId: string;
       roleId: string | null;
       permissionId: string | null;
-      appliesTo: AccessBindingAppliesTo;
+      appliesTo: IamBindingAppliesTo;
       expiresAt: string | null;
     }>;
   }>;
@@ -36,7 +36,7 @@ export type AccessResourceGrantsReplaceResult = {
   projectionIds: string[];
 };
 
-export type AccessMemberRolesReplaceResult = {
+export type IamMemberRolesReplaceResult = {
   accessScopeId: string;
   principalId: string;
   roleIds: string[];
@@ -45,28 +45,28 @@ export type AccessMemberRolesReplaceResult = {
   projectionIds: string[];
 };
 
-export type AccessGrantableRoleTarget =
+export type IamGrantableRoleTarget =
   | { type: "scope" }
   | {
       type: "resource";
       resourceType: string;
       resourceId: string;
-      appliesTo?: AccessBindingAppliesTo;
+      appliesTo?: IamBindingAppliesTo;
     };
 
-export type AccessGrantableRoleListResult = {
+export type IamGrantableRoleListResult = {
   accessScopeId: string;
   roles: ScopeRoleSummary[];
 };
 
-export type AccessScopeCreateResult = {
+export type IamScopeCreateResult = {
   accessScopeId: string;
   created?: boolean;
   sourceVersion: number;
   projectionIds: string[];
 };
 
-export type AccessInvitationCreateResult = {
+export type IamInvitationCreateResult = {
   accessScopeId: string;
   invitationId: string;
   email: string;
@@ -78,7 +78,7 @@ export type AccessInvitationCreateResult = {
   projectionIds: string[];
 };
 
-export type AccessInvitationAcceptResult = {
+export type IamInvitationAcceptResult = {
   accessScopeId: string;
   invitationId: string;
   principalId: string;
@@ -88,7 +88,7 @@ export type AccessInvitationAcceptResult = {
   projectionIds: string[];
 };
 
-export type AccessDeploymentEntryResult = {
+export type IamDeploymentEntryResult = {
   allowed: boolean;
   reason: string;
   principalId?: string;
@@ -97,7 +97,7 @@ export type AccessDeploymentEntryResult = {
   changed: boolean;
 };
 
-export type AccessGroupListResult = {
+export type IamGroupListResult = {
   accessScopeId: string;
   groups: Array<{
     groupPrincipalId: string;
@@ -110,7 +110,7 @@ export type AccessGroupListResult = {
   }>;
 };
 
-export type AccessGroupWriteResult = {
+export type IamGroupWriteResult = {
   accessScopeId: string;
   groupPrincipalId: string;
   changed?: boolean;
@@ -118,12 +118,12 @@ export type AccessGroupWriteResult = {
   projectionIds: string[];
 };
 
-export type AccessGroupMemberWriteResult = AccessGroupWriteResult & {
+export type IamGroupMemberWriteResult = IamGroupWriteResult & {
   memberPrincipalId: string;
   membershipId?: string;
 };
 
-export type AccessResourceInvitationListResult = {
+export type IamResourceInvitationListResult = {
   accessScopeId: string;
   invitations: Array<{
     invitationId: string;
@@ -133,14 +133,14 @@ export type AccessResourceInvitationListResult = {
     conferralType: "role" | "permission" | null;
     roleId: string | null;
     permissionId: string | null;
-    appliesTo: AccessBindingAppliesTo;
+    appliesTo: IamBindingAppliesTo;
     expiresAt: string;
     createdAt: string;
     updatedAt: string;
   }>;
 };
 
-export type AccessRoleOverridesResult = {
+export type IamRoleOverridesResult = {
   accessScopeId: string;
   roleId: string;
   overrides: Array<{
@@ -150,7 +150,7 @@ export type AccessRoleOverridesResult = {
   }>;
 };
 
-export type AccessUserExceptionsResult = {
+export type IamUserExceptionsResult = {
   accessScopeId: string;
   principalId: string;
   exceptions: Array<{
@@ -161,49 +161,44 @@ export type AccessUserExceptionsResult = {
   }>;
 };
 
-export type AccessControlSdkClient = {
+export type IamSdkClient = {
   post<T>(path: string, options: { body: Record<string, unknown> }): Promise<T>;
 };
 
-export type AccessControlApiOptions = {
+export type IamApiOptions = {
   apiKey?: string;
   apiKeyEnvVar?: string;
   apiVersion?: typeof DEFAULT_API_VERSION;
-  client?: AccessControlSdkClient;
+  client?: IamSdkClient;
 };
 
-export type CreateAccessServiceActionsOptions<DataModel extends GenericDataModel> =
-  AccessControlApiOptions & {
-    internalAction: ActionBuilder<DataModel, "internal">;
-  };
+export type CreateIamServiceActionsOptions<DataModel extends GenericDataModel> = IamApiOptions & {
+  internalAction: ActionBuilder<DataModel, "internal">;
+};
 
-export type CreateAccessManagementActionsOptions<DataModel extends GenericDataModel> =
-  AccessControlApiOptions & {
+export type CreateIamManagementActionsOptions<DataModel extends GenericDataModel> =
+  IamApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
   };
 
 export type CreateDeploymentEntryActionOptions<DataModel extends GenericDataModel> =
-  AccessControlApiOptions & {
+  IamApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
     getDeploymentEntryStatus?: (
       ctx: GenericActionCtx<DataModel>,
-    ) => Promise<AccessDeploymentEntryMirrorResult>;
+    ) => Promise<IamDeploymentEntryMirrorResult>;
   };
 
 // The full admission-policy surface the entry evaluator handles.
-export type AccessAccountEntryMode =
-  | "open"
-  | "allowlisted_only"
-  | "invite_only"
-  | "approval_required";
+export type IamAccountEntryMode = "open" | "allowlisted_only" | "invite_only" | "approval_required";
 
-export type CreateAccessScopeArgs = {
+export type CreateIamScopeArgs = {
   name: string;
   defaultRoleKey?: string;
-  accountEntryMode?: AccessAccountEntryMode;
+  accountEntryMode?: IamAccountEntryMode;
 };
 
-export type CreateAccessInvitationArgs = {
+export type CreateIamInvitationArgs = {
   scopeId: string;
   email: string;
   roleIds?: string[];
@@ -219,11 +214,11 @@ export type CreateResourceInvitationArgs = {
   /** Conferred grant — exactly one of these. A custom role or a single permission. */
   roleKey?: string;
   permissionKey?: string;
-  appliesTo?: AccessBindingAppliesTo;
+  appliesTo?: IamBindingAppliesTo;
   expiresInDays?: number;
 };
 
-export type AcceptAccessInvitationArgs = {
+export type AcceptIamInvitationArgs = {
   token: string;
   /**
    * The signed-in user's OIDC ID token (`user.id_token`): a JWT with three
@@ -236,20 +231,19 @@ export type AcceptAccessInvitationArgs = {
 
 const serviceActor = { actor_mode: "service" as const };
 
-export type CreateAccessScopeContext = {
+export type CreateIamScopeContext = {
   auth: {
     getUserIdentity(): Promise<{ tokenIdentifier?: string | null } | null>;
   };
 };
 
-export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
-  AccessControlApiOptions & {
-    authenticatedAction: ActionBuilder<DataModel, "public">;
-    canCreateScope: (
-      ctx: CreateAccessScopeContext,
-      args: CreateAccessScopeArgs,
-    ) => boolean | Promise<boolean>;
-  };
+export type CreateIamScopeActionOptions<DataModel extends GenericDataModel> = IamApiOptions & {
+  authenticatedAction: ActionBuilder<DataModel, "public">;
+  canCreateScope: (
+    ctx: CreateIamScopeContext,
+    args: CreateIamScopeArgs,
+  ) => boolean | Promise<boolean>;
+};
 
 export type ResourceCreatorBootstrapTarget = {
   scopeId: string;
@@ -268,15 +262,15 @@ export type ResourceCreatorBootstrapResult =
       resourceId: string;
       state: "active";
       bootstrapped: true;
-      grant: AccessResourceGrantWriteResult;
+      grant: IamResourceGrantWriteResult;
     };
 
 export type CreateResourceCreatorBootstrapActionOptions<DataModel extends GenericDataModel> =
-  AccessControlApiOptions & {
+  IamApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
     resourceType: string;
     managerRoleKey: string;
-    appliesTo: AccessBindingAppliesTo;
+    appliesTo: IamBindingAppliesTo;
     getBootstrapTarget: (
       ctx: GenericActionCtx<DataModel>,
       args: { resourceId: string },
@@ -287,16 +281,16 @@ export type CreateResourceCreatorBootstrapActionOptions<DataModel extends Generi
       args: {
         resourceId: string;
         creatorHerculesAuthUserId: string;
-        grant: AccessResourceGrantWriteResult;
+        grant: IamResourceGrantWriteResult;
       },
     ) => Promise<void>;
   };
 
-export type AccessRecipient =
+export type IamRecipient =
   | { type: "user"; herculesAuthUserId: string }
   | { type: "principal"; principalId: string };
 
-const accessRecipientValidator = v.union(
+const iamRecipientValidator = v.union(
   v.object({
     type: v.literal("user"),
     herculesAuthUserId: v.string(),
@@ -339,7 +333,7 @@ const resourceGrantReplacementValidator = v.object({
   expiresAt: v.optional(v.union(v.string(), v.null())),
 });
 const resourceGrantSubjectReplacementValidator = v.object({
-  recipient: accessRecipientValidator,
+  recipient: iamRecipientValidator,
   grants: v.array(resourceGrantReplacementValidator),
 });
 const resourceRuleSubjectValidator = v.union(
@@ -358,23 +352,23 @@ const resourceRuleReplacementEffectValidator = v.union(
 );
 
 /**
- * Builds the managed Access Control write actions (assign/remove roles,
+ * Builds the managed IAM write actions (assign/remove roles,
  * invite, create org custom roles, resource grants, overrides, expiries,
  * member lifecycle, admission rules, entry mode, and groups) plus the raw
  * reads backing them (group/resource-invitation lists, role overrides, user
  * exceptions). Each one calls the Hercules control plane, so it needs the
- * `HERCULES_API_KEY` secret. Wire it in an internal `convex/accessService.ts`
+ * `HERCULES_API_KEY` secret. Wire it in an internal `convex/iamService.ts`
  * module only when the app needs trusted service automation, and re-export
  * only the actions that workflow uses.
  *
  * These are internal service-authority actions. Do not re-export them as public
- * Convex actions. Use {@link createAccessManagementActions} for public resource
+ * Convex actions. Use {@link createIamManagementActions} for public resource
  * management by signed-in app users.
  */
-export function createAccessServiceActions<DataModel extends GenericDataModel>(
-  options: CreateAccessServiceActionsOptions<DataModel>,
+export function createIamServiceActions<DataModel extends GenericDataModel>(
+  options: CreateIamServiceActionsOptions<DataModel>,
 ) {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const callIamApi = makeIamApiCaller(options);
   const { internalAction } = options;
 
   return {
@@ -382,7 +376,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
       args: { scopeId: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId };
-        return await callAccessControlApi("/v1/access-control/scopes/archive", body);
+        return await callIamApi("/v1/iam/scopes/archive", body);
       },
     }),
 
@@ -394,7 +388,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           ...roleRef(args),
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/scopes/set-default-role", body);
+        return await callIamApi("/v1/iam/scopes/set-default-role", body);
       },
     }),
 
@@ -407,7 +401,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
         expiresInDays: v.optional(v.number()),
       },
       handler: async (_ctx, args) => {
-        const result = await createAccessInvitation(args, options);
+        const result = await createIamInvitation(args, options);
         return result;
       },
     }),
@@ -420,14 +414,14 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           invitation_id: args.invitationId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/invitations/revoke", body);
+        return await callIamApi("/v1/iam/invitations/revoke", body);
       },
     }),
 
     assignRole: internalAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         ...optionalRoleRef,
       },
       handler: async (_ctx, args) => {
@@ -437,14 +431,14 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           ...roleRef(args),
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/assign", body);
+        return await callIamApi("/v1/iam/roles/assign", body);
       },
     }),
 
     removeRole: internalAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         ...optionalRoleRef,
       },
       handler: async (_ctx, args) => {
@@ -454,7 +448,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           ...roleRef(args),
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/remove", body);
+        return await callIamApi("/v1/iam/roles/remove", body);
       },
     }),
 
@@ -475,7 +469,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           permission_keys: args.permissionKeys,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/create-org-custom", body);
+        return await callIamApi("/v1/iam/roles/create-org-custom", body);
       },
     }),
 
@@ -492,14 +486,14 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           permission_keys: args.permissionKeys,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/roles/update-permissions", body);
+        return await callIamApi("/v1/iam/roles/update-permissions", body);
       },
     }),
 
     setUserExceptions: internalAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         allow: v.array(v.string()),
         deny: v.array(v.string()),
       },
@@ -511,14 +505,14 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           deny: args.deny,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/user-exceptions/set", body);
+        return await callIamApi("/v1/iam/user-exceptions/set", body);
       },
     }),
 
     createResourceGrant: internalAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         resourceType: v.string(),
         resourceId: v.string(),
         roleKey: v.optional(v.string()),
@@ -540,11 +534,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           expires_at: args.expiresAt,
           ...serviceActor,
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/resource-grants/create",
-          body,
-        );
-        return normalizeAccessResourceGrantWriteResult(result);
+        const result = await callIamApi("/v1/iam/resource-grants/create", body);
+        return normalizeIamResourceGrantWriteResult(result);
       },
     }),
 
@@ -564,18 +555,15 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           subjects: resourceGrantReplacementSubjectsBody(args.subjects),
           ...serviceActor,
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/resource-grants/replace",
-          body,
-        );
-        return normalizeAccessResourceGrantsReplaceResult(result);
+        const result = await callIamApi("/v1/iam/resource-grants/replace", body);
+        return normalizeIamResourceGrantsReplaceResult(result);
       },
     }),
 
     replaceMemberRoles: internalAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         roleKeys: v.array(v.string()),
       },
       handler: async (_ctx, args) => {
@@ -585,8 +573,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           role_keys: memberRoleReplacementKeysBody(args.roleKeys),
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/roles/replace", body);
-        return normalizeAccessMemberRolesReplaceResult(result);
+        const result = await callIamApi("/v1/iam/roles/replace", body);
+        return normalizeIamMemberRolesReplaceResult(result);
       },
     }),
 
@@ -630,7 +618,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           expires_at: args.expiresAt,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/resource-rules/set", body);
+        return await callIamApi("/v1/iam/resource-rules/set", body);
       },
     }),
 
@@ -664,7 +652,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           })),
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/resource-rules/replace", body);
+        return await callIamApi("/v1/iam/resource-rules/replace", body);
       },
     }),
 
@@ -676,11 +664,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           grant_id: args.grantId,
           ...serviceActor,
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/resource-grants/revoke",
-          body,
-        );
-        return normalizeAccessResourceGrantWriteResult(result);
+        const result = await callIamApi("/v1/iam/resource-grants/revoke", body);
+        return normalizeIamResourceGrantWriteResult(result);
       },
     }),
 
@@ -697,8 +682,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           expires_at: args.expiresAt,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/expiries/set", body);
-        return normalizeAccessResourceGrantWriteResult(result);
+        const result = await callIamApi("/v1/iam/expiries/set", body);
+        return normalizeIamResourceGrantWriteResult(result);
       },
     }),
 
@@ -717,7 +702,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           deny: args.deny,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/role-overrides/set", body);
+        return await callIamApi("/v1/iam/role-overrides/set", body);
       },
     }),
 
@@ -738,7 +723,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           ...roleRef(args),
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/members/add", body);
+        return await callIamApi("/v1/iam/members/add", body);
       },
     }),
 
@@ -755,7 +740,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           status: args.status,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/members/status", body);
+        return await callIamApi("/v1/iam/members/status", body);
       },
     }),
 
@@ -767,7 +752,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           principal_id: args.principalId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/members/remove", body);
+        return await callIamApi("/v1/iam/members/remove", body);
       },
     }),
 
@@ -779,7 +764,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           principal_id: args.principalId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/members/approve", body);
+        return await callIamApi("/v1/iam/members/approve", body);
       },
     }),
 
@@ -800,7 +785,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           reason: args.reason,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/admission-rules/upsert", body);
+        return await callIamApi("/v1/iam/admission-rules/upsert", body);
       },
     }),
 
@@ -812,7 +797,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           rule_id: args.ruleId,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/admission-rules/archive", body);
+        return await callIamApi("/v1/iam/admission-rules/archive", body);
       },
     }),
 
@@ -827,7 +812,7 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           account_entry_mode: args.accountEntryMode,
           ...serviceActor,
         };
-        return await callAccessControlApi("/v1/access-control/entry-mode/set", body);
+        return await callIamApi("/v1/iam/entry-mode/set", body);
       },
     }),
 
@@ -839,8 +824,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           name: args.name,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/create", body);
-        return normalizeAccessGroupWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/create", body);
+        return normalizeIamGroupWriteResult(result);
       },
     }),
 
@@ -857,8 +842,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           name: args.name,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/rename", body);
-        return normalizeAccessGroupWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/rename", body);
+        return normalizeIamGroupWriteResult(result);
       },
     }),
 
@@ -871,8 +856,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           group_principal_id: args.groupPrincipalId,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/archive", body);
-        return normalizeAccessGroupWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/archive", body);
+        return normalizeIamGroupWriteResult(result);
       },
     }),
 
@@ -884,8 +869,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           include_archived: args.includeArchived,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/list", body);
-        return normalizeAccessGroupListResult(result);
+        const result = await callIamApi("/v1/iam/groups/list", body);
+        return normalizeIamGroupListResult(result);
       },
     }),
 
@@ -902,8 +887,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           member_principal_id: args.memberPrincipalId,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/members/add", body);
-        return normalizeAccessGroupMemberWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/members/add", body);
+        return normalizeIamGroupMemberWriteResult(result);
       },
     }),
 
@@ -920,8 +905,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           member_principal_id: args.memberPrincipalId,
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/members/remove", body);
-        return normalizeAccessGroupMemberWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/members/remove", body);
+        return normalizeIamGroupMemberWriteResult(result);
       },
     }),
 
@@ -929,11 +914,8 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
       args: { scopeId: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId, ...serviceActor };
-        const result = await callAccessControlApi(
-          "/v1/access-control/invitations/list-resource",
-          body,
-        );
-        return normalizeAccessResourceInvitationListResult(result);
+        const result = await callIamApi("/v1/iam/invitations/list-resource", body);
+        return normalizeIamResourceInvitationListResult(result);
       },
     }),
 
@@ -945,21 +927,21 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
           ...roleRef(args),
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/role-overrides/get", body);
-        return normalizeAccessRoleOverridesResult(result);
+        const result = await callIamApi("/v1/iam/role-overrides/get", body);
+        return normalizeIamRoleOverridesResult(result);
       },
     }),
 
     getUserExceptions: internalAction({
-      args: { scopeId: v.string(), recipient: accessRecipientValidator },
+      args: { scopeId: v.string(), recipient: iamRecipientValidator },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
           ...principalRef(args.recipient),
           ...serviceActor,
         };
-        const result = await callAccessControlApi("/v1/access-control/user-exceptions/get", body);
-        return normalizeAccessUserExceptionsResult(result);
+        const result = await callIamApi("/v1/iam/user-exceptions/get", body);
+        return normalizeIamUserExceptionsResult(result);
       },
     }),
   };
@@ -967,13 +949,13 @@ export function createAccessServiceActions<DataModel extends GenericDataModel>(
 
 /**
  * Builds the deployment-admission action used by the managed auth callback.
- * Keep this in the baseline access module so apps do not instantiate the full
- * access-management action collection only to enter a deployment.
+ * Keep this in the baseline IAM module so apps do not instantiate the full
+ * iam-management action collection only to enter a deployment.
  */
 export function createDeploymentEntryAction<DataModel extends GenericDataModel>(
   options: CreateDeploymentEntryActionOptions<DataModel>,
 ) {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const callIamApi = makeIamApiCaller(options);
 
   return options.authenticatedAction({
     args: { idToken: v.string() },
@@ -986,16 +968,16 @@ export function createDeploymentEntryAction<DataModel extends GenericDataModel>(
         }
       }
 
-      const result = await callAccessControlApi("/v1/access-control/entry", {
+      const result = await callIamApi("/v1/iam/entry", {
         id_token: idToken,
       });
-      return normalizeAccessDeploymentEntryResult(result);
+      return normalizeIamDeploymentEntryResult(result);
     },
   });
 }
 
 /**
- * Builds authenticated public actions for end-user access management. The
+ * Builds authenticated public actions for end-user IAM management. The
  * control plane verifies the supplied ID token and applies the operation's
  * scope, Owner, or resource-level RBAC gate.
  *
@@ -1004,10 +986,10 @@ export function createDeploymentEntryAction<DataModel extends GenericDataModel>(
  * or subject id (for example `user.profile.sub`); the SDK rejects values that
  * are not JWT-shaped before calling the API.
  */
-export function createAccessManagementActions<DataModel extends GenericDataModel>(
-  options: CreateAccessManagementActionsOptions<DataModel>,
+export function createIamManagementActions<DataModel extends GenericDataModel>(
+  options: CreateIamManagementActionsOptions<DataModel>,
 ) {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const callIamApi = makeIamApiCaller(options);
   const { authenticatedAction } = options;
 
   return {
@@ -1019,7 +1001,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/scopes/set-default-role", body);
+        return await callIamApi("/v1/iam/scopes/set-default-role", body);
       },
     }),
 
@@ -1041,8 +1023,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           expires_in_days: args.expiresInDays,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/invitations/create", body);
-        return normalizeAccessInvitationCreateResult(result);
+        const result = await callIamApi("/v1/iam/invitations/create", body);
+        return normalizeIamInvitationCreateResult(result);
       },
     }),
 
@@ -1058,7 +1040,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           invitation_id: args.invitationId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/invitations/revoke", body);
+        return await callIamApi("/v1/iam/invitations/revoke", body);
       },
     }),
 
@@ -1085,20 +1067,20 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
                 resource_id: args.target.resourceId,
                 applies_to: args.target.appliesTo ?? "self",
               };
-        const result = await callAccessControlApi("/v1/access-control/roles/list-grantable", {
+        const result = await callIamApi("/v1/iam/roles/list-grantable", {
           scope_id: args.scopeId,
           subject_type: args.subjectType,
           target,
           ...appUserActor(args.idToken),
         });
-        return normalizeAccessGrantableRoleListResult(result);
+        return normalizeIamGrantableRoleListResult(result);
       },
     }),
 
     assignRole: authenticatedAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         ...optionalRoleRef,
         idToken: v.string(),
       },
@@ -1109,14 +1091,14 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/roles/assign", body);
+        return await callIamApi("/v1/iam/roles/assign", body);
       },
     }),
 
     removeRole: authenticatedAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         ...optionalRoleRef,
         idToken: v.string(),
       },
@@ -1127,7 +1109,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/roles/remove", body);
+        return await callIamApi("/v1/iam/roles/remove", body);
       },
     }),
 
@@ -1149,7 +1131,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           permission_keys: args.permissionKeys,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/roles/create-org-custom", body);
+        return await callIamApi("/v1/iam/roles/create-org-custom", body);
       },
     }),
 
@@ -1167,14 +1149,14 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           permission_keys: args.permissionKeys,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/roles/update-permissions", body);
+        return await callIamApi("/v1/iam/roles/update-permissions", body);
       },
     }),
 
     setUserExceptions: authenticatedAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         allow: v.array(v.string()),
         deny: v.array(v.string()),
         idToken: v.string(),
@@ -1187,14 +1169,14 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           deny: args.deny,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/user-exceptions/set", body);
+        return await callIamApi("/v1/iam/user-exceptions/set", body);
       },
     }),
 
     createResourceGrant: authenticatedAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         resourceType: v.string(),
         resourceId: v.string(),
         roleKey: v.optional(v.string()),
@@ -1217,11 +1199,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           expires_at: args.expiresAt,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/resource-grants/create",
-          body,
-        );
-        return normalizeAccessResourceGrantWriteResult(result);
+        const result = await callIamApi("/v1/iam/resource-grants/create", body);
+        return normalizeIamResourceGrantWriteResult(result);
       },
     }),
 
@@ -1242,18 +1221,15 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           subjects: resourceGrantReplacementSubjectsBody(args.subjects),
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/resource-grants/replace",
-          body,
-        );
-        return normalizeAccessResourceGrantsReplaceResult(result);
+        const result = await callIamApi("/v1/iam/resource-grants/replace", body);
+        return normalizeIamResourceGrantsReplaceResult(result);
       },
     }),
 
     replaceMemberRoles: authenticatedAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         roleKeys: v.array(v.string()),
         idToken: v.string(),
       },
@@ -1264,8 +1240,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           role_keys: memberRoleReplacementKeysBody(args.roleKeys),
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/roles/replace", body);
-        return normalizeAccessMemberRolesReplaceResult(result);
+        const result = await callIamApi("/v1/iam/roles/replace", body);
+        return normalizeIamMemberRolesReplaceResult(result);
       },
     }),
 
@@ -1294,11 +1270,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           expires_in_days: args.expiresInDays,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/invitations/create-resource",
-          body,
-        );
-        return normalizeAccessInvitationCreateResult(result);
+        const result = await callIamApi("/v1/iam/invitations/create-resource", body);
+        return normalizeIamInvitationCreateResult(result);
       },
     }),
 
@@ -1327,7 +1300,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           expires_at: args.expiresAt,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/resource-rules/set", body);
+        return await callIamApi("/v1/iam/resource-rules/set", body);
       },
     }),
 
@@ -1362,7 +1335,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           })),
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/resource-rules/replace", body);
+        return await callIamApi("/v1/iam/resource-rules/replace", body);
       },
     }),
 
@@ -1374,11 +1347,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           grant_id: args.grantId,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi(
-          "/v1/access-control/resource-grants/revoke",
-          body,
-        );
-        return normalizeAccessResourceGrantWriteResult(result);
+        const result = await callIamApi("/v1/iam/resource-grants/revoke", body);
+        return normalizeIamResourceGrantWriteResult(result);
       },
     }),
 
@@ -1396,8 +1366,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           expires_at: args.expiresAt,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/expiries/set", body);
-        return normalizeAccessResourceGrantWriteResult(result);
+        const result = await callIamApi("/v1/iam/expiries/set", body);
+        return normalizeIamResourceGrantWriteResult(result);
       },
     }),
 
@@ -1417,7 +1387,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           deny: args.deny,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/role-overrides/set", body);
+        return await callIamApi("/v1/iam/role-overrides/set", body);
       },
     }),
 
@@ -1439,7 +1409,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/members/add", body);
+        return await callIamApi("/v1/iam/members/add", body);
       },
     }),
 
@@ -1457,7 +1427,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           status: args.status,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/members/status", body);
+        return await callIamApi("/v1/iam/members/status", body);
       },
     }),
 
@@ -1473,7 +1443,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           principal_id: args.principalId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/members/remove", body);
+        return await callIamApi("/v1/iam/members/remove", body);
       },
     }),
 
@@ -1489,7 +1459,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           principal_id: args.principalId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/members/approve", body);
+        return await callIamApi("/v1/iam/members/approve", body);
       },
     }),
 
@@ -1511,7 +1481,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           reason: args.reason,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/admission-rules/upsert", body);
+        return await callIamApi("/v1/iam/admission-rules/upsert", body);
       },
     }),
 
@@ -1523,7 +1493,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           rule_id: args.ruleId,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/admission-rules/archive", body);
+        return await callIamApi("/v1/iam/admission-rules/archive", body);
       },
     }),
 
@@ -1539,7 +1509,7 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           account_entry_mode: args.accountEntryMode,
           ...appUserActor(args.idToken),
         };
-        return await callAccessControlApi("/v1/access-control/entry-mode/set", body);
+        return await callIamApi("/v1/iam/entry-mode/set", body);
       },
     }),
 
@@ -1551,8 +1521,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           name: args.name,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/create", body);
-        return normalizeAccessGroupWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/create", body);
+        return normalizeIamGroupWriteResult(result);
       },
     }),
 
@@ -1570,8 +1540,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           name: args.name,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/rename", body);
-        return normalizeAccessGroupWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/rename", body);
+        return normalizeIamGroupWriteResult(result);
       },
     }),
 
@@ -1588,8 +1558,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           group_principal_id: args.groupPrincipalId,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/archive", body);
-        return normalizeAccessGroupWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/archive", body);
+        return normalizeIamGroupWriteResult(result);
       },
     }),
 
@@ -1605,8 +1575,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           include_archived: args.includeArchived,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/list", body);
-        return normalizeAccessGroupListResult(result);
+        const result = await callIamApi("/v1/iam/groups/list", body);
+        return normalizeIamGroupListResult(result);
       },
     }),
 
@@ -1624,8 +1594,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           member_principal_id: args.memberPrincipalId,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/members/add", body);
-        return normalizeAccessGroupMemberWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/members/add", body);
+        return normalizeIamGroupMemberWriteResult(result);
       },
     }),
 
@@ -1643,8 +1613,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           member_principal_id: args.memberPrincipalId,
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/groups/members/remove", body);
-        return normalizeAccessGroupMemberWriteResult(result);
+        const result = await callIamApi("/v1/iam/groups/members/remove", body);
+        return normalizeIamGroupMemberWriteResult(result);
       },
     }),
 
@@ -1652,11 +1622,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
       args: { scopeId: v.string(), idToken: v.string() },
       handler: async (_ctx, args) => {
         const body = { scope_id: args.scopeId, ...appUserActor(args.idToken) };
-        const result = await callAccessControlApi(
-          "/v1/access-control/invitations/list-resource",
-          body,
-        );
-        return normalizeAccessResourceInvitationListResult(result);
+        const result = await callIamApi("/v1/iam/invitations/list-resource", body);
+        return normalizeIamResourceInvitationListResult(result);
       },
     }),
 
@@ -1668,15 +1635,15 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/role-overrides/get", body);
-        return normalizeAccessRoleOverridesResult(result);
+        const result = await callIamApi("/v1/iam/role-overrides/get", body);
+        return normalizeIamRoleOverridesResult(result);
       },
     }),
 
     getUserExceptions: authenticatedAction({
       args: {
         scopeId: v.string(),
-        recipient: accessRecipientValidator,
+        recipient: iamRecipientValidator,
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
@@ -1685,8 +1652,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
           ...principalRef(args.recipient),
           ...appUserActor(args.idToken),
         };
-        const result = await callAccessControlApi("/v1/access-control/user-exceptions/get", body);
-        return normalizeAccessUserExceptionsResult(result);
+        const result = await callIamApi("/v1/iam/user-exceptions/get", body);
+        return normalizeIamUserExceptionsResult(result);
       },
     }),
   };
@@ -1698,8 +1665,8 @@ export function createAccessManagementActions<DataModel extends GenericDataModel
  * becomes the new scope's Owner automatically; do not add a separate self
  * role or resource grant.
  */
-export function createAccessScopeAction<DataModel extends GenericDataModel>(
-  options: CreateAccessScopeActionOptions<DataModel>,
+export function createIamScopeAction<DataModel extends GenericDataModel>(
+  options: CreateIamScopeActionOptions<DataModel>,
 ) {
   return options.authenticatedAction({
     args: {
@@ -1716,7 +1683,7 @@ export function createAccessScopeAction<DataModel extends GenericDataModel>(
         });
       }
 
-      return await createAccessScope(ctx, args, options);
+      return await createIamScope(ctx, args, options);
     },
   });
 }
@@ -1739,7 +1706,7 @@ export function createAccessScopeAction<DataModel extends GenericDataModel>(
 export function createResourceCreatorBootstrapAction<DataModel extends GenericDataModel>(
   options: CreateResourceCreatorBootstrapActionOptions<DataModel>,
 ) {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const callIamApi = makeIamApiCaller(options);
 
   return options.authenticatedAction({
     args: { resourceId: v.string() },
@@ -1752,7 +1719,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         target.resourceId !== args.resourceId ||
         target.creatorHerculesAuthUserId !== actorHerculesAuthUserId
       ) {
-        throwAccessDenied();
+        throwIamDenied();
       }
 
       const memberships = await options.listMyMemberships(ctx);
@@ -1760,7 +1727,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         (membership) => membership.scopeId === target.scopeId && membership.status === "active",
       );
       if (!activeInTargetScope) {
-        throwAccessDenied();
+        throwIamDenied();
       }
 
       if (target.state === "active") {
@@ -1771,7 +1738,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         };
       }
 
-      const result = await callAccessControlApi("/v1/access-control/resource-grants/create", {
+      const result = await callIamApi("/v1/iam/resource-grants/create", {
         scope_id: target.scopeId,
         hercules_auth_user_id: actorHerculesAuthUserId,
         resource_type: options.resourceType,
@@ -1782,7 +1749,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         expires_at: undefined,
         ...serviceActor,
       });
-      const grant = normalizeAccessResourceGrantWriteResult(result);
+      const grant = normalizeIamResourceGrantWriteResult(result);
 
       await options.activateResource(ctx, {
         resourceId: target.resourceId,
@@ -1806,12 +1773,12 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
  * scope. The app should persist the returned `accessScopeId` on its
  * organization metadata row.
  */
-export async function createAccessScope(
-  ctx: CreateAccessScopeContext,
-  args: CreateAccessScopeArgs,
-  options: AccessControlApiOptions = {},
-): Promise<AccessScopeCreateResult> {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+export async function createIamScope(
+  ctx: CreateIamScopeContext,
+  args: CreateIamScopeArgs,
+  options: IamApiOptions = {},
+): Promise<IamScopeCreateResult> {
+  const callIamApi = makeIamApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
   const actorHerculesAuthUserId = parseTokenIdentifierSubject(identity?.tokenIdentifier);
   const body = {
@@ -1820,15 +1787,15 @@ export async function createAccessScope(
     account_entry_mode: args.accountEntryMode,
     owner_hercules_auth_user_id: actorHerculesAuthUserId,
   };
-  const result = await callAccessControlApi("/v1/access-control/scopes/create", body);
-  return normalizeAccessScopeCreateResult(result);
+  const result = await callIamApi("/v1/iam/scopes/create", body);
+  return normalizeIamScopeCreateResult(result);
 }
 
-export async function createAccessInvitation(
-  args: CreateAccessInvitationArgs,
-  options: AccessControlApiOptions = {},
-): Promise<AccessInvitationCreateResult> {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+export async function createIamInvitation(
+  args: CreateIamInvitationArgs,
+  options: IamApiOptions = {},
+): Promise<IamInvitationCreateResult> {
+  const callIamApi = makeIamApiCaller(options);
   const body = {
     scope_id: args.scopeId,
     email: args.email,
@@ -1837,8 +1804,8 @@ export async function createAccessInvitation(
     expires_in_days: args.expiresInDays,
     ...serviceActor,
   };
-  const result = await callAccessControlApi("/v1/access-control/invitations/create", body);
-  return normalizeAccessInvitationCreateResult(result);
+  const result = await callIamApi("/v1/iam/invitations/create", body);
+  return normalizeIamInvitationCreateResult(result);
 }
 
 /**
@@ -1846,14 +1813,14 @@ export async function createAccessInvitation(
  * permission scoped to that resource (not the whole scope). Pass exactly one of
  * `roleKey` / `permissionKey`. This helper always acts as the internal service.
  * Public app-user invitations are exposed by
- * {@link createAccessManagementActions}.
+ * {@link createIamManagementActions}.
  */
 export async function createResourceInvitation(
   args: CreateResourceInvitationArgs,
-  options: AccessControlApiOptions = {},
-): Promise<AccessInvitationCreateResult> {
+  options: IamApiOptions = {},
+): Promise<IamInvitationCreateResult> {
   requireExactResourceForDescendants(args);
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+  const callIamApi = makeIamApiCaller(options);
   const body = {
     scope_id: args.scopeId,
     email: args.email,
@@ -1865,12 +1832,12 @@ export async function createResourceInvitation(
     expires_in_days: args.expiresInDays,
     ...serviceActor,
   };
-  const result = await callAccessControlApi("/v1/access-control/invitations/create-resource", body);
-  return normalizeAccessInvitationCreateResult(result);
+  const result = await callIamApi("/v1/iam/invitations/create-resource", body);
+  return normalizeIamInvitationCreateResult(result);
 }
 
 function requireExactResourceForDescendants(args: {
-  appliesTo?: AccessBindingAppliesTo;
+  appliesTo?: IamBindingAppliesTo;
   resourceId?: string | null;
 }) {
   if (
@@ -1882,7 +1849,7 @@ function requireExactResourceForDescendants(args: {
 }
 
 function requireSpecificTargetForDescendants(args: {
-  appliesTo?: AccessBindingAppliesTo;
+  appliesTo?: IamBindingAppliesTo;
   target: { mode: "all" } | { mode: "specific"; resourceId: string };
 }) {
   if (args.appliesTo === "self_and_descendants" && args.target.mode !== "specific") {
@@ -1890,21 +1857,21 @@ function requireSpecificTargetForDescendants(args: {
   }
 }
 
-export async function acceptAccessInvitation(
-  ctx: CreateAccessScopeContext,
-  args: AcceptAccessInvitationArgs,
-  options: AccessControlApiOptions = {},
-): Promise<AccessInvitationAcceptResult> {
-  const callAccessControlApi = makeAccessControlApiCaller(options);
+export async function acceptIamInvitation(
+  ctx: CreateIamScopeContext,
+  args: AcceptIamInvitationArgs,
+  options: IamApiOptions = {},
+): Promise<IamInvitationAcceptResult> {
+  const callIamApi = makeIamApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
   requireTokenIdentifier(identity?.tokenIdentifier);
   const body = { token: args.token, id_token: normalizeIdToken(args.idToken) };
-  const result = await callAccessControlApi("/v1/access-control/invitations/accept", body);
-  return normalizeAccessInvitationAcceptResult(result);
+  const result = await callIamApi("/v1/iam/invitations/accept", body);
+  return normalizeIamInvitationAcceptResult(result);
 }
 
-function makeAccessControlApiCaller(options: AccessControlApiOptions) {
-  let client: AccessControlSdkClient | undefined = options.client;
+function makeIamApiCaller(options: IamApiOptions) {
+  let client: IamSdkClient | undefined = options.client;
 
   return async (path: string, body: Record<string, unknown>): Promise<WriteResult> => {
     client ??= createSdkClient(options);
@@ -1912,17 +1879,17 @@ function makeAccessControlApiCaller(options: AccessControlApiOptions) {
   };
 }
 
-function createSdkClient(options: AccessControlApiOptions): AccessControlSdkClient {
-  const envVarName = options.apiKeyEnvVar ?? DEFAULT_ACCESS_CONTROL_API_KEY_ENV_VAR;
+function createSdkClient(options: IamApiOptions): IamSdkClient {
+  const envVarName = options.apiKeyEnvVar ?? DEFAULT_IAM_API_KEY_ENV_VAR;
   const apiKey = options.apiKey ?? process.env[envVarName];
   if (!apiKey) {
-    throw new Error(`${envVarName} is required for Hercules Access Control API calls.`);
+    throw new Error(`${envVarName} is required for Hercules IAM API calls.`);
   }
 
   return new Hercules({
     apiKey,
     apiVersion: options.apiVersion ?? DEFAULT_API_VERSION,
-  }) as unknown as AccessControlSdkClient;
+  }) as unknown as IamSdkClient;
 }
 
 function appUserActor(idToken: string) {
@@ -1957,7 +1924,7 @@ function normalizeIdToken(idToken: string): string {
   return normalizedIdToken;
 }
 
-function principalRef(recipient: AccessRecipient) {
+function principalRef(recipient: IamRecipient) {
   return recipient.type === "user"
     ? { hercules_auth_user_id: recipient.herculesAuthUserId }
     : { principal_id: recipient.principalId };
@@ -1974,11 +1941,11 @@ function memberRoleReplacementKeysBody(roleKeys: string[]) {
 
 function resourceGrantReplacementSubjectsBody(
   subjects: Array<{
-    recipient: AccessRecipient;
+    recipient: IamRecipient;
     grants: Array<{
       roleKey?: string;
       permissionKey?: string;
-      appliesTo?: AccessBindingAppliesTo;
+      appliesTo?: IamBindingAppliesTo;
       expiresAt?: string | null;
     }>;
   }>,
@@ -2059,14 +2026,14 @@ function requireTokenIdentifier(tokenIdentifier: string | null | undefined): str
   return tokenIdentifier;
 }
 
-function throwAccessDenied(): never {
+function throwIamDenied(): never {
   throw new ConvexError({
     code: "ACCESS_DENIED",
     message: "Access denied",
   });
 }
 
-function normalizeAccessScopeCreateResult(result: WriteResult): AccessScopeCreateResult {
+function normalizeIamScopeCreateResult(result: WriteResult): IamScopeCreateResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     created: optionalBoolean(result, "created", "created"),
@@ -2075,9 +2042,7 @@ function normalizeAccessScopeCreateResult(result: WriteResult): AccessScopeCreat
   };
 }
 
-function normalizeAccessResourceGrantWriteResult(
-  result: WriteResult,
-): AccessResourceGrantWriteResult {
+function normalizeIamResourceGrantWriteResult(result: WriteResult): IamResourceGrantWriteResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     grantId: requiredString(result, "grant_id", "grantId"),
@@ -2087,9 +2052,9 @@ function normalizeAccessResourceGrantWriteResult(
   };
 }
 
-function normalizeAccessResourceGrantsReplaceResult(
+function normalizeIamResourceGrantsReplaceResult(
   result: WriteResult,
-): AccessResourceGrantsReplaceResult {
+): IamResourceGrantsReplaceResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     resourceType: requiredString(result, "resource_type", "resourceType"),
@@ -2110,9 +2075,7 @@ function normalizeAccessResourceGrantsReplaceResult(
   };
 }
 
-function normalizeAccessMemberRolesReplaceResult(
-  result: WriteResult,
-): AccessMemberRolesReplaceResult {
+function normalizeIamMemberRolesReplaceResult(result: WriteResult): IamMemberRolesReplaceResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     principalId: requiredString(result, "principal_id", "principalId"),
@@ -2123,7 +2086,7 @@ function normalizeAccessMemberRolesReplaceResult(
   };
 }
 
-function normalizeAccessInvitationCreateResult(result: WriteResult): AccessInvitationCreateResult {
+function normalizeIamInvitationCreateResult(result: WriteResult): IamInvitationCreateResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     invitationId: requiredString(result, "invitation_id", "invitationId"),
@@ -2137,7 +2100,7 @@ function normalizeAccessInvitationCreateResult(result: WriteResult): AccessInvit
   };
 }
 
-function normalizeAccessInvitationAcceptResult(result: WriteResult): AccessInvitationAcceptResult {
+function normalizeIamInvitationAcceptResult(result: WriteResult): IamInvitationAcceptResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     invitationId: requiredString(result, "invitation_id", "invitationId"),
@@ -2149,7 +2112,7 @@ function normalizeAccessInvitationAcceptResult(result: WriteResult): AccessInvit
   };
 }
 
-function normalizeAccessGroupListResult(result: WriteResult): AccessGroupListResult {
+function normalizeIamGroupListResult(result: WriteResult): IamGroupListResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     groups: requiredRecordArray(result, "groups", "groups").map((group) => ({
@@ -2164,15 +2127,13 @@ function normalizeAccessGroupListResult(result: WriteResult): AccessGroupListRes
   };
 }
 
-function normalizeAccessGrantableRoleListResult(
-  result: WriteResult,
-): AccessGrantableRoleListResult {
+function normalizeIamGrantableRoleListResult(result: WriteResult): IamGrantableRoleListResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     roles: requiredRecordArray(result, "roles", "roles").map((role) => {
       const roleKind = requiredString(role, "role_kind", "roles[].roleKind");
       if (roleKind !== "system" && roleKind !== "custom") {
-        throw new Error("Access Control API response has invalid roles[].roleKind.");
+        throw new Error("IAM API response has invalid roles[].roleKind.");
       }
       return {
         roleId: requiredString(role, "role_id", "roles[].roleId"),
@@ -2185,7 +2146,7 @@ function normalizeAccessGrantableRoleListResult(
   };
 }
 
-function normalizeAccessGroupWriteResult(result: WriteResult): AccessGroupWriteResult {
+function normalizeIamGroupWriteResult(result: WriteResult): IamGroupWriteResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     groupPrincipalId: requiredString(result, "group_principal_id", "groupPrincipalId"),
@@ -2195,17 +2156,17 @@ function normalizeAccessGroupWriteResult(result: WriteResult): AccessGroupWriteR
   };
 }
 
-function normalizeAccessGroupMemberWriteResult(result: WriteResult): AccessGroupMemberWriteResult {
+function normalizeIamGroupMemberWriteResult(result: WriteResult): IamGroupMemberWriteResult {
   return {
-    ...normalizeAccessGroupWriteResult(result),
+    ...normalizeIamGroupWriteResult(result),
     memberPrincipalId: requiredString(result, "member_principal_id", "memberPrincipalId"),
     membershipId: optionalString(result, "membership_id", "membershipId"),
   };
 }
 
-function normalizeAccessResourceInvitationListResult(
+function normalizeIamResourceInvitationListResult(
   result: WriteResult,
-): AccessResourceInvitationListResult {
+): IamResourceInvitationListResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     invitations: requiredRecordArray(result, "invitations", "invitations").map((invitation) => ({
@@ -2224,7 +2185,7 @@ function normalizeAccessResourceInvitationListResult(
   };
 }
 
-function normalizeAccessRoleOverridesResult(result: WriteResult): AccessRoleOverridesResult {
+function normalizeIamRoleOverridesResult(result: WriteResult): IamRoleOverridesResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     roleId: requiredString(result, "role_id", "roleId"),
@@ -2236,7 +2197,7 @@ function normalizeAccessRoleOverridesResult(result: WriteResult): AccessRoleOver
   };
 }
 
-function normalizeAccessUserExceptionsResult(result: WriteResult): AccessUserExceptionsResult {
+function normalizeIamUserExceptionsResult(result: WriteResult): IamUserExceptionsResult {
   return {
     accessScopeId: requiredString(result, "access_scope_id", "accessScopeId"),
     principalId: requiredString(result, "principal_id", "principalId"),
@@ -2249,12 +2210,12 @@ function normalizeAccessUserExceptionsResult(result: WriteResult): AccessUserExc
   };
 }
 
-function normalizeAccessDeploymentEntryResult(result: WriteResult): AccessDeploymentEntryResult {
+function normalizeIamDeploymentEntryResult(result: WriteResult): IamDeploymentEntryResult {
   return {
     allowed: requiredBoolean(result, "allowed", "allowed"),
     reason: requiredString(result, "reason", "reason"),
     principalId: optionalString(result, "principal_id", "principalId"),
-    status: optionalAccessEntryStatus(result),
+    status: optionalIamEntryStatus(result),
     stateVersion: requiredNumber(result, "state_version", "stateVersion"),
     changed: requiredBoolean(result, "changed", "changed"),
   };
@@ -2263,7 +2224,7 @@ function normalizeAccessDeploymentEntryResult(result: WriteResult): AccessDeploy
 function activeDeploymentEntryResultFromMirror(result: {
   principalId: string;
   stateVersion: number;
-}): AccessDeploymentEntryResult {
+}): IamDeploymentEntryResult {
   return {
     allowed: true,
     reason: "existing_active",
@@ -2277,7 +2238,7 @@ function activeDeploymentEntryResultFromMirror(result: {
 function requiredString(result: WriteResult, apiKey: string, resultName: string): string {
   const value = result[apiKey];
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Access Control API response missing ${resultName}.`);
+    throw new Error(`IAM API response missing ${resultName}.`);
   }
   return value;
 }
@@ -2290,7 +2251,7 @@ function optionalString(
   const value = result[apiKey];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Access Control API response has invalid ${resultName}.`);
+    throw new Error(`IAM API response has invalid ${resultName}.`);
   }
   return value;
 }
@@ -2298,7 +2259,7 @@ function optionalString(
 function requiredBoolean(result: WriteResult, apiKey: string, resultName: string): boolean {
   const value = result[apiKey];
   if (typeof value !== "boolean") {
-    throw new Error(`Access Control API response missing ${resultName}.`);
+    throw new Error(`IAM API response missing ${resultName}.`);
   }
   return value;
 }
@@ -2311,12 +2272,12 @@ function optionalBoolean(
   const value = result[apiKey];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "boolean") {
-    throw new Error(`Access Control API response has invalid ${resultName}.`);
+    throw new Error(`IAM API response has invalid ${resultName}.`);
   }
   return value;
 }
 
-function optionalAccessEntryStatus(result: WriteResult): AccessDeploymentEntryResult["status"] {
+function optionalIamEntryStatus(result: WriteResult): IamDeploymentEntryResult["status"] {
   const value = result["status"];
   if (value === undefined || value === null) return undefined;
   if (
@@ -2326,7 +2287,7 @@ function optionalAccessEntryStatus(result: WriteResult): AccessDeploymentEntryRe
     value !== "pending_approval" &&
     value !== "removed"
   ) {
-    throw new Error("Access Control API response has invalid status.");
+    throw new Error("IAM API response has invalid status.");
   }
   return value;
 }
@@ -2334,7 +2295,7 @@ function optionalAccessEntryStatus(result: WriteResult): AccessDeploymentEntryRe
 function requiredNumber(result: WriteResult, apiKey: string, resultName: string): number {
   const value = result[apiKey];
   if (typeof value !== "number") {
-    throw new Error(`Access Control API response missing ${resultName}.`);
+    throw new Error(`IAM API response missing ${resultName}.`);
   }
   return value;
 }
@@ -2342,7 +2303,7 @@ function requiredNumber(result: WriteResult, apiKey: string, resultName: string)
 function requiredStringArray(result: WriteResult, apiKey: string, resultName: string): string[] {
   const value = result[apiKey];
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new Error(`Access Control API response missing ${resultName}.`);
+    throw new Error(`IAM API response missing ${resultName}.`);
   }
   return value;
 }
@@ -2357,7 +2318,7 @@ function requiredRecordArray(
     !Array.isArray(value) ||
     value.some((item) => typeof item !== "object" || item === null || Array.isArray(item))
   ) {
-    throw new Error(`Access Control API response missing ${resultName}.`);
+    throw new Error(`IAM API response missing ${resultName}.`);
   }
   return value as WriteResult[];
 }
@@ -2366,7 +2327,7 @@ function nullableString(result: WriteResult, apiKey: string, resultName: string)
   const value = result[apiKey];
   if (value === undefined || value === null) return null;
   if (typeof value !== "string") {
-    throw new Error(`Access Control API response has invalid ${resultName}.`);
+    throw new Error(`IAM API response has invalid ${resultName}.`);
   }
   return value;
 }
@@ -2374,16 +2335,16 @@ function nullableString(result: WriteResult, apiKey: string, resultName: string)
 function requiredEffect(result: WriteResult, apiKey: string, resultName: string): "allow" | "deny" {
   const value = result[apiKey];
   if (value !== "allow" && value !== "deny") {
-    throw new Error(`Access Control API response has invalid ${resultName}.`);
+    throw new Error(`IAM API response has invalid ${resultName}.`);
   }
   return value;
 }
 
-function optionalBindingAppliesTo(result: WriteResult): AccessBindingAppliesTo {
+function optionalBindingAppliesTo(result: WriteResult): IamBindingAppliesTo {
   const value = result["applies_to"];
   if (value === undefined) return "self";
   if (value !== "self" && value !== "self_and_descendants") {
-    throw new Error("Access Control API response has invalid invitations[].appliesTo.");
+    throw new Error("IAM API response has invalid invitations[].appliesTo.");
   }
   return value;
 }
@@ -2392,7 +2353,7 @@ function nullableConferralType(result: WriteResult): "role" | "permission" | nul
   const value = result["conferral_type"];
   if (value === undefined || value === null) return null;
   if (value !== "role" && value !== "permission") {
-    throw new Error("Access Control API response has invalid invitations[].conferralType.");
+    throw new Error("IAM API response has invalid invitations[].conferralType.");
   }
   return value;
 }

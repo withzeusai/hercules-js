@@ -1,7 +1,7 @@
 import type { FunctionReference, HttpActionBuilder, HttpRouter } from "convex/server";
 import { Webhook, WebhookVerificationError } from "standardwebhooks";
 import {
-  ACCESS_CONTROL_SYNC_PATH,
+  IAM_SYNC_PATH,
   accessProjectionSyncPayloadSchema,
   type AccessProjectionSyncPayload,
   type SyncResponse,
@@ -14,25 +14,22 @@ type ApplySyncReference = FunctionReference<
   SyncResponse
 >;
 
-export type AccessControlSyncComponent = {
+export type IamSyncComponent = {
   sync: { applySync: ApplySyncReference };
 };
 
-export type RegisterAccessControlRoutesOptions = {
+export type RegisterIamRoutesOptions = {
   httpAction: HttpActionBuilder;
   components?: Record<string, unknown>;
-  component?: AccessControlSyncComponent;
+  component?: IamSyncComponent;
   componentName?: string;
   path?: string;
   envVarName?: string;
 };
 
-export function registerAccessControlRoutes(
-  http: HttpRouter,
-  options: RegisterAccessControlRoutesOptions,
-) {
+export function registerIamRoutes(http: HttpRouter, options: RegisterIamRoutesOptions) {
   const component = resolveSyncComponent(options);
-  const path = options.path ?? ACCESS_CONTROL_SYNC_PATH;
+  const path = options.path ?? IAM_SYNC_PATH;
   const envVarName = options.envVarName ?? "HERCULES_SYNC_SECRET";
 
   http.route({
@@ -78,9 +75,7 @@ function syncResponseStatus(result: SyncResponse): number {
   return 400;
 }
 
-function resolveSyncComponent(
-  options: RegisterAccessControlRoutesOptions,
-): AccessControlSyncComponent {
+function resolveSyncComponent(options: RegisterIamRoutesOptions): IamSyncComponent {
   if (options.component) {
     return options.component;
   }
@@ -90,11 +85,11 @@ function resolveSyncComponent(
 
   if (!component) {
     throw new Error(
-      "Missing Hercules Access Control component. Install @usehercules/convex in convex/convex.config.ts.",
+      "Missing Hercules IAM component. Install @usehercules/convex in convex/convex.config.ts.",
     );
   }
 
-  return component as AccessControlSyncComponent;
+  return component as IamSyncComponent;
 }
 
 function verifyWebhookPayload(secret: string, rawBody: string, headers: Headers) {

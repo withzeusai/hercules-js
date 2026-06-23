@@ -1,10 +1,10 @@
-// Access Control projection sync — v3 wire contract.
+// IAM projection sync — v3 wire contract.
 //
 // This module is the consumer-side entry point for the signed projection sync
 // channel. The wire shapes themselves live in `./projection-protocol` (the zod
 // mirror of the producer's source of truth); this file re-exports them and adds
 // the non-wire pieces the HTTP handler and the Convex component need:
-//   • ACCESS_CONTROL_SYNC_PATH — the webhook route the producer posts to.
+//   • IAM_SYNC_PATH — the webhook route the producer posts to.
 //   • SyncResponse — the mutation's response contract (mapped to HTTP statuses
 //     by client/http.ts and consumed by the producer's reconciler).
 //
@@ -13,7 +13,7 @@
 // the top level and per-scope runtime state, with typed discriminated change
 // identities (see projection-protocol.ts).
 
-export const ACCESS_CONTROL_SYNC_PATH = "/_hercules/access-control/sync";
+export const IAM_SYNC_PATH = "/_hercules/iam/sync";
 
 // ── v3 wire schema + types (re-exported from the protocol mirror) ────────────
 export {
