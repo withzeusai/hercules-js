@@ -2,7 +2,7 @@ export {
   createIamInvitation,
   createIamServiceActions,
   createResourceInvitation,
-} from "./iam-actions";
+} from "./iam-actions.js";
 
 export type {
   IamBindingAppliesTo,
@@ -18,4 +18,4 @@ export type {
   CreateIamInvitationArgs,
   CreateIamServiceActionsOptions,
   CreateResourceInvitationArgs,
-} from "./iam-actions";
+} from "./iam-actions.js";

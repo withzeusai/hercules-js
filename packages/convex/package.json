@@ -68,7 +68,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc --project ./tsconfig.build.json",
+    "build": "tsc --project ./tsconfig.build.json && node ./scripts/check-esm-exports.mjs",
     "dev": "tsc --project ./tsconfig.build.json --watch",
     "test": "vitest --run"
   },

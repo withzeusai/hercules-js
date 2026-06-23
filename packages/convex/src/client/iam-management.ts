@@ -5,7 +5,7 @@ export {
   createIamScopeAction,
   createDeploymentEntryAction,
   createResourceCreatorBootstrapAction,
-} from "./iam-actions";
+} from "./iam-actions.js";
 
 export type {
   AcceptIamInvitationArgs,
@@ -35,4 +35,4 @@ export type {
   CreateResourceCreatorBootstrapActionOptions,
   ResourceCreatorBootstrapResult,
   ResourceCreatorBootstrapTarget,
-} from "./iam-actions";
+} from "./iam-actions.js";
