@@ -9,6 +9,7 @@ describe("IAM public surface", () => {
     const exports = iam as Record<string, unknown>;
 
     expect(exports.createIam).toBeTypeOf("function");
+    expect(exports.classifyIamError).toBeTypeOf("function");
     expect(createIamManagementActions).toBeTypeOf("function");
     expect(createIamServiceActions).toBeTypeOf("function");
     expect(registerIamRoutes).toBeTypeOf("function");
