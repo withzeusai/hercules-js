@@ -23,6 +23,8 @@ export type IamCheckFinding = {
     | "org_scoped_global_slug_lookup"
     | "org_row_scope_from_arg"
     | "authenticated_org_data_read"
+    | "existing_row_missing_resource_scope"
+    | "resource_capability_missing_resource"
     | "privileged_resource_permission_rule"
     | "public_service_authority_call"
     | "runtime_superset_permission"
@@ -176,6 +178,7 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
     ...sourceFiles.flatMap((filePath) =>
       checkCanonicalPermissionKeys(cwd, filePath, catalogPermissionKeys),
     ),
+    ...sourceFiles.flatMap((filePath) => checkIamResourcePatterns(cwd, filePath)),
     ...[...sourceFiles, ...appSourceFiles].flatMap((filePath) =>
       checkIamOrgPatterns(cwd, filePath, orgOwnedTables),
     ),
@@ -415,6 +418,72 @@ function checkIamOrgPatterns(
   return findings;
 }
 
+function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+  const findings: IamCheckFinding[] = [];
+  const checkPermissionsNames = collectImportedNames(sourceFile, "checkPermissions");
+
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, [
+    "iamQuery",
+    "iamMutation",
+    "iamAction",
+  ])) {
+    if (!findDirectArgsRowAccess(definition.definition)) continue;
+
+    const config = unwrapExpression(definition.definition);
+    if (ts.isObjectLiteralExpression(config) && !hasObjectProperty(config, "scope")) {
+      findings.push(
+        createPatternFindingAtNode({
+          cwd,
+          sourceFile,
+          node: definition.node,
+          code: "existing_row_missing_resource_scope",
+          message: "Existing-row IAM operations must authorize against the loaded resource.",
+          suggestion:
+            'Use scopeFromDefaultResource("tableName", "rowIdArg") for the default app scope or scopeFromResource("tableName", "rowIdArg") for an organization scope.',
+        }),
+      );
+    }
+  }
+
+  if (checkPermissionsNames.size === 0) return findings;
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, ["iamQuery"])) {
+    if (!findDirectArgsRowAccess(definition.definition)) continue;
+    visitCheckPermissionsCalls(definition.definition, (call) => {
+      const target = unwrapExpression(call.expression);
+      if (!ts.isIdentifier(target) || !checkPermissionsNames.has(target.text)) return;
+
+      const requests = call.arguments[1] && unwrapExpression(call.arguments[1]);
+      if (!requests || !ts.isArrayLiteralExpression(requests)) return;
+
+      for (const request of requests.elements) {
+        const value = unwrapExpression(request as ts.Expression);
+        if (
+          !ts.isObjectLiteralExpression(value) ||
+          value.properties.some(ts.isSpreadAssignment) ||
+          hasObjectProperty(value, "resource")
+        ) {
+          continue;
+        }
+        findings.push(
+          createPatternFindingAtNode({
+            cwd,
+            sourceFile,
+            node: value,
+            code: "resource_capability_missing_resource",
+            message: "Row capability checks must include the concrete resource.",
+            suggestion:
+              'Add resource: { type: "app.resource", id: String(row._id) } and include its trusted ancestor chain when applicable.',
+          }),
+        );
+      }
+    });
+  }
+
+  return findings;
+}
+
 function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
   const tableNames = new Set<string>();
   for (const filePath of sourceFiles) {
@@ -459,6 +528,94 @@ function collectManagedBuilderDefinitions(
 
   visit(sourceFile);
   return definitions;
+}
+
+function findDirectArgsRowAccess(definition: ts.Expression): ts.CallExpression | null {
+  let match: ts.CallExpression | null = null;
+
+  function visit(node: ts.Node): void {
+    if (match || !ts.isCallExpression(node)) {
+      if (!match) ts.forEachChild(node, visit);
+      return;
+    }
+
+    const target = unwrapExpression(node.expression);
+    const rowId = node.arguments[0] && unwrapExpression(node.arguments[0]);
+    if (
+      ts.isPropertyAccessExpression(target) &&
+      new Set(["get", "patch", "replace", "delete"]).has(target.name.text) &&
+      ts.isPropertyAccessExpression(target.expression) &&
+      target.expression.name.text === "db" &&
+      ts.isIdentifier(target.expression.expression) &&
+      target.expression.expression.text === "ctx" &&
+      rowId &&
+      ts.isPropertyAccessExpression(rowId) &&
+      ts.isIdentifier(rowId.expression) &&
+      rowId.expression.text === "args"
+    ) {
+      match = node;
+      return;
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(definition);
+  return match;
+}
+
+function visitCheckPermissionsCalls(
+  definition: ts.Expression,
+  visitCall: (call: ts.CallExpression) => void,
+): void {
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      visitCall(node);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(definition);
+}
+
+function collectImportedNames(sourceFile: ts.SourceFile, importedName: string): Set<string> {
+  const names = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      statement.importClause?.isTypeOnly ||
+      !statement.importClause?.namedBindings ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      continue;
+    }
+
+    for (const element of statement.importClause.namedBindings.elements) {
+      if (element.isTypeOnly) continue;
+      if ((element.propertyName ?? element.name).text === importedName) {
+        names.add(element.name.text);
+      }
+    }
+  }
+
+  return names;
+}
+
+function hasObjectProperty(object: ts.ObjectLiteralExpression, propertyName: string): boolean {
+  return object.properties.some((property) => {
+    if (
+      !ts.isPropertyAssignment(property) &&
+      !ts.isShorthandPropertyAssignment(property) &&
+      !ts.isMethodDeclaration(property) &&
+      !ts.isGetAccessorDeclaration(property) &&
+      !ts.isSetAccessorDeclaration(property)
+    ) {
+      return false;
+    }
+    const name = property.name;
+    return (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) && name.text === propertyName;
+  });
 }
 
 function checkHardcodedAccessScopeIds(cwd: string, filePath: string): IamCheckFinding[] {

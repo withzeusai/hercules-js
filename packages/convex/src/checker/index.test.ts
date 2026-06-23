@@ -1668,6 +1668,119 @@ describe("checkIamSource", () => {
     expect(formatIamCheckResult(result)).toContain("scopeFromResource");
   });
 
+  test("reports existing-row IAM operations without a resource scope", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/tasks.ts": `
+        import { v } from "convex/values";
+        import { iamMutation } from "./iam";
+
+        export const update = iamMutation({
+          permission: "app.tasks:update",
+          args: { taskId: v.id("tasks"), title: v.string() },
+          handler: async (ctx, args) => {
+            const task = await ctx.db.get(args.taskId);
+            if (!task) throw new Error("Task not found");
+            await ctx.db.patch(args.taskId, { title: args.title });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "existing_row_missing_resource_scope",
+          filePath: "convex/tasks.ts",
+        }),
+      ]),
+    );
+    expect(formatIamCheckResult(result)).toContain("scopeFromDefaultResource");
+  });
+
+  test("reports row capability checks without a concrete resource", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/tasks.ts": `
+        import { v } from "convex/values";
+        import {
+          checkPermissions,
+          iamQuery,
+          scopeFromDefaultResource,
+        } from "./iam";
+
+        export const getCapabilities = iamQuery({
+          permission: "app.tasks:read",
+          scope: scopeFromDefaultResource("tasks", "taskId"),
+          args: { taskId: v.id("tasks") },
+          handler: async (ctx, args) => {
+            const task = await ctx.db.get(args.taskId);
+            if (!task) throw new Error("Task not found");
+            const [decision] = await checkPermissions(ctx, [
+              { permission: "app.tasks:update" },
+            ]);
+            return { canUpdate: decision?.allowed === true };
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "resource_capability_missing_resource",
+          filePath: "convex/tasks.ts",
+        }),
+      ]),
+    );
+    expect(formatIamCheckResult(result)).toContain("concrete resource");
+  });
+
+  test("allows existing-row IAM operations with concrete resource authorization", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/tasks.ts": `
+        import { v } from "convex/values";
+        import {
+          checkPermissions,
+          iamQuery,
+          scopeFromDefaultResource,
+        } from "./iam";
+
+        export const getCapabilities = iamQuery({
+          permission: "app.tasks:read",
+          scope: scopeFromDefaultResource("tasks", "taskId"),
+          args: { taskId: v.id("tasks") },
+          handler: async (ctx, args) => {
+            const task = await ctx.db.get(args.taskId);
+            if (!task) throw new Error("Task not found");
+            const [decision] = await checkPermissions(ctx, [
+              {
+                permission: "app.tasks:update",
+                resource: { type: "app.tasks", id: String(task._id) },
+              },
+            ]);
+            return { canUpdate: decision?.allowed === true };
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
   test("reports authenticated reads of org-owned tables", () => {
     const root = createFixture({
       "convex/schema.ts": `
