@@ -1,5 +1,3 @@
-"use node";
-
 import { Hercules } from "@usehercules/sdk";
 import type { ActionBuilder, GenericActionCtx, GenericDataModel } from "convex/server";
 import { ConvexError, v } from "convex/values";

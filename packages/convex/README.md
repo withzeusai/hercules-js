@@ -276,8 +276,10 @@ Never call generated `internal.accessAdmin.*` actions from an exported public,
 authenticated, or access builder, directly or through a helper. Service
 authority is only for trusted internal workflows.
 
+Access Control actions run in Convex's default runtime. Do not add the
+`"use node"` directive to these files.
+
 ```ts
-"use node";
 import { createAccessAdminActions } from "@usehercules/convex/access-admin";
 import { internalAction } from "./_generated/server";
 
@@ -289,7 +291,6 @@ export const { assignRole, removeRole, createInvitation } = createAccessAdminAct
 Use `createAccessUserActions` for user-initiated administration.
 
 ```ts
-"use node";
 import { createAccessUserActions } from "@usehercules/convex/access-admin";
 import { authenticatedAction } from "./hercules";
 
@@ -379,8 +380,6 @@ queries. Then expose one action:
 
 ```ts
 // convex/accessUser.ts
-"use node";
-
 import { createResourceCreatorBootstrapAction } from "@usehercules/convex/access-admin";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";

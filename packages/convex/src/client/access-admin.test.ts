@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
 import {
   acceptAccessInvitation,
@@ -21,6 +22,14 @@ const RESOURCE_GRANT_RESULT = {
   source_version: 2,
   projection_ids: ["projection_2"],
 };
+
+describe("access-admin runtime", () => {
+  test("does not force the Node.js runtime", async () => {
+    const source = await readFile(new URL("./access-admin.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/^\s*["']use node["'];?/m);
+  });
+});
 
 describe("createAccessAdminActions", () => {
   test("posts role assignment writes", async () => {
