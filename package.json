@@ -12,13 +12,16 @@
     "test": "turbo test",
     "dev": "turbo dev",
     "changeset": "changeset",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && pnpm sync:jsr",
     "changeset:publish": "pnpm build && changeset publish",
+    "sync:jsr": "node scripts/sync-jsr-versions.mjs",
+    "sync:jsr:check": "node scripts/sync-jsr-versions.mjs --check",
+    "jsr:publish": "node scripts/jsr-publish.mjs",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
     "@types/babel__core": "^7.20.5",
     "@types/babel__generator": "^7.27.0",

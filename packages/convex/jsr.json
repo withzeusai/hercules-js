@@ -1,0 +1,20 @@
+{
+  "name": "@usehercules/convex",
+  "version": "1.0.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./dist/client/index.js",
+    "./access-admin": "./dist/client/access-admin.js",
+    "./access-admin.js": "./dist/client/access-admin.js",
+    "./http": "./dist/client/http.js",
+    "./checker": "./dist/checker/index.js",
+    "./convex.config": "./dist/component/convex.config.js",
+    "./convex.config.js": "./dist/component/convex.config.js",
+    "./_generated/component": "./dist/_generated/component.js",
+    "./_generated/component.js": "./dist/_generated/component.js"
+  },
+  "publish": {
+    "include": ["dist", "package.json", "README.md", "jsr.json"],
+    "exclude": ["!dist"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@usehercules/auth",
+  "version": "1.1.0",
+  "license": "MIT",
+  "exports": {
+    "./convex-react": "./dist/convex-react/index.mjs",
+    "./react": "./dist/react/index.mjs"
+  },
+  "publish": {
+    "include": ["dist", "package.json", "README.md", "jsr.json"],
+    "exclude": ["!dist"]
+  }
+}

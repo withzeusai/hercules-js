@@ -38,6 +38,13 @@ jobs:
       - name: Build and test packages
         run: pnpm build test
 
+      # Lint the JSR config without publishing: verify jsr.json versions match
+      # package.json and that every package passes jsr's publish checks.
+      - name: Validate JSR config
+        run: |
+          pnpm sync:jsr:check
+          node scripts/jsr-publish.mjs --dry-run --allow-dirty
+
       - name: Publish preview packages
         # zizmor: ignore[use-trusted-publishing] pkg-pr-new publishes preview
         # builds to pkg.pr.new (not npm); trusted publishing does not apply.
