@@ -2,7 +2,6 @@
   "name": "@usehercules/eslint-plugin",
   "version": "1.0.41",
   "description": "ESLint plugin for Hercules",
-  "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "files": [
     "dist",
@@ -35,8 +34,8 @@
     "@typescript-eslint/parser": "^8.61.0",
     "@typescript-eslint/rule-tester": "^8.61.0",
     "eslint": "^9.39.4",
-    "tsdown": "^0.18.4",
-    "typescript": "^5.9.3",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
@@ -53,7 +52,6 @@
     "url": "https://github.com/withzeusai/hercules-js.git",
     "directory": "packages/eslint-plugin-hercules"
   },
-  "module": "./dist/index.mjs",
   "exports": {
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"

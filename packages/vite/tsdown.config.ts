@@ -9,5 +9,8 @@ export default defineConfig((options) => [
     sourcemap: true,
     exports: true,
     ignoreWatch: [".turbo"],
+    // src/index.ts intentionally provides both named exports and a
+    // default export; "named" silences rolldown's MIXED_EXPORTS warning.
+    outputOptions: { exports: "named" },
   },
 ]);

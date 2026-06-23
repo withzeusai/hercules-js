@@ -20,6 +20,11 @@ export default defineConfig((options) => [
     sourcemap: false,
     minify: true,
     ignoreWatch: [".turbo"],
-    noExternal: ["ulid", "web-vitals", "bowser"],
+    deps: {
+      alwaysBundle: ["ulid", "web-vitals", "bowser"],
+      // Whitelist exactly the deps we intend to inline into the browser
+      // script; tsdown errors if anything else gets bundled.
+      onlyBundle: ["ulid", "web-vitals", "bowser"],
+    },
   },
 ]);
