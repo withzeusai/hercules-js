@@ -72,6 +72,7 @@ export type RoleSummary = {
   roleKind: "system" | "custom";
 };
 
+/** One scope returned by `listMyMemberships`. Select the default scope by `kind`, not array order. */
 export type Membership = {
   scopeId: string;
   scopeName: string;
@@ -122,6 +123,7 @@ export type EffectivePermissionsResult = {
   permissions: string[];
 };
 
+/** One member returned directly by `listScopeMembers`. Role assignments are in `roles`. */
 export type ScopeMember = {
   principalId: string;
   type: "user" | "group";
@@ -136,6 +138,7 @@ export type ScopeMember = {
   roles: RoleSummary[];
 };
 
+/** One user in a `listScopeMemberDirectory` page. Only directory entries expose `roleKeys`. */
 export type ScopeMemberDirectoryEntry = {
   principalId: string;
   herculesAuthUserId: string;
@@ -150,6 +153,7 @@ export type ScopeMemberDirectoryPage = {
   nextCursor?: string;
 };
 
+/** One catalog role returned by `listScopeRoles`. Use `roleKey` and `roleName` for display only. */
 export type ScopeRoleSummary = RoleSummary & { shared: boolean };
 
 export type ScopePermissionSummary = {

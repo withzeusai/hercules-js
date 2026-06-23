@@ -238,6 +238,22 @@ Read the scope's members, roles, and catalog with the `listScope*` helpers.
 Each self-gates on the matching `system.*:read` permission and returns `[]`
 when the caller lacks it (`owner`/`admin` hold these automatically).
 
+Managed read shapes are intentionally distinct:
+
+- `listScopeMembers(ctx, { scopeId })` returns `ScopeMember[]`. Read each
+  member's assigned roles from `member.roles`.
+- `listScopeMemberDirectory(ctx, args)` returns
+  `{ members, nextCursor? }`. Only directory entries expose `roleKeys`.
+- `listScopeRoles(ctx, { scopeId })` returns `ScopeRoleSummary[]`. Use
+  `roleKey` and `roleName` for display, not as a write picker.
+
+For a default-scope app, select the membership by kind rather than array order:
+
+```ts
+const membership = (await listMyMemberships(ctx)).find(({ kind }) => kind === "default");
+if (!membership) throw new Error("Default access scope not found");
+```
+
 For member-facing pickers, use `listScopeMemberDirectory`. It is gated by
 `app.members:read` and returns bounded pages of active users with only their
 principal id, Hercules Auth user id, name, email, optional image, and
@@ -312,6 +328,10 @@ export const {
   revokeInvitation,
 } = createAccessManagementActions({ authenticatedAction });
 ```
+
+Every export from `createAccessManagementActions` is a Convex action. Frontend
+code must call these functions with `useAction`, not `useMutation`. Keep the
+control disabled until `user.id_token` exists; never send an empty token.
 
 Keep deployment entry in the baseline access module rather than creating the
 management collection only for auth synchronization:
