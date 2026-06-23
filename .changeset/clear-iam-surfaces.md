@@ -1,5 +1,5 @@
 ---
-"@usehercules/convex": minor
+"@usehercules/convex": major
 ---
 
 Separate deployment entry, end-user IAM management, and trusted service actions

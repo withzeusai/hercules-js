@@ -65,14 +65,7 @@ const publicBuilderNames = new Set<string>([
 ]);
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const ignoredDirectories = new Set(["_generated", "node_modules", "dist", ".git"]);
-const exemptFileNames = new Set([
-  "iam.ts",
-  "iam.tsx",
-  "hercules.ts",
-  "hercules.tsx",
-  "http.ts",
-  "convex.config.ts",
-]);
+const exemptFileNames = new Set(["iam.ts", "iam.tsx", "http.ts", "convex.config.ts"]);
 const exemptionMarkers = ["hercules-iam: allow-raw-builder", "hercules-iam: allow-raw-builders"];
 const iamPackageName = "@usehercules/convex";
 const iamServicePackageNames = new Set([
@@ -2262,25 +2255,20 @@ function isIamImport(
 
   return (
     stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
-      join(convexDir, "hercules") ||
-    stripKnownModuleExtension(resolve(dirname(sourceFile.fileName), moduleSpecifier)) ===
-      join(convexDir, "iam")
+    join(convexDir, "iam")
   );
 }
 
 function isIamWiringSourceFile(filePath: string | undefined, convexDir: string): boolean {
   if (!filePath) return false;
   const extensionlessPath = stripKnownModuleExtension(filePath);
-  return (
-    extensionlessPath === join(convexDir, "hercules") ||
-    extensionlessPath === join(convexDir, "iam")
-  );
+  return extensionlessPath === join(convexDir, "iam");
 }
 
 // A Convex function file uses managed IAM when it imports the
 // @usehercules/convex SDK (including subpaths such as /iam-management and
-// /convex.config) or the local convex/hercules or convex/iam wiring module
-// the managed builders are re-exported from.
+// /convex.config) from the canonical convex/iam wiring module, or imports that
+// local wiring module from another Convex function.
 function fileUsesManagedIam(filePath: string, convexDir: string): boolean {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
@@ -2294,8 +2282,9 @@ function fileUsesManagedIam(filePath: string, convexDir: string): boolean {
       continue;
     }
     if (
-      moduleSpecifier.text === iamPackageName ||
-      moduleSpecifier.text.startsWith(`${iamPackageName}/`) ||
+      ((moduleSpecifier.text === iamPackageName ||
+        moduleSpecifier.text.startsWith(`${iamPackageName}/`)) &&
+        isIamWiringSourceFile(filePath, convexDir)) ||
       isIamImport(sourceFile, moduleSpecifier.text, convexDir)
     ) {
       return true;

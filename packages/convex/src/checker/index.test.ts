@@ -7,7 +7,7 @@ import { checkIamSource, formatIamCheckResult } from "./index";
 describe("checkIamSource", () => {
   test("reports exported raw Convex builders", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         import { createIam } from "@usehercules/convex";
         export const builders = createIam;
       `,
@@ -113,8 +113,39 @@ describe("checkIamSource", () => {
     expect(source).toContain("export const list = query({");
   });
 
-  test("still reports raw unguarded builders when IAM is wired through convex.config.ts", () => {
+  test("does not rewrite legacy hercules.ts wiring", () => {
     const root = createFixture({
+      "convex/hercules.ts": `
+        import { createIam } from "@usehercules/convex";
+        export const builders = createIam;
+      `,
+      "convex/posts.ts": `
+        import { query } from "./_generated/server";
+
+        export const list = query({
+          args: {},
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const result = checkIamSource({
+      cwd: root,
+      fixAuthenticated: true,
+    });
+    const source = readFileSync(join(root, "convex/posts.ts"), "utf8");
+
+    expect(result).toMatchObject({ ok: true, fixedFiles: 0, findings: [] });
+    expect(source).toContain('import { query } from "./_generated/server";');
+    expect(source).toContain("export const list = query({");
+    expect(source).not.toContain('from "./iam"');
+  });
+
+  test("still reports raw unguarded builders when canonical IAM wiring is configured", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
       "convex/convex.config.ts": `
         import { defineApp } from "convex/server";
         import iam from "@usehercules/convex/convex.config";
@@ -155,7 +186,7 @@ describe("checkIamSource", () => {
       `,
       "convex/tasks.ts": `
         import { internalAction, mutation } from "./_generated/server";
-        import { iamMutation, authenticatedQuery } from "./hercules";
+        import { iamMutation, authenticatedQuery } from "./iam";
 
         export const list = authenticatedQuery({
           args: {},
@@ -191,12 +222,12 @@ describe("checkIamSource", () => {
 
   test("reports service-authority actions referenced by exported managed builders", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction, publicAction } from "./hercules";
+        import { authenticatedAction, publicAction } from "./iam";
 
         export const addMember = authenticatedAction({
           args: {},
@@ -236,12 +267,12 @@ describe("checkIamSource", () => {
 
   test("reports service-authority references hidden behind same-file helpers", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { iamAction } from "./hercules";
+        import { iamAction } from "./iam";
 
         async function replaceAccess(ctx, args) {
           return await ctx.runAction(internal.iamService.setResourcePermissionRules, args);
@@ -269,7 +300,7 @@ describe("checkIamSource", () => {
 
   test("reports service-authority calls hidden behind imported local helpers", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -280,7 +311,7 @@ describe("checkIamSource", () => {
         }
       `,
       "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole } from "./accessHelpers";
 
         export const addMember = authenticatedAction({
@@ -304,12 +335,12 @@ describe("checkIamSource", () => {
 
   test("reports service-authority calls behind aliased and namespace public builders", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/aliased.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         const auth = authenticatedAction;
         export const addMember = auth({
@@ -320,7 +351,7 @@ describe("checkIamSource", () => {
       `,
       "convex/namespaced.ts": `
         import { internal } from "./_generated/api";
-        import * as access from "./hercules";
+        import * as access from "./iam";
 
         export const removeMember = access.authenticatedAction({
           args: {},
@@ -339,7 +370,7 @@ describe("checkIamSource", () => {
 
   test("reports imported helper aliases through barrels and emitted js specifiers", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/helpers/iam.ts": `
@@ -353,7 +384,7 @@ describe("checkIamSource", () => {
         export { assignRole } from "./iam.js";
       `,
       "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole as importedAssignRole } from "./helpers/index.js";
 
         const delegated = importedAssignRole;
@@ -378,7 +409,7 @@ describe("checkIamSource", () => {
 
   test("reports service-authority calls through namespace-imported local helpers", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -389,7 +420,7 @@ describe("checkIamSource", () => {
         }
       `,
       "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import * as helpers from "./accessHelpers";
 
         export const addMember = authenticatedAction({
@@ -413,7 +444,7 @@ describe("checkIamSource", () => {
 
   test("reports standalone service-authority helpers imported from iam-service", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
@@ -421,7 +452,7 @@ describe("checkIamSource", () => {
           createIamInvitation as inviteMember,
         } from "@usehercules/convex/iam-service";
         import * as iamService from "@usehercules/convex/iam-service";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const invite = authenticatedAction({
           args: {},
@@ -455,11 +486,11 @@ describe("checkIamSource", () => {
 
   test("resolves builders and service helpers through src namespace barrels", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/iamBuilders.ts": `
-        export { authenticatedAction } from "./hercules";
+        export { authenticatedAction } from "./iam";
       `,
       "src/access/service.ts": `
         export {
@@ -498,12 +529,12 @@ describe("checkIamSource", () => {
 
   test("resolves bound handlers from non-inline builder configs", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -527,12 +558,12 @@ describe("checkIamSource", () => {
 
   test("uses final static config properties after object spreads", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -558,12 +589,12 @@ describe("checkIamSource", () => {
 
   test("resolves statically returned handler callbacks", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function removeRole(ctx, args) {
           return await ctx.runAction(internal.iamService.removeRole, args);
@@ -589,12 +620,12 @@ describe("checkIamSource", () => {
 
   test("resolves destructured aliases and deterministic outer reassignments", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -636,12 +667,12 @@ describe("checkIamSource", () => {
 
   test("uses the latest deterministic lexical assignment", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -667,12 +698,12 @@ describe("checkIamSource", () => {
 
   test("does not infer branch-only callable reassignments", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -698,12 +729,12 @@ describe("checkIamSource", () => {
 
   test("does not infer switch or loop-only callable reassignments", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -742,7 +773,7 @@ describe("checkIamSource", () => {
 
   test("detects renamed modules built with createIamServiceActions", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/services/iamService.ts": `
@@ -753,7 +784,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const addMember = authenticatedAction({
           args: {},
@@ -777,7 +808,7 @@ describe("checkIamSource", () => {
 
   test("detects service modules built through a namespace package import", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/services/iamService.ts": `
@@ -788,7 +819,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const addMember = authenticatedAction({
           args: {},
@@ -812,7 +843,7 @@ describe("checkIamSource", () => {
 
   test("marks only exports derived from createIamServiceActions", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/services/iamService.ts": `
@@ -828,7 +859,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const addMember = authenticatedAction({
           args: {},
@@ -853,7 +884,7 @@ describe("checkIamSource", () => {
 
   test("keeps safe properties separate when spreading admin actions", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/services/iamService.ts": `
@@ -873,7 +904,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const addMember = authenticatedAction({
           args: {},
@@ -898,7 +929,7 @@ describe("checkIamSource", () => {
 
   test("ignores shadowed helpers and uncalled nested functions", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -910,7 +941,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole } from "./accessHelpers";
 
         export const list = authenticatedAction({
@@ -936,12 +967,12 @@ describe("checkIamSource", () => {
 
   test("reports direct object-property and Function.call/apply indirections", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         async function assignRole(ctx, args) {
           return await ctx.runAction(internal.iamService.assignRole, args);
@@ -975,7 +1006,7 @@ describe("checkIamSource", () => {
 
   test("reports aliases of generated service-authority modules", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/services/iamService.ts": `
@@ -986,7 +1017,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         const rootIamService = internal.iamService;
         const nestedIamService = internal.services.iamService;
@@ -1014,7 +1045,7 @@ describe("checkIamSource", () => {
 
   test("detects aliased createIamServiceActions factories", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/services/iamService.ts": `
@@ -1026,7 +1057,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const addMember = authenticatedAction({
           args: {},
@@ -1050,7 +1081,7 @@ describe("checkIamSource", () => {
 
   test("resolves default exports and import-then-export barrels", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/defaultHelper.ts": `
@@ -1072,7 +1103,7 @@ describe("checkIamSource", () => {
         export { removeRole };
       `,
       "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import assignRole from "./defaultHelper";
         import { removeRole } from "./barrel";
 
@@ -1097,7 +1128,7 @@ describe("checkIamSource", () => {
 
   test("keeps dangerous closure bindings from declaration scope", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -1108,7 +1139,7 @@ describe("checkIamSource", () => {
         }
       `,
       "convex/projects.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole as dangerousAssignRole } from "./accessHelpers";
 
         export const update = authenticatedAction({
@@ -1134,7 +1165,7 @@ describe("checkIamSource", () => {
 
   test("keeps safe closure bindings from declaration scope", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -1145,7 +1176,7 @@ describe("checkIamSource", () => {
         }
       `,
       "convex/projects.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole as dangerousAssignRole } from "./accessHelpers";
 
         export const update = authenticatedAction({
@@ -1170,12 +1201,12 @@ describe("checkIamSource", () => {
 
   test("reports service-authority calls through shorthand handler properties", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         const handler = async (ctx, args) =>
           ctx.runAction(internal.iamService.assignRole, args);
@@ -1196,7 +1227,7 @@ describe("checkIamSource", () => {
 
   test("ignores namespace helper imports shadowed in callable scope", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -1207,7 +1238,7 @@ describe("checkIamSource", () => {
         }
       `,
       "convex/projects.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import * as helpers from "./accessHelpers";
 
         export const update = authenticatedAction({
@@ -1224,11 +1255,11 @@ describe("checkIamSource", () => {
 
   test("terminates on cyclic local callable aliases", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const update = authenticatedAction({
           args: {},
@@ -1248,7 +1279,7 @@ describe("checkIamSource", () => {
 
   test("ignores loop and generated-internal lexical shadows", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -1260,7 +1291,7 @@ describe("checkIamSource", () => {
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole } from "./accessHelpers";
 
         export const list = authenticatedAction({
@@ -1292,12 +1323,12 @@ describe("checkIamSource", () => {
 
   test("ignores generated-internal lexical shadows in switch clauses", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const update = authenticatedAction({
           args: {},
@@ -1324,7 +1355,7 @@ describe("checkIamSource", () => {
 
   test("treats passing a known dangerous callable as public exposure", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/accessHelpers.ts": `
@@ -1335,7 +1366,7 @@ describe("checkIamSource", () => {
         }
       `,
       "convex/projects.ts": `
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
         import { assignRole } from "./accessHelpers";
 
         const invoke = (callback, ctx, args) => callback(ctx, args);
@@ -1370,7 +1401,7 @@ describe("checkIamSource", () => {
 
   test("does not treat unrelated builder-shaped imports as public roots", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/fakeBuilders.ts": `
@@ -1403,13 +1434,13 @@ describe("checkIamSource", () => {
 
   test("ignores unreachable service references in internal-only functions", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { internalAction } from "./_generated/server";
-        import { authenticatedAction } from "./hercules";
+        import { authenticatedAction } from "./iam";
 
         export const list = authenticatedAction({
           args: {},
@@ -1441,11 +1472,11 @@ describe("checkIamSource", () => {
 
   test("describes successful checks as static and limited", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projects.ts": `
-        import { authenticatedQuery } from "./hercules";
+        import { authenticatedQuery } from "./iam";
 
         export const list = authenticatedQuery({
           args: {},
@@ -1504,16 +1535,14 @@ describe("checkIamSource", () => {
 
   test("reports hardcoded IAM scope ids in source", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
       "convex/iam.ts": `
-        import { getEffectivePermissions } from "./hercules";
+        import { createIam } from "@usehercules/convex";
+        export const builders = createIam;
 
         export const CLINIC_SCOPE_ID = "01KTYRQ825E43T3PFRPZZESTPJ";
 
-        export async function getMyPermissions(ctx: unknown) {
-          return await getEffectivePermissions(ctx, { scopeId: CLINIC_SCOPE_ID });
+        export function getClinicScopeId() {
+          return CLINIC_SCOPE_ID;
         }
       `,
     });
@@ -1534,7 +1563,7 @@ describe("checkIamSource", () => {
 
   test("reports app-local org membership tables in managed IAM apps", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/schema.ts": `
@@ -1612,7 +1641,7 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { iamMutation, scopeFromArg } from "./hercules";
+        import { iamMutation, scopeFromArg } from "./iam";
 
         export const update = iamMutation({
           permission: "posts.update",
@@ -1654,7 +1683,7 @@ describe("checkIamSource", () => {
       `,
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { authenticatedQuery } from "./hercules";
+        import { authenticatedQuery } from "./iam";
 
         export const listDrafts = authenticatedQuery({
           args: { orgScopeId: v.string() },
@@ -1703,7 +1732,7 @@ describe("checkIamSource", () => {
 
   test("reports privileged permissions in resource permission rules", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
@@ -1751,7 +1780,7 @@ describe("checkIamSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { iamQuery, iamMutation, scopeFromArg } from "./hercules";
+        import { iamQuery, iamMutation, scopeFromArg } from "./iam";
 
         export const list = iamQuery({
           permission: "projects:read",
@@ -1829,7 +1858,7 @@ describe("checkIamSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { iamQuery, scopeFromArg } from "./hercules";
+        import { iamQuery, scopeFromArg } from "./iam";
 
         const AUDIT_PERMISSION = "app.audit:read";
 
@@ -1864,7 +1893,7 @@ describe("checkIamSource", () => {
   test("skips the catalog permission check when hercules/iam.jsonc is missing or invalid", () => {
     const builderSource = `
       import { v } from "convex/values";
-      import { iamQuery, scopeFromArg } from "./hercules";
+      import { iamQuery, scopeFromArg } from "./iam";
 
       export const list = iamQuery({
         permission: "projects:read",
@@ -1894,7 +1923,7 @@ describe("checkIamSource", () => {
 
   test("can rewrite exported raw builders to authenticated builders", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/posts.ts": `
@@ -1932,9 +1961,9 @@ describe("checkIamSource", () => {
     expect(source).toContain("export const repair = internalMutation({");
   });
 
-  test("rewrites nested files with a relative Hercules import", () => {
+  test("rewrites nested files with a relative IAM import", () => {
     const root = createFixture({
-      "convex/hercules.ts": `
+      "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
       "convex/admin/posts.ts": `
