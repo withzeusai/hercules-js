@@ -1,0 +1,16 @@
+{
+  "name": "@usehercules/analytics",
+  "version": "1.0.41",
+  "license": "MIT",
+  "exports": {
+    ".": "./dist/es/index.mjs",
+    "./types": "./dist/es/types.mjs",
+    "./schema": "./dist/es/schema.mjs",
+    "./utils": "./dist/es/utils.mjs",
+    "./script": "./dist/browser/script-content.mjs"
+  },
+  "publish": {
+    "include": ["dist", "package.json", "README.md", "jsr.json"],
+    "exclude": ["!dist"]
+  }
+}

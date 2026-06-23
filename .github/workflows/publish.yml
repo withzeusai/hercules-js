@@ -44,3 +44,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+
+      # Publish the same packages to JSR. Auth is via OIDC (id-token: write),
+      # so no token is needed. jsr publish skips any version already on JSR.
+      - name: Publish to JSR
+        run: pnpm sync:jsr && pnpm jsr:publish

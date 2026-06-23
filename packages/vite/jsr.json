@@ -1,0 +1,12 @@
+{
+  "name": "@usehercules/vite",
+  "version": "1.0.42",
+  "license": "MIT",
+  "exports": {
+    ".": "./dist/index.mjs"
+  },
+  "publish": {
+    "include": ["dist", "package.json", "README.md", "jsr.json"],
+    "exclude": ["!dist"]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@usehercules/eslint-plugin",
+  "version": "1.0.41",
+  "license": "MIT",
+  "exports": {
+    ".": "./dist/index.mjs"
+  },
+  "publish": {
+    "include": ["dist", "package.json", "README.md", "jsr.json"],
+    "exclude": ["!dist"]
+  }
+}
