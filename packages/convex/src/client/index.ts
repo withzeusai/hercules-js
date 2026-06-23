@@ -18,8 +18,8 @@ import type {
 import { ConvexError } from "convex/values";
 import type { GenericValidator, PropertyValidators, Validator } from "convex/values";
 import type { ScopeKind } from "../shared/sync";
-export { classifyIamError } from "./iam-errors";
-export type { IamAdmissionStatus, IamErrorClassification } from "./iam-errors";
+export { classifyIamError } from "./iam-errors.js";
+export type { IamAdmissionStatus, IamErrorClassification } from "./iam-errors.js";
 
 type IamMode = "authenticated" | "permission";
 
