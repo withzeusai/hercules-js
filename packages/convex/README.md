@@ -5,15 +5,16 @@ roles, permissions, and resource-level grants, enforced inside your Convex
 functions. The app reads from a local mirror that Hercules keeps in sync with
 the control plane.
 
-This README and the published `dist/client/index.d.ts` and
-`dist/client/access-admin.d.ts` files are the authoritative public contract.
-Use their TypeScript signatures and your local wrappers. Do not inspect package
-or component implementation internals to infer behavior. Public REST payloads
-are documented at https://docs-cloud.hercules.app.
+This README and the published `dist/client/index.d.ts`,
+`dist/client/access-management.d.ts`, and `dist/client/access-service.d.ts`
+files are the authoritative public contract. Use their TypeScript signatures
+and your local wrappers. Do not inspect package or component implementation
+internals to infer behavior. Public REST payloads are documented at
+https://docs-cloud.hercules.app.
 
 ## Setup
 
-Call `createAccessControl` once in `convex/hercules.ts` and re-export the
+Call `createAccessControl` once in `convex/access.ts` and re-export the
 builders. Use these builders instead of the raw `./_generated/server` ones for
 anything permissioned.
 
@@ -111,7 +112,7 @@ sign-in.
 
 ```ts
 import { v } from "convex/values";
-import { accessQuery, accessMutation, scopeFromArg, scopeFromResource } from "./hercules";
+import { accessQuery, accessMutation, scopeFromArg, scopeFromResource } from "./access";
 
 // Read: scope from an arg. "view" is a real permission; grant it to every role
 // that should see the data, including a read-only role.
@@ -263,36 +264,41 @@ membership. Do not copy it into an app-owned role table.
 
 ### Authority matrix
 
-| Surface                                                                          | Convex exposure                  | Authority                                                                       |
-| -------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
-| `createAccessAdminActions`, `createAccessInvitation`, `createResourceInvitation` | Internal only                    | Service via `HERCULES_API_KEY`                                                  |
-| `createAccessUserActions`                                                        | Public `authenticatedAction`     | Signed-in app user via `idToken`; the control plane applies runtime role checks |
-| `createAccessScopeAction`                                                        | Public `authenticatedAction`     | Authenticated creator after `canCreateScope`; the creator becomes Owner         |
-| `createAccessScope`                                                              | App-owned authenticated function | Authenticated creator from `ctx`; the app supplies its own product-policy gate  |
-| `createResourceCreatorBootstrapAction`                                           | Public `authenticatedAction`     | Trusted resource creator; one fixed initial resource role                       |
-| `acceptAccessInvitation`                                                         | App-owned authenticated function | Invitee identified by the invitation token and `idToken`                        |
+| Surface                                                                            | Convex exposure                  | Authority                                                                       |
+| ---------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- |
+| `createAccessServiceActions`, `createAccessInvitation`, `createResourceInvitation` | Internal only                    | Service via `HERCULES_API_KEY`                                                  |
+| `createAccessManagementActions`                                                    | Public `authenticatedAction`     | Signed-in app user via `idToken`; the control plane applies runtime role checks |
+| `createDeploymentEntryAction`                                                      | Public `authenticatedAction`     | Signed-in app user entering the current deployment                              |
+| `createAccessScopeAction`                                                          | Public `authenticatedAction`     | Authenticated creator after `canCreateScope`; the creator becomes Owner         |
+| `createAccessScope`                                                                | App-owned authenticated function | Authenticated creator from `ctx`; the app supplies its own product-policy gate  |
+| `createResourceCreatorBootstrapAction`                                             | Public `authenticatedAction`     | Trusted resource creator; one fixed initial resource role                       |
+| `acceptAccessInvitation`                                                           | App-owned authenticated function | Invitee identified by the invitation token and `idToken`                        |
 
-Never call generated `internal.accessAdmin.*` actions from an exported public,
-authenticated, or access builder, directly or through a helper. Service
-authority is only for trusted internal workflows.
+Never call generated `internal.accessService.*` actions from an exported
+public, authenticated, or access builder, directly or through a helper.
+Service authority is only for trusted internal workflows.
 
 Access Control actions run in Convex's default runtime. Do not add the
 `"use node"` directive to these files.
 
 ```ts
-import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+// convex/accessService.ts
+import { createAccessServiceActions } from "@usehercules/convex/access-service";
 import { internalAction } from "./_generated/server";
 
-export const { assignRole, removeRole, createInvitation } = createAccessAdminActions({
+export const { assignRole, removeRole, createInvitation } = createAccessServiceActions({
   internalAction,
 });
 ```
 
-Use `createAccessUserActions` for user-initiated administration.
+Create this service module only for explicit trusted automation. For
+user-initiated administration, create an app-owned management module and
+export only the actions the app uses.
 
 ```ts
-import { createAccessUserActions } from "@usehercules/convex/access-admin";
-import { authenticatedAction } from "./hercules";
+// convex/accessManagement.ts
+import { createAccessManagementActions } from "@usehercules/convex/access-management";
+import { authenticatedAction } from "./access";
 
 export const {
   assignRole,
@@ -304,21 +310,35 @@ export const {
   setResourcePermissionRules,
   listResourceInvitations,
   revokeInvitation,
-} = createAccessUserActions({ authenticatedAction });
+} = createAccessManagementActions({ authenticatedAction });
+```
+
+Keep deployment entry in the baseline access module rather than creating the
+management collection only for auth synchronization:
+
+```ts
+import { createDeploymentEntryAction } from "@usehercules/convex/access-management";
+
+export const enterDeployment = createDeploymentEntryAction({
+  authenticatedAction,
+  getDeploymentEntryStatus,
+});
 ```
 
 `idToken` authenticates the actor only. In trusted Convex code, load the
 resource row to derive its scope and resource id, use its canonical `app.*`
-resource type, and resolve a selected `herculesAuthUserId` with
-`getScopeMemberDirectoryEntry`; pass the returned `principalId` as the
-recipient. Do not trust a browser-supplied principal or scope/resource pair.
+resource type, and identify user recipients as
+`{ type: "user", herculesAuthUserId }`. Use
+`{ type: "principal", principalId }` only for a principal resolved by trusted
+server code, such as a group. Do not trust a browser-supplied principal or
+scope/resource pair.
 
 Use `listGrantableRoles` for role pickers. It returns only roles the current
 actor may confer at the exact scope or resource target. Set `subjectType` to
 match the intended user or group recipient:
 
 ```ts
-await ctx.runAction(api.accessUser.listGrantableRoles, {
+await ctx.runAction(api.accessManagement.listGrantableRoles, {
   scopeId,
   subjectType: "user",
   target: {
@@ -338,25 +358,30 @@ assign at that target. The write still reauthorizes after a picker result.
 Common public action calls:
 
 ```ts
-await ctx.runAction(api.accessUser.replaceMemberRoles, {
+await ctx.runAction(api.accessManagement.replaceMemberRoles, {
   scopeId,
-  herculesAuthUserId,
+  recipient: { type: "user", herculesAuthUserId },
   roleKeys: ["reviewer"],
   idToken,
 });
 
-await ctx.runAction(api.accessUser.createInvitation, {
+await ctx.runAction(api.accessManagement.createInvitation, {
   scopeId,
   email,
   roleKeys: ["member"],
   idToken,
 });
 
-await ctx.runAction(api.accessUser.replaceResourceGrants, {
+await ctx.runAction(api.accessManagement.replaceResourceGrants, {
   scopeId,
   resourceType: "app.documents",
   resourceId: String(documentId),
-  subjects: [{ principalId, grants: [{ roleKey: "reviewer" }] }],
+  subjects: [
+    {
+      recipient: { type: "principal", principalId },
+      grants: [{ roleKey: "reviewer" }],
+    },
+  ],
   idToken,
 });
 ```
@@ -379,11 +404,11 @@ Create the app row as `provisioning`, record its creator with
 queries. Then expose one action:
 
 ```ts
-// convex/accessUser.ts
-import { createResourceCreatorBootstrapAction } from "@usehercules/convex/access-admin";
+// convex/accessManagement.ts
+import { createResourceCreatorBootstrapAction } from "@usehercules/convex/access-management";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { authenticatedAction, listMyMemberships } from "./hercules";
+import { authenticatedAction, listMyMemberships } from "./access";
 
 export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
   authenticatedAction,
@@ -415,7 +440,8 @@ do not expose a raw service-authority action. If every scope Admin should
 already manage every resource, skip creator bootstrap entirely: the built-in
 Admin role already covers ordinary `app.*` permissions.
 
-For a browser-selected user, resolve active scope membership before writing:
+For app-owned code that needs the selected user's current directory entry,
+resolve it from the browser-supplied Hercules Auth user id:
 
 ```ts
 const recipient = await getScopeMemberDirectoryEntry(ctx, {
@@ -424,6 +450,8 @@ const recipient = await getScopeMemberDirectoryEntry(ctx, {
 });
 if (!recipient) throw new Error("Active member not found");
 ```
+
+Do not ask the browser to supply `recipient.principalId`.
 
 Grant `app.members:read` to roles that may use a member-facing directory.
 Access-administration screens should use `listScopeMembers`, which requires

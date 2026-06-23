@@ -25,6 +25,7 @@ export type AccessControlCheckFinding = {
     | "authenticated_org_data_read"
     | "privileged_resource_permission_rule"
     | "public_service_authority_call"
+    | "runtime_superset_permission"
     | "noncanonical_permission_key";
   severity: "error";
   filePath: string;
@@ -77,12 +78,12 @@ const exemptionMarkers = [
   "hercules-access-control: allow-raw-builders",
 ];
 const accessControlPackageName = "@usehercules/convex";
-const accessAdminPackageNames = new Set([
-  `${accessControlPackageName}/access-admin`,
-  `${accessControlPackageName}/access-admin.js`,
+const accessServicePackageNames = new Set([
+  `${accessControlPackageName}/access-service`,
+  `${accessControlPackageName}/access-service.js`,
 ]);
 const serviceAuthorityHelperNames = new Set(["createAccessInvitation", "createResourceInvitation"]);
-const accessAdminActionNames = new Set([
+const accessServiceActionNames = new Set([
   "archiveScope",
   "setDefaultRole",
   "createInvitation",
@@ -183,6 +184,7 @@ export function checkAccessControlSource(
     ...checkPublicServiceAuthorityCalls(cwd, convexDir, markerFiles, authoritySourceFiles),
     ...markerFiles.flatMap((filePath) => checkHardcodedAccessScopeIds(cwd, filePath)),
     ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
+    ...sourceFiles.flatMap((filePath) => checkRuntimeSupersetPermissionKeys(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) =>
       checkCanonicalPermissionKeys(cwd, filePath, catalogPermissionKeys),
     ),
@@ -333,7 +335,7 @@ function checkAccessControlOrgPatterns(
     message:
       "Do not store a blank Hercules Access Control scope id. Create a Hercules Access Control scope first, then persist the returned accessScopeId.",
     suggestion:
-      "Use createAccessScope from @usehercules/convex/access-admin before inserting org metadata.",
+      "Use createAccessScope from @usehercules/convex/access-management before inserting org metadata.",
   });
 
   addPatternFinding({
@@ -586,7 +588,7 @@ type StaticValue =
   | { kind: "module"; target: ModuleTarget }
   | {
       kind: "known";
-      value: "publicBuilder" | "serviceAuthority" | "accessAdminFactory" | "accessAdminActions";
+      value: "publicBuilder" | "serviceAuthority" | "accessServiceFactory" | "accessServiceActions";
     };
 
 function checkPublicServiceAuthorityCalls(
@@ -645,7 +647,7 @@ function checkPublicServiceAuthorityCalls(
         message:
           "Exported public Convex functions must not call service-authority Access Control actions.",
         suggestion:
-          "Use createAccessUserActions for public access changes, or keep the createAccessAdminActions caller internal.",
+          "Use createAccessManagementActions for public access changes, or keep the createAccessServiceActions caller internal.",
       }),
     );
   };
@@ -719,12 +721,12 @@ function checkPublicServiceAuthorityCalls(
       const targetInfo = sourceFiles.get(target.filePath);
       return targetInfo ? resolveExportedValues(targetInfo, exportedName, resolving) : [];
     }
-    if (!accessAdminPackageNames.has(target.moduleSpecifier)) return [];
+    if (!accessServicePackageNames.has(target.moduleSpecifier)) return [];
     if (serviceAuthorityHelperNames.has(exportedName)) {
       return [{ kind: "known", value: "serviceAuthority" }];
     }
-    if (exportedName === "createAccessAdminActions") {
-      return [{ kind: "known", value: "accessAdminFactory" }];
+    if (exportedName === "createAccessServiceActions") {
+      return [{ kind: "known", value: "accessServiceFactory" }];
     }
     return [];
   }
@@ -831,7 +833,7 @@ function checkPublicServiceAuthorityCalls(
       return resolveModuleExportValues(value.target, propertyName, resolving);
     }
     if (value.kind === "known") {
-      return value.value === "accessAdminActions" && accessAdminActionNames.has(propertyName)
+      return value.value === "accessServiceActions" && accessServiceActionNames.has(propertyName)
         ? [{ kind: "known", value: "serviceAuthority" }]
         : [];
     }
@@ -937,8 +939,8 @@ function checkPublicServiceAuthorityCalls(
 
       const values: StaticValue[] = [];
       for (const callable of resolveStaticValues(info, target.expression, scope, resolving)) {
-        if (callable.kind === "known" && callable.value === "accessAdminFactory") {
-          values.push({ kind: "known", value: "accessAdminActions" });
+        if (callable.kind === "known" && callable.value === "accessServiceFactory") {
+          values.push({ kind: "known", value: "accessServiceActions" });
         } else if (callable.kind === "node" && isCallableNode(callable.node)) {
           values.push(...resolveCallableReturnValues(callable, new Set(resolving)));
         }
@@ -1039,7 +1041,7 @@ function checkPublicServiceAuthorityCalls(
     }
 
     if (!moduleInfo) {
-      return path[0] === "accessAdmin";
+      return path[0] === "accessService";
     }
 
     const exportedPath = path.slice(moduleSegmentCount);
@@ -1845,6 +1847,42 @@ function isPrivilegedResourceRuleKey(permissionKey: string): boolean {
   return action === "*" || action === "manage_members" || action === "manage_access";
 }
 
+function checkRuntimeSupersetPermissionKeys(
+  cwd: string,
+  filePath: string,
+): AccessControlCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile = createSourceFile(filePath, sourceText);
+  const findings: AccessControlCheckFinding[] = [];
+
+  for (const definition of collectManagedBuilderDefinitions(sourceFile, [
+    "accessQuery",
+    "accessMutation",
+    "accessAction",
+  ])) {
+    const permission = getLiteralPermissionProperty(definition.definition);
+    if (!permission) continue;
+    const actionSeparatorIndex = permission.key.lastIndexOf(":");
+    const action =
+      actionSeparatorIndex === -1 ? "" : permission.key.slice(actionSeparatorIndex + 1);
+    if (action !== "manage" && action !== "*") continue;
+
+    findings.push(
+      createPatternFindingAtNode({
+        cwd,
+        sourceFile,
+        node: permission.node,
+        code: "runtime_superset_permission",
+        message: `Permission key "${permission.key}" is a catalog grouping key, not a runtime action.`,
+        suggestion:
+          "Check a concrete permission action at runtime, such as read, create, update, delete, list, or an app-defined action.",
+      }),
+    );
+  }
+
+  return findings;
+}
+
 // The IAM catalog is file-only: hercules/iam.jsonc at the app root declares
 // every app permission key, and the control plane seeds the platform
 // system.* keys. Returns null when the file is missing or does not parse as
@@ -2255,7 +2293,7 @@ function isAccessWiringSourceFile(filePath: string | undefined, convexDir: strin
 }
 
 // A Convex function file uses managed Access Control when it imports the
-// @usehercules/convex SDK (including subpaths such as /access-admin and
+// @usehercules/convex SDK (including subpaths such as /access-management and
 // /convex.config) or the local convex/hercules or convex/access wiring module
 // the managed builders are re-exported from.
 function fileUsesManagedAccessControl(filePath: string, convexDir: string): boolean {
@@ -2387,7 +2425,7 @@ function createFinding(
     functionName: candidate.functionName,
     builder: candidate.builder,
     message: `Exported Convex function "${candidate.functionName}" uses raw ${candidate.builder}().`,
-    suggestion: `Import from ./hercules and choose public${builderSuffix}, authenticated${builderSuffix}, or access${builderSuffix}.`,
+    suggestion: `Import from ./access and choose public${builderSuffix}, authenticated${builderSuffix}, or access${builderSuffix}.`,
   };
 }
 

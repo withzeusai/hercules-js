@@ -52,7 +52,7 @@ describe("checkAccessControlSource", () => {
       },
     ]);
     expect(formatAccessControlCheckResult(result)).toContain(
-      "Import from ./hercules and choose publicQuery, authenticatedQuery, or accessQuery.",
+      "Import from ./access and choose publicQuery, authenticatedQuery, or accessQuery.",
     );
   });
 
@@ -201,7 +201,7 @@ describe("checkAccessControlSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx) =>
-            ctx.runAction(internal.accessAdmin.assignRole, {
+            ctx.runAction(internal.accessService.assignRole, {
               scopeId: "scope_1",
             }),
         });
@@ -209,7 +209,7 @@ describe("checkAccessControlSource", () => {
         const removeMember = publicAction({
           args: {},
           handler: async (ctx) =>
-            ctx.runAction(internal.accessAdmin.removeRole, {
+            ctx.runAction(internal.accessService.removeRole, {
               scopeId: "scope_1",
             }),
         });
@@ -244,7 +244,7 @@ describe("checkAccessControlSource", () => {
         import { accessAction } from "./hercules";
 
         async function replaceAccess(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.setResourcePermissionRules, args);
+          return await ctx.runAction(internal.accessService.setResourcePermissionRules, args);
         }
 
         export const share = accessAction({
@@ -276,7 +276,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projectMembers.ts": `
@@ -315,7 +315,7 @@ describe("checkAccessControlSource", () => {
         export const addMember = auth({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessAdmin.assignRole, args),
+            ctx.runAction(internal.accessService.assignRole, args),
         });
       `,
       "convex/namespaced.ts": `
@@ -325,7 +325,7 @@ describe("checkAccessControlSource", () => {
         export const removeMember = access.authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessAdmin.removeRole, args),
+            ctx.runAction(internal.accessService.removeRole, args),
         });
       `,
     });
@@ -346,7 +346,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "../_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/helpers/index.ts": `
@@ -385,7 +385,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projectMembers.ts": `
@@ -411,7 +411,7 @@ describe("checkAccessControlSource", () => {
     );
   });
 
-  test("reports standalone service-authority helpers imported from access-admin", () => {
+  test("reports standalone service-authority helpers imported from access-service", () => {
     const root = createFixture({
       "convex/hercules.ts": `
         export { createAccessControl } from "@usehercules/convex";
@@ -419,8 +419,8 @@ describe("checkAccessControlSource", () => {
       "convex/projectMembers.ts": `
         import {
           createAccessInvitation as inviteMember,
-        } from "@usehercules/convex/access-admin";
-        import * as accessAdmin from "@usehercules/convex/access-admin";
+        } from "@usehercules/convex/access-service";
+        import * as accessService from "@usehercules/convex/access-service";
         import { authenticatedAction } from "./hercules";
 
         export const invite = authenticatedAction({
@@ -435,7 +435,7 @@ describe("checkAccessControlSource", () => {
         export const inviteToProject = authenticatedAction({
           args: {},
           handler: async () =>
-            accessAdmin.createResourceInvitation({
+            accessService.createResourceInvitation({
               scopeId: "scope_1",
               email: "member@example.com",
               resourceType: "app.projects",
@@ -464,7 +464,7 @@ describe("checkAccessControlSource", () => {
       "src/access/service.ts": `
         export {
           createAccessInvitation as inviteMember,
-        } from "@usehercules/convex/access-admin";
+        } from "@usehercules/convex/access-service";
       `,
       "src/access/index.ts": `
         export * as service from "./service";
@@ -506,7 +506,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         const definition = {
@@ -535,7 +535,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         const serviceConfig = {
@@ -566,7 +566,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.removeRole, args);
+          return await ctx.runAction(internal.accessService.removeRole, args);
         }
 
         function makeHandler() {
@@ -597,11 +597,11 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.removeRole, args);
+          return await ctx.runAction(internal.accessService.removeRole, args);
         }
 
         const helpers = { assignRole };
@@ -644,7 +644,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         export const update = authenticatedAction({
@@ -675,7 +675,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         export const update = authenticatedAction({
@@ -706,7 +706,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         export const throughSwitch = authenticatedAction({
@@ -740,16 +740,16 @@ describe("checkAccessControlSource", () => {
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
-  test("detects renamed modules built with createAccessAdminActions", () => {
+  test("detects renamed modules built with createAccessServiceActions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
         export { createAccessControl } from "@usehercules/convex";
       `,
       "convex/services/accessService.ts": `
-        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { createAccessServiceActions } from "@usehercules/convex/access-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = createAccessAdminActions({ internalAction });
+        export const { assignRole } = createAccessServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -781,10 +781,10 @@ describe("checkAccessControlSource", () => {
         export { createAccessControl } from "@usehercules/convex";
       `,
       "convex/services/accessService.ts": `
-        import * as accessAdmin from "@usehercules/convex/access-admin";
+        import * as accessService from "@usehercules/convex/access-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = accessAdmin.createAccessAdminActions({ internalAction });
+        export const { assignRole } = accessService.createAccessServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -810,16 +810,16 @@ describe("checkAccessControlSource", () => {
     );
   });
 
-  test("marks only exports derived from createAccessAdminActions", () => {
+  test("marks only exports derived from createAccessServiceActions", () => {
     const root = createFixture({
       "convex/hercules.ts": `
         export { createAccessControl } from "@usehercules/convex";
       `,
       "convex/services/accessService.ts": `
-        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { createAccessServiceActions } from "@usehercules/convex/access-service";
         import { internalAction } from "../_generated/server";
 
-        const actions = createAccessAdminActions({ internalAction });
+        const actions = createAccessServiceActions({ internalAction });
         export const { assignRole } = actions;
         export const health = internalAction({
           args: {},
@@ -857,7 +857,7 @@ describe("checkAccessControlSource", () => {
         export { createAccessControl } from "@usehercules/convex";
       `,
       "convex/services/accessService.ts": `
-        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { createAccessServiceActions } from "@usehercules/convex/access-service";
         import { internalAction } from "../_generated/server";
 
         const health = internalAction({
@@ -866,7 +866,7 @@ describe("checkAccessControlSource", () => {
         });
         const actions = {
           health,
-          ...createAccessAdminActions({ internalAction }),
+          ...createAccessServiceActions({ internalAction }),
         };
 
         export const { assignRole, health: exportedHealth } = actions;
@@ -905,7 +905,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -920,7 +920,7 @@ describe("checkAccessControlSource", () => {
             await assignRole();
 
             async function unused(ctx, args) {
-              return await ctx.runAction(internal.accessAdmin.removeRole, args);
+              return await ctx.runAction(internal.accessService.removeRole, args);
             }
 
             return [];
@@ -944,7 +944,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
 
         const helpers = { assignRole };
@@ -979,28 +979,28 @@ describe("checkAccessControlSource", () => {
         export { createAccessControl } from "@usehercules/convex";
       `,
       "convex/services/accessService.ts": `
-        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { createAccessServiceActions } from "@usehercules/convex/access-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = createAccessAdminActions({ internalAction });
+        export const { assignRole } = createAccessServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./hercules";
 
-        const accessAdmin = internal.accessAdmin;
-        const accessService = internal.services.accessService;
+        const rootAccessService = internal.accessService;
+        const nestedAccessService = internal.services.accessService;
 
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(accessAdmin.assignRole, args),
+            ctx.runAction(rootAccessService.assignRole, args),
         });
 
         export const addProjectMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(accessService.assignRole, args),
+            ctx.runAction(nestedAccessService.assignRole, args),
         });
       `,
     });
@@ -1012,17 +1012,17 @@ describe("checkAccessControlSource", () => {
     ).toHaveLength(2);
   });
 
-  test("detects aliased createAccessAdminActions factories", () => {
+  test("detects aliased createAccessServiceActions factories", () => {
     const root = createFixture({
       "convex/hercules.ts": `
         export { createAccessControl } from "@usehercules/convex";
       `,
       "convex/services/accessService.ts": `
-        import { createAccessAdminActions } from "@usehercules/convex/access-admin";
+        import { createAccessServiceActions } from "@usehercules/convex/access-service";
         import { internalAction } from "../_generated/server";
 
-        const createAdminActions = createAccessAdminActions;
-        export const { assignRole } = createAdminActions({ internalAction });
+        const createServiceActions = createAccessServiceActions;
+        export const { assignRole } = createServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -1057,14 +1057,14 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export default async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/namedHelper.ts": `
         import { internal } from "./_generated/api";
 
         export async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.removeRole, args);
+          return await ctx.runAction(internal.accessService.removeRole, args);
         }
       `,
       "convex/barrel.ts": `
@@ -1104,7 +1104,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1141,7 +1141,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1178,7 +1178,7 @@ describe("checkAccessControlSource", () => {
         import { authenticatedAction } from "./hercules";
 
         const handler = async (ctx, args) =>
-          ctx.runAction(internal.accessAdmin.assignRole, args);
+          ctx.runAction(internal.accessService.assignRole, args);
 
         export const update = authenticatedAction({
           args: {},
@@ -1203,7 +1203,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1255,7 +1255,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1272,11 +1272,11 @@ describe("checkAccessControlSource", () => {
 
             {
               const internal = {
-                accessAdmin: {
+                accessService: {
                   assignRole: async () => null,
                 },
               };
-              await internal.accessAdmin.assignRole();
+              await internal.accessService.assignRole();
             }
 
             return [];
@@ -1305,11 +1305,11 @@ describe("checkAccessControlSource", () => {
             switch (value) {
               case "safe":
                 const internal = {
-                  accessAdmin: {
+                  accessService: {
                     assignRole: async () => null,
                   },
                 };
-                await internal.accessAdmin.assignRole();
+                await internal.accessService.assignRole();
                 break;
             }
           },
@@ -1331,7 +1331,7 @@ describe("checkAccessControlSource", () => {
         import { internal } from "./_generated/api";
 
         export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.accessAdmin.assignRole, args);
+          return await ctx.runAction(internal.accessService.assignRole, args);
         }
       `,
       "convex/projects.ts": `
@@ -1382,7 +1382,7 @@ describe("checkAccessControlSource", () => {
 
         export const run = authenticatedAction({
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessAdmin.assignRole, args),
+            ctx.runAction(internal.accessService.assignRole, args),
         });
       `,
       "convex/namespaced.ts": `
@@ -1391,7 +1391,7 @@ describe("checkAccessControlSource", () => {
 
         export const run = fakeBuilders.authenticatedAction({
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessAdmin.assignRole, args),
+            ctx.runAction(internal.accessService.assignRole, args),
         });
       `,
     });
@@ -1419,7 +1419,7 @@ describe("checkAccessControlSource", () => {
         export const repair = internalAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessAdmin.assignRole, args),
+            ctx.runAction(internal.accessService.assignRole, args),
         });
       `,
       "convex/repairs.ts": `
@@ -1429,7 +1429,7 @@ describe("checkAccessControlSource", () => {
         export const repair = internalAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.accessAdmin.assignRole, args),
+            ctx.runAction(internal.accessService.assignRole, args),
         });
       `,
     });
@@ -1714,7 +1714,7 @@ describe("checkAccessControlSource", () => {
         import { api } from "./_generated/api";
 
         export async function promote(ctx, args) {
-          await ctx.runAction(api.accessUser.setResourcePermissionRule, {
+          await ctx.runAction(api.accessManagement.setResourcePermissionRule, {
             scopeId: args.scopeId,
             subject: { type: "principal", principalId: args.principalId },
             resourceType: "app.projects",
@@ -1784,6 +1784,47 @@ describe("checkAccessControlSource", () => {
     );
     expect(formatAccessControlCheckResult(result)).toContain(
       'Use the catalog key "app.projects:read"',
+    );
+  });
+
+  test("reports catalog grouping keys used as runtime permissions", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": `{
+        "permissions": {
+          "app.projects:manage": { "name": "Manage projects" },
+          "app.projects:*": { "name": "All project actions" },
+        },
+      }`,
+      "convex/projects.ts": `
+        import { accessMutation, accessQuery } from "./access";
+
+        export const list = accessQuery({
+          permission: "app.projects:*",
+          handler: async () => [],
+        });
+
+        export const update = accessMutation({
+          permission: "app.projects:manage",
+          handler: async () => null,
+        });
+      `,
+    });
+
+    const result = checkAccessControlSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      {
+        code: "runtime_superset_permission",
+        filePath: "convex/projects.ts",
+      },
+      {
+        code: "runtime_superset_permission",
+        filePath: "convex/projects.ts",
+      },
+    ]);
+    expect(formatAccessControlCheckResult(result)).toContain(
+      "Check a concrete permission action at runtime",
     );
   });
 

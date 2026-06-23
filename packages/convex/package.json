@@ -9,13 +9,21 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
-    "./access-admin": {
-      "types": "./dist/client/access-admin.d.ts",
-      "default": "./dist/client/access-admin.js"
+    "./access-management": {
+      "types": "./dist/client/access-management.d.ts",
+      "default": "./dist/client/access-management.js"
     },
-    "./access-admin.js": {
-      "types": "./dist/client/access-admin.d.ts",
-      "default": "./dist/client/access-admin.js"
+    "./access-management.js": {
+      "types": "./dist/client/access-management.d.ts",
+      "default": "./dist/client/access-management.js"
+    },
+    "./access-service": {
+      "types": "./dist/client/access-service.d.ts",
+      "default": "./dist/client/access-service.js"
+    },
+    "./access-service.js": {
+      "types": "./dist/client/access-service.d.ts",
+      "default": "./dist/client/access-service.js"
     },
     "./http": {
       "types": "./dist/client/http.d.ts",

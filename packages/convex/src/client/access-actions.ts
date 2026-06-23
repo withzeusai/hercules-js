@@ -4,7 +4,7 @@ import { ConvexError, v } from "convex/values";
 import type { AccessDeploymentEntryMirrorResult, Membership, ScopeRoleSummary } from "./index";
 
 const DEFAULT_API_VERSION = "2025-12-09";
-const DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR = "HERCULES_API_KEY";
+const DEFAULT_ACCESS_CONTROL_API_KEY_ENV_VAR = "HERCULES_API_KEY";
 
 type WriteResult = Record<string, unknown>;
 export type AccessBindingAppliesTo = "self" | "self_and_descendants";
@@ -161,24 +161,29 @@ export type AccessUserExceptionsResult = {
   }>;
 };
 
-export type AccessAdminSdkClient = {
+export type AccessControlSdkClient = {
   post<T>(path: string, options: { body: Record<string, unknown> }): Promise<T>;
 };
 
-type AccessAdminApiOptions = {
+export type AccessControlApiOptions = {
   apiKey?: string;
   apiKeyEnvVar?: string;
   apiVersion?: typeof DEFAULT_API_VERSION;
-  client?: AccessAdminSdkClient;
+  client?: AccessControlSdkClient;
 };
 
-export type CreateAccessAdminActionsOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & {
+export type CreateAccessServiceActionsOptions<DataModel extends GenericDataModel> =
+  AccessControlApiOptions & {
     internalAction: ActionBuilder<DataModel, "internal">;
   };
 
-export type CreateAccessUserActionsOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & {
+export type CreateAccessManagementActionsOptions<DataModel extends GenericDataModel> =
+  AccessControlApiOptions & {
+    authenticatedAction: ActionBuilder<DataModel, "public">;
+  };
+
+export type CreateDeploymentEntryActionOptions<DataModel extends GenericDataModel> =
+  AccessControlApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
     getDeploymentEntryStatus?: (
       ctx: GenericActionCtx<DataModel>,
@@ -238,7 +243,7 @@ export type CreateAccessScopeContext = {
 };
 
 export type CreateAccessScopeActionOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & {
+  AccessControlApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
     canCreateScope: (
       ctx: CreateAccessScopeContext,
@@ -267,7 +272,7 @@ export type ResourceCreatorBootstrapResult =
     };
 
 export type CreateResourceCreatorBootstrapActionOptions<DataModel extends GenericDataModel> =
-  AccessAdminApiOptions & {
+  AccessControlApiOptions & {
     authenticatedAction: ActionBuilder<DataModel, "public">;
     resourceType: string;
     managerRoleKey: string;
@@ -287,10 +292,20 @@ export type CreateResourceCreatorBootstrapActionOptions<DataModel extends Generi
     ) => Promise<void>;
   };
 
-const optionalPrincipalRef = {
-  principalId: v.optional(v.string()),
-  herculesAuthUserId: v.optional(v.string()),
-};
+export type AccessRecipient =
+  | { type: "user"; herculesAuthUserId: string }
+  | { type: "principal"; principalId: string };
+
+const accessRecipientValidator = v.union(
+  v.object({
+    type: v.literal("user"),
+    herculesAuthUserId: v.string(),
+  }),
+  v.object({
+    type: v.literal("principal"),
+    principalId: v.string(),
+  }),
+);
 
 const optionalRoleRef = {
   roleId: v.optional(v.string()),
@@ -324,7 +339,7 @@ const resourceGrantReplacementValidator = v.object({
   expiresAt: v.optional(v.union(v.string(), v.null())),
 });
 const resourceGrantSubjectReplacementValidator = v.object({
-  ...optionalPrincipalRef,
+  recipient: accessRecipientValidator,
   grants: v.array(resourceGrantReplacementValidator),
 });
 const resourceRuleSubjectValidator = v.union(
@@ -348,15 +363,16 @@ const resourceRuleReplacementEffectValidator = v.union(
  * member lifecycle, admission rules, entry mode, and groups) plus the raw
  * reads backing them (group/resource-invitation lists, role overrides, user
  * exceptions). Each one calls the Hercules control plane, so it needs the
- * `HERCULES_API_KEY` secret. Wire it once in `convex/accessAdmin.ts` and
- * re-export the actions you use.
+ * `HERCULES_API_KEY` secret. Wire it in an internal `convex/accessService.ts`
+ * module only when the app needs trusted service automation, and re-export
+ * only the actions that workflow uses.
  *
  * These are internal service-authority actions. Do not re-export them as public
- * Convex actions. Use {@link createAccessUserActions} for public resource
+ * Convex actions. Use {@link createAccessManagementActions} for public resource
  * management by signed-in app users.
  */
-export function createAccessAdminActions<DataModel extends GenericDataModel>(
-  options: CreateAccessAdminActionsOptions<DataModel>,
+export function createAccessServiceActions<DataModel extends GenericDataModel>(
+  options: CreateAccessServiceActionsOptions<DataModel>,
 ) {
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const { internalAction } = options;
@@ -411,13 +427,13 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     assignRole: internalAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         ...optionalRoleRef,
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           ...roleRef(args),
           ...serviceActor,
         };
@@ -428,13 +444,13 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     removeRole: internalAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         ...optionalRoleRef,
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           ...roleRef(args),
           ...serviceActor,
         };
@@ -483,14 +499,14 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     setUserExceptions: internalAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         allow: v.array(v.string()),
         deny: v.array(v.string()),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           allow: args.allow,
           deny: args.deny,
           ...serviceActor,
@@ -502,7 +518,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     createResourceGrant: internalAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         resourceType: v.string(),
         resourceId: v.string(),
         roleKey: v.optional(v.string()),
@@ -515,7 +531,7 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
         requireExactResourceForDescendants(args);
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           resource_type: args.resourceType,
           resource_id: args.resourceId,
           role_key: args.roleKey,
@@ -559,13 +575,13 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     replaceMemberRoles: internalAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         roleKeys: v.array(v.string()),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           role_keys: memberRoleReplacementKeysBody(args.roleKeys),
           ...serviceActor,
         };
@@ -935,11 +951,11 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
     }),
 
     getUserExceptions: internalAction({
-      args: { scopeId: v.string(), ...optionalPrincipalRef },
+      args: { scopeId: v.string(), recipient: accessRecipientValidator },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           ...serviceActor,
         };
         const result = await callAccessControlApi("/v1/access-control/user-exceptions/get", body);
@@ -947,6 +963,35 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
       },
     }),
   };
+}
+
+/**
+ * Builds the deployment-admission action used by the managed auth callback.
+ * Keep this in the baseline access module so apps do not instantiate the full
+ * access-management action collection only to enter a deployment.
+ */
+export function createDeploymentEntryAction<DataModel extends GenericDataModel>(
+  options: CreateDeploymentEntryActionOptions<DataModel>,
+) {
+  const callAccessControlApi = makeAccessControlApiCaller(options);
+
+  return options.authenticatedAction({
+    args: { idToken: v.string() },
+    handler: async (ctx, args) => {
+      const idToken = normalizeIdToken(args.idToken);
+      if (options.getDeploymentEntryStatus) {
+        const mirror = await options.getDeploymentEntryStatus(ctx);
+        if (mirror.kind === "principal" && mirror.status === "active") {
+          return activeDeploymentEntryResultFromMirror(mirror);
+        }
+      }
+
+      const result = await callAccessControlApi("/v1/access-control/entry", {
+        id_token: idToken,
+      });
+      return normalizeAccessDeploymentEntryResult(result);
+    },
+  });
 }
 
 /**
@@ -959,31 +1004,13 @@ export function createAccessAdminActions<DataModel extends GenericDataModel>(
  * or subject id (for example `user.profile.sub`); the SDK rejects values that
  * are not JWT-shaped before calling the API.
  */
-export function createAccessUserActions<DataModel extends GenericDataModel>(
-  options: CreateAccessUserActionsOptions<DataModel>,
+export function createAccessManagementActions<DataModel extends GenericDataModel>(
+  options: CreateAccessManagementActionsOptions<DataModel>,
 ) {
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const { authenticatedAction } = options;
 
   return {
-    enterDeployment: authenticatedAction({
-      args: { idToken: v.string() },
-      handler: async (ctx, args) => {
-        const idToken = normalizeIdToken(args.idToken);
-        if (options.getDeploymentEntryStatus) {
-          const mirror = await options.getDeploymentEntryStatus(ctx);
-          if (mirror.kind === "principal" && mirror.status === "active") {
-            return activeDeploymentEntryResultFromMirror(mirror);
-          }
-        }
-
-        const result = await callAccessControlApi("/v1/access-control/entry", {
-          id_token: idToken,
-        });
-        return normalizeAccessDeploymentEntryResult(result);
-      },
-    }),
-
     setDefaultRole: authenticatedAction({
       args: { scopeId: v.string(), ...optionalRoleRef, idToken: v.string() },
       handler: async (_ctx, args) => {
@@ -1071,14 +1098,14 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     assignRole: authenticatedAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         ...optionalRoleRef,
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
@@ -1089,14 +1116,14 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     removeRole: authenticatedAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         ...optionalRoleRef,
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           ...roleRef(args),
           ...appUserActor(args.idToken),
         };
@@ -1147,7 +1174,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     setUserExceptions: authenticatedAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         allow: v.array(v.string()),
         deny: v.array(v.string()),
         idToken: v.string(),
@@ -1155,7 +1182,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           allow: args.allow,
           deny: args.deny,
           ...appUserActor(args.idToken),
@@ -1167,7 +1194,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     createResourceGrant: authenticatedAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         resourceType: v.string(),
         resourceId: v.string(),
         roleKey: v.optional(v.string()),
@@ -1181,7 +1208,7 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
         requireExactResourceForDescendants(args);
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           resource_type: args.resourceType,
           resource_id: args.resourceId,
           role_key: args.roleKey,
@@ -1226,14 +1253,14 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     replaceMemberRoles: authenticatedAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         roleKeys: v.array(v.string()),
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           role_keys: memberRoleReplacementKeysBody(args.roleKeys),
           ...appUserActor(args.idToken),
         };
@@ -1649,13 +1676,13 @@ export function createAccessUserActions<DataModel extends GenericDataModel>(
     getUserExceptions: authenticatedAction({
       args: {
         scopeId: v.string(),
-        ...optionalPrincipalRef,
+        recipient: accessRecipientValidator,
         idToken: v.string(),
       },
       handler: async (_ctx, args) => {
         const body = {
           scope_id: args.scopeId,
-          ...principalRef(args),
+          ...principalRef(args.recipient),
           ...appUserActor(args.idToken),
         };
         const result = await callAccessControlApi("/v1/access-control/user-exceptions/get", body);
@@ -1746,7 +1773,6 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
 
       const result = await callAccessControlApi("/v1/access-control/resource-grants/create", {
         scope_id: target.scopeId,
-        principal_id: undefined,
         hercules_auth_user_id: actorHerculesAuthUserId,
         resource_type: options.resourceType,
         resource_id: target.resourceId,
@@ -1783,7 +1809,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
 export async function createAccessScope(
   ctx: CreateAccessScopeContext,
   args: CreateAccessScopeArgs,
-  options: AccessAdminApiOptions = {},
+  options: AccessControlApiOptions = {},
 ): Promise<AccessScopeCreateResult> {
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
@@ -1800,7 +1826,7 @@ export async function createAccessScope(
 
 export async function createAccessInvitation(
   args: CreateAccessInvitationArgs,
-  options: AccessAdminApiOptions = {},
+  options: AccessControlApiOptions = {},
 ): Promise<AccessInvitationCreateResult> {
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const body = {
@@ -1819,11 +1845,12 @@ export async function createAccessInvitation(
  * Invite an email to a single resource, conferring a custom role or a single
  * permission scoped to that resource (not the whole scope). Pass exactly one of
  * `roleKey` / `permissionKey`. This helper always acts as the internal service.
- * Public app-user invitations are exposed by {@link createAccessUserActions}.
+ * Public app-user invitations are exposed by
+ * {@link createAccessManagementActions}.
  */
 export async function createResourceInvitation(
   args: CreateResourceInvitationArgs,
-  options: AccessAdminApiOptions = {},
+  options: AccessControlApiOptions = {},
 ): Promise<AccessInvitationCreateResult> {
   requireExactResourceForDescendants(args);
   const callAccessControlApi = makeAccessControlApiCaller(options);
@@ -1866,7 +1893,7 @@ function requireSpecificTargetForDescendants(args: {
 export async function acceptAccessInvitation(
   ctx: CreateAccessScopeContext,
   args: AcceptAccessInvitationArgs,
-  options: AccessAdminApiOptions = {},
+  options: AccessControlApiOptions = {},
 ): Promise<AccessInvitationAcceptResult> {
   const callAccessControlApi = makeAccessControlApiCaller(options);
   const identity = await ctx.auth.getUserIdentity();
@@ -1876,8 +1903,8 @@ export async function acceptAccessInvitation(
   return normalizeAccessInvitationAcceptResult(result);
 }
 
-function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
-  let client: AccessAdminSdkClient | undefined = options.client;
+function makeAccessControlApiCaller(options: AccessControlApiOptions) {
+  let client: AccessControlSdkClient | undefined = options.client;
 
   return async (path: string, body: Record<string, unknown>): Promise<WriteResult> => {
     client ??= createSdkClient(options);
@@ -1885,17 +1912,17 @@ function makeAccessControlApiCaller(options: AccessAdminApiOptions) {
   };
 }
 
-function createSdkClient(options: AccessAdminApiOptions): AccessAdminSdkClient {
-  const envVarName = options.apiKeyEnvVar ?? DEFAULT_ACCESS_ADMIN_API_KEY_ENV_VAR;
+function createSdkClient(options: AccessControlApiOptions): AccessControlSdkClient {
+  const envVarName = options.apiKeyEnvVar ?? DEFAULT_ACCESS_CONTROL_API_KEY_ENV_VAR;
   const apiKey = options.apiKey ?? process.env[envVarName];
   if (!apiKey) {
-    throw new Error(`${envVarName} is required for Access Control admin actions.`);
+    throw new Error(`${envVarName} is required for Hercules Access Control API calls.`);
   }
 
   return new Hercules({
     apiKey,
     apiVersion: options.apiVersion ?? DEFAULT_API_VERSION,
-  }) as unknown as AccessAdminSdkClient;
+  }) as unknown as AccessControlSdkClient;
 }
 
 function appUserActor(idToken: string) {
@@ -1930,11 +1957,10 @@ function normalizeIdToken(idToken: string): string {
   return normalizedIdToken;
 }
 
-function principalRef(args: { principalId?: string; herculesAuthUserId?: string }) {
-  return {
-    principal_id: args.principalId,
-    hercules_auth_user_id: args.herculesAuthUserId,
-  };
+function principalRef(recipient: AccessRecipient) {
+  return recipient.type === "user"
+    ? { hercules_auth_user_id: recipient.herculesAuthUserId }
+    : { principal_id: recipient.principalId };
 }
 
 function memberRoleReplacementKeysBody(roleKeys: string[]) {
@@ -1948,8 +1974,7 @@ function memberRoleReplacementKeysBody(roleKeys: string[]) {
 
 function resourceGrantReplacementSubjectsBody(
   subjects: Array<{
-    principalId?: string;
-    herculesAuthUserId?: string;
+    recipient: AccessRecipient;
     grants: Array<{
       roleKey?: string;
       permissionKey?: string;
@@ -1975,7 +2000,7 @@ function resourceGrantReplacementSubjectsBody(
     );
   }
   return subjects.map((subject) => ({
-    ...principalRef(subject),
+    ...principalRef(subject.recipient),
     grants: subject.grants.map((grant) => ({
       role_key: grant.roleKey,
       permission_key: grant.permissionKey,

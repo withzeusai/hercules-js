@@ -464,7 +464,7 @@ type BuilderCaller = (definition: unknown) => unknown;
 
 /**
  * Wires Hercules managed Access Control into a Convex app. Call once in
- * `convex/hercules.ts`, passing the generated `query`/`mutation`/`action`
+ * `convex/access.ts`, passing the generated `query`/`mutation`/`action`
  * builders and `components`, then re-export the returned builders.
  *
  * Returned builders:
@@ -483,8 +483,8 @@ type BuilderCaller = (definition: unknown) => unknown;
  * - `listScopeMembers`/`listScopeRoles`/`listScopePermissions`: complete
  *   mirrored admin reads for an in-app management screen. Each self-gates on
  *   the matching `system.*:read` permission and returns `[]` when the caller
- *   lacks it. Use `createAccessUserActions().listGrantableRoles` instead when
- *   choosing a role for a write at an exact target.
+ *   lacks it. Use `createAccessManagementActions().listGrantableRoles`
+ *   instead when choosing a role for a write at an exact target.
  *
  * Reads resolve against the app's local Access Control mirror, which lags the
  * control plane by a short projection-sync window after any change.
