@@ -2,6 +2,7 @@ const publicExports = [
   ["@usehercules/convex", "createIam"],
   ["@usehercules/convex/iam-management", "createIamManagementActions"],
   ["@usehercules/convex/iam-service", "createIamServiceActions"],
+  ["@usehercules/convex/http", "registerIamRoutes"],
 ];
 
 for (const [specifier, exportName] of publicExports) {

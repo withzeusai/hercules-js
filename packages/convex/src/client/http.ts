@@ -5,7 +5,7 @@ import {
   accessProjectionSyncPayloadSchema,
   type AccessProjectionSyncPayload,
   type SyncResponse,
-} from "../shared/sync";
+} from "../shared/sync.js";
 
 type ApplySyncReference = FunctionReference<
   "mutation",

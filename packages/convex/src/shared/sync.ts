@@ -44,7 +44,7 @@ export {
   projectionScopeDeltaSchema,
   projectionCatalogDeltaSchema,
   projectionUserDeltaSchema,
-} from "./projection-protocol";
+} from "./projection-protocol.js";
 
 export type {
   AccessProjectionSyncPayload,
@@ -79,13 +79,13 @@ export type {
   ProjectionEntityType,
   ProjectionCatalogChange,
   ProjectionScopeChange,
-} from "./projection-protocol";
+} from "./projection-protocol.js";
 
 // ── compatibility aliases for non-wire consumers ─────────────────────────────
 // `ScopeKind` is imported by client/index.ts and the generated component shape.
 // It is the same enum as the wire scope kind; alias it so those imports keep
 // resolving without depending on the protocol module's longer name.
-import type { AccessProjectionScopeKind } from "./projection-protocol";
+import type { AccessProjectionScopeKind } from "./projection-protocol.js";
 export type ScopeKind = AccessProjectionScopeKind;
 
 // ── mutation response contract ───────────────────────────────────────────────
