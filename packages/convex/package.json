@@ -9,21 +9,9 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
-    "./iam-management": {
-      "types": "./dist/client/iam-management.d.ts",
-      "default": "./dist/client/iam-management.js"
-    },
-    "./iam-management.js": {
-      "types": "./dist/client/iam-management.d.ts",
-      "default": "./dist/client/iam-management.js"
-    },
-    "./iam-service": {
-      "types": "./dist/client/iam-service.d.ts",
-      "default": "./dist/client/iam-service.js"
-    },
-    "./iam-service.js": {
-      "types": "./dist/client/iam-service.d.ts",
-      "default": "./dist/client/iam-service.js"
+    "./iam-helpers": {
+      "types": "./dist/client/iam-helpers.d.ts",
+      "default": "./dist/client/iam-helpers.js"
     },
     "./http": {
       "types": "./dist/client/http.d.ts",
@@ -68,7 +56,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc --project ./tsconfig.build.json && node ./scripts/check-esm-exports.mjs",
+    "clean": "rm -rf dist",
+    "build": "pnpm run clean && tsc --project ./tsconfig.build.json && node ./scripts/check-esm-exports.mjs",
     "dev": "tsc --project ./tsconfig.build.json --watch",
     "test": "vitest --run"
   },

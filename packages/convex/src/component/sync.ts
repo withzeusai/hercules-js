@@ -30,11 +30,11 @@ const mutation = mutationGeneric as MutationBuilder<DataModel, "public">;
 // fail closed on the timestamp, so a delayed schedule never over-grants.
 const expireRoleBindingReference = makeFunctionReference<
   "mutation",
-  { bindingId: string; expiresAt: number; updatedAt: number }
+  { bindingId: string; expiresAt: number; updatedAt: number; sourceVersion: number }
 >("sync:expireRoleBinding");
 const expirePermissionBindingReference = makeFunctionReference<
   "mutation",
-  { bindingId: string; expiresAt: number; updatedAt: number }
+  { bindingId: string; expiresAt: number; updatedAt: number; sourceVersion: number }
 >("sync:expirePermissionBinding");
 
 // Convex transactions have document-count limits. Reject an oversized aggregate
@@ -87,6 +87,7 @@ export const applySync = mutation({
     }
 
     const payload = parsed.data;
+    const sourceVersion = payload.sourceVersion;
     const state = await ctx.db.query("sync_state").unique();
 
     // Idempotency: a re-delivered event/snapshot with the same eventId is a
@@ -216,6 +217,7 @@ export const applySync = mutation({
           description: role.description,
           baseWildcard: role.baseWildcard,
           updatedAt: role.updatedAt,
+          sourceVersion,
         });
       }
       for (const permission of snapshot.catalog.permissions) {
@@ -228,6 +230,7 @@ export const applySync = mutation({
           classification: permission.classification,
           tenantAssignable: permission.tenantAssignable,
           updatedAt: permission.updatedAt,
+          sourceVersion,
         });
       }
       for (const rolePermission of snapshot.catalog.rolePermissions) {
@@ -236,12 +239,13 @@ export const applySync = mutation({
           permissionId: rolePermission.permissionId,
           effect: rolePermission.effect,
           updatedAt: rolePermission.updatedAt,
+          sourceVersion,
         });
       }
 
       // Deployment-wide users.
       for (const user of snapshot.users) {
-        await ctx.db.insert("users", { ...user });
+        await ctx.db.insert("users", { ...user, sourceVersion });
       }
 
       // Per-scope runtime state.
@@ -261,12 +265,14 @@ export const applySync = mutation({
             ...principal,
             memberCount:
               principal.type === "group" ? (groupMemberCounts.get(principal.principalId) ?? 0) : 0,
+            sourceVersion,
           });
         }
         for (const membership of scopeEntry.principalMemberships) {
           await ctx.db.insert("principal_memberships", {
             accessScopeId: scopeEntry.scope.accessScopeId,
             ...membership,
+            sourceVersion,
           });
         }
         // E4 (cross-scope escalation fence): write every embedded row pinned to
@@ -285,12 +291,14 @@ export const applySync = mutation({
             baseWildcard: role.baseWildcard,
             accessScopeId: enclosingScopeId,
             updatedAt: role.updatedAt,
+            sourceVersion,
           });
         }
         for (const override of scopeEntry.rolePermissionOverrides) {
           await ctx.db.insert("role_permission_overrides", {
             ...override,
             accessScopeId: enclosingScopeId,
+            sourceVersion,
           });
         }
         for (const binding of scopeEntry.roleBindings) {
@@ -300,8 +308,9 @@ export const applySync = mutation({
           await ctx.db.insert("role_bindings", {
             ...binding,
             accessScopeId: enclosingScopeId,
+            sourceVersion,
           });
-          await scheduleRoleBindingExpiration(binding);
+          await scheduleRoleBindingExpiration(binding, sourceVersion);
         }
         for (const binding of scopeEntry.permissionBindings) {
           if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
@@ -310,8 +319,9 @@ export const applySync = mutation({
           await ctx.db.insert("permission_bindings", {
             ...binding,
             accessScopeId: enclosingScopeId,
+            sourceVersion,
           });
-          await schedulePermissionBindingExpiration(binding);
+          await schedulePermissionBindingExpiration(binding, sourceVersion);
         }
       }
     }
@@ -536,9 +546,9 @@ export const applySync = mutation({
     }
 
     async function insertScope(scope: ProjectionScopeMetadata) {
-      await ctx.db.insert("scopes", { ...scope });
+      await ctx.db.insert("scopes", { ...scope, sourceVersion });
       if (scope.kind === "org" || scope.kind === "suite") {
-        await ctx.db.insert("organizations", organizationFromScope(scope));
+        await ctx.db.insert("organizations", organizationFromScope(scope, sourceVersion));
       }
     }
 
@@ -547,8 +557,9 @@ export const applySync = mutation({
         .query("scopes")
         .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scope.accessScopeId))
         .unique();
-      if (existing) await ctx.db.replace(existing._id, { ...scope });
-      else await ctx.db.insert("scopes", { ...scope });
+      const scopeRow = { ...scope, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, scopeRow);
+      else await ctx.db.insert("scopes", scopeRow);
 
       const organization = await ctx.db
         .query("organizations")
@@ -558,12 +569,48 @@ export const applySync = mutation({
         if (organization) await ctx.db.delete(organization._id);
         return;
       }
-      const row = organizationFromScope(scope);
+      const row = organizationFromScope(scope, sourceVersion);
       if (organization) await ctx.db.replace(organization._id, row);
       else await ctx.db.insert("organizations", row);
     }
 
     async function deleteScope(accessScopeId: string) {
+      for (const binding of await ctx.db
+        .query("permission_bindings")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect()) {
+        await ctx.db.delete(binding._id);
+      }
+      for (const binding of await ctx.db
+        .query("role_bindings")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect()) {
+        await ctx.db.delete(binding._id);
+      }
+      for (const override of await ctx.db
+        .query("role_permission_overrides")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect()) {
+        await ctx.db.delete(override._id);
+      }
+      for (const membership of await ctx.db
+        .query("principal_memberships")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect()) {
+        await ctx.db.delete(membership._id);
+      }
+      for (const principal of await ctx.db
+        .query("principals")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect()) {
+        await ctx.db.delete(principal._id);
+      }
+      for (const role of await ctx.db
+        .query("roles")
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
+        .collect()) {
+        await ctx.db.delete(role._id);
+      }
       const scope = await ctx.db
         .query("scopes")
         .withIndex("by_scope_id", (q) => q.eq("accessScopeId", accessScopeId))
@@ -590,9 +637,15 @@ export const applySync = mutation({
         .query("users")
         .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", user.herculesAuthUserId))
         .unique();
-      if (existing && existing.updatedAt >= user.updatedAt) return;
-      if (existing) await ctx.db.replace(existing._id, user);
-      else await ctx.db.insert("users", user);
+      if (existing && existing.updatedAt >= user.updatedAt) {
+        if (existing.sourceVersion !== sourceVersion) {
+          await ctx.db.patch(existing._id, { sourceVersion });
+        }
+        return;
+      }
+      const row = { ...user, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("users", row);
     }
 
     async function deleteUser(herculesAuthUserId: string) {
@@ -626,6 +679,7 @@ export const applySync = mutation({
         ...principal,
         memberCount:
           principal.type === "group" && existing?.type === "group" ? existing.memberCount : 0,
+        sourceVersion,
       };
       if (existing) await ctx.db.replace(existing._id, row);
       else await ctx.db.insert("principals", row);
@@ -688,7 +742,7 @@ export const applySync = mutation({
             .eq("memberPrincipalId", membership.memberPrincipalId),
         )
         .unique();
-      const row = { accessScopeId, ...membership };
+      const row = { accessScopeId, ...membership, sourceVersion };
       if (existing) await ctx.db.replace(existing._id, row);
       else {
         await ctx.db.insert("principal_memberships", row);
@@ -735,6 +789,7 @@ export const applySync = mutation({
       }
       await ctx.db.patch(group._id, {
         memberCount: Math.max(0, group.memberCount + delta),
+        sourceVersion,
       });
     }
 
@@ -752,8 +807,9 @@ export const applySync = mutation({
         .withIndex("by_role_id", (q) => q.eq("roleId", role.roleId))
         .unique();
       // Catalog roles carry NO accessScopeId.
-      if (existing) await ctx.db.replace(existing._id, role);
-      else await ctx.db.insert("roles", role);
+      const row = { ...role, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("roles", row);
     }
 
     async function upsertTenantRole(role: {
@@ -770,8 +826,9 @@ export const applySync = mutation({
         .query("roles")
         .withIndex("by_role_id", (q) => q.eq("roleId", role.roleId))
         .unique();
-      if (existing) await ctx.db.replace(existing._id, role);
-      else await ctx.db.insert("roles", role);
+      const row = { ...role, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("roles", row);
     }
 
     async function deleteRoleEverywhere(roleId: string) {
@@ -833,8 +890,9 @@ export const applySync = mutation({
         .query("permissions")
         .withIndex("by_permission_id", (q) => q.eq("permissionId", permission.permissionId))
         .unique();
-      if (existing) await ctx.db.replace(existing._id, permission);
-      else await ctx.db.insert("permissions", permission);
+      const row = { ...permission, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("permissions", row);
     }
 
     async function deletePermission(permissionId: string) {
@@ -878,8 +936,9 @@ export const applySync = mutation({
           q.eq("roleId", rolePermission.roleId).eq("permissionId", rolePermission.permissionId),
         )
         .unique();
-      if (existing) await ctx.db.replace(existing._id, rolePermission);
-      else await ctx.db.insert("role_permissions", rolePermission);
+      const row = { ...rolePermission, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("role_permissions", row);
     }
 
     async function deleteRolePermission(roleId: string, permissionId: string) {
@@ -908,8 +967,9 @@ export const applySync = mutation({
             .eq("permissionId", override.permissionId),
         )
         .unique();
-      if (existing) await ctx.db.replace(existing._id, override);
-      else await ctx.db.insert("role_permission_overrides", override);
+      const row = { ...override, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("role_permission_overrides", row);
     }
 
     async function deleteOverride(accessScopeId: string, roleId: string, permissionId: string) {
@@ -947,9 +1007,10 @@ export const applySync = mutation({
         if (existing) await ctx.db.delete(existing._id);
         return;
       }
-      if (existing) await ctx.db.replace(existing._id, binding);
-      else await ctx.db.insert("role_bindings", binding);
-      await scheduleRoleBindingExpiration(binding);
+      const row = { ...binding, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("role_bindings", row);
+      await scheduleRoleBindingExpiration(binding, sourceVersion);
     }
 
     async function deleteRoleBinding(bindingId: string) {
@@ -984,9 +1045,10 @@ export const applySync = mutation({
         if (existing) await ctx.db.delete(existing._id);
         return;
       }
-      if (existing) await ctx.db.replace(existing._id, binding);
-      else await ctx.db.insert("permission_bindings", binding);
-      await schedulePermissionBindingExpiration(binding);
+      const row = { ...binding, sourceVersion };
+      if (existing) await ctx.db.replace(existing._id, row);
+      else await ctx.db.insert("permission_bindings", row);
+      await schedulePermissionBindingExpiration(binding, sourceVersion);
     }
 
     async function deletePermissionBinding(bindingId: string) {
@@ -997,42 +1059,60 @@ export const applySync = mutation({
       if (binding) await ctx.db.delete(binding._id);
     }
 
-    async function scheduleRoleBindingExpiration(binding: {
-      bindingId: string;
-      expiresAt?: number;
-      updatedAt: number;
-    }) {
+    async function scheduleRoleBindingExpiration(
+      binding: {
+        bindingId: string;
+        expiresAt?: number;
+        updatedAt: number;
+      },
+      bindingSourceVersion: number,
+    ) {
       if (binding.expiresAt === undefined) return;
       await ctx.scheduler.runAt(binding.expiresAt, expireRoleBindingReference, {
         bindingId: binding.bindingId,
         expiresAt: binding.expiresAt,
         updatedAt: binding.updatedAt,
+        sourceVersion: bindingSourceVersion,
       });
     }
 
-    async function schedulePermissionBindingExpiration(binding: {
-      bindingId: string;
-      expiresAt?: number;
-      updatedAt: number;
-    }) {
+    async function schedulePermissionBindingExpiration(
+      binding: {
+        bindingId: string;
+        expiresAt?: number;
+        updatedAt: number;
+      },
+      bindingSourceVersion: number,
+    ) {
       if (binding.expiresAt === undefined) return;
       await ctx.scheduler.runAt(binding.expiresAt, expirePermissionBindingReference, {
         bindingId: binding.bindingId,
         expiresAt: binding.expiresAt,
         updatedAt: binding.updatedAt,
+        sourceVersion: bindingSourceVersion,
       });
     }
   },
 });
 
 export const expireRoleBinding = internalMutation({
-  args: { bindingId: v.string(), expiresAt: v.number(), updatedAt: v.number() },
+  args: {
+    bindingId: v.string(),
+    expiresAt: v.number(),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  },
   handler: async (ctx, args) => {
     const binding = await ctx.db
       .query("role_bindings")
       .withIndex("by_binding_id", (q) => q.eq("bindingId", args.bindingId))
       .unique();
-    if (!binding || binding.expiresAt !== args.expiresAt || binding.updatedAt !== args.updatedAt) {
+    if (
+      !binding ||
+      binding.expiresAt !== args.expiresAt ||
+      binding.updatedAt !== args.updatedAt ||
+      binding.sourceVersion !== args.sourceVersion
+    ) {
       return;
     }
     if (args.expiresAt > Date.now()) {
@@ -1044,13 +1124,23 @@ export const expireRoleBinding = internalMutation({
 });
 
 export const expirePermissionBinding = internalMutation({
-  args: { bindingId: v.string(), expiresAt: v.number(), updatedAt: v.number() },
+  args: {
+    bindingId: v.string(),
+    expiresAt: v.number(),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  },
   handler: async (ctx, args) => {
     const binding = await ctx.db
       .query("permission_bindings")
       .withIndex("by_binding_id", (q) => q.eq("bindingId", args.bindingId))
       .unique();
-    if (!binding || binding.expiresAt !== args.expiresAt || binding.updatedAt !== args.updatedAt) {
+    if (
+      !binding ||
+      binding.expiresAt !== args.expiresAt ||
+      binding.updatedAt !== args.updatedAt ||
+      binding.sourceVersion !== args.sourceVersion
+    ) {
       return;
     }
     if (args.expiresAt > Date.now()) {
@@ -1061,13 +1151,14 @@ export const expirePermissionBinding = internalMutation({
   },
 });
 
-function organizationFromScope(scope: ProjectionScopeMetadata) {
+function organizationFromScope(scope: ProjectionScopeMetadata, sourceVersion: number) {
   return {
     accessScopeId: scope.accessScopeId,
     name: scope.name,
     status: scope.status,
-    accountEntryMode: scope.accountEntryMode,
+    accessMode: scope.accessMode,
     updatedAt: scope.updatedAt,
+    sourceVersion,
   };
 }
 

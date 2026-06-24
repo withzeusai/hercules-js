@@ -219,7 +219,7 @@ function hierarchySnapshot(options: {
           name: "Default",
           kind: "default" as const,
           status: "active" as const,
-          accountEntryMode: "open" as const,
+          accessMode: "open" as const,
           defaultRoleId: "role_member",
           updatedAt: 1,
         },

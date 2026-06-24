@@ -1,14 +1,12 @@
 # @usehercules/convex
 
-Convex integration for Hercules managed IAM. The public model uses one term:
+Convex integration for Hercules-managed IAM. The public model uses one term:
 **tenant**. The default app tenant and additional product tenants use the same
 APIs.
 
-The package has three public entry points:
-
-- `@usehercules/convex`: authorization builders and mirrored reads.
-- `@usehercules/convex/iam-management`: signed-in user management actions.
-- `@usehercules/convex/iam-service`: trusted internal automation.
+Use this package for authorization builders, mirrored reads, webhook routes, and
+the fixed creator-bootstrap helper. Use the generated `@usehercules/sdk` client
+directly from Convex actions for IAM writes and REST reads.
 
 The generated `.d.ts` files are the exact TypeScript contract. Do not infer
 public behavior from component implementation files.
@@ -67,11 +65,9 @@ export {
 } from "@usehercules/convex";
 ```
 
-Keep this as the main IAM wiring file. Add `convex/iamManagement.ts` only when
-the app needs user-initiated management actions. Add `convex/iamService.ts`
-only for explicit trusted internal automation.
-
-IAM actions use Convex's default runtime. Do not add `"use node"`.
+Keep this as the main IAM wiring file. Add app-owned Convex action modules only
+when the app needs IAM writes. IAM actions use Convex's default runtime. Do not
+add `"use node"`.
 
 ## Catalog
 
@@ -103,8 +99,8 @@ permissions.
 
 - Runtime permission checks use concrete keys such as
   `app.documents:update`. Do not check `manage` or `*`.
-- Permission checks do not filter database rows. Queries must still select
-  rows belonging to the requested tenant and resource.
+- Permission checks do not filter database rows. Queries must still select rows
+  belonging to the requested tenant and resource.
 - Do not infer authorization from role names or `listMyRoles`.
 
 ## Authorization
@@ -118,8 +114,8 @@ optional `tenant` extractor defaults to the app's default tenant.
 | Existing row | `tenantFromDefaultResource(...)`       | `tenantFromResource(...)`       |
 | Child create | `tenantFromDefaultParentResource(...)` | `tenantFromParentResource(...)` |
 
-For an existing row, derive the tenant from the loaded row. Do not accept both
-a row id and a browser-supplied tenant id.
+For an existing row, derive the tenant from the loaded row. Do not accept both a
+row id and a browser-supplied tenant id.
 
 ```ts
 import { v } from "convex/values";
@@ -156,8 +152,8 @@ tenant: tenantFromResource("tasks", "taskId", {
 
 The target and ancestors are evaluated atomically. An applicable deny wins.
 
-`filterAuthorizedResources` filters a bounded page of app-owned rows by
-running a resource check for each row. It does not load or paginate app data.
+`filterAuthorizedResources` filters a bounded page of app-owned rows by running
+a resource check for each row. It does not load or paginate app data.
 
 ## Mirrored Reads
 
@@ -184,24 +180,18 @@ User and group reads are separate. Tenant APIs use `user`; group APIs use
 `member`.
 
 `listMyTenants` returns `{ tenants, nextCursor? }`. `listTenantUsers` returns
-`{ users, nextCursor? }`. `listTenantGroups` returns
-`{ groups, nextCursor? }`. Each page contains at most 100 records. Both include
-`directRoleGrants` with the full role grant shape and nullable expiry for each
-direct tenant role assignment. Effective `roles` may also include roles
-inherited through groups. `listTenantGroups` also includes the current direct
-`memberCount`.
+`{ users, nextCursor? }`. `listTenantGroups` returns `{ groups, nextCursor? }`.
+Each page contains at most 100 records. User and group rows include
+`directRoleGrants` with full role grant shape and nullable expiry. Effective
+`roles` may include roles inherited through groups. `listTenantGroups` includes
+the current direct `memberCount`.
+
 `listGroupMembers` returns `{ users, nextCursor? }`, `listUserGroups` returns
 `{ groups, nextCursor? }`, and `listDirectSubjectsForResource` returns
-`{ subjects, nextCursor? }`. These reads also cap pages at 100 records.
+`{ subjects, nextCursor? }`. These reads cap pages at 100 records.
 `getTenantRole` includes the description, base permissions, tenant overrides,
-and effective permissions.
-`listDirectSubjectsForResource` keeps each user or group as the containing
-subject and exposes its direct role or permission grant under `grant`.
-It requires `system.access.grants:read` in the tenant.
-`getResourcePermissionOverrides` returns the mirrored direct permission grants
-for one user, group, or role target.
-`explainAccess` requires `system.access.grants:read` and explains the same
-evaluator used by `hasPermission` and the IAM builders.
+and effective permissions. `listDirectSubjectsForResource` requires
+`system.access.grants:read` in the tenant.
 
 Select the default app tenant by `kind`, not array order:
 
@@ -211,267 +201,212 @@ const tenant = tenants.find(({ kind }) => kind === "default");
 if (!tenant) throw new Error("Default IAM tenant not found");
 ```
 
-`listTenantRoles` is the complete mirrored role catalog. Use
-`evaluateGrantableRoles` for a write picker because it returns only roles the
-current actor may grant at the exact target.
+`listTenantRoles` is the complete mirrored role catalog. Back tenant assignment
+pickers with `hercules.iam.tenants.grantableRoles` and exact resource pickers
+with `hercules.iam.tenants.resources.accessGrantingRoles`.
 
-## Role References
+## IAM Actions
 
-Every role reference is exactly one of:
-
-```ts
-{
-  id: "role_123";
-}
-{
-  key: "reviewer";
-}
-```
-
-Do not pass both fields. Do not pass optional `roleId` and `roleKey`
-properties.
-
-## User Management
-
-Create signed-in management actions in `convex/iamManagement.ts`:
+Create app-owned Convex actions for IAM writes and REST reads. Call the
+generated SDK directly.
 
 ```ts
-import { createIamManagementActions } from "@usehercules/convex/iam-management";
+import { Hercules } from "@usehercules/sdk";
+import { v } from "convex/values";
 import { authenticatedAction } from "./iam";
 
-export const {
-  createUser,
-  updateUser,
-  removeUser,
-  replaceUserRoles,
-  listUserPermissionOverrides,
-  replaceUserPermissionOverrides,
-} = createIamManagementActions({ authenticatedAction });
+const hercules = new Hercules({ apiKey: process.env.HERCULES_API_KEY! });
+
+export const updateTenantUser = authenticatedAction({
+  args: {
+    tenantId: v.string(),
+    userId: v.string(),
+    roleGrants: v.array(
+      v.object({
+        roleId: v.string(),
+        expiresAt: v.union(v.string(), v.null()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+    return await hercules.iam.tenants.users.update(args.userId, {
+      tenant_id: args.tenantId,
+      roles: args.roleGrants.map(({ roleId, expiresAt }) => ({
+        role: { id: roleId },
+        expires_at: expiresAt,
+      })),
+      user_token_identifier: identity.tokenIdentifier,
+    });
+  },
+});
 ```
 
-These are Convex actions. Frontend code calls them with `useAction`. Each
-management call requires the signed-in user's OIDC `idToken`. Keep controls
-disabled until the token exists.
-`listUserPermissionOverrides` returns the user's full direct permission grant
-objects, including grant IDs and nullable expiry.
+For `authenticatedAction` and `iamAction` handlers:
+
+1. Get `identity = await ctx.auth.getUserIdentity()`.
+2. Require `identity?.tokenIdentifier`.
+3. Pass `user_token_identifier: identity.tokenIdentifier` in the SDK request.
+
+Never accept `user_token_identifier` from action args. Browser code uses
+`useAction` and passes business args only. The browser never supplies ID tokens
+or token identifiers.
+
+SDK request and query fields use snake_case. Keep Convex action args app-facing,
+then map them to SDK fields such as `tenant_id`, `resource_type`,
+`access_mode`, `default_role`, `applies_to`, `expires_at`, and
+`user_token_identifier`.
+
+Pass the deepest path identifier as the positional argument. Put ancestor path
+fields in the request object. For example,
+`hercules.iam.tenants.users.update(userId, { tenant_id, ... })` takes `userId`
+positionally. It does not take `tenantId` and `userId` as two positional
+arguments.
+
+Trusted `internalAction` service workflows call the same SDK methods and pass
+`user_token_identifier: null`:
 
 ```ts
-await createUser({
-  tenantId,
-  userId,
-  grant: {
-    role: { key: "member" },
-    expiresAt: null,
-  },
-  idToken,
-});
+import { Hercules } from "@usehercules/sdk";
+import { v } from "convex/values";
+import { internalAction } from "./_generated/server";
 
-await replaceUserRoles({
-  tenantId,
-  userId,
-  grants: [
-    {
-      role: { key: "reviewer" },
-      expiresAt: "2026-07-01T00:00:00.000Z",
-    },
-  ],
-  idToken,
+const hercules = new Hercules({ apiKey: process.env.HERCULES_API_KEY! });
+
+export const unarchiveTenantForBilling = internalAction({
+  args: { tenantId: v.string() },
+  handler: async (_, args) =>
+    hercules.iam.tenants.unarchive(args.tenantId, {
+      user_token_identifier: null,
+    }),
 });
 ```
 
-## Groups
+## Round-3 IAM Operations
 
-The management and service factories expose:
+Use these generated SDK operations as the source of truth:
 
-- `createGroup`
-- `updateGroup`
-- `archiveGroup`
-- `addGroupMember`
-- `removeGroupMember`
-- `replaceGroupRoles`
-- `listGroupPermissionOverrides`
-- `replaceGroupPermissionOverrides`
+- Tenants: `hercules.iam.tenants.create`, `hercules.iam.tenants.update`,
+  `hercules.iam.tenants.archive`, `hercules.iam.tenants.unarchive`,
+  `hercules.iam.tenants.evaluateAccess`, and
+  `hercules.iam.tenants.grantableRoles`
+- Users: `hercules.iam.tenants.users.create`,
+  `hercules.iam.tenants.users.update`, and
+  `hercules.iam.tenants.users.remove`
+- User permission overrides:
+  `hercules.iam.tenants.users.permissionOverrides.get` and
+  `hercules.iam.tenants.users.permissionOverrides.update`
+- Tenant grants: `hercules.iam.tenants.grants.update` and
+  `hercules.iam.tenants.grants.delete`
+- Groups: `hercules.iam.tenants.groups.create`,
+  `hercules.iam.tenants.groups.update`,
+  `hercules.iam.tenants.groups.archive`, and
+  `hercules.iam.tenants.groups.unarchive`
+- Group members: `hercules.iam.tenants.groups.members.add` and
+  `hercules.iam.tenants.groups.members.remove`
+- Group permission overrides:
+  `hercules.iam.tenants.groups.permissionOverrides.get` and
+  `hercules.iam.tenants.groups.permissionOverrides.update`
+- Roles: `hercules.iam.tenants.roles.create`,
+  `hercules.iam.tenants.roles.update`,
+  `hercules.iam.tenants.roles.archive`, and
+  `hercules.iam.tenants.roles.unarchive`
+- Role permission overrides:
+  `hercules.iam.tenants.roles.permissionOverrides.get` and
+  `hercules.iam.tenants.roles.permissionOverrides.update`
+- Admission rules: `hercules.iam.tenants.admissionRules.list`,
+  `hercules.iam.tenants.admissionRules.create`,
+  `hercules.iam.tenants.admissionRules.update`,
+  `hercules.iam.tenants.admissionRules.archive`, and
+  `hercules.iam.tenants.admissionRules.unarchive`
+- Audit events: `hercules.iam.tenants.auditEvents.list`
+- Tenant invitations: `hercules.iam.tenants.invitations.list`,
+  `hercules.iam.tenants.invitations.createTenant`,
+  `hercules.iam.tenants.invitations.createResource`, and
+  `hercules.iam.tenants.invitations.revoke`
+- Invitation acceptance: `hercules.iam.invitations.accept`
+- Resource access: `hercules.iam.tenants.resources.accessGrantingRoles`,
+  `hercules.iam.tenants.resources.grants.create`,
+  `hercules.iam.tenants.resources.grants.update`, and
+  `hercules.iam.tenants.resources.permissionOverrides.update`
 
-```ts
-await updateGroup({
-  tenantId,
-  groupId,
-  action: "suspend",
-  idToken,
-});
+Role references are exactly `{ id }` or `{ key }`. Include `roles` in
+the generated user create/update and group update request objects for complete
+direct tenant role sets. Use `suspend` and `unsuspend` for user or group status.
 
-await addGroupMember({
-  tenantId,
-  groupId,
-  userId,
-  idToken,
-});
-```
+`hercules.iam.tenants.update` accepts request fields `name`, `access_mode`, and
+`default_role`. Access modes are `open`, `allowlisted_only`, `invite_only`, and
+`approval_required`.
 
-## Roles And Overrides
+`hercules.iam.tenants.invitations.list` accepts `cursor`, `limit`, `email`, and
+one optional typed `target`. Use `{ type: "tenant" }`,
+`{ type: "resource" }`, or
+`{ type: "resource", resource_type, resource_id }`; omit `target` to list all
+invitations. Use the returned `accept_url` for invite UI.
 
-The factories expose:
-
-- `createRole`
-- `updateRole`
-- `archiveRole`
-- `evaluateGrantableRoles`
-- `listRolePermissionOverrides`
-- `replaceRolePermissionOverrides`
-
-Use permission overrides for explicit allow/deny exceptions. Normal tenant
-access should come from roles. User permission override grants may include
-`expiresAt`. Role permission overrides modify the role definition and do not
-accept an expiry.
-
-## Admission Rules
-
-The factories expose:
-
-- `listAdmissionRules`
-- `createAdmissionRule`
-- `updateAdmissionRule`
-- `archiveAdmissionRule`
-
-Admission rules control who may enter a tenant. They do not replace
-authorization checks inside app functions.
-
-## Audit Events
-
-Use `listAuditEvents` for cursor-paginated IAM audit history. Audit events are
-REST reads and are not projected into the Convex mirror.
-
-## Invitations
-
-The factories expose:
-
-- `listInvitations`
-- `createInvitation`
-- `revokeInvitation`
-
-One invitation API handles tenant and resource targets:
-
-```ts
-await createInvitation({
-  tenantId,
-  email,
-  target: { type: "tenant" },
-  grants: [{ role: { key: "member" }, expiresAt: null }],
-  idToken,
-});
-
-await createInvitation({
-  tenantId,
-  email,
-  target: {
-    type: "resource",
-    resourceType: "app.documents",
-    resourceId: String(documentId),
-    appliesTo: "self",
-  },
-  grant: {
-    role: { key: "reviewer" },
-    expiresAt: "2026-07-01T00:00:00.000Z",
-  },
-  idToken,
-});
-
-// A resource invitation may instead confer one direct permission.
-await createInvitation({
-  tenantId,
-  email,
-  target: {
-    type: "resource",
-    resourceType: "app.documents",
-    resourceId: String(documentId),
-    appliesTo: "self",
-  },
-  grant: { permissionKey: "app.documents:read", expiresAt: null },
-  idToken,
-});
-```
-
-Use `acceptIamInvitation` from app-owned authenticated code. The invitee is
-identified by the invitation token and signed-in `idToken`.
-`listInvitations` accepts `cursor`, `limit`, `email`, `targetType`,
-`resourceType`, and `resourceId`. Pass `resourceType` and `resourceId`
-together. The result includes `nextCursor` when another page exists.
+App-owned audit action args may use `startTime`, `endTime`, and `status`. Map
+them to SDK query fields `start_time`, `end_time`, and `status` before calling
+`hercules.iam.tenants.auditEvents.list`.
 
 ## Resource Access
 
-The factories expose:
-
-- `createResourceGrant`
-- `replaceResourceGrants`
-- `replaceResourcePermissionOverrides`
-
-Use `updateGrant` to set or clear expiry and `deleteGrant` to revoke any role
-assignment, user permission override, or resource grant by grant ID. Pass
-`null` to make a grant non-expiring.
-
-Subjects are typed:
+SDK request subjects are typed:
 
 ```ts
-{
-  type: ("user", userId);
-}
-{
-  type: ("group", groupId);
-}
+{ type: "user", user_id: userId }
+{ type: "group", group_id: groupId }
 ```
 
-Role references remain `{ id }` or `{ key }`.
+Use additive resource roles for normal per-resource access. Use permission
+overrides only for exceptional allow/deny behavior.
 
 ```ts
-await createResourceGrant({
-  tenantId,
-  resourceType: "app.documents",
-  resourceId: String(documentId),
-  subject: { type: "user", userId },
+await hercules.iam.tenants.resources.grants.create(String(documentId), {
+  tenant_id: tenantId,
+  resource_type: "app.documents",
+  subject: { type: "user", user_id: userId },
   role: { key: "reviewer" },
-  appliesTo: "self",
-  idToken,
+  applies_to: "self",
+  user_token_identifier: identity.tokenIdentifier,
 });
 ```
 
-Use `replaceResourceGrants` for an atomic complete replacement. Use
-`replaceResourcePermissionOverrides` only for ordinary allow/deny exceptions,
-not to grant privileged management permissions. Resource permission overrides
-may include `expiresAt`.
+Use `hercules.iam.tenants.resources.accessGrantingRoles` for the exact resource
+picker and `hercules.iam.tenants.resources.grants.update` for an atomic
+complete editor save. Use `hercules.iam.tenants.grants.update` to set or clear
+`expires_at` and `hercules.iam.tenants.grants.delete` to revoke any role,
+permission, or resource grant by grant ID. Pass `null` to make a grant
+non-expiring.
 
-## Tenants And Entry
+## Product Tenants
 
-Use `createIamTenantAction` for app-controlled tenant creation:
+Create product tenants from an `authenticatedAction` and direct SDK call:
 
 ```ts
-import { createIamTenantAction } from "@usehercules/convex/iam-management";
-import { authenticatedAction } from "./iam";
+export const createTenant = authenticatedAction({
+  args: {
+    name: v.string(),
+    accessMode: v.optional(v.string()),
+    defaultRole: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
-export const createTenant = createIamTenantAction({
-  authenticatedAction,
-  canCreateTenant: async (ctx, args) => {
-    // App product-policy check.
-    return true;
+    return await hercules.iam.tenants.create({
+      name: args.name,
+      access_mode: args.accessMode,
+      default_role: args.defaultRole,
+      user_token_identifier: identity.tokenIdentifier,
+    });
   },
 });
 ```
 
 The creator becomes Owner automatically. Do not add a second signup role.
-
-`updateTenant` accepts `name`, `entryMode`, and `defaultRole`. At least one
-must be supplied:
-
-```ts
-await updateTenant({
-  tenantId,
-  defaultRole: { key: "member" },
-  idToken,
-});
-```
-
-Use `createDeploymentEntryAction` for the default app tenant. Use
-`evaluateTenantEntry` for an explicit tenant. Entry evaluation is not a
-replacement for backend permission checks.
+Create an app tenant metadata row only when the product needs extra fields.
+Store the returned `tenantId`.
 
 ## Resource Creator Bootstrap
 
@@ -485,39 +420,28 @@ to the trusted creator of a provisioning row.
 - An active row is never bootstrapped again.
 
 ```ts
+import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
+import { components, internal } from "./_generated/api";
+import { authenticatedAction } from "./iam";
+
 export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
   authenticatedAction,
   resourceType: "app.projects",
   managerRole: { key: "project_manager" },
   appliesTo: "self_and_descendants",
-  listMyTenants,
-  getBootstrapTarget: async (ctx, { resourceId }) =>
-    ctx.runQuery(internal.projects.getCreatorBootstrapTarget, {
-      projectId: resourceId as Id<"projects">,
-    }),
-  activateResource: async (ctx, args) =>
-    ctx.runMutation(internal.projects.activateCreatorBootstrap, args),
+  listMyTenants: components.hercules.queries.listMyTenants,
+  getBootstrapTarget: internal.projects.getCreatorBootstrapTarget,
+  activateResource: internal.projects.activateCreatorBootstrap,
 });
 ```
 
-## Trusted Service Actions
-
-Only trusted internal automation should use `iam-service`:
-
-```ts
-import { createIamServiceActions } from "@usehercules/convex/iam-service";
-import { internalAction } from "./_generated/server";
-
-export const { replaceUserRoles, createInvitation, createResourceGrant, archiveTenant } =
-  createIamServiceActions({ internalAction });
-```
-
-Never call generated `internal.iamService.*` actions from an exported public,
-authenticated, or IAM function, directly or through a helper.
-
-The management and service factories share the same resource actions. The
-management factory additionally exposes `evaluateTenantEntry`; the service
-factory additionally exposes `archiveTenant`.
+The three query and mutation options are generated `FunctionReference` values.
+The helper performs the `runQuery` and `runMutation` calls. Define
+`getCreatorBootstrapTarget` as an internal query that accepts
+`{ resourceId: string }` and returns
+`{ tenantId, resourceId, creatorHerculesAuthUserId, state } | null`. Define
+`activateCreatorBootstrap` as an internal mutation that accepts
+`{ resourceId, creatorHerculesAuthUserId, grant }` and returns `void`.
 
 ## Static Checker
 
@@ -529,14 +453,14 @@ hercules-convex-iam-check convex
 
 The checker catches deterministic source patterns such as raw exported Convex
 builders, optional tenant ids on tenant-owned rows, caller-supplied tenant ids
-for existing-row operations, and public paths to service authority.
+for existing-row operations, and public paths to trusted service authority.
 
-It does not prove runtime role decisions, row filtering, or control-plane
-writes are authorized.
+It does not prove runtime role decisions, row filtering, or control-plane writes
+are authorized.
 
 ## Operational Notes
 
-- Mirror reads may briefly lag a successful management write.
+- Mirror reads may briefly lag a successful SDK write.
 - Treat a not-yet-synchronized mirror state as loading, not as proof of
   authorization.
-- `HERCULES_API_KEY` remains the service credential name.
+- `HERCULES_API_KEY` remains the server-side service credential name.

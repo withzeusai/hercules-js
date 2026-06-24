@@ -169,7 +169,7 @@ type TenantDetail = {
   tenantName: string;
   kind: "default" | "custom";
   status: "active" | "disabled";
-  entryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
   updatedAt: number;
 };

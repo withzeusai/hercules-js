@@ -46,7 +46,7 @@ const snapshot: AccessProjectionSnapshot = {
         name: "Default",
         kind: "default",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 1,
       },

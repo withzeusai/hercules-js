@@ -38,15 +38,13 @@ export type AccessProjectionScopeKind = z.infer<typeof accessProjectionScopeKind
 export const accessProjectionScopeStatusSchema = z.enum(["active", "disabled"]);
 export type AccessProjectionScopeStatus = z.infer<typeof accessProjectionScopeStatusSchema>;
 
-export const accessProjectionAccountEntryModeSchema = z.enum([
+export const accessProjectionAccessModeSchema = z.enum([
   "open",
   "allowlisted_only",
   "invite_only",
   "approval_required",
 ]);
-export type AccessProjectionAccountEntryMode = z.infer<
-  typeof accessProjectionAccountEntryModeSchema
->;
+export type AccessProjectionAccessMode = z.infer<typeof accessProjectionAccessModeSchema>;
 
 // "blocked" and "pending_approval" are POLICY states (admission reconciliation
 // may move principals among active/pending_approval/blocked). "suspended" and
@@ -122,7 +120,7 @@ export const projectionScopeMetadataSchema = z.strictObject({
   name: z.string().min(1),
   kind: accessProjectionScopeKindSchema,
   status: accessProjectionScopeStatusSchema,
-  accountEntryMode: accessProjectionAccountEntryModeSchema,
+  accessMode: accessProjectionAccessModeSchema,
   defaultRoleId: z.string().min(1),
   updatedAt: z.number().int().nonnegative(),
 });

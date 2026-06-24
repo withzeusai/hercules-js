@@ -1,7 +1,6 @@
 const publicExports = [
   ["@usehercules/convex", "createIam"],
-  ["@usehercules/convex/iam-management", "createIamManagementActions"],
-  ["@usehercules/convex/iam-service", "createIamServiceActions"],
+  ["@usehercules/convex/iam-helpers", "createResourceCreatorBootstrapAction"],
   ["@usehercules/convex/http", "registerIamRoutes"],
 ];
 

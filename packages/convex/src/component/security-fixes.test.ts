@@ -106,6 +106,7 @@ describe("E3 - a blocked group must grant nothing", () => {
         classification: "delegable",
         tenantAssignable: true,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("principals", {
         accessScopeId: "as_default",
@@ -115,12 +116,14 @@ describe("E3 - a blocked group must grant nothing", () => {
         status: "active",
         joinedAt: now,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "as_default",
         groupPrincipalId: "pr_default_admins_group",
         memberPrincipalId: "pr_default_bob",
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("role_bindings", {
         bindingId: "rb_default_group_admin",
@@ -129,6 +132,7 @@ describe("E3 - a blocked group must grant nothing", () => {
         accessScopeId: "as_default",
         appliesTo: "self",
         updatedAt: now,
+        sourceVersion: 7,
       });
     });
 
@@ -181,12 +185,14 @@ describe("E3 - a blocked group must grant nothing", () => {
         classification: "delegable",
         tenantAssignable: true,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "as_default",
         groupPrincipalId: "pr_default_alice",
         memberPrincipalId: "pr_default_bob",
         updatedAt: now,
+        sourceVersion: 7,
       });
     });
 
@@ -305,6 +311,7 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
               effect: "allow" as const,
               // Foreign scope: this binding would land in as_org1.
               accessScopeId: "as_org1",
+              appliesTo: "self" as const,
               updatedAt: 1780444800000,
             },
           ],
@@ -456,12 +463,14 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
         classification: "delegable",
         tenantAssignable: true,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("role_permissions", {
         roleId: "role_editor",
         permissionId: "perm_widgets_approve",
         effect: "allow",
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("role_bindings", {
         bindingId: "rb_default_bob_editor_widget1",
@@ -472,6 +481,7 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
         resourceId: "widget_1",
         appliesTo: "self",
         updatedAt: now,
+        sourceVersion: 7,
       });
     });
 

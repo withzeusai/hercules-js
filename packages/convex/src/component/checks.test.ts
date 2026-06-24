@@ -2,24 +2,25 @@ import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
 import { componentModules as modules } from "../../test/component-modules";
-import { withV4SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
+import {
+  type ProjectionFixtureSnapshot,
+  withProjectionFixtures,
+} from "../../test/projection-fixtures";
 import { tenantFromResource } from "../client";
 import schema from "./schema";
 
-// The behavioral fixtures below are authored in the pre-v4 (schemaVersion 2)
-// shape; withV4SyncFixtures upgrades them to the v4 wire shape before forwarding
-// to the real applySync mutation. AccessProjectionSnapshot is the v4 type, so the
-// fixtures are typed with the legacy shape instead.
-type Snapshot = LegacySnapshot;
+// Compact semantic fixtures are materialized into the current projection wire
+// shape before they reach the real applySync mutation.
+type Snapshot = ProjectionFixtureSnapshot;
 
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
 const authorize = makeFunctionReference<"query">("checks:authorize");
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>
-  withV4SyncFixtures(baseConvexTest(schemaArg, modulesArg));
+  withProjectionFixtures(baseConvexTest(schemaArg, modulesArg));
 
-function emptyEntities() {
+function emptyState() {
   return {
     users: [],
     principals: [],
@@ -34,7 +35,6 @@ function emptyEntities() {
 function defaultScopeSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_seed",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -43,12 +43,12 @@ function defaultScopeSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice",
@@ -67,7 +67,7 @@ function defaultScopeSnapshot(): Snapshot {
           kind: "system",
           name: "Admin",
           // Narrowed Admin (enumerated): the producer downgrades Admin to
-          // "none" once explicit role-permission rows exist, so these legacy
+          // "none" once explicit role-permission rows exist, so these enumerated
           // enumerated assertions stay deterministic. Wildcard-Admin behavior
           // is covered by the dedicated wildcard suite below.
           wildcard: "none",
@@ -183,7 +183,6 @@ describe("authorize", () => {
 
     await t.mutation(applySync, {
       type: "access.projection.event",
-      schemaVersion: 2,
       eventId: "evt_disable",
       sourceVersion: 2,
       scope: {
@@ -191,12 +190,12 @@ describe("authorize", () => {
         name: "Default",
         kind: "default",
         status: "disabled",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 2,
       },
       changes: [],
-      entities: emptyEntities(),
+      state: emptyState(),
     });
 
     const decision = await t.query(authorize, {
@@ -263,7 +262,6 @@ describe("authorize", () => {
 
     await t.mutation(applySync, {
       type: "access.projection.event",
-      schemaVersion: 2,
       eventId: "evt_suspend",
       sourceVersion: 2,
       scope: {
@@ -271,13 +269,13 @@ describe("authorize", () => {
         name: "Default",
         kind: "default",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 2,
       },
       changes: [{ entityType: "principal", entityId: "p_alice", operation: "upsert" }],
-      entities: {
-        ...emptyEntities(),
+      state: {
+        ...emptyState(),
         principals: [
           {
             principalId: "p_alice",
@@ -309,7 +307,6 @@ describe("authorize", () => {
 
     const ingest = await t.mutation(applySync, {
       type: "access.projection.event",
-      schemaVersion: 2,
       eventId: "evt_remove",
       sourceVersion: 2,
       scope: {
@@ -317,13 +314,13 @@ describe("authorize", () => {
         name: "Default",
         kind: "default",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 2,
       },
       changes: [{ entityType: "principal", entityId: "p_alice", operation: "upsert" }],
-      entities: {
-        ...emptyEntities(),
+      state: {
+        ...emptyState(),
         principals: [
           {
             principalId: "p_alice",
@@ -354,13 +351,13 @@ describe("authorize", () => {
   test("per-instance role grant grants the role's permissions on that instance only", async () => {
     const t = convexTest(schema, modules);
     const snapshot = defaultScopeSnapshot();
-    snapshot.entities.roles[0]!.kind = "custom";
-    snapshot.entities.roles[0]!.key = "task_admin";
-    snapshot.entities.roles[0]!.name = "Task Admin";
+    snapshot.state.roles[0]!.kind = "custom";
+    snapshot.state.roles[0]!.key = "task_admin";
+    snapshot.state.roles[0]!.name = "Task Admin";
     // Replace the scope-level role grant with a role granted on a single
     // resource instance (relationKind="role" + objectType="resource"), the
     // shape the producer emits for grantResourceAccess(role).
-    snapshot.entities.grants = [
+    snapshot.state.grants = [
       {
         grantId: "grant_alice_admin_task_1",
         subjectPrincipalId: "p_alice",
@@ -414,10 +411,10 @@ describe("authorize", () => {
   test("resource role deny overrides another allow on the same instance", async () => {
     const t = convexTest(schema, modules);
     const snapshot = defaultScopeSnapshot();
-    snapshot.entities.roles[0]!.kind = "custom";
-    snapshot.entities.roles[0]!.key = "task_restricted";
-    snapshot.entities.roles[0]!.name = "Task Restricted";
-    snapshot.entities.rolePermissions = [
+    snapshot.state.roles[0]!.kind = "custom";
+    snapshot.state.roles[0]!.key = "task_restricted";
+    snapshot.state.roles[0]!.name = "Task Restricted";
+    snapshot.state.rolePermissions = [
       {
         roleId: "role_admin",
         permissionId: "perm_tasks_create",
@@ -426,7 +423,7 @@ describe("authorize", () => {
         updatedAt: 1,
       },
     ];
-    snapshot.entities.grants = [
+    snapshot.state.grants = [
       {
         grantId: "grant_alice_task_restricted",
         subjectPrincipalId: "p_alice",
@@ -496,7 +493,7 @@ describe("authorize — wildcard roles", () => {
   test("catalog owner_only classification is enforced end to end", async () => {
     const t = convexTest(schema, modules);
     const snapshot = wildcardSnapshot();
-    Object.assign(snapshot.entities.permissions[0]!, {
+    Object.assign(snapshot.state.permissions[0]!, {
       classification: "owner_only",
     });
     await t.mutation(applySync, snapshot);
@@ -548,7 +545,7 @@ describe("authorize — wildcard roles", () => {
     // A deny-only role_permission row does NOT narrow Admin (canonical
     // isAdminNarrowed): the role keeps wildcard "default" AND carries the deny.
     // The deny must short-circuit before the Admin default-allow.
-    snapshot.entities.rolePermissions.push({
+    snapshot.state.rolePermissions.push({
       roleId: "role_admin",
       permissionId: "perm_loans_read",
       accessScopeId: "scope_default",
@@ -602,7 +599,7 @@ describe("authorize — wildcard roles", () => {
   test("narrowed admin (wildcard none) falls back to enumerated rows", async () => {
     const t = convexTest(schema, modules);
     const snapshot = wildcardSnapshot();
-    const adminRole = snapshot.entities.roles.find((role) => role.roleId === "role_admin")!;
+    const adminRole = snapshot.state.roles.find((role) => role.roleId === "role_admin")!;
     adminRole.wildcard = "none";
     await t.mutation(applySync, snapshot);
 
@@ -621,7 +618,6 @@ describe("authorize — wildcard roles", () => {
     await t.mutation(applySync, wildcardSnapshot());
     await t.mutation(applySync, {
       type: "access.projection.snapshot",
-      schemaVersion: 2,
       eventId: "evt_org_admin_override",
       sourceVersion: 2,
       expectedIssuer: ISSUER,
@@ -630,12 +626,12 @@ describe("authorize — wildcard roles", () => {
         name: "Acme",
         kind: "org",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 2,
       },
-      entities: {
-        ...emptyEntities(),
+      state: {
+        ...emptyState(),
         principals: [
           {
             principalId: "p_org_admin",
@@ -756,7 +752,6 @@ type ResourceShareGrant = {
 function resourceShareSnapshot(grants: ResourceShareGrant[]): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_resource_share",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -765,12 +760,12 @@ function resourceShareSnapshot(grants: ResourceShareGrant[]): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_viewer",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice",
@@ -1046,21 +1041,6 @@ describe("authorize — resource grant fail-closed", () => {
   });
 });
 
-describe("schema gating", () => {
-  test("rejects a v1 payload at the mutation validator", async () => {
-    const t = convexTest(schema, modules);
-    const v1 = { ...wildcardSnapshot(), schemaVersion: 1 };
-    await expect(t.mutation(applySync, v1 as never)).rejects.toThrow();
-  });
-
-  // NOTE: the v2-era "rejects a role row missing wildcard" test was removed.
-  // v4 roles no longer carry a per-role `wildcard` wire field — a catalog role
-  // carries an intrinsic `baseWildcard` and the EFFECTIVE wildcard is derived
-  // per scope. The v4 payload validator (zod, applySync) rejects a role row
-  // missing baseWildcard with invalid_payload; that gating is covered by the
-  // projection-protocol parse tests.
-});
-
 // B1: the resource-type convention, end to end through the REAL client
 // extractor. The app stores rows in a `projects` table while the catalog names
 // the resource type `app.project` (the canonical `namespace.resourceType:action`
@@ -1169,7 +1149,6 @@ describe("app-level standing fence (H2)", () => {
 function wildcardSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_wildcard",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1178,12 +1157,12 @@ function wildcardSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_owner",
@@ -1408,7 +1387,6 @@ function wildcardSnapshot(): Snapshot {
 function projectCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_project_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1417,12 +1395,12 @@ function projectCatalogSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_archiver",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice",
@@ -1516,7 +1494,6 @@ function appStandingDefaultSnapshot(
 ): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_app_standing_default",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1525,12 +1502,12 @@ function appStandingDefaultSnapshot(
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_doc_reader",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals:
         appStatus === "missing"
           ? []
@@ -1582,7 +1559,6 @@ function appStandingDefaultSnapshot(
 function appStandingOrgSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_app_standing_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -1591,12 +1567,12 @@ function appStandingOrgSnapshot(): Snapshot {
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_doc_reader",
       updatedAt: 2,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice_org",
@@ -1626,7 +1602,6 @@ function appStandingOrgSnapshot(): Snapshot {
 function accessCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_access_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1635,12 +1610,12 @@ function accessCatalogSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_manager",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       // H2 cross-scope fence: org-scope checks also require an ACTIVE user
       // principal in the default (app) scope, so the catalog seeds alice's
       // app-scope standing alongside the deployment-wide catalog.
@@ -1740,7 +1715,6 @@ function accessCatalogSnapshot(): Snapshot {
 function acmeOrgSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_acme_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -1749,12 +1723,12 @@ function acmeOrgSnapshot(): Snapshot {
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_manager",
       updatedAt: 2,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice_acme",

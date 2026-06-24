@@ -128,7 +128,7 @@
         "name": "cd_demo",
         "kind": "default",
         "status": "active",
-        "accountEntryMode": "open",
+        "accessMode": "open",
         "defaultRoleId": "role_member",
         "updatedAt": 1767225600000
       },
@@ -189,7 +189,7 @@
         "name": "Acme Org",
         "kind": "org",
         "status": "active",
-        "accountEntryMode": "invite_only",
+        "accessMode": "invite_only",
         "defaultRoleId": "role_member",
         "updatedAt": 1767225600000
       },

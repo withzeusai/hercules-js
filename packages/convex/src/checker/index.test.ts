@@ -220,81 +220,750 @@ describe("checkIamSource", () => {
     expect(result).toMatchObject({ ok: true, filesChecked: 1, findings: [] });
   });
 
-  test("reports service-authority actions referenced by exported managed builders", () => {
+  test("allows direct authenticatedAction and iamAction SDK IAM calls with verified identity token", () => {
     const root = createFixture({
       "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
+      `,
+      "convex/projectMembers.ts": `
+        import { Hercules as HerculesClient } from "@usehercules/sdk";
+        import { authenticatedAction, iamAction } from "./iam";
+
+        const hercules = new HerculesClient({ apiKey: "test" });
+
+        export const invite = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            await hercules.iam.tenants.invitations.createTenant({
+              tenant_id: "tenant_1",
+              email: "member@example.com",
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const share = iamAction({
+          permission: "app.projects:share",
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity) throw new Error("Authentication required");
+            if (!identity.tokenIdentifier) throw new Error("Authentication required");
+            await hercules.iam.tenants.resources.grants.create("project_1", {
+              tenant_id: "tenant_1",
+              resource_type: "app.projects",
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test.each([
+    "@usehercules/sdk/client",
+    "@usehercules/sdk/client.js",
+    "@usehercules/sdk/client.mjs",
+    "@usehercules/sdk/index",
+    "@usehercules/sdk/index.js",
+    "@usehercules/sdk/index.mjs",
+  ])("checks IAM calls imported from %s", (moduleSpecifier) => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/access.ts": `
+        import { Hercules } from "${moduleSpecifier}";
+        import { authenticatedAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const evaluate = authenticatedAction({
+          args: {},
+          handler: async () => {
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: null,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(1);
+  });
+
+  test("allows fail-closed if/else identity and token presence checks", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/access.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const truthyTokenProperty = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (identity?.tokenIdentifier) {
+              // Continue with the verified token identifier.
+            } else {
+              throw new Error("Authentication required");
+            }
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const negatedTokenProperty = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) {
+              return null;
+            } else {
+              // Continue with the verified token identifier.
+            }
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const truthyToken = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            const tokenIdentifier = identity?.tokenIdentifier;
+            if (tokenIdentifier) {
+              // Continue with the verified token.
+            } else {
+              throw new Error("Authentication required");
+            }
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: tokenIdentifier,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("allows positional Stainless IAM requests and Function.call/apply", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/access.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+        const evaluateAccess = hercules.iam.tenants.evaluateAccess;
+        const updateUser = hercules.iam.tenants.users.update;
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+            await hercules.iam.tenants.users.update(args.userId, {
+              tenant_id: args.tenantId,
+              roles: [],
+              user_token_identifier: identity.tokenIdentifier,
+            });
+            await hercules.iam.tenants.resources.grants.create(args.resourceId, {
+              tenant_id: args.tenantId,
+              resource_type: "app.projects",
+              user_token_identifier: identity.tokenIdentifier,
+            });
+            await hercules.iam.tenants.auditEvents.list(args.tenantId, {
+              limit: 25,
+              user_token_identifier: identity.tokenIdentifier,
+            });
+            await updateUser.call(
+              hercules.iam.tenants.users,
+              args.userId,
+              {
+                tenant_id: args.tenantId,
+                roles: [],
+                user_token_identifier: identity.tokenIdentifier,
+              },
+            );
+            await evaluateAccess.apply(hercules.iam.tenants, [
+              "default",
+              { user_token_identifier: identity.tokenIdentifier },
+            ]);
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("rejects invalid positional Stainless IAM request payloads", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/access.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+        const evaluateAccess = hercules.iam.tenants.evaluateAccess;
+        const updateUser = hercules.iam.tenants.users.update;
+
+        export const invalid = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+
+            await hercules.iam.tenants.evaluateAccess("default", {
+              tenant_id: "default",
+            });
+            await hercules.iam.tenants.users.update(args.userId, {
+              tenant_id: args.tenantId,
+              user_token_identifier: args.userTokenIdentifier,
+            });
+            await hercules.iam.tenants.resources.grants.create(args.resourceId, args.request);
+            await hercules.iam.tenants.evaluateAccess(
+              "default",
+              { user_token_identifier: identity.tokenIdentifier },
+              { user_token_identifier: identity.tokenIdentifier },
+            );
+            await updateUser.call(
+              hercules.iam.tenants.users,
+              args.userId,
+              { tenant_id: args.tenantId, roles: [] },
+            );
+            await evaluateAccess.apply(hercules.iam.tenants, [
+              "default",
+              { user_token_identifier: args.userTokenIdentifier },
+            ]);
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(6);
+  });
+
+  test("reports invalid authenticated SDK IAM token provenance", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/projectMembers.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+        const constantToken = "issuer|user_1";
+
+        export const fromArgs = authenticatedAction({
+          args: {},
+          handler: async (_ctx, args) => hercules.iam.tenants.users.create({
+            tenant_id: "tenant_1",
+            user_token_identifier: args.userTokenIdentifier,
+          }),
+        });
+
+        export const fromConstant = authenticatedAction({
+          args: {},
+          handler: async () => hercules.iam.tenants.users.create({
+            tenant_id: "tenant_1",
+            user_token_identifier: constantToken,
+          }),
+        });
+
+        export const camelCase = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            await hercules.iam.tenants.users.create({
+              tenant_id: "tenant_1",
+              userTokenIdentifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const optionalIdentity = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            await hercules.iam.tenants.users.create({
+              tenant_id: "tenant_1",
+              user_token_identifier: identity?.tokenIdentifier,
+            });
+          },
+        });
+
+        export const identityOnly = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity) throw new Error("Authentication required");
+            await hercules.iam.tenants.users.create({
+              tenant_id: "tenant_1",
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const omitted = authenticatedAction({
+          args: {},
+          handler: async () => hercules.iam.tenants.users.create({
+            tenant_id: "tenant_1",
+          }),
+        });
+
+        export const dynamicSpread = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            await hercules.iam.tenants.users.create({
+              ...args,
+              tenant_id: "tenant_1",
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(7);
+    expect(formatIamCheckResult(result)).toContain("user_token_identifier");
+  });
+
+  test("invalidates checked identity and token facts after reassignment or mutation", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/access.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const reassignedIdentity = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            let identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            identity = await ctx.auth.getUserIdentity();
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const reassignedToken = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            let tokenIdentifier = identity.tokenIdentifier;
+            if (!tokenIdentifier) throw new Error("Authentication required");
+            tokenIdentifier = identity.tokenIdentifier;
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: tokenIdentifier,
+            });
+          },
+        });
+
+        export const mutatedIdentity = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            identity.tokenIdentifier = args.userTokenIdentifier;
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+
+        export const loopReassignedIdentity = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            let identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            for (const _value of args.values) {
+              identity = await ctx.auth.getUserIdentity();
+            }
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(4);
+  });
+
+  test("resolves SDK IAM aliases, destructuring, reexports, helpers, and static spreads", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/sdk/client.ts": `
+        import * as sdk from "@usehercules/sdk";
+
+        export const hercules = new sdk.Hercules({ apiKey: "test" });
+      `,
+      "convex/sdk/index.ts": `
+        export { hercules as client } from "./client.js";
+      `,
+      "convex/accessHelpers.ts": `
+        import { client } from "./sdk";
+
+        const { iam } = client;
+        const users = iam.tenants.users;
+
+        export async function createUser(ctx) {
+          const identity = await ctx.auth.getUserIdentity();
+          if (!identity) throw new Error("Authentication required");
+          const { tokenIdentifier } = identity;
+          if (!tokenIdentifier) throw new Error("Authentication required");
+          const authority = { user_token_identifier: tokenIdentifier };
+          return await users.create({
+            ...authority,
+            tenant_id: "tenant_1",
+            email: "member@example.com",
+          });
+        }
+      `,
+      "convex/projectMembers.ts": `
+        import { authenticatedAction } from "./iam";
+        import { createUser } from "./accessHelpers";
+
+        export const create = authenticatedAction({
+          args: {},
+          handler: async (ctx) => createUser(ctx),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("traces transitive local helpers outside the Convex source directory", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "lib/accessHelpers.ts": `
+        import { Hercules } from "@usehercules/sdk";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export async function updateUser(ctx, args) {
+          const identity = await ctx.auth.getUserIdentity();
+          if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+          return await hercules.iam.tenants.users.update(args.userId, {
+            tenant_id: args.tenantId,
+            user_token_identifier: args.userTokenIdentifier,
+          });
+        }
+      `,
+      "lib/index.ts": `
+        export { updateUser } from "./accessHelpers.js";
+      `,
+      "convex/projectMembers.ts": `
+        import { authenticatedAction } from "./iam";
+        import { updateUser } from "../lib";
+
+        export const update = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => updateUser(ctx, args),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unsafe_sdk_iam_call",
+          filePath: "lib/accessHelpers.ts",
+        }),
+      ]),
+    );
+  });
+
+  test("rejects helper parameters and unchecked nullable tokens", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/accessHelpers.ts": `
+        export async function createUser(hercules, token) {
+          return await hercules.iam.tenants.users.create({
+            tenant_id: "tenant_1",
+            user_token_identifier: token,
+          });
+        }
+      `,
+      "convex/projectMembers.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
+        import { createUser } from "./accessHelpers";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const parameter = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            await createUser(hercules, identity.tokenIdentifier);
+          },
+        });
+
+        export const unchecked = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            await hercules.iam.tenants.users.create({
+              tenant_id: "tenant_1",
+              user_token_identifier: identity.tokenIdentifier,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(2);
+  });
+
+  test("allows internalAction SDK IAM calls only with literal null service authority", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/service.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { internalAction } from "./_generated/server";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const archive = internalAction({
+          args: {},
+          handler: async () =>
+            hercules.iam.tenants.archive("tenant_1", {
+              user_token_identifier: null,
+            }),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
+  });
+
+  test("reports internalAction SDK IAM calls without literal null", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/service.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { internalAction } from "./_generated/server";
+
+        const hercules = new Hercules({ apiKey: "test" });
+        const serviceActor = null;
+
+        export const omitted = internalAction({
+          args: {},
+          handler: async () => hercules.iam.tenants.archive("tenant_1", {}),
+        });
+
+        export const alias = internalAction({
+          args: {},
+          handler: async () =>
+            hercules.iam.tenants.users.update("user_1", {
+              tenant_id: "tenant_1",
+              user_token_identifier: serviceActor,
+            }),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(2);
+  });
+
+  test("rejects publicAction and raw action SDK IAM calls", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/publicActions.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { action } from "./_generated/server";
+        import { publicAction } from "./iam";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const publicInvite = publicAction({
+          args: {},
+          handler: async () => hercules.iam.tenants.invitations.createTenant({
+            tenant_id: "tenant_1",
+            user_token_identifier: null,
+          }),
+        });
+
+        export const rawInvite = action({
+          args: {},
+          handler: async () => hercules.iam.tenants.invitations.createTenant({
+            tenant_id: "tenant_1",
+            user_token_identifier: null,
+          }),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(2);
+  });
+
+  test("rejects aliased, namespace, and reexported raw action SDK IAM calls", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/rawBuilders.ts": `
+        export { action as reexportedAction } from "./_generated/server.js";
+      `,
+      "convex/publicActions.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { action } from "./_generated/server";
+        import * as server from "./_generated/server";
+        import { reexportedAction } from "./rawBuilders.js";
+
+        const hercules = new Hercules({ apiKey: "test" });
+        const raw = action;
+
+        export const aliased = raw({
+          args: {},
+          handler: async () => hercules.iam.tenants.archive("tenant_1", {
+            user_token_identifier: null,
+          }),
+        });
+
+        export const namespaced = server.action({
+          args: {},
+          handler: async () => hercules.iam.tenants.archive("tenant_1", {
+            user_token_identifier: null,
+          }),
+        });
+
+        export const reexported = reexportedAction({
+          args: {},
+          handler: async () => hercules.iam.tenants.archive("tenant_1", {
+            user_token_identifier: null,
+          }),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(3);
+    expect(
+      result.findings.filter((finding) => finding.code === "raw_exported_convex_builder"),
+    ).toHaveLength(3);
+  });
+
+  test("traces public-to-internal SDK IAM authority", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/service.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { internalAction } from "./_generated/server";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const updateRoles = internalAction({
+          args: {},
+          handler: async () => hercules.iam.tenants.users.update("user_1", {
+            tenant_id: "tenant_1",
+            roles: [],
+            user_token_identifier: null,
+          }),
+        });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction, publicAction } from "./iam";
 
-        export const addMember = authenticatedAction({
+        export const authenticated = authenticatedAction({
           args: {},
-          handler: async (ctx) =>
-            ctx.runAction(internal.iamService.replaceUserRoles, {
-              tenantId: "scope_1",
-            }),
+          handler: async (ctx) => ctx.runAction(internal.service.updateRoles, {}),
         });
 
-        const removeMember = publicAction({
+        export const publicFlow = publicAction({
           args: {},
-          handler: async (ctx) =>
-            ctx.runAction(internal.iamService.removeUser, {
-              tenantId: "scope_1",
-            }),
-        });
-
-        export { removeMember };
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.ok).toBe(false);
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/projectMembers.ts",
-        }),
-      ]),
-    );
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(2);
-  });
-
-  test("tracks the current IAM service action surface", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import { createIamServiceActions } from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        export const {
-          deleteGrant,
-          listAdmissionRules,
-          listAuditEvents,
-          listGroupPermissionOverrides,
-          replaceGroupPermissionOverrides,
-        } = createIamServiceActions({ internalAction });
-      `,
-      "convex/actions.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const run = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            await ctx.runAction(internal.services.iamService.deleteGrant, args);
-            await ctx.runAction(internal.services.iamService.listAdmissionRules, args);
-            await ctx.runAction(internal.services.iamService.listAuditEvents, args);
-            await ctx.runAction(internal.services.iamService.listGroupPermissionOverrides, args);
-            await ctx.runAction(internal.services.iamService.replaceGroupPermissionOverrides, args);
-          },
+          handler: async (ctx) => ctx.runAction(internal.service.updateRoles, {}),
         });
       `,
     });
@@ -302,324 +971,29 @@ describe("checkIamSource", () => {
     const result = checkIamSource({ cwd: root });
 
     expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(5);
-  });
-
-  test("reports service-authority references hidden behind same-file helpers", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { iamAction } from "./iam";
-
-        async function replaceAccess(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceResourcePermissionOverrides, args);
-        }
-
-        export const share = iamAction({
-          permission: "app.projects:share",
-          args: {},
-          handler: async (ctx, args) => replaceAccess(ctx, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/projects.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("reports service-authority calls hidden behind imported local helpers", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles } from "./accessHelpers";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => replaceUserRoles(ctx, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/accessHelpers.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("reports service-authority calls behind aliased and namespace public builders", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/aliased.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        const auth = authenticatedAction;
-        export const addMember = auth({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.replaceUserRoles, args),
-        });
-      `,
-      "convex/namespaced.ts": `
-        import { internal } from "./_generated/api";
-        import * as access from "./iam";
-
-        export const removeMember = access.authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.removeUser, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(2);
-  });
-
-  test("reports imported helper aliases through barrels and emitted js specifiers", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/helpers/iam.ts": `
-        import { internal } from "../_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/helpers/index.ts": `
-        export { replaceUserRoles } from "./iam.js";
-      `,
-      "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles as importedReplaceUserRoles } from "./helpers/index.js";
-
-        const delegated = importedReplaceUserRoles;
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => delegated(ctx, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/helpers/iam.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("reports service-authority calls through namespace-imported local helpers", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./iam";
-        import * as helpers from "./accessHelpers";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => helpers.replaceUserRoles(ctx, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/accessHelpers.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("reports standalone service-authority helpers imported from iam-service", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projectMembers.ts": `
-        import {
-          createIamInvitation as inviteMember,
-        } from "@usehercules/convex/iam-service";
-        import * as iamService from "@usehercules/convex/iam-service";
-        import { authenticatedAction } from "./iam";
-
-        export const invite = authenticatedAction({
-          args: {},
-          handler: async () =>
-            inviteMember({
-              tenantId: "scope_1",
-              email: "member@example.com",
-            }),
-        });
-
-        export const inviteToProject = authenticatedAction({
-          args: {},
-          handler: async () =>
-            iamService.createResourceInvitation({
-              tenantId: "scope_1",
-              email: "member@example.com",
-              resourceType: "app.projects",
-              resourceId: "project_1",
-              roleKey: "project_member",
-            }),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(2);
-  });
-
-  test("resolves builders and service helpers through src namespace barrels", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/iamBuilders.ts": `
-        export { authenticatedAction } from "./iam";
-      `,
-      "src/access/service.ts": `
-        export {
-          createIamInvitation as inviteMember,
-        } from "@usehercules/convex/iam-service";
-      `,
-      "src/access/index.ts": `
-        export * as service from "./service";
-      `,
-      "convex/projectMembers.ts": `
-        import * as access from "./iamBuilders";
-        import { service } from "../src/access";
-
-        export const invite = access.authenticatedAction({
-          args: {},
-          handler: async () =>
-            service.inviteMember({
-              tenantId: "scope_1",
-              email: "member@example.com",
-            }),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/projectMembers.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("resolves bound handlers from non-inline builder configs", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        const definition = {
-          args: {},
-          handler: replaceUserRoles.bind(undefined),
-        };
-
-        export const update = authenticatedAction(definition);
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
     ).toHaveLength(1);
   });
 
-  test("uses final static config properties after object spreads", () => {
+  test("allows the resource creator bootstrap helper exception", () => {
     const root = createFixture({
       "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
+      "convex/resources.ts": `
+        import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
+        import { api, internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        const serviceConfig = {
-          args: {},
-          handler: replaceUserRoles,
-        };
-        const publicConfig = {
-          ...serviceConfig,
-          handler: async () => null,
-        };
-
-        export const update = authenticatedAction(publicConfig);
+        export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
+          authenticatedAction,
+          resourceType: "app.projects",
+          managerRole: { key: "project_manager" },
+          appliesTo: "self_and_descendants",
+          listMyTenants: api.iam.listMyTenants,
+          getBootstrapTarget: internal.projects.getCreatorBootstrapTarget,
+          activateResource: internal.projects.activateCreatorBootstrap,
+        });
       `,
     });
 
@@ -628,26 +1002,32 @@ describe("checkIamSource", () => {
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
-  test("resolves statically returned handler callbacks", () => {
+  test("reports SDK IAM calls inside resource creator bootstrap config expressions", () => {
     const root = createFixture({
       "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
       `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
+      "convex/resources.ts": `
+        import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
+        import { Hercules } from "@usehercules/sdk";
+        import { api, internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function removeUser(ctx, args) {
-          return await ctx.runAction(internal.iamService.removeUser, args);
-        }
+        const hercules = new Hercules({ apiKey: "test" });
 
-        function makeHandler() {
-          return removeUser;
-        }
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: makeHandler(),
+        export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
+          authenticatedAction,
+          resourceType: "app.projects",
+          managerRole: { key: "project_manager" },
+          appliesTo: "self_and_descendants",
+          listMyTenants: api.iam.listMyTenants,
+          getBootstrapTarget: (() => {
+            hercules.iam.tenants.archive("tenant_1", {
+              user_token_identifier: null,
+            });
+            return internal.projects.getCreatorBootstrapTarget;
+          })(),
+          activateResource: internal.projects.activateCreatorBootstrap,
         });
       `,
     });
@@ -655,860 +1035,8 @@ describe("checkIamSource", () => {
     const result = checkIamSource({ cwd: root });
 
     expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
     ).toHaveLength(1);
-  });
-
-  test("resolves destructured aliases and deterministic outer reassignments", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        async function removeUser(ctx, args) {
-          return await ctx.runAction(internal.iamService.removeUser, args);
-        }
-
-        const helpers = { replaceUserRoles };
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            const { replaceUserRoles: delegated } = helpers;
-            return await delegated(ctx, args);
-          },
-        });
-
-        export const removeMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            let delegated = async () => null;
-            {
-              delegated = removeUser;
-            }
-            return await delegated(ctx, args);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(2);
-  });
-
-  test("uses the latest deterministic lexical assignment", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async () => {
-            let delegated = replaceUserRoles;
-            {
-              delegated = async () => null;
-            }
-            return await delegated();
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("does not infer branch-only callable reassignments", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            let delegated = async () => null;
-            if (args.useServiceAuthority) {
-              delegated = replaceUserRoles;
-            }
-            return await delegated(ctx, args);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("does not infer switch or loop-only callable reassignments", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        export const throughSwitch = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            let delegated = async () => null;
-            switch (args.mode) {
-              case "service":
-                delegated = replaceUserRoles;
-                break;
-            }
-            return await delegated(ctx, args);
-          },
-        });
-
-        export const throughLoop = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            let delegated = async () => null;
-            for (const value of args.values) {
-              delegated = replaceUserRoles;
-            }
-            return await delegated(ctx, args);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("detects renamed modules built with createIamServiceActions", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import { createIamServiceActions } from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        export const { replaceUserRoles } = createIamServiceActions({ internalAction });
-      `,
-      "convex/projectMembers.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/projectMembers.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("detects service modules built through a namespace package import", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import * as iamService from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        export const { replaceUserRoles } = iamService.createIamServiceActions({ internalAction });
-      `,
-      "convex/projectMembers.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/projectMembers.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("marks only exports derived from createIamServiceActions", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import { createIamServiceActions } from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        const actions = createIamServiceActions({ internalAction });
-        export const { replaceUserRoles } = actions;
-        export const health = internalAction({
-          args: {},
-          handler: async () => "ok",
-        });
-      `,
-      "convex/projectMembers.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
-        });
-
-        export const health = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.health, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(1);
-  });
-
-  test("keeps safe properties separate when spreading admin actions", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import { createIamServiceActions } from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        const health = internalAction({
-          args: {},
-          handler: async () => "ok",
-        });
-        const actions = {
-          health,
-          ...createIamServiceActions({ internalAction }),
-        };
-
-        export const { replaceUserRoles, health: exportedHealth } = actions;
-      `,
-      "convex/projectMembers.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
-        });
-
-        export const health = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.exportedHealth, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(1);
-  });
-
-  test("ignores shadowed helpers and uncalled nested functions", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles } from "./accessHelpers";
-
-        export const list = authenticatedAction({
-          args: {},
-          handler: async () => {
-            const replaceUserRoles = async () => null;
-            await replaceUserRoles();
-
-            async function unused(ctx, args) {
-              return await ctx.runAction(internal.iamService.removeUser, args);
-            }
-
-            return [];
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("reports direct object-property and Function.call/apply indirections", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-
-        const helpers = { replaceUserRoles };
-
-        export const throughObject = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => helpers.replaceUserRoles(ctx, args),
-        });
-
-        export const throughCall = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => replaceUserRoles.call(undefined, ctx, args),
-        });
-
-        export const throughApply = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => replaceUserRoles.apply(undefined, [ctx, args]),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(1);
-  });
-
-  test("reports aliases of generated service-authority modules", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import { createIamServiceActions } from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        export const { replaceUserRoles } = createIamServiceActions({ internalAction });
-      `,
-      "convex/projectMembers.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        const rootIamService = internal.iamService;
-        const nestedIamService = internal.services.iamService;
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(rootIamService.replaceUserRoles, args),
-        });
-
-        export const addProjectMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(nestedIamService.replaceUserRoles, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(2);
-  });
-
-  test("detects aliased createIamServiceActions factories", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/services/iamService.ts": `
-        import { createIamServiceActions } from "@usehercules/convex/iam-service";
-        import { internalAction } from "../_generated/server";
-
-        const createServiceActions = createIamServiceActions;
-        export const { replaceUserRoles } = createServiceActions({ internalAction });
-      `,
-      "convex/projectMembers.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "public_service_authority_call",
-          filePath: "convex/projectMembers.ts",
-        }),
-      ]),
-    );
-  });
-
-  test("resolves default exports and import-then-export barrels", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/defaultHelper.ts": `
-        import { internal } from "./_generated/api";
-
-        export default async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/namedHelper.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function removeUser(ctx, args) {
-          return await ctx.runAction(internal.iamService.removeUser, args);
-        }
-      `,
-      "convex/barrel.ts": `
-        import { removeUser } from "./namedHelper";
-        export { removeUser };
-      `,
-      "convex/projectMembers.ts": `
-        import { authenticatedAction } from "./iam";
-        import replaceUserRoles from "./defaultHelper";
-        import { removeUser } from "./barrel";
-
-        export const addMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => replaceUserRoles(ctx, args),
-        });
-
-        export const removeMember = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => removeUser(ctx, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(2);
-  });
-
-  test("keeps dangerous closure bindings from declaration scope", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projects.ts": `
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles as dangerousReplaceUserRoles } from "./accessHelpers";
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => {
-            const dangerousClosure = async () => dangerousReplaceUserRoles(ctx, args);
-
-            {
-              const dangerousReplaceUserRoles = async () => null;
-              await dangerousClosure();
-            }
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(1);
-  });
-
-  test("keeps safe closure bindings from declaration scope", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projects.ts": `
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles as dangerousReplaceUserRoles } from "./accessHelpers";
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async () => {
-            const replaceUserRoles = async () => null;
-            const safeClosure = async () => replaceUserRoles();
-
-            {
-              const replaceUserRoles = dangerousReplaceUserRoles;
-              await safeClosure();
-            }
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("reports service-authority calls through shorthand handler properties", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        const handler = async (ctx, args) =>
-          ctx.runAction(internal.iamService.replaceUserRoles, args);
-
-        export const update = authenticatedAction({
-          args: {},
-          handler,
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(1);
-  });
-
-  test("ignores namespace helper imports shadowed in callable scope", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projects.ts": `
-        import { authenticatedAction } from "./iam";
-        import * as helpers from "./accessHelpers";
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async (helpers) => helpers.replaceUserRoles(),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("terminates on cyclic local callable aliases", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { authenticatedAction } from "./iam";
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async () => {
-            const first = second;
-            const second = first;
-            await first();
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("ignores loop and generated-internal lexical shadows", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles } from "./accessHelpers";
-
-        export const list = authenticatedAction({
-          args: {},
-          handler: async () => {
-            for (const replaceUserRoles of [async () => null]) {
-              await replaceUserRoles();
-            }
-
-            {
-              const internal = {
-                iamService: {
-                  replaceUserRoles: async () => null,
-                },
-              };
-              await internal.iamService.replaceUserRoles();
-            }
-
-            return [];
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("ignores generated-internal lexical shadows in switch clauses", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./iam";
-
-        export const update = authenticatedAction({
-          args: {},
-          handler: async (value) => {
-            switch (value) {
-              case "safe":
-                const internal = {
-                  iamService: {
-                    replaceUserRoles: async () => null,
-                  },
-                };
-                await internal.iamService.replaceUserRoles();
-                break;
-            }
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("treats passing a known dangerous callable as public exposure", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/accessHelpers.ts": `
-        import { internal } from "./_generated/api";
-
-        export async function replaceUserRoles(ctx, args) {
-          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
-        }
-      `,
-      "convex/projects.ts": `
-        import { authenticatedAction } from "./iam";
-        import { replaceUserRoles } from "./accessHelpers";
-
-        const invoke = (callback, ctx, args) => callback(ctx, args);
-        const ignore = (_callback) => null;
-
-        export const invoked = authenticatedAction({
-          args: {},
-          handler: async (ctx, args) => invoke(replaceUserRoles, ctx, args),
-        });
-
-        export const ignored = authenticatedAction({
-          args: {},
-          handler: async () => ignore(replaceUserRoles),
-        });
-
-        export const safe = authenticatedAction({
-          args: {},
-          handler: async () => ignore(async () => null),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    // The checker does not infer whether arbitrary higher-order functions call
-    // their arguments. Passing a statically dangerous callable from a public
-    // handler is itself treated as service-authority exposure.
-    expect(
-      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
-    ).toHaveLength(1);
-  });
-
-  test("does not treat unrelated builder-shaped imports as public roots", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/fakeBuilders.ts": `
-        export const authenticatedAction = (definition) => definition;
-      `,
-      "convex/named.ts": `
-        import { internal } from "./_generated/api";
-        import { authenticatedAction } from "./fakeBuilders";
-
-        export const run = authenticatedAction({
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.replaceUserRoles, args),
-        });
-      `,
-      "convex/namespaced.ts": `
-        import { internal } from "./_generated/api";
-        import * as fakeBuilders from "./fakeBuilders";
-
-        export const run = fakeBuilders.authenticatedAction({
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.replaceUserRoles, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("ignores unreachable service references in internal-only functions", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/projects.ts": `
-        import { internal } from "./_generated/api";
-        import { internalAction } from "./_generated/server";
-        import { authenticatedAction } from "./iam";
-
-        export const list = authenticatedAction({
-          args: {},
-          handler: async () => [],
-        });
-
-        export const repair = internalAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.replaceUserRoles, args),
-        });
-      `,
-      "convex/repairs.ts": `
-        import { internal } from "./_generated/api";
-        import { internalAction } from "./_generated/server";
-
-        export const repair = internalAction({
-          args: {},
-          handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.replaceUserRoles, args),
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
   test("describes successful checks as static and limited", () => {
@@ -1890,22 +1418,29 @@ describe("checkIamSource", () => {
         export { createIam } from "@usehercules/convex";
       `,
       "convex/projectMembers.ts": `
-        import { api } from "./_generated/api";
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction } from "./iam";
 
-        export async function promote(ctx, args) {
-          await ctx.runAction(api.iamManagement.replaceResourcePermissionOverrides, {
-            tenantId: args.tenantId,
-            subject: { type: "user", userId: args.userId },
-            resourceType: "app.projects",
-            target: { type: "resource", resourceId: args.projectId },
-            appliesTo: "self_and_descendants",
-            overrides: [{
-              permissionKey: "app.projects:manage_members",
-              effect: "allow",
-            }],
-            idToken: args.idToken,
-          });
-        }
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const promote = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+            await hercules.iam.tenants.resources.permissionOverrides.update(args.projectId, {
+              tenant_id: args.tenantId,
+              resource_type: "app.projects",
+              subject: { type: "user", user_id: args.userId },
+              applies_to: "self_and_descendants",
+              user_token_identifier: identity.tokenIdentifier,
+              overrides: [{
+                permission_key: "app.projects:manage_members",
+                effect: "allow",
+              }],
+            });
+          },
+        });
       `,
     });
 
@@ -1920,6 +1455,9 @@ describe("checkIamSource", () => {
         }),
       ]),
     );
+    expect(
+      result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
+    ).toHaveLength(0);
     expect(formatIamCheckResult(result)).toContain(
       "Do not grant manage_members, manage_access, system.*, or wildcard permissions through resource permission rules",
     );

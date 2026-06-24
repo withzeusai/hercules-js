@@ -117,7 +117,7 @@ export type TenantDetail = {
   tenantName: string;
   kind: TenantKind;
   status: "active" | "disabled";
-  entryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
   updatedAt: number;
 };
@@ -767,8 +767,8 @@ type BuilderCaller = (definition: unknown) => unknown;
  *   `listTenantPermissions`: complete
  *   mirrored admin reads for an in-app management screen. Each self-gates on
  *   the matching `system.*:read` permission and returns `[]` when the caller
- *   lacks it. Use `createIamManagementActions().listGrantableRoles`
- *   instead when choosing a role for a write at an exact target.
+ *   lacks it. Do not use mirror reads as write authorization; write paths
+ *   should call generated IAM SDK methods that enforce grantability.
  *
  * Reads resolve against the app's local IAM mirror, which lags the
  * control plane by a short projection-sync window after any change.

@@ -6,7 +6,7 @@ type RawConvexBuilder = "query" | "mutation" | "action";
 
 type RawBuilderCandidate = {
   builder: RawConvexBuilder;
-  builderNode: ts.Identifier;
+  builderNode: ts.Expression;
   functionName: string;
   isDirectExport: boolean;
   declaration: ts.Node;
@@ -26,7 +26,7 @@ export type IamCheckFinding = {
     | "existing_row_missing_resource_tenant"
     | "resource_capability_missing_resource"
     | "privileged_resource_permission_rule"
-    | "public_service_authority_call"
+    | "unsafe_sdk_iam_call"
     | "runtime_superset_permission"
     | "noncanonical_permission_key";
   severity: "error";
@@ -66,52 +66,21 @@ const publicBuilderNames = new Set<string>([
   "iamAction",
 ]);
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
-const ignoredDirectories = new Set(["_generated", "node_modules", "dist", ".git"]);
+const ignoredDirectories = new Set(["_generated", "node_modules", "dist", "build", ".git"]);
 const exemptFileNames = new Set(["iam.ts", "iam.tsx", "http.ts", "convex.config.ts"]);
 const exemptionMarkers = ["hercules-iam: allow-raw-builder", "hercules-iam: allow-raw-builders"];
 const iamPackageName = "@usehercules/convex";
-const iamServicePackageNames = new Set([
-  `${iamPackageName}/iam-service`,
-  `${iamPackageName}/iam-service.js`,
-]);
-const serviceAuthorityHelperNames = new Set(["createIamInvitation", "createResourceInvitation"]);
-const iamServiceActionNames = new Set([
-  "addGroupMember",
-  "archiveAdmissionRule",
-  "archiveGroup",
-  "archiveRole",
-  "archiveTenant",
-  "createAdmissionRule",
-  "createGroup",
-  "createInvitation",
-  "createResourceGrant",
-  "createRole",
-  "createUser",
-  "deleteGrant",
-  "evaluateGrantableRoles",
-  "listAdmissionRules",
-  "listAuditEvents",
-  "listGroupPermissionOverrides",
-  "listInvitations",
-  "listRolePermissionOverrides",
-  "listUserPermissionOverrides",
-  "removeGroupMember",
-  "removeUser",
-  "replaceGroupPermissionOverrides",
-  "replaceGroupRoles",
-  "replaceResourceGrants",
-  "replaceResourcePermissionOverrides",
-  "replaceRolePermissionOverrides",
-  "replaceUserPermissionOverrides",
-  "replaceUserRoles",
-  "revokeInvitation",
-  "updateAdmissionRule",
-  "updateGrant",
-  "updateGroup",
-  "updateRole",
-  "updateTenant",
-  "updateUser",
-]);
+const herculesSdkPackageName = "@usehercules/sdk";
+const iamHelpersPackageName = `${iamPackageName}/iam-helpers`;
+const resourceCreatorBootstrapHelperName = "createResourceCreatorBootstrapAction";
+const generatedServerModuleSpecifier = "convex:_generated/server";
+
+function isHerculesSdkModuleSpecifier(moduleSpecifier: string): boolean {
+  return (
+    moduleSpecifier === herculesSdkPackageName ||
+    moduleSpecifier.startsWith(`${herculesSdkPackageName}/`)
+  );
+}
 
 export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckResult {
   const cwd = resolve(options.cwd ?? process.cwd());
@@ -156,23 +125,17 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
 
   const sourceFiles = collectSourceFiles(convexDir);
   const appSourceFiles = collectAppSourceFiles(cwd, convexDir);
-  const authoritySourceFiles = [
-    ...new Set([
-      ...markerFiles,
-      ...collectAppSourceFiles(cwd, convexDir, {
-        includeExemptFiles: true,
-      }),
-    ]),
-  ];
   const tenantOwnedTables = collectTenantOwnedTables(sourceFiles);
   const catalogPermissionKeys = loadCatalogPermissionKeys(cwd);
   const fixedFiles = options.fixAuthenticated
     ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir))
         .length
     : 0;
+  const authoritySourceFiles = collectAuthoritySourceFiles(cwd, markerFiles);
+  const checkerSourceFiles = createCheckerSourceFiles(authoritySourceFiles);
   const findings = [
-    ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
-    ...checkPublicServiceAuthorityCalls(cwd, convexDir, markerFiles, authoritySourceFiles),
+    ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath, checkerSourceFiles)),
+    ...checkSdkIamCalls(cwd, convexDir, markerFiles, checkerSourceFiles),
     ...markerFiles.flatMap((filePath) => checkHardcodedTenantIds(cwd, filePath)),
     ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) => checkRuntimeSupersetPermissionKeys(cwd, filePath)),
@@ -225,7 +188,7 @@ function fixSourceFileToAuthenticatedBuilders(filePath: string, convexDir: strin
   }
 
   const exportedNames = collectExportedNames(sourceFile);
-  const candidates = collectRawBuilderCandidates(sourceFile, rawBuilderImports)
+  const candidates = collectDirectRawBuilderCandidates(sourceFile, rawBuilderImports)
     .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
     .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration));
   if (candidates.length === 0) {
@@ -292,16 +255,88 @@ function collectAppSourceFiles(
   return collectSourceFiles(srcDir, options);
 }
 
-function checkSourceFile(cwd: string, filePath: string): IamCheckFinding[] {
-  const sourceText = readFileSync(filePath, "utf8");
-  const sourceFile = createSourceFile(filePath, sourceText);
-  const rawBuilderImports = collectRawBuilderImports(sourceFile);
-  if (rawBuilderImports.size === 0) {
-    return [];
+function collectAuthoritySourceFiles(cwd: string, rootFilePaths: string[]): string[] {
+  const sourceFiles = new Set<string>();
+  const pending = [...rootFilePaths].sort((left, right) => left.localeCompare(right));
+
+  while (pending.length > 0) {
+    const filePath = pending.shift()!;
+    if (sourceFiles.has(filePath) || !isProjectSourceFile(cwd, filePath)) {
+      continue;
+    }
+    sourceFiles.add(filePath);
+
+    const sourceFile = createSourceFile(filePath, readFileSync(filePath, "utf8"));
+    for (const moduleSpecifier of collectRelativeModuleSpecifiers(sourceFile)) {
+      const targetFilePath = resolveExistingLocalSourceFile(cwd, filePath, moduleSpecifier);
+      if (targetFilePath && !sourceFiles.has(targetFilePath)) {
+        pending.push(targetFilePath);
+        pending.sort((left, right) => left.localeCompare(right));
+      }
+    }
   }
 
+  return [...sourceFiles].sort((left, right) => left.localeCompare(right));
+}
+
+function collectRelativeModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
+  const moduleSpecifiers = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (
+      (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text.startsWith(".")
+    ) {
+      moduleSpecifiers.add(statement.moduleSpecifier.text);
+    }
+  }
+  return [...moduleSpecifiers].sort((left, right) => left.localeCompare(right));
+}
+
+function resolveExistingLocalSourceFile(
+  cwd: string,
+  fromFilePath: string,
+  moduleSpecifier: string,
+): string | null {
+  for (const candidate of localSourceFileCandidates(fromFilePath, moduleSpecifier)) {
+    if (
+      isProjectSourceFile(cwd, candidate) &&
+      existsSync(candidate) &&
+      statSync(candidate).isFile()
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isProjectSourceFile(cwd: string, filePath: string): boolean {
+  if (!isSourceFile(filePath)) return false;
+  const relativePath = relative(cwd, filePath);
+  if (
+    relativePath === "" ||
+    relativePath.startsWith("..") ||
+    resolve(cwd, relativePath) !== filePath
+  ) {
+    return false;
+  }
+  return normalizePath(relativePath)
+    .split("/")
+    .every((segment) => !ignoredDirectories.has(segment));
+}
+
+function checkSourceFile(
+  cwd: string,
+  filePath: string,
+  sourceFiles: Map<string, CheckerSourceFile>,
+): IamCheckFinding[] {
+  const sourceText = readFileSync(filePath, "utf8");
+  const sourceFile =
+    sourceFiles.get(filePath)?.sourceFile ?? createSourceFile(filePath, sourceText);
+
   const exportedNames = collectExportedNames(sourceFile);
-  const candidates = collectRawBuilderCandidates(sourceFile, rawBuilderImports);
+  const candidates = collectStaticRawBuilderCandidates(sourceFile, sourceFiles);
   return candidates
     .filter((candidate) => candidate.isDirectExport || exportedNames.has(candidate.functionName))
     .filter((candidate) => !hasLocalExemption(sourceFile, sourceText, candidate.declaration))
@@ -328,7 +363,7 @@ function checkIamTenantPatterns(
     message:
       "Do not store a blank Hercules IAM tenant id. Create a Hercules IAM tenant first, then persist the returned tenantId.",
     suggestion:
-      "Use createIamTenant from @usehercules/convex/iam-management before inserting tenant metadata.",
+      "Create the tenant with hercules.iam.tenants.create from an authenticatedAction, then persist the returned tenantId.",
   });
 
   addPatternFinding({
@@ -638,7 +673,7 @@ function checkHardcodedTenantIds(cwd: string, filePath: string): IamCheckFinding
       /\b(?:[A-Z][A-Z0-9_]*_)?(?:(?:ACCESS_)?SCOPE|TENANT)_ID\b\s*=\s*["']01[A-Z0-9]{24}["']|\b(?:scopeId|tenantId)\s*:\s*["']01[A-Z0-9]{24}["']/,
     message: "Do not hardcode IAM tenant ids.",
     suggestion:
-      "Use the default tenant helper, or store tenant ids returned by createIamTenant on app rows and load them from the row.",
+      "Use the default tenant helper, or store tenant ids returned by hercules.iam.tenants.create on app rows and load them from the row.",
   });
 
   return findings;
@@ -651,7 +686,8 @@ function checkPrivilegedResourcePermissionRules(cwd: string, filePath: string): 
 
   function visit(node: ts.Node): void {
     if (ts.isObjectLiteralExpression(node)) {
-      const permission = getStringProperty(node, "permissionKey");
+      const permission =
+        getStringProperty(node, "permission_key") ?? getStringProperty(node, "permissionKey");
       const effect = getStringProperty(node, "effect");
       if (
         permission &&
@@ -706,6 +742,7 @@ type BindingValue =
   | {
       kind: "expression";
       expression: ts.Expression;
+      expressionInfo?: CheckerSourceFile;
       scope: LexicalScope | null;
       propertyPath: string[];
     }
@@ -733,18 +770,53 @@ type StaticValue =
       node: ts.Node;
       declarationScope: LexicalScope | null;
     }
+  | {
+      kind: "convexFunction";
+      info: CheckerSourceFile;
+      call: ts.CallExpression;
+      declarationScope: LexicalScope | null;
+      builder: ConvexFunctionBuilder;
+    }
+  | {
+      kind: "resourceCreatorBootstrap";
+      info: CheckerSourceFile;
+      call: ts.CallExpression;
+      declarationScope: LexicalScope | null;
+    }
   | { kind: "module"; target: ModuleTarget }
   | {
       kind: "known";
-      value: "publicBuilder" | "serviceAuthority" | "iamServiceFactory" | "iamServiceActions";
+      value:
+        | "herculesSdkConstructor"
+        | "herculesSdkClient"
+        | "herculesSdkIam"
+        | "resourceCreatorBootstrapFactory"
+        | ConvexFunctionBuilder;
     };
 
-function checkPublicServiceAuthorityCalls(
-  cwd: string,
-  convexDir: string,
-  rootFilePaths: string[],
-  filePaths: string[],
-): IamCheckFinding[] {
+type ConvexFunctionBuilder =
+  | "publicQuery"
+  | "publicMutation"
+  | "publicAction"
+  | "authenticatedQuery"
+  | "authenticatedMutation"
+  | "authenticatedAction"
+  | "iamQuery"
+  | "iamMutation"
+  | "iamAction"
+  | "rawAction"
+  | "internalAction";
+
+type SdkIamAuthorityMode = "user" | "service" | "reject";
+
+type AuthorityState = {
+  mode: SdkIamAuthorityMode;
+  ctxBindings: Set<ScopedBinding>;
+  checkedTokenBindings: Set<ScopedBinding>;
+  checkedIdentityTokenBindings: Set<ScopedBinding>;
+};
+
+function createCheckerSourceFiles(filePaths: string[]): Map<string, CheckerSourceFile> {
   const sourceFiles = new Map<string, CheckerSourceFile>();
   for (const filePath of filePaths) {
     const sourceFile = createSourceFile(filePath, readFileSync(filePath, "utf8"));
@@ -772,6 +844,15 @@ function checkPublicServiceAuthorityCalls(
     info.exportAllTargets = reExports.exportAllTargets;
   }
 
+  return sourceFiles;
+}
+
+function checkSdkIamCalls(
+  cwd: string,
+  convexDir: string,
+  rootFilePaths: string[],
+  sourceFiles: Map<string, CheckerSourceFile>,
+): IamCheckFinding[] {
   const convexModules = new Map<string, CheckerSourceFile>();
   for (const info of sourceFiles.values()) {
     const relativePath = normalizePath(relative(convexDir, info.filePath));
@@ -781,20 +862,28 @@ function checkPublicServiceAuthorityCalls(
   const findings: IamCheckFinding[] = [];
   const findingKeys = new Set<string>();
   const visitedCallables = new Set<string>();
+  const visitedConvexFunctions = new Set<string>();
+  const visitedResourceCreatorBootstraps = new Set<string>();
 
-  const addFinding = (info: CheckerSourceFile, node: ts.Node) => {
+  const addFinding = (info: CheckerSourceFile, node: ts.Node, state: AuthorityState) => {
     const key = `${info.filePath}:${node.getStart(info.sourceFile)}`;
     if (findingKeys.has(key)) return;
     findingKeys.add(key);
+    const message =
+      state.mode === "service"
+        ? "Internal Convex actions that call Hercules SDK IAM methods must pass literal user_token_identifier: null."
+        : state.mode === "user"
+          ? "Authenticated Convex actions that call Hercules SDK IAM methods must pass user_token_identifier from ctx.auth.getUserIdentity().tokenIdentifier after a fail-closed presence check."
+          : "Public or unauthenticated Convex flows must not call Hercules SDK IAM methods.";
     findings.push(
       createPatternFindingAtNode({
         cwd,
         sourceFile: info.sourceFile,
         node,
-        code: "public_service_authority_call",
-        message: "Exported public Convex functions must not call service-authority IAM actions.",
+        code: "unsafe_sdk_iam_call",
+        message,
         suggestion:
-          "Use createIamManagementActions for public IAM changes, or keep the createIamServiceActions caller internal.",
+          "Use authenticatedAction or iamAction with user_token_identifier from the action identity, or keep service IAM SDK calls in internalAction with user_token_identifier: null.",
       }),
     );
   };
@@ -803,8 +892,25 @@ function checkPublicServiceAuthorityCalls(
     info: CheckerSourceFile,
     node: ts.Node,
     declarationScope: LexicalScope | null,
+    state: AuthorityState,
+    options: {
+      markFirstParameterAsCtx?: boolean;
+      callArguments?: readonly ts.Expression[];
+      callInfo?: CheckerSourceFile;
+      callScope?: LexicalScope | null;
+    } = {},
   ): void => {
-    const callableKey = `${info.filePath}:${node.getStart(info.sourceFile)}`;
+    const ctxArgumentMask =
+      options.callArguments
+        ?.map((argument) =>
+          isActionCtxExpression(info, argument, options.callScope ?? null, state, new Set())
+            ? "1"
+            : "0",
+        )
+        .join("") ?? "";
+    const callableKey = `${info.filePath}:${node.getStart(info.sourceFile)}:${state.mode}:${
+      options.markFirstParameterAsCtx === true ? "handler" : "helper"
+    }:${ctxArgumentMask}`;
     if (visitedCallables.has(callableKey)) return;
     visitedCallables.add(callableKey);
 
@@ -813,16 +919,48 @@ function checkPublicServiceAuthorityCalls(
       parent: declarationScope,
       bindings: new Map(),
     };
-    for (const parameter of node.parameters) {
+    const functionState = cloneAuthorityState(state);
+    node.parameters.forEach((parameter, index) => {
       addBindingNames(functionScope, parameter.name, parameter, functionScope);
-    }
+      const argument = options.callArguments?.[index];
+      if (argument) {
+        for (const name of collectBindingNames(parameter.name)) {
+          const binding = functionScope.bindings.get(name);
+          if (binding) {
+            binding.value = {
+              kind: "expression",
+              expression: argument,
+              expressionInfo: options.callInfo ?? info,
+              scope: options.callScope ?? null,
+              propertyPath: [],
+            };
+          }
+        }
+      }
+      const markAsCtx =
+        (options.markFirstParameterAsCtx === true && index === 0) ||
+        (options.callArguments?.[index] !== undefined &&
+          isActionCtxExpression(
+            info,
+            options.callArguments[index]!,
+            options.callScope ?? null,
+            state,
+            new Set(),
+          ));
+      if (markAsCtx) {
+        for (const name of collectBindingNames(parameter.name)) {
+          const binding = functionScope.bindings.get(name);
+          if (binding) functionState.ctxBindings.add(binding);
+        }
+      }
+    });
 
     const body = node.body;
     if (!body) return;
     if (ts.isBlock(body)) {
-      visitBlock(info, body, functionScope);
+      visitBlock(info, body, functionScope, functionState);
     } else {
-      visitReachable(info, body, functionScope);
+      visitReachable(info, body, functionScope, functionState);
     }
   };
 
@@ -847,8 +985,9 @@ function checkPublicServiceAuthorityCalls(
       ];
     }
 
+    const expressionInfo = binding.value.expressionInfo ?? info;
     let values = resolveStaticValues(
-      info,
+      expressionInfo,
       binding.value.expression,
       binding.value.scope,
       nextResolving,
@@ -868,12 +1007,24 @@ function checkPublicServiceAuthorityCalls(
       const targetInfo = sourceFiles.get(target.filePath);
       return targetInfo ? resolveExportedValues(targetInfo, exportedName, resolving) : [];
     }
-    if (!iamServicePackageNames.has(target.moduleSpecifier)) return [];
-    if (serviceAuthorityHelperNames.has(exportedName)) {
-      return [{ kind: "known", value: "serviceAuthority" }];
+    if (isHerculesSdkModuleSpecifier(target.moduleSpecifier)) {
+      return exportedName === "Hercules" || exportedName === "default"
+        ? [{ kind: "known", value: "herculesSdkConstructor" }]
+        : [];
     }
-    if (exportedName === "createIamServiceActions") {
-      return [{ kind: "known", value: "iamServiceFactory" }];
+    if (
+      target.moduleSpecifier === iamHelpersPackageName &&
+      exportedName === resourceCreatorBootstrapHelperName
+    ) {
+      return [{ kind: "known", value: "resourceCreatorBootstrapFactory" }];
+    }
+    if (target.moduleSpecifier === generatedServerModuleSpecifier) {
+      if (exportedName === "action") {
+        return [{ kind: "known", value: "rawAction" }];
+      }
+      if (exportedName === "internalAction") {
+        return [{ kind: "known", value: "internalAction" }];
+      }
     }
     return [];
   }
@@ -888,7 +1039,7 @@ function checkPublicServiceAuthorityCalls(
     const nextResolving = new Set(resolving).add(symbolKey);
 
     if (isIamWiringSourceFile(info.filePath, convexDir) && publicBuilderNames.has(exportedName)) {
-      return [{ kind: "known", value: "publicBuilder" }];
+      return [{ kind: "known", value: exportedName as ConvexFunctionBuilder }];
     }
 
     const localName = info.exportBindings.get(exportedName);
@@ -977,9 +1128,16 @@ function checkPublicServiceAuthorityCalls(
       return resolveModuleExportValues(value.target, propertyName, resolving);
     }
     if (value.kind === "known") {
-      return value.value === "iamServiceActions" && iamServiceActionNames.has(propertyName)
-        ? [{ kind: "known", value: "serviceAuthority" }]
-        : [];
+      if (value.value === "herculesSdkClient" && propertyName === "iam") {
+        return [{ kind: "known", value: "herculesSdkIam" }];
+      }
+      if (value.value === "herculesSdkIam") {
+        return [{ kind: "known", value: "herculesSdkIam" }];
+      }
+      return [];
+    }
+    if (value.kind !== "node") {
+      return [];
     }
     if (ts.isObjectLiteralExpression(value.node)) {
       return resolveObjectPropertyValues(
@@ -1075,6 +1233,14 @@ function checkPublicServiceAuthorityCalls(
       );
     }
 
+    if (ts.isNewExpression(target)) {
+      return resolveStaticValues(info, target.expression, scope, resolving).flatMap((value) =>
+        value.kind === "known" && value.value === "herculesSdkConstructor"
+          ? [{ kind: "known", value: "herculesSdkClient" }]
+          : [],
+      );
+    }
+
     if (ts.isCallExpression(target)) {
       const callTarget = unwrapExpression(target.expression);
       if (ts.isPropertyAccessExpression(callTarget) && callTarget.name.text === "bind") {
@@ -1083,8 +1249,28 @@ function checkPublicServiceAuthorityCalls(
 
       const values: StaticValue[] = [];
       for (const callable of resolveStaticValues(info, target.expression, scope, resolving)) {
-        if (callable.kind === "known" && callable.value === "iamServiceFactory") {
-          values.push({ kind: "known", value: "iamServiceActions" });
+        const builder =
+          callable.kind === "known" ? convexBuilderForKnownValue(callable.value) : null;
+        if (builder) {
+          values.push({
+            kind: "convexFunction",
+            info,
+            call: target,
+            declarationScope: scope,
+            builder,
+          });
+        } else if (callable.kind === "known" && callable.value === "herculesSdkConstructor") {
+          values.push({ kind: "known", value: "herculesSdkClient" });
+        } else if (
+          callable.kind === "known" &&
+          callable.value === "resourceCreatorBootstrapFactory"
+        ) {
+          values.push({
+            kind: "resourceCreatorBootstrap",
+            info,
+            call: target,
+            declarationScope: scope,
+          });
         } else if (callable.kind === "node" && isCallableNode(callable.node)) {
           values.push(...resolveCallableReturnValues(callable, new Set(resolving)));
         }
@@ -1165,13 +1351,13 @@ function checkPublicServiceAuthorityCalls(
     return values;
   }
 
-  function isGeneratedServiceAuthorityReference(
+  function resolveInternalApiReferenceValues(
     node: ts.Node,
     info: CheckerSourceFile,
     scope: LexicalScope | null,
-  ): boolean {
+  ): StaticValue[] {
     const path = getInternalApiReferencePath(node, info, scope, new Set());
-    if (path === null || path.length === 0) return false;
+    if (path === null || path.length === 0) return [];
 
     let moduleInfo: CheckerSourceFile | undefined;
     let moduleSegmentCount = 0;
@@ -1185,29 +1371,38 @@ function checkPublicServiceAuthorityCalls(
     }
 
     if (!moduleInfo) {
-      return path[0] === "iamService";
+      return [];
     }
 
     const exportedPath = path.slice(moduleSegmentCount);
-    if (exportedPath.length === 0) return false;
+    if (exportedPath.length === 0) return [];
     let values = resolveExportedValues(moduleInfo, exportedPath[0]!, new Set());
     for (const propertyName of exportedPath.slice(1)) {
       values = values.flatMap((value) => resolvePropertyValues(value, propertyName, new Set()));
     }
-    return values.some((value) => value.kind === "known" && value.value === "serviceAuthority");
+    return values;
   }
 
   const visitCallableReference = (
     info: CheckerSourceFile,
     expression: ts.Expression,
     scope: LexicalScope | null,
-    resolving: Set<string> = new Set(),
+    state: AuthorityState,
+    options: {
+      markFirstParameterAsCtx?: boolean;
+      callArguments?: readonly ts.Expression[];
+      callInfo?: CheckerSourceFile;
+      callScope?: LexicalScope | null;
+      resolving?: Set<string>;
+    } = {},
   ): void => {
-    for (const value of resolveStaticValues(info, expression, scope, resolving)) {
-      if (value.kind === "known" && value.value === "serviceAuthority") {
-        addFinding(info, expression);
-      } else if (value.kind === "node" && isCallableNode(value.node)) {
-        visitCallableNode(value.info, value.node, value.declarationScope);
+    for (const value of resolveStaticValues(info, expression, scope, options.resolving)) {
+      if (value.kind === "node" && isCallableNode(value.node)) {
+        visitCallableNode(value.info, value.node, value.declarationScope, state, options);
+      } else if (value.kind === "convexFunction") {
+        visitConvexFunction(value, state);
+      } else if (value.kind === "resourceCreatorBootstrap") {
+        visitResourceCreatorBootstrap(value);
       }
     }
   };
@@ -1216,6 +1411,7 @@ function checkPublicServiceAuthorityCalls(
     info: CheckerSourceFile,
     block: ts.Block,
     parentScope: LexicalScope,
+    state: AuthorityState,
   ): void => {
     const scope: LexicalScope = {
       parent: parentScope,
@@ -1224,65 +1420,195 @@ function checkPublicServiceAuthorityCalls(
     collectDirectBlockBindings(block, scope);
     for (const statement of block.statements) {
       if (ts.isFunctionDeclaration(statement)) continue;
-      visitReachable(info, statement, scope);
+      visitReachable(info, statement, scope, state);
     }
   };
+
+  function invalidateMutationTarget(
+    info: CheckerSourceFile,
+    target: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    preserveDirectAssignment: boolean,
+  ): void {
+    const bindings = new Set<ScopedBinding>();
+    collectMutationTargetBindings(info, target, scope, bindings);
+    const unwrappedTarget = unwrapExpression(target);
+    const directAssignmentBinding =
+      preserveDirectAssignment && ts.isIdentifier(unwrappedTarget)
+        ? findAnyBinding(info, scope, unwrappedTarget.text)
+        : null;
+
+    for (const binding of bindings) {
+      state.checkedTokenBindings.delete(binding);
+      state.checkedIdentityTokenBindings.delete(binding);
+      if (binding === directAssignmentBinding) {
+        state.ctxBindings.delete(binding);
+      } else {
+        binding.value = { kind: "unknown" };
+      }
+    }
+  }
+
+  function collectMutationTargetBindings(
+    info: CheckerSourceFile,
+    target: ts.Expression,
+    scope: LexicalScope | null,
+    bindings: Set<ScopedBinding>,
+  ): void {
+    const unwrappedTarget = unwrapExpression(target);
+    if (ts.isIdentifier(unwrappedTarget)) {
+      const binding = findAnyBinding(info, scope, unwrappedTarget.text);
+      if (binding) bindings.add(binding);
+      return;
+    }
+    if (
+      ts.isPropertyAccessExpression(unwrappedTarget) ||
+      ts.isElementAccessExpression(unwrappedTarget)
+    ) {
+      collectMutationTargetBindings(info, unwrappedTarget.expression, scope, bindings);
+      return;
+    }
+    if (ts.isArrayLiteralExpression(unwrappedTarget)) {
+      for (const element of unwrappedTarget.elements) {
+        if (ts.isOmittedExpression(element)) continue;
+        collectMutationTargetBindings(
+          info,
+          ts.isSpreadElement(element) ? element.expression : element,
+          scope,
+          bindings,
+        );
+      }
+      return;
+    }
+    if (ts.isObjectLiteralExpression(unwrappedTarget)) {
+      for (const property of unwrappedTarget.properties) {
+        if (ts.isShorthandPropertyAssignment(property)) {
+          collectMutationTargetBindings(info, property.name, scope, bindings);
+        } else if (ts.isPropertyAssignment(property)) {
+          collectMutationTargetBindings(info, property.initializer, scope, bindings);
+        } else if (ts.isSpreadAssignment(property)) {
+          collectMutationTargetBindings(info, property.expression, scope, bindings);
+        }
+      }
+      return;
+    }
+    if (
+      ts.isBinaryExpression(unwrappedTarget) &&
+      unwrappedTarget.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      collectMutationTargetBindings(info, unwrappedTarget.left, scope, bindings);
+    }
+  }
 
   const visitReachable = (
     info: CheckerSourceFile,
     node: ts.Node,
     scope: LexicalScope | null,
+    state: AuthorityState,
   ): void => {
-    if (isGeneratedServiceAuthorityReference(node, info, scope)) {
-      addFinding(info, node);
-      return;
-    }
-
     if (isCallableNode(node)) return;
 
     if (ts.isIfStatement(node)) {
-      visitReachable(info, node.expression, scope);
+      visitReachable(info, node.expression, scope, state);
       const before = snapshotBindingValues(scope);
-      visitReachable(info, node.thenStatement, scope);
+      const beforeAuthority = snapshotAuthorityState(state);
+      const thenState = cloneAuthorityState(state);
+      for (const expression of truthyPresenceExpressions(node.expression)) {
+        addPresenceCheck(info, expression, scope, thenState);
+      }
+      visitReachable(info, node.thenStatement, scope, thenState);
       const afterThen = snapshotBindingValues(scope);
       restoreBindingValues(before);
+      const elseState = cloneAuthorityState(beforeAuthority);
+      for (const expression of falsyPresenceExpressions(node.expression)) {
+        addPresenceCheck(info, expression, scope, elseState);
+      }
       if (node.elseStatement) {
-        visitReachable(info, node.elseStatement, scope);
+        visitReachable(info, node.elseStatement, scope, elseState);
       }
       const afterElse = snapshotBindingValues(scope);
-      mergeBindingValues(before, [afterThen, afterElse]);
+      const continuingBindings: BindingSnapshot[] = [];
+      const continuingAuthority: AuthorityState[] = [];
+      if (statementCanFallThrough(node.thenStatement)) {
+        continuingBindings.push(afterThen);
+        continuingAuthority.push(thenState);
+      }
+      if (!node.elseStatement || statementCanFallThrough(node.elseStatement)) {
+        continuingBindings.push(afterElse);
+        continuingAuthority.push(elseState);
+      }
+      if (continuingBindings.length > 0) {
+        mergeBindingValues(before, continuingBindings);
+      } else {
+        restoreBindingValues(before);
+      }
+      if (continuingAuthority.length === 1) {
+        restoreAuthorityState(state, continuingAuthority[0]!);
+      } else {
+        restoreAuthorityState(
+          state,
+          conservativelyMergeAuthorityStates(beforeAuthority, continuingAuthority),
+        );
+      }
       return;
     }
 
     if (ts.isBlock(node)) {
-      visitBlock(info, node, scope ?? { parent: null, bindings: new Map() });
+      visitBlock(info, node, scope ?? { parent: null, bindings: new Map() }, state);
       return;
     }
 
     if (ts.isForStatement(node)) {
       const before = snapshotBindingValues(scope);
+      const beforeAuthority = snapshotAuthorityState(state);
       const loopScope = createChildScope(scope);
       if (node.initializer) {
         collectForInitializerBindings(node.initializer, loopScope);
-        visitReachable(info, node.initializer, loopScope);
+        visitReachable(info, node.initializer, loopScope, state);
       }
-      if (node.condition) visitReachable(info, node.condition, loopScope);
+      if (node.condition) visitReachable(info, node.condition, loopScope, state);
+      visitReachable(info, node.statement, loopScope, state);
       if (node.incrementor) {
-        visitReachable(info, node.incrementor, loopScope);
+        visitReachable(info, node.incrementor, loopScope, state);
       }
-      visitReachable(info, node.statement, loopScope);
+      const afterAuthority = snapshotAuthorityState(state);
       restoreBindingValues(before);
+      restoreAuthorityState(
+        state,
+        conservativelyMergeAuthorityStates(beforeAuthority, [afterAuthority]),
+      );
       return;
     }
 
     if (ts.isForInStatement(node) || ts.isForOfStatement(node)) {
       const before = snapshotBindingValues(scope);
+      const beforeAuthority = snapshotAuthorityState(state);
       const loopScope = createChildScope(scope);
       collectForInitializerBindings(node.initializer, loopScope);
-      visitReachable(info, node.initializer, loopScope);
-      visitReachable(info, node.expression, loopScope);
-      visitReachable(info, node.statement, loopScope);
+      visitReachable(info, node.initializer, loopScope, state);
+      visitReachable(info, node.expression, loopScope, state);
+      visitReachable(info, node.statement, loopScope, state);
+      const afterAuthority = snapshotAuthorityState(state);
       restoreBindingValues(before);
+      restoreAuthorityState(
+        state,
+        conservativelyMergeAuthorityStates(beforeAuthority, [afterAuthority]),
+      );
+      return;
+    }
+
+    if (ts.isWhileStatement(node) || ts.isDoStatement(node)) {
+      const before = snapshotBindingValues(scope);
+      const beforeAuthority = snapshotAuthorityState(state);
+      visitReachable(info, node.expression, scope, state);
+      visitReachable(info, node.statement, scope, state);
+      const afterAuthority = snapshotAuthorityState(state);
+      restoreBindingValues(before);
+      restoreAuthorityState(
+        state,
+        conservativelyMergeAuthorityStates(beforeAuthority, [afterAuthority]),
+      );
       return;
     }
 
@@ -1296,60 +1622,107 @@ function checkPublicServiceAuthorityCalls(
           catchScope,
         );
       }
-      visitReachable(info, node.block, catchScope);
+      visitReachable(info, node.block, catchScope, state);
       return;
     }
 
     if (ts.isCaseBlock(node)) {
       const before = snapshotBindingValues(scope);
+      const beforeAuthority = snapshotAuthorityState(state);
       const switchScope = createChildScope(scope);
       collectDirectCaseBlockBindings(node, switchScope);
       for (const clause of node.clauses) {
         if (ts.isCaseClause(clause)) {
-          visitReachable(info, clause.expression, switchScope);
+          visitReachable(info, clause.expression, switchScope, state);
         }
         for (const statement of clause.statements) {
-          visitReachable(info, statement, switchScope);
+          visitReachable(info, statement, switchScope, state);
         }
       }
+      const afterAuthority = snapshotAuthorityState(state);
       restoreBindingValues(before);
+      restoreAuthorityState(
+        state,
+        conservativelyMergeAuthorityStates(beforeAuthority, [afterAuthority]),
+      );
       return;
     }
 
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      visitReachable(info, node.right, scope);
-      assignBindingExpression(node.left, node.right, scope);
+    if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
+      visitReachable(info, node.right, scope, state);
+      visitReachable(info, node.left, scope, state);
+      invalidateMutationTarget(
+        info,
+        node.left,
+        scope,
+        state,
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken,
+      );
+      if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        assignBindingExpression(node.left, node.right, scope);
+      }
+      return;
+    }
+
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken)
+    ) {
+      visitReachable(info, node.operand, scope, state);
+      invalidateMutationTarget(info, node.operand, scope, state, false);
+      return;
+    }
+
+    if (
+      ts.isDeleteExpression(node) &&
+      (ts.isPropertyAccessExpression(unwrapExpression(node.expression)) ||
+        ts.isElementAccessExpression(unwrapExpression(node.expression)))
+    ) {
+      visitReachable(info, node.expression, scope, state);
+      invalidateMutationTarget(info, node.expression, scope, state, false);
       return;
     }
 
     if (ts.isCallExpression(node)) {
       const target = unwrapExpression(node.expression);
-      visitCallableReference(info, target, scope);
-      visitReachable(info, target, scope);
+      if (isSdkIamCallTarget(info, target, scope)) {
+        validateSdkIamCall(info, node, scope, state);
+      }
+      visitRunActionTarget(info, node, scope, state);
+      visitCallableReference(info, target, scope, state, {
+        callArguments: [...node.arguments],
+        callInfo: info,
+        callScope: scope,
+      });
+      visitReachable(info, target, scope, state);
       for (const argument of node.arguments) {
         // Do not infer whether an arbitrary higher-order callee invokes a
-        // callback. A statically dangerous callable passed from a public
-        // handler is itself service-authority exposure, so classify callable
-        // arguments syntactically and still inspect the argument expression.
-        visitCallableReference(info, argument, scope);
-        visitReachable(info, argument, scope);
+        // callback. A statically visible IAM SDK caller passed from an exposed
+        // handler is itself authority exposure, so classify callable arguments
+        // syntactically and still inspect the argument expression.
+        visitCallableReference(info, argument, scope, state);
+        visitReachable(info, argument, scope, state);
       }
       return;
     }
 
-    ts.forEachChild(node, (child) => visitReachable(info, child, scope));
+    ts.forEachChild(node, (child) => visitReachable(info, child, scope, state));
   };
 
-  const collectPublicBuilderRoots = (info: CheckerSourceFile): ts.CallExpression[] => {
-    const roots: ts.CallExpression[] = [];
+  const collectAuthorityRoots = (
+    info: CheckerSourceFile,
+  ): Array<Extract<StaticValue, { kind: "convexFunction" | "resourceCreatorBootstrap" }>> => {
+    const roots: Array<
+      Extract<StaticValue, { kind: "convexFunction" | "resourceCreatorBootstrap" }>
+    > = [];
     const exportedNames = collectExportedNames(info.sourceFile);
     const addRoot = (expression: ts.Expression): void => {
-      const target = unwrapExpression(expression);
-      if (!ts.isCallExpression(target)) return;
-      const isPublicBuilder = resolveStaticValues(info, target.expression, null).some(
-        (value) => value.kind === "known" && value.value === "publicBuilder",
-      );
-      if (isPublicBuilder) roots.push(target);
+      for (const value of resolveStaticValues(info, expression, null)) {
+        if (value.kind === "convexFunction" || value.kind === "resourceCreatorBootstrap") {
+          roots.push(value);
+        }
+      }
     };
 
     for (const statement of info.sourceFile.statements) {
@@ -1371,15 +1744,60 @@ function checkPublicServiceAuthorityCalls(
     return roots;
   };
 
+  const visitFactoryArguments = (
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void => {
+    for (const argument of call.arguments) {
+      visitReachable(info, argument, scope, state);
+      for (const value of resolveStaticValues(info, argument, scope)) {
+        if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
+          visitConfigObject(value.info, value.node, value.declarationScope, state);
+        }
+      }
+    }
+  };
+
+  const visitConvexFunction = (
+    root: Extract<StaticValue, { kind: "convexFunction" }>,
+    state: AuthorityState,
+  ): void => {
+    const rootKey = `${root.info.filePath}:${root.call.getStart(root.info.sourceFile)}:${
+      root.builder
+    }:${state.mode}`;
+    if (visitedConvexFunctions.has(rootKey)) return;
+    visitedConvexFunctions.add(rootKey);
+
+    visitFactoryArguments(root.info, root.call, root.declarationScope, state);
+  };
+
+  const visitResourceCreatorBootstrap = (
+    root: Extract<StaticValue, { kind: "resourceCreatorBootstrap" }>,
+  ): void => {
+    const rootKey = `${root.info.filePath}:${root.call.getStart(root.info.sourceFile)}`;
+    if (visitedResourceCreatorBootstraps.has(rootKey)) return;
+    visitedResourceCreatorBootstraps.add(rootKey);
+    visitFactoryArguments(
+      root.info,
+      root.call,
+      root.declarationScope,
+      createAuthorityState("reject"),
+    );
+  };
+
   const visitConfigObject = (
     info: CheckerSourceFile,
     config: ts.ObjectLiteralExpression,
     scope: LexicalScope | null,
+    state: AuthorityState,
     visitedProperties: Set<string> = new Set(),
   ): void => {
     for (let index = config.properties.length - 1; index >= 0; index -= 1) {
       const property = config.properties[index]!;
       if (ts.isSpreadAssignment(property)) {
+        visitReachable(info, property.expression, scope, state);
         const objectValues = resolveStaticValues(info, property.expression, scope).filter(
           (value): value is Extract<StaticValue, { kind: "node" }> =>
             value.kind === "node" && ts.isObjectLiteralExpression(value.node),
@@ -1390,10 +1808,14 @@ function checkPublicServiceAuthorityCalls(
             value.info,
             value.node as ts.ObjectLiteralExpression,
             value.declarationScope,
+            state,
             visitedProperties,
           );
         }
         continue;
+      }
+      if (property.name && ts.isComputedPropertyName(property.name)) {
+        visitReachable(info, property.name.expression, scope, state);
       }
       const propertyName =
         property.name &&
@@ -1409,50 +1831,808 @@ function checkPublicServiceAuthorityCalls(
         visitedProperties.add(propertyName);
       }
       if (ts.isMethodDeclaration(property)) {
-        visitCallableNode(info, property, scope);
+        visitCallableNode(info, property, scope, state, {
+          markFirstParameterAsCtx: propertyName === "handler",
+        });
         continue;
       }
       if (ts.isShorthandPropertyAssignment(property)) {
-        if (property.name.text === "handler") {
-          visitCallableReference(info, property.name, scope);
-        } else {
-          visitReachable(info, property, scope);
-        }
+        visitCallableReference(info, property.name, scope, state, {
+          markFirstParameterAsCtx: property.name.text === "handler",
+        });
+        visitReachable(info, property, scope, state);
         continue;
       }
       if (!ts.isPropertyAssignment(property)) {
-        visitReachable(info, property, scope);
+        visitReachable(info, property, scope, state);
         continue;
       }
       const initializer = unwrapExpression(property.initializer);
-      if (isCallableNode(initializer) || propertyName === "handler") {
-        visitCallableReference(info, initializer, scope);
-      } else {
-        visitReachable(info, initializer, scope);
-      }
+      visitCallableReference(info, initializer, scope, state, {
+        markFirstParameterAsCtx: propertyName === "handler",
+      });
+      visitReachable(info, initializer, scope, state);
     }
   };
 
-  for (const filePath of rootFilePaths) {
-    const info = sourceFiles.get(filePath);
-    if (!info) continue;
-    for (const root of collectPublicBuilderRoots(info)) {
-      for (const argument of root.arguments) {
-        let resolvedObject = false;
-        for (const value of resolveStaticValues(info, argument, null)) {
-          if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
-            resolvedObject = true;
-            visitConfigObject(value.info, value.node, value.declarationScope);
-          }
-        }
-        if (!resolvedObject) {
-          visitReachable(info, argument, null);
+  function visitRunActionTarget(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const target = unwrapExpression(call.expression);
+    if (
+      !ts.isPropertyAccessExpression(target) ||
+      target.name.text !== "runAction" ||
+      call.arguments.length === 0
+    ) {
+      return;
+    }
+
+    const nextMode = state.mode === "service" ? "service" : "reject";
+    for (const value of resolveInternalApiReferenceValues(call.arguments[0]!, info, scope)) {
+      if (value.kind === "convexFunction") {
+        visitConvexFunction(value, createAuthorityState(nextMode));
+      }
+    }
+  }
+
+  function isSdkIamCallTarget(
+    info: CheckerSourceFile,
+    target: ts.Expression,
+    scope: LexicalScope | null,
+  ): boolean {
+    return resolveStaticValues(info, target, scope).some(
+      (value) => value.kind === "known" && value.value === "herculesSdkIam",
+    );
+  }
+
+  function validateSdkIamCall(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    if (state.mode === "reject") {
+      addFinding(info, call, state);
+      return;
+    }
+
+    const payload = sdkIamPayloadArgument(info, call, scope);
+    if (!payload) {
+      addFinding(info, call, state);
+      return;
+    }
+
+    if (state.mode === "service") {
+      if (unwrapExpression(payload.property.expression).kind === ts.SyntaxKind.NullKeyword) {
+        return;
+      }
+      addFinding(info, call, state);
+      return;
+    }
+
+    if (
+      isVerifiedUserTokenIdentifier(
+        payload.property.info,
+        payload.property.expression,
+        payload.property.scope,
+        state,
+        new Set(),
+      )
+    ) {
+      return;
+    }
+    addFinding(info, call, state);
+  }
+
+  function sdkIamPayloadArgument(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+  ): {
+    property: {
+      info: CheckerSourceFile;
+      expression: ts.Expression;
+      scope: LexicalScope | null;
+    };
+  } | null {
+    const argumentsList = sdkIamMethodArguments(info, call, scope);
+    if (!argumentsList) return null;
+
+    const candidates: Array<{
+      index: number;
+      property: {
+        info: CheckerSourceFile;
+        expression: ts.Expression;
+        scope: LexicalScope | null;
+      };
+    }> = [];
+    const unresolvedArgumentIndexes: number[] = [];
+    let invalidPayloadShape = false;
+
+    argumentsList.forEach((argument, index) => {
+      const values = resolveStaticValues(argument.info, argument.expression, argument.scope);
+      const objectValues = values.filter(
+        (value): value is Extract<StaticValue, { kind: "node" }> =>
+          value.kind === "node" && ts.isObjectLiteralExpression(value.node),
+      );
+      if (objectValues.length === 0) {
+        if (values.length === 0) unresolvedArgumentIndexes.push(index);
+        return;
+      }
+      if (values.length !== 1 || objectValues.length !== 1) {
+        invalidPayloadShape = true;
+        return;
+      }
+
+      const objectValue = objectValues[0]!;
+      const objectLiteral = objectValue.node as ts.ObjectLiteralExpression;
+      if (objectHasDynamicSpread(objectValue.info, objectLiteral, objectValue.declarationScope)) {
+        invalidPayloadShape = true;
+        return;
+      }
+
+      const property = deterministicObjectProperty(
+        objectValue.info,
+        objectLiteral,
+        "user_token_identifier",
+        objectValue.declarationScope,
+        new Set(),
+      );
+      if (property.kind === "dynamic") {
+        invalidPayloadShape = true;
+      } else if (property.kind === "found") {
+        candidates.push({ index, property });
+      }
+    });
+
+    if (invalidPayloadShape || candidates.length !== 1) return null;
+    const candidate = candidates[0]!;
+    if (unresolvedArgumentIndexes.some((index) => index > candidate.index)) {
+      return null;
+    }
+    return { property: candidate.property };
+  }
+
+  function sdkIamMethodArguments(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+  ): Array<{
+    info: CheckerSourceFile;
+    expression: ts.Expression;
+    scope: LexicalScope | null;
+  }> | null {
+    const target = unwrapExpression(call.expression);
+    if (ts.isPropertyAccessExpression(target) && target.name.text === "call") {
+      return call.arguments.slice(1).map((expression) => ({ info, expression, scope }));
+    }
+    if (ts.isPropertyAccessExpression(target) && target.name.text === "apply") {
+      const argumentList = call.arguments[1];
+      if (!argumentList) return null;
+      const values = resolveStaticValues(info, argumentList, scope);
+      if (values.length !== 1) return null;
+      const value = values[0]!;
+      if (value.kind !== "node" || !ts.isArrayLiteralExpression(value.node)) return null;
+      const argumentsArray: Array<{
+        info: CheckerSourceFile;
+        expression: ts.Expression;
+        scope: LexicalScope | null;
+      }> = [];
+      for (const element of value.node.elements) {
+        if (ts.isOmittedExpression(element) || ts.isSpreadElement(element)) return null;
+        argumentsArray.push({
+          info: value.info,
+          expression: element,
+          scope: value.declarationScope,
+        });
+      }
+      return argumentsArray;
+    }
+    return call.arguments.map((expression) => ({ info, expression, scope }));
+  }
+
+  function deterministicObjectProperty(
+    info: CheckerSourceFile,
+    objectLiteral: ts.ObjectLiteralExpression,
+    propertyName: string,
+    scope: LexicalScope | null,
+    resolving: Set<string>,
+  ):
+    | {
+        kind: "found";
+        info: CheckerSourceFile;
+        expression: ts.Expression;
+        scope: LexicalScope | null;
+      }
+    | { kind: "missing" }
+    | { kind: "dynamic" } {
+    for (let index = objectLiteral.properties.length - 1; index >= 0; index -= 1) {
+      const property = objectLiteral.properties[index]!;
+      if (ts.isSpreadAssignment(property)) {
+        const objectValues = resolveStaticValues(
+          info,
+          property.expression,
+          scope,
+          resolving,
+        ).filter(
+          (value): value is Extract<StaticValue, { kind: "node" }> =>
+            value.kind === "node" && ts.isObjectLiteralExpression(value.node),
+        );
+        if (objectValues.length !== 1) return { kind: "dynamic" };
+        const spreadValue = objectValues[0]!;
+        const spreadProperty = deterministicObjectProperty(
+          spreadValue.info,
+          spreadValue.node as ts.ObjectLiteralExpression,
+          propertyName,
+          spreadValue.declarationScope,
+          resolving,
+        );
+        if (spreadProperty.kind !== "missing") return spreadProperty;
+        continue;
+      }
+      const name = property.name;
+      const nameText =
+        name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) ? name.text : null;
+      if (nameText !== propertyName) continue;
+      if (ts.isPropertyAssignment(property)) {
+        return {
+          kind: "found",
+          info,
+          expression: property.initializer,
+          scope,
+        };
+      }
+      if (ts.isShorthandPropertyAssignment(property)) {
+        return {
+          kind: "found",
+          info,
+          expression: property.name,
+          scope,
+        };
+      }
+      return { kind: "dynamic" };
+    }
+    return { kind: "missing" };
+  }
+
+  function objectHasDynamicSpread(
+    info: CheckerSourceFile,
+    objectLiteral: ts.ObjectLiteralExpression,
+    scope: LexicalScope | null,
+    resolving: Set<string> = new Set(),
+  ): boolean {
+    for (const property of objectLiteral.properties) {
+      if (!ts.isSpreadAssignment(property)) continue;
+      const objectValues = resolveStaticValues(info, property.expression, scope, resolving).filter(
+        (value): value is Extract<StaticValue, { kind: "node" }> =>
+          value.kind === "node" && ts.isObjectLiteralExpression(value.node),
+      );
+      if (objectValues.length !== 1) return true;
+      const value = objectValues[0]!;
+      if (
+        objectHasDynamicSpread(
+          value.info,
+          value.node as ts.ObjectLiteralExpression,
+          value.declarationScope,
+          resolving,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isVerifiedUserTokenIdentifier(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): boolean {
+    const provenance = tokenIdentifierProvenance(info, expression, scope, state, resolving);
+    if (!provenance.fromActionCtx) return false;
+    for (const binding of provenance.tokenBindings) {
+      if (state.checkedTokenBindings.has(binding)) return true;
+    }
+    if (provenance.optional) return false;
+    for (const binding of provenance.identityBindings) {
+      if (state.checkedIdentityTokenBindings.has(binding)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function addPresenceCheck(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const tokenProvenance = tokenIdentifierProvenance(info, expression, scope, state, new Set());
+    if (tokenProvenance.fromActionCtx) {
+      for (const binding of tokenProvenance.tokenBindings) {
+        state.checkedTokenBindings.add(binding);
+      }
+      if (isTokenIdentifierAccess(unwrapExpression(expression))) {
+        for (const binding of tokenProvenance.identityBindings) {
+          state.checkedIdentityTokenBindings.add(binding);
         }
       }
     }
   }
 
+  function tokenIdentifierProvenance(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): {
+    fromActionCtx: boolean;
+    optional: boolean;
+    identityBindings: Set<ScopedBinding>;
+    tokenBindings: Set<ScopedBinding>;
+  } {
+    const target = unwrapExpression(expression);
+    const optional = containsOptionalChain(target);
+
+    if (isTokenIdentifierAccess(target)) {
+      const base = tokenIdentifierAccessBase(target);
+      const identity = identityProvenanceFor(info, base, scope, state, resolving);
+      return {
+        fromActionCtx: identity.fromActionCtx,
+        optional: optional || identity.optional,
+        identityBindings: identity.identityBindings,
+        tokenBindings: new Set(),
+      };
+    }
+
+    if (ts.isIdentifier(target)) {
+      const binding = findAnyBinding(info, scope, target.text);
+      if (!binding) {
+        return emptyTokenProvenance(optional);
+      }
+      if (ts.isParameter(binding.node)) {
+        return emptyTokenProvenance(optional);
+      }
+      const bindingKey = `${info.filePath}:token:${binding.id}`;
+      if (resolving.has(bindingKey)) {
+        return emptyTokenProvenance(optional);
+      }
+      const bindingProvenance = tokenIdentifierProvenanceFromBinding(
+        info,
+        binding,
+        state,
+        new Set(resolving).add(bindingKey),
+      );
+      bindingProvenance.optional ||= optional;
+      if (bindingProvenance.fromActionCtx) {
+        bindingProvenance.tokenBindings.add(binding);
+      }
+      return bindingProvenance;
+    }
+
+    return emptyTokenProvenance(optional);
+  }
+
+  function tokenIdentifierProvenanceFromBinding(
+    info: CheckerSourceFile,
+    binding: ScopedBinding,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): {
+    fromActionCtx: boolean;
+    optional: boolean;
+    identityBindings: Set<ScopedBinding>;
+    tokenBindings: Set<ScopedBinding>;
+  } {
+    if (binding.value.kind !== "expression") return emptyTokenProvenance(false);
+    if (
+      binding.value.propertyPath.length === 1 &&
+      binding.value.propertyPath[0] === "tokenIdentifier"
+    ) {
+      const expressionInfo = binding.value.expressionInfo ?? info;
+      const identity = identityProvenanceFor(
+        expressionInfo,
+        binding.value.expression,
+        binding.value.scope,
+        state,
+        resolving,
+      );
+      return {
+        fromActionCtx: identity.fromActionCtx,
+        optional: identity.optional,
+        identityBindings: identity.identityBindings,
+        tokenBindings: new Set(),
+      };
+    }
+    if (binding.value.propertyPath.length > 0) return emptyTokenProvenance(false);
+    const expressionInfo = binding.value.expressionInfo ?? info;
+    return tokenIdentifierProvenance(
+      expressionInfo,
+      binding.value.expression,
+      binding.value.scope,
+      state,
+      resolving,
+    );
+  }
+
+  function identityProvenanceFor(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): {
+    fromActionCtx: boolean;
+    optional: boolean;
+    identityBindings: Set<ScopedBinding>;
+  } {
+    const target = unwrapAwaitExpression(unwrapExpression(expression));
+    const optional = containsOptionalChain(target);
+    if (isGetUserIdentityCall(info, target, scope, state, resolving)) {
+      return {
+        fromActionCtx: true,
+        optional,
+        identityBindings: new Set(),
+      };
+    }
+
+    if (!ts.isIdentifier(target)) {
+      return { fromActionCtx: false, optional, identityBindings: new Set() };
+    }
+
+    const binding = findAnyBinding(info, scope, target.text);
+    if (!binding || binding.value.kind !== "expression") {
+      return { fromActionCtx: false, optional, identityBindings: new Set() };
+    }
+    if (ts.isParameter(binding.node) && !state.ctxBindings.has(binding)) {
+      return { fromActionCtx: false, optional, identityBindings: new Set() };
+    }
+    const bindingKey = `${info.filePath}:identity:${binding.id}`;
+    if (resolving.has(bindingKey)) {
+      return { fromActionCtx: false, optional, identityBindings: new Set() };
+    }
+    if (binding.value.propertyPath.length > 0) {
+      return { fromActionCtx: false, optional, identityBindings: new Set() };
+    }
+
+    const expressionInfo = binding.value.expressionInfo ?? info;
+    const provenance = identityProvenanceFor(
+      expressionInfo,
+      binding.value.expression,
+      binding.value.scope,
+      state,
+      new Set(resolving).add(bindingKey),
+    );
+    provenance.optional ||= optional;
+    if (provenance.fromActionCtx) {
+      provenance.identityBindings.add(binding);
+    }
+    return provenance;
+  }
+
+  function isGetUserIdentityCall(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): boolean {
+    const call = unwrapExpression(expression);
+    if (!ts.isCallExpression(call)) return false;
+    const target = unwrapExpression(call.expression);
+    return (
+      ts.isPropertyAccessExpression(target) &&
+      target.name.text === "getUserIdentity" &&
+      ts.isPropertyAccessExpression(target.expression) &&
+      target.expression.name.text === "auth" &&
+      isActionCtxExpression(info, target.expression.expression, scope, state, resolving)
+    );
+  }
+
+  function isActionCtxExpression(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): boolean {
+    const target = unwrapExpression(expression);
+    if (!ts.isIdentifier(target)) return false;
+    const binding = findAnyBinding(info, scope, target.text);
+    if (!binding) return false;
+    if (state.ctxBindings.has(binding)) return true;
+    const bindingKey = `${info.filePath}:ctx:${binding.id}`;
+    if (resolving.has(bindingKey) || binding.value.kind !== "expression") return false;
+    if (binding.value.propertyPath.length > 0) return false;
+    const expressionInfo = binding.value.expressionInfo ?? info;
+    return isActionCtxExpression(
+      expressionInfo,
+      binding.value.expression,
+      binding.value.scope,
+      state,
+      new Set(resolving).add(bindingKey),
+    );
+  }
+
+  function visitRoots(): void {
+    for (const filePath of rootFilePaths) {
+      const info = sourceFiles.get(filePath);
+      if (!info) continue;
+      for (const root of collectAuthorityRoots(info)) {
+        if (root.kind === "resourceCreatorBootstrap") {
+          visitResourceCreatorBootstrap(root);
+          continue;
+        }
+        const mode = authorityModeForBuilder(root.builder);
+        if (mode) {
+          visitConvexFunction(root, createAuthorityState(mode));
+        }
+      }
+    }
+  }
+
+  visitRoots();
+
   return findings;
+}
+
+function convexBuilderForKnownValue(
+  value: Extract<StaticValue, { kind: "known" }>["value"],
+): ConvexFunctionBuilder | null {
+  switch (value) {
+    case "publicQuery":
+    case "publicMutation":
+    case "publicAction":
+    case "authenticatedQuery":
+    case "authenticatedMutation":
+    case "authenticatedAction":
+    case "iamQuery":
+    case "iamMutation":
+    case "iamAction":
+    case "rawAction":
+    case "internalAction":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function authorityModeForBuilder(builder: ConvexFunctionBuilder): SdkIamAuthorityMode | null {
+  switch (builder) {
+    case "authenticatedAction":
+    case "iamAction":
+      return "user";
+    case "internalAction":
+      return "service";
+    case "publicAction":
+    case "rawAction":
+    case "publicQuery":
+    case "publicMutation":
+    case "authenticatedQuery":
+    case "authenticatedMutation":
+    case "iamQuery":
+    case "iamMutation":
+      return "reject";
+  }
+}
+
+function createAuthorityState(mode: SdkIamAuthorityMode): AuthorityState {
+  return {
+    mode,
+    ctxBindings: new Set(),
+    checkedTokenBindings: new Set(),
+    checkedIdentityTokenBindings: new Set(),
+  };
+}
+
+function cloneAuthorityState(state: AuthorityState): AuthorityState {
+  return {
+    mode: state.mode,
+    ctxBindings: new Set(state.ctxBindings),
+    checkedTokenBindings: new Set(state.checkedTokenBindings),
+    checkedIdentityTokenBindings: new Set(state.checkedIdentityTokenBindings),
+  };
+}
+
+function snapshotAuthorityState(state: AuthorityState): AuthorityState {
+  return cloneAuthorityState(state);
+}
+
+function restoreAuthorityState(state: AuthorityState, snapshot: AuthorityState): void {
+  state.ctxBindings = new Set(snapshot.ctxBindings);
+  state.checkedTokenBindings = new Set(snapshot.checkedTokenBindings);
+  state.checkedIdentityTokenBindings = new Set(snapshot.checkedIdentityTokenBindings);
+}
+
+function conservativelyMergeAuthorityStates(
+  before: AuthorityState,
+  alternatives: AuthorityState[],
+): AuthorityState {
+  const merged = cloneAuthorityState(before);
+  for (const alternative of alternatives) {
+    for (const binding of merged.ctxBindings) {
+      if (!alternative.ctxBindings.has(binding)) merged.ctxBindings.delete(binding);
+    }
+    for (const binding of merged.checkedTokenBindings) {
+      if (!alternative.checkedTokenBindings.has(binding)) {
+        merged.checkedTokenBindings.delete(binding);
+      }
+    }
+    for (const binding of merged.checkedIdentityTokenBindings) {
+      if (!alternative.checkedIdentityTokenBindings.has(binding)) {
+        merged.checkedIdentityTokenBindings.delete(binding);
+      }
+    }
+  }
+  return merged;
+}
+
+function truthyPresenceExpressions(expression: ts.Expression): ts.Expression[] {
+  const target = unwrapExpression(expression);
+  if (ts.isPrefixUnaryExpression(target) && target.operator === ts.SyntaxKind.ExclamationToken) {
+    return [];
+  }
+  if (
+    ts.isBinaryExpression(target) &&
+    target.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+  ) {
+    return [...truthyPresenceExpressions(target.left), ...truthyPresenceExpressions(target.right)];
+  }
+  if (ts.isBinaryExpression(target)) {
+    if (isPositiveNullishCheck(target)) {
+      return [nonNullishSide(target)!];
+    }
+    if (isNegativeNullishCheck(target)) {
+      return [];
+    }
+  }
+  return [target];
+}
+
+function falsyPresenceExpressions(expression: ts.Expression): ts.Expression[] {
+  const target = unwrapExpression(expression);
+  if (ts.isPrefixUnaryExpression(target) && target.operator === ts.SyntaxKind.ExclamationToken) {
+    return truthyPresenceExpressions(target.operand);
+  }
+  if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    return [...falsyPresenceExpressions(target.left), ...falsyPresenceExpressions(target.right)];
+  }
+  if (ts.isBinaryExpression(target) && isNegativeNullishCheck(target)) {
+    return [nonNullishSide(target)!];
+  }
+  return [];
+}
+
+function isPositiveNullishCheck(expression: ts.BinaryExpression): boolean {
+  return (
+    (expression.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken ||
+      expression.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken) &&
+    nonNullishSide(expression) !== null
+  );
+}
+
+function isNegativeNullishCheck(expression: ts.BinaryExpression): boolean {
+  return (
+    (expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken ||
+      expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) &&
+    nonNullishSide(expression) !== null
+  );
+}
+
+function nonNullishSide(expression: ts.BinaryExpression): ts.Expression | null {
+  if (isNullishLiteral(unwrapExpression(expression.left))) return expression.right;
+  if (isNullishLiteral(unwrapExpression(expression.right))) return expression.left;
+  return null;
+}
+
+function isNullishLiteral(expression: ts.Expression): boolean {
+  return (
+    expression.kind === ts.SyntaxKind.NullKeyword ||
+    (ts.isIdentifier(expression) && expression.text === "undefined")
+  );
+}
+
+function statementCanFallThrough(statement: ts.Statement): boolean {
+  if (ts.isThrowStatement(statement) || ts.isReturnStatement(statement)) {
+    return false;
+  }
+  if (ts.isBlock(statement)) {
+    const lastStatement = statement.statements.at(-1);
+    return lastStatement ? statementCanFallThrough(lastStatement) : true;
+  }
+  if (ts.isIfStatement(statement) && statement.elseStatement) {
+    return (
+      statementCanFallThrough(statement.thenStatement) ||
+      statementCanFallThrough(statement.elseStatement)
+    );
+  }
+  return true;
+}
+
+function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
+  switch (kind) {
+    case ts.SyntaxKind.EqualsToken:
+    case ts.SyntaxKind.PlusEqualsToken:
+    case ts.SyntaxKind.MinusEqualsToken:
+    case ts.SyntaxKind.AsteriskEqualsToken:
+    case ts.SyntaxKind.AsteriskAsteriskEqualsToken:
+    case ts.SyntaxKind.SlashEqualsToken:
+    case ts.SyntaxKind.PercentEqualsToken:
+    case ts.SyntaxKind.LessThanLessThanEqualsToken:
+    case ts.SyntaxKind.GreaterThanGreaterThanEqualsToken:
+    case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken:
+    case ts.SyntaxKind.AmpersandEqualsToken:
+    case ts.SyntaxKind.BarEqualsToken:
+    case ts.SyntaxKind.CaretEqualsToken:
+    case ts.SyntaxKind.BarBarEqualsToken:
+    case ts.SyntaxKind.AmpersandAmpersandEqualsToken:
+    case ts.SyntaxKind.QuestionQuestionEqualsToken:
+      return true;
+    default:
+      return false;
+  }
+}
+
+function unwrapAwaitExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (ts.isAwaitExpression(current)) {
+    current = unwrapExpression(current.expression);
+  }
+  return current;
+}
+
+function containsOptionalChain(node: ts.Node): boolean {
+  let found = false;
+  const visit = (child: ts.Node): void => {
+    if (found) return;
+    if (
+      "questionDotToken" in child &&
+      (child as { questionDotToken?: unknown }).questionDotToken !== undefined
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function isTokenIdentifierAccess(node: ts.Expression): boolean {
+  return ts.isPropertyAccessExpression(node) && node.name.text === "tokenIdentifier";
+}
+
+function tokenIdentifierAccessBase(node: ts.Expression): ts.Expression {
+  return (node as ts.PropertyAccessExpression).expression;
+}
+
+function emptyTokenProvenance(optional: boolean): {
+  fromActionCtx: boolean;
+  optional: boolean;
+  identityBindings: Set<ScopedBinding>;
+  tokenBindings: Set<ScopedBinding>;
+} {
+  return {
+    fromActionCtx: false,
+    optional,
+    identityBindings: new Set(),
+    tokenBindings: new Set(),
+  };
+}
+
+function findAnyBinding(
+  info: CheckerSourceFile,
+  scope: LexicalScope | null,
+  name: string,
+): ScopedBinding | null {
+  return findLexicalBinding(scope, name) ?? info.bindings.get(name) ?? null;
 }
 
 function collectTopLevelBindings(sourceFile: ts.SourceFile): Map<string, ScopedBinding> {
@@ -1629,6 +2809,9 @@ function resolveModuleTarget(
   moduleSpecifier: string,
   sourceFiles: Map<string, CheckerSourceFile>,
 ): ModuleTarget | null {
+  if (isGeneratedServerImport(moduleSpecifier)) {
+    return { kind: "external", moduleSpecifier: generatedServerModuleSpecifier };
+  }
   if (moduleSpecifier.startsWith(".")) {
     const targetFilePath = resolveLocalSourceFile(fromFilePath, moduleSpecifier, sourceFiles);
     return targetFilePath ? { kind: "local", filePath: targetFilePath } : null;
@@ -1641,18 +2824,25 @@ function resolveLocalSourceFile(
   moduleSpecifier: string,
   sourceFiles: Map<string, CheckerSourceFile>,
 ): string | null {
-  if (!moduleSpecifier.startsWith(".")) return null;
+  return (
+    localSourceFileCandidates(fromFilePath, moduleSpecifier).find((candidate) =>
+      sourceFiles.has(candidate),
+    ) ?? null
+  );
+}
+
+function localSourceFileCandidates(fromFilePath: string, moduleSpecifier: string): string[] {
+  if (!moduleSpecifier.startsWith(".")) return [];
   const basePath = resolve(dirname(fromFilePath), moduleSpecifier);
   const baseExtension = extname(basePath);
   const extensionlessBasePath = sourceExtensions.has(baseExtension)
     ? basePath.slice(0, -baseExtension.length)
     : basePath;
-  const candidates = [
+  return [
     basePath,
     ...[...sourceExtensions].map((extension) => `${extensionlessBasePath}${extension}`),
     ...[...sourceExtensions].map((extension) => join(extensionlessBasePath, `index${extension}`)),
   ];
-  return candidates.find((candidate) => sourceFiles.has(candidate)) ?? null;
 }
 
 function isCallableNode(node: ts.Node): node is ts.FunctionLikeDeclaration {
@@ -1845,6 +3035,7 @@ function bindingValuesEqual(left: BindingValue, right: BindingValue): boolean {
   if (left.kind === "expression" && right.kind === "expression") {
     return (
       left.expression === right.expression &&
+      left.expressionInfo === right.expressionInfo &&
       left.scope === right.scope &&
       left.propertyPath.length === right.propertyPath.length &&
       left.propertyPath.every((propertyName, index) => propertyName === right.propertyPath[index])
@@ -2231,7 +3422,11 @@ function buildGeneratedServerImportRemovals(
   const builderNodeStarts = new Set(
     candidates.map((candidate) => candidate.builderNode.getStart(sourceFile)),
   );
-  const builderNamesToReplace = new Set(candidates.map((candidate) => candidate.builderNode.text));
+  const builderNamesToReplace = new Set(
+    candidates.flatMap((candidate) =>
+      ts.isIdentifier(candidate.builderNode) ? [candidate.builderNode.text] : [],
+    ),
+  );
   const identifierUses = collectIdentifierUses(sourceFile, builderNamesToReplace);
   const removableNames = new Set<string>();
 
@@ -2428,10 +3623,9 @@ function isIamWiringSourceFile(filePath: string | undefined, convexDir: string):
   return extensionlessPath === join(convexDir, "iam");
 }
 
-// A Convex function file uses managed IAM when it imports the
-// @usehercules/convex SDK (including subpaths such as /iam-management and
-// /convex.config) from the canonical convex/iam wiring module, or imports that
-// local wiring module from another Convex function.
+// A Convex function file uses managed IAM when it imports @usehercules/sdk
+// directly, the canonical convex/iam wiring module imports @usehercules/convex,
+// or another Convex function imports that local wiring module.
 function fileUsesManagedIam(filePath: string, convexDir: string): boolean {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
@@ -2445,6 +3639,7 @@ function fileUsesManagedIam(filePath: string, convexDir: string): boolean {
       continue;
     }
     if (
+      moduleSpecifier.text === herculesSdkPackageName ||
       ((moduleSpecifier.text === iamPackageName ||
         moduleSpecifier.text.startsWith(`${iamPackageName}/`)) &&
         isIamWiringSourceFile(filePath, convexDir)) ||
@@ -2478,7 +3673,242 @@ function collectExportedNames(sourceFile: ts.SourceFile): Set<string> {
   return names;
 }
 
-function collectRawBuilderCandidates(
+type RawBuilderResolution =
+  | { kind: "builder"; builder: RawConvexBuilder }
+  | { kind: "module"; target: ModuleTarget };
+
+function collectStaticRawBuilderCandidates(
+  sourceFile: ts.SourceFile,
+  sourceFiles: Map<string, CheckerSourceFile>,
+): RawBuilderCandidate[] {
+  const info = sourceFiles.get(sourceFile.fileName);
+  if (!info) return [];
+  const candidates: RawBuilderCandidate[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement)) {
+      const isDirectExport = hasExportModifier(statement);
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
+          continue;
+        }
+
+        const rawCall = getStaticRawBuilderCall(
+          info,
+          declaration.initializer,
+          sourceFiles,
+          new Set(),
+        );
+        if (rawCall) {
+          candidates.push({
+            ...rawCall,
+            functionName: declaration.name.text,
+            isDirectExport,
+            declaration: statement,
+          });
+        }
+      }
+      continue;
+    }
+
+    if (ts.isExportAssignment(statement)) {
+      const rawCall = getStaticRawBuilderCall(info, statement.expression, sourceFiles, new Set());
+      if (rawCall) {
+        candidates.push({
+          ...rawCall,
+          functionName: "default",
+          isDirectExport: true,
+          declaration: statement,
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function getStaticRawBuilderCall(
+  info: CheckerSourceFile,
+  initializer: ts.Expression,
+  sourceFiles: Map<string, CheckerSourceFile>,
+  resolving: Set<string>,
+): Pick<RawBuilderCandidate, "builder" | "builderNode"> | null {
+  const expression = unwrapExpression(initializer);
+  if (!ts.isCallExpression(expression)) return null;
+
+  const callTarget = unwrapExpression(expression.expression);
+  const builders = new Set(
+    resolveRawBuilderValues(info, callTarget, sourceFiles, resolving).flatMap((value) =>
+      value.kind === "builder" ? [value.builder] : [],
+    ),
+  );
+  if (builders.size !== 1) return null;
+  return { builder: [...builders][0]!, builderNode: callTarget };
+}
+
+function resolveRawBuilderValues(
+  info: CheckerSourceFile,
+  expression: ts.Expression,
+  sourceFiles: Map<string, CheckerSourceFile>,
+  resolving: Set<string>,
+): RawBuilderResolution[] {
+  const target = unwrapExpression(expression);
+  if (ts.isIdentifier(target)) {
+    const key = `${info.filePath}:raw-local:${target.text}`;
+    if (resolving.has(key)) return [];
+    const nextResolving = new Set(resolving).add(key);
+    const binding = info.bindings.get(target.text);
+    if (binding) {
+      return resolveRawBuilderBinding(info, binding, sourceFiles, nextResolving);
+    }
+    const imported = info.imports.get(target.text);
+    if (imported) {
+      return resolveRawBuilderModuleExport(
+        imported.target,
+        imported.exportedName,
+        sourceFiles,
+        nextResolving,
+      );
+    }
+    const namespaceImport = info.namespaceImports.get(target.text);
+    return namespaceImport ? [{ kind: "module", target: namespaceImport }] : [];
+  }
+
+  if (ts.isPropertyAccessExpression(target)) {
+    return resolveRawBuilderValues(info, target.expression, sourceFiles, resolving).flatMap(
+      (value) => resolveRawBuilderProperty(value, target.name.text, sourceFiles, resolving),
+    );
+  }
+
+  if (ts.isElementAccessExpression(target)) {
+    const argument = target.argumentExpression && unwrapExpression(target.argumentExpression);
+    if (!argument || !ts.isStringLiteralLike(argument)) return [];
+    return resolveRawBuilderValues(info, target.expression, sourceFiles, resolving).flatMap(
+      (value) => resolveRawBuilderProperty(value, argument.text, sourceFiles, resolving),
+    );
+  }
+
+  if (ts.isConditionalExpression(target)) {
+    return [
+      ...resolveRawBuilderValues(info, target.whenTrue, sourceFiles, new Set(resolving)),
+      ...resolveRawBuilderValues(info, target.whenFalse, sourceFiles, new Set(resolving)),
+    ];
+  }
+
+  if (
+    ts.isBinaryExpression(target) &&
+    (target.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+      target.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+      target.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+  ) {
+    return [
+      ...resolveRawBuilderValues(info, target.left, sourceFiles, new Set(resolving)),
+      ...resolveRawBuilderValues(info, target.right, sourceFiles, new Set(resolving)),
+    ];
+  }
+
+  return [];
+}
+
+function resolveRawBuilderBinding(
+  info: CheckerSourceFile,
+  binding: ScopedBinding,
+  sourceFiles: Map<string, CheckerSourceFile>,
+  resolving: Set<string>,
+): RawBuilderResolution[] {
+  if (binding.value.kind !== "expression") return [];
+  const expressionInfo = binding.value.expressionInfo ?? info;
+  let values = resolveRawBuilderValues(
+    expressionInfo,
+    binding.value.expression,
+    sourceFiles,
+    resolving,
+  );
+  for (const propertyName of binding.value.propertyPath) {
+    values = values.flatMap((value) =>
+      resolveRawBuilderProperty(value, propertyName, sourceFiles, resolving),
+    );
+  }
+  return values;
+}
+
+function resolveRawBuilderProperty(
+  value: RawBuilderResolution,
+  propertyName: string,
+  sourceFiles: Map<string, CheckerSourceFile>,
+  resolving: Set<string>,
+): RawBuilderResolution[] {
+  if (value.kind !== "module") return [];
+  return resolveRawBuilderModuleExport(value.target, propertyName, sourceFiles, resolving);
+}
+
+function resolveRawBuilderModuleExport(
+  target: ModuleTarget,
+  exportedName: string,
+  sourceFiles: Map<string, CheckerSourceFile>,
+  resolving: Set<string>,
+): RawBuilderResolution[] {
+  if (target.kind === "external") {
+    return target.moduleSpecifier === generatedServerModuleSpecifier &&
+      isRawBuilderName(exportedName)
+      ? [{ kind: "builder", builder: exportedName }]
+      : [];
+  }
+  const info = sourceFiles.get(target.filePath);
+  return info ? resolveRawBuilderExport(info, exportedName, sourceFiles, resolving) : [];
+}
+
+function resolveRawBuilderExport(
+  info: CheckerSourceFile,
+  exportedName: string,
+  sourceFiles: Map<string, CheckerSourceFile>,
+  resolving: Set<string>,
+): RawBuilderResolution[] {
+  const key = `${info.filePath}:raw-export:${exportedName}`;
+  if (resolving.has(key)) return [];
+  const nextResolving = new Set(resolving).add(key);
+
+  const localName = info.exportBindings.get(exportedName);
+  if (localName) {
+    const binding = info.bindings.get(localName);
+    if (binding) {
+      return resolveRawBuilderBinding(info, binding, sourceFiles, nextResolving);
+    }
+    const imported = info.imports.get(localName);
+    if (imported) {
+      return resolveRawBuilderModuleExport(
+        imported.target,
+        imported.exportedName,
+        sourceFiles,
+        nextResolving,
+      );
+    }
+    const namespaceImport = info.namespaceImports.get(localName);
+    if (namespaceImport) {
+      return [{ kind: "module", target: namespaceImport }];
+    }
+  }
+
+  const reExport = info.reExports.get(exportedName);
+  if (reExport) {
+    return resolveRawBuilderModuleExport(
+      reExport.target,
+      reExport.exportedName,
+      sourceFiles,
+      nextResolving,
+    );
+  }
+  const namespaceReExport = info.namespaceReExports.get(exportedName);
+  if (namespaceReExport) {
+    return [{ kind: "module", target: namespaceReExport }];
+  }
+
+  return info.exportAllTargets.flatMap((target) =>
+    resolveRawBuilderModuleExport(target, exportedName, sourceFiles, nextResolving),
+  );
+}
+
+function collectDirectRawBuilderCandidates(
   sourceFile: ts.SourceFile,
   rawBuilderImports: Map<string, RawConvexBuilder>,
 ): RawBuilderCandidate[] {

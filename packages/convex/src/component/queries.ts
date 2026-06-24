@@ -121,7 +121,7 @@ type TenantDetail = {
   tenantName: string;
   kind: "default" | "custom";
   status: "active" | "disabled";
-  entryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
   updatedAt: number;
 };
@@ -567,7 +567,7 @@ export const getTenant = query({
       tenantName: scope.name,
       kind: scope.kind === "default" ? "default" : "custom",
       status: scope.status,
-      entryMode: scope.accountEntryMode,
+      accessMode: scope.accessMode,
       defaultRoleId: scope.defaultRoleId,
       updatedAt: scope.updatedAt,
     };

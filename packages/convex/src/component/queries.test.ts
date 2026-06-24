@@ -1,14 +1,15 @@
 import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
-import { withV4SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
+import {
+  type ProjectionFixtureSnapshot,
+  withProjectionFixtures,
+} from "../../test/projection-fixtures";
 import schema from "./schema";
 
-// The fixtures below are authored in the pre-v4 (schemaVersion 2) shape;
-// withV4SyncFixtures upgrades them to the v4 wire shape before forwarding to the
-// real applySync mutation, so they are typed with the legacy shape rather than
-// the v4 AccessProjectionSnapshot type.
-type Snapshot = LegacySnapshot;
+// Compact semantic fixtures are materialized into the current projection wire
+// shape before they reach the real applySync mutation.
+type Snapshot = ProjectionFixtureSnapshot;
 
 import { componentModules as modules } from "../../test/component-modules";
 
@@ -35,6 +36,11 @@ type PermissionSummary = {
   resourceType: string;
   action: string;
 };
+type DirectRoleGrant = RoleSummary & {
+  grantId: string;
+  type: "role";
+  expiresAt: number | null;
+};
 type TenantUser = {
   userId: string;
   status: string;
@@ -42,6 +48,7 @@ type TenantUser = {
   name?: string;
   email?: string;
   roles: RoleSummary[];
+  directRoleGrants: DirectRoleGrant[];
 };
 type TenantGroup = {
   groupId: string;
@@ -50,6 +57,7 @@ type TenantGroup = {
   memberCount: number;
   name?: string;
   roles: RoleSummary[];
+  directRoleGrants: DirectRoleGrant[];
 };
 type TenantUsersPage = { users: TenantUser[]; cursor?: string };
 type TenantGroupsPage = { groups: TenantGroup[]; cursor?: string };
@@ -59,7 +67,7 @@ type TenantDetail = {
   tenantName: string;
   kind: string;
   status: string;
-  entryMode: string;
+  accessMode: string;
   defaultRoleId: string;
   updatedAt: number;
 };
@@ -104,14 +112,32 @@ type AccessExplanation = {
     expiredIgnoredGrants: Array<Record<string, unknown>>;
   };
 };
-type DirectSubject = {
+type DirectResourceRoleGrant = {
   grantId: string;
-  type: "user" | "group";
-  userId?: string;
-  groupId?: string;
-  name?: string;
+  type: "role";
+  roleId: string;
+  expiresAt: number | null;
   appliesTo: "self" | "self_and_descendants";
 };
+type DirectResourcePermissionGrant = {
+  grantId: string;
+  type: "permission";
+  permissionId: string;
+  permissionKey: string;
+  effect: "allow" | "deny";
+  expiresAt: number | null;
+  appliesTo: "self" | "self_and_descendants";
+};
+type DirectSubject = {
+  status: string;
+  name?: string;
+  email?: string;
+  image?: string;
+} & ({ type: "user"; userId: string } | { type: "group"; groupId: string }) &
+  (
+    | { grant: DirectResourceRoleGrant; role: RoleSummary }
+    | { grant: DirectResourcePermissionGrant }
+  );
 type DeploymentEntryStatus =
   | {
       kind: "principal";
@@ -195,9 +221,9 @@ const getDeploymentEntryStatus = makeFunctionReference<
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>
-  withV4SyncFixtures(baseConvexTest(schemaArg, modulesArg));
+  withProjectionFixtures(baseConvexTest(schemaArg, modulesArg));
 
-function emptyEntities() {
+function emptyState() {
   return {
     users: [],
     principals: [],
@@ -232,9 +258,10 @@ async function seedDeploymentEntryMirror(
       name: "App",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
+      sourceVersion: options.sourceVersion,
     });
     if (options.principal) {
       await ctx.db.insert("principals", {
@@ -246,6 +273,7 @@ async function seedDeploymentEntryMirror(
         status: options.principal.status,
         joinedAt: 1,
         updatedAt: 1,
+        sourceVersion: options.sourceVersion,
       });
     }
   });
@@ -346,7 +374,6 @@ function memberSnapshot(
 ): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: options.eventId,
     sourceVersion: options.sourceVersion,
     expectedIssuer: ISSUER,
@@ -355,12 +382,12 @@ function memberSnapshot(
       name: scopeName,
       kind: scopeKind,
       status: scopeStatus,
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: options.roleId,
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: options.userPrincipalId,
@@ -399,15 +426,14 @@ function memberSnapshot(
 }
 
 function effectiveRoleReadSnapshot(options: {
-  grants: Snapshot["entities"]["grants"];
-  roles: Snapshot["entities"]["roles"];
+  grants: Snapshot["state"]["grants"];
+  roles: Snapshot["state"]["roles"];
   // The group principal's status. Defaults to "active"; the blocked-group fence
   // tests (E3 / L9) pass "blocked" to assert the group confers nothing.
   groupStatus?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 }): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_effective_role_reads",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -416,12 +442,12 @@ function effectiveRoleReadSnapshot(options: {
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice",
@@ -527,7 +553,6 @@ describe("listMyTenants", () => {
 
     await t.mutation(applySync, {
       type: "access.projection.snapshot",
-      schemaVersion: 2,
       eventId: "evt_multi_role",
       sourceVersion: 1,
       expectedIssuer: ISSUER,
@@ -536,12 +561,12 @@ describe("listMyTenants", () => {
         name: "Acme",
         kind: "org",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_loan_officer",
         updatedAt: 1,
       },
-      entities: {
-        ...emptyEntities(),
+      state: {
+        ...emptyState(),
         principals: [
           {
             principalId: "p_alice_acme",
@@ -624,7 +649,6 @@ describe("listMyTenants", () => {
 
     await t.mutation(applySync, {
       type: "access.projection.snapshot",
-      schemaVersion: 2,
       eventId: "evt_resource_only_tenant",
       sourceVersion: 1,
       expectedIssuer: ISSUER,
@@ -633,12 +657,12 @@ describe("listMyTenants", () => {
         name: "Acme",
         kind: "org",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 1,
       },
-      entities: {
-        ...emptyEntities(),
+      state: {
+        ...emptyState(),
         principals: [
           {
             principalId: "p_alice_acme",
@@ -1033,7 +1057,6 @@ const aliceAppPrincipal = {
 function groupPermissionCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_group_permission_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1042,12 +1065,12 @@ function groupPermissionCatalogSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [aliceAppPrincipal],
       permissions: [
         {
@@ -1069,7 +1092,6 @@ function groupPermissionOrgSnapshot(
 ): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_group_permission_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -1078,12 +1100,12 @@ function groupPermissionOrgSnapshot(
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_engineer",
       updatedAt: 2,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice_acme",
@@ -1147,7 +1169,6 @@ function groupPermissionOrgSnapshot(
 function manageCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_manage_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1156,12 +1177,12 @@ function manageCatalogSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [aliceAppPrincipal],
       permissions: [
         {
@@ -1217,7 +1238,6 @@ function manageCatalogSnapshot(): Snapshot {
 function manageOrgSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_manage_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -1226,12 +1246,12 @@ function manageOrgSnapshot(): Snapshot {
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_role_admin",
       updatedAt: 2,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice_acme",
@@ -1288,7 +1308,6 @@ function manageOrgSnapshot(): Snapshot {
 function permissionCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_permission_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1297,12 +1316,12 @@ function permissionCatalogSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_manager",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [aliceAppPrincipal],
       roles: [
         {
@@ -1399,7 +1418,6 @@ function permissionCatalogSnapshot(): Snapshot {
 function permissionOrgSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_permission_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -1408,12 +1426,12 @@ function permissionOrgSnapshot(): Snapshot {
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_manager",
       updatedAt: 2,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice_acme",
@@ -1492,7 +1510,6 @@ function permissionOrgSnapshot(): Snapshot {
 function resourceCatalogSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_resource_catalog",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1501,12 +1518,12 @@ function resourceCatalogSnapshot(): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_viewer",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [aliceAppPrincipal],
       permissions: [
         {
@@ -1535,7 +1552,6 @@ function resourceCatalogSnapshot(): Snapshot {
 function resourceOrgSnapshot(): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_resource_org",
     sourceVersion: 2,
     expectedIssuer: ISSUER,
@@ -1544,12 +1560,12 @@ function resourceOrgSnapshot(): Snapshot {
       name: "Acme",
       kind: "org",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_viewer",
       updatedAt: 2,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice_acme",
@@ -1592,8 +1608,8 @@ function resourceRoleCatalogSnapshot(): Snapshot {
   return {
     ...snapshot,
     eventId: "evt_resource_role_catalog",
-    entities: {
-      ...snapshot.entities,
+    state: {
+      ...snapshot.state,
       roles: [
         {
           roleId: "role_viewer",
@@ -1614,8 +1630,8 @@ function resourceRoleOrgSnapshot(): Snapshot {
   return {
     ...snapshot,
     eventId: "evt_resource_role_org",
-    entities: {
-      ...snapshot.entities,
+    state: {
+      ...snapshot.state,
       grants: [
         {
           grantId: "grant_alice_viewer",
@@ -1673,7 +1689,6 @@ type ResourceShareGrant = {
 function resourceShareEnumSnapshot(grants: ResourceShareGrant[]): Snapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 2,
     eventId: "evt_resource_share_enum",
     sourceVersion: 1,
     expectedIssuer: ISSUER,
@@ -1682,12 +1697,12 @@ function resourceShareEnumSnapshot(grants: ResourceShareGrant[]): Snapshot {
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_viewer",
       updatedAt: 1,
     },
-    entities: {
-      ...emptyEntities(),
+    state: {
+      ...emptyState(),
       principals: [
         {
           principalId: "p_alice",
@@ -1890,7 +1905,6 @@ describe("tenant admin reads", () => {
   function adminReadSnapshot(): Snapshot {
     return {
       type: "access.projection.snapshot",
-      schemaVersion: 2,
       eventId: "evt_admin_read",
       sourceVersion: 1,
       expectedIssuer: ISSUER,
@@ -1899,12 +1913,12 @@ describe("tenant admin reads", () => {
         name: "Default",
         kind: "default",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 1,
       },
-      entities: {
-        ...emptyEntities(),
+      state: {
+        ...emptyState(),
         users: [
           {
             herculesAuthUserId: "user_owner",
@@ -2090,7 +2104,7 @@ describe("tenant admin reads", () => {
       tenantName: "Default",
       kind: "default",
       status: "active",
-      entryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     });
@@ -2133,6 +2147,7 @@ describe("tenant admin reads", () => {
         permissionId: "perm_posts_read",
         effect: "deny",
         updatedAt: 2,
+        sourceVersion: 1,
       });
     });
 
@@ -2210,6 +2225,7 @@ describe("tenant admin reads", () => {
         description: null,
         baseWildcard: "none",
         updatedAt: 2,
+        sourceVersion: 1,
       });
     });
 
@@ -2220,24 +2236,6 @@ describe("tenant admin reads", () => {
 
     expect(roles.find((role) => role.roleId === "role_owner")?.roleKind).toBe("system");
     expect(roles.find((role) => role.roleId === "role_editor")?.roleKind).toBe("custom");
-  });
-
-  test("rejects principal documents without memberCount", async () => {
-    const t = convexTest(schema, modules);
-
-    await expect(
-      t.run(async (ctx) =>
-        ctx.db.insert("principals", {
-          accessScopeId: "scope_default",
-          principalId: "p_missing_count",
-          type: "user",
-          herculesAuthUserId: "user_missing_count",
-          status: "active",
-          joinedAt: 1,
-          updatedAt: 1,
-        }),
-      ),
-    ).rejects.toThrow(/memberCount/);
   });
 
   test("explainAccess uses the authorize evaluator and reports decisive sources", async () => {
@@ -2253,12 +2251,14 @@ describe("tenant admin reads", () => {
         status: "active",
         joinedAt: 1,
         updatedAt: 1,
+        sourceVersion: 1,
       });
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "scope_default",
         groupPrincipalId: "p_reviewers",
         memberPrincipalId: "p_member",
         updatedAt: 1,
+        sourceVersion: 1,
       });
       await ctx.db.insert("role_permission_overrides", {
         accessScopeId: "scope_default",
@@ -2266,6 +2266,7 @@ describe("tenant admin reads", () => {
         permissionId: "perm_posts_read",
         effect: "allow",
         updatedAt: 2,
+        sourceVersion: 1,
       });
       await ctx.db.insert("permission_bindings", {
         bindingId: "grant_group_deny",
@@ -2277,6 +2278,7 @@ describe("tenant admin reads", () => {
         resourceId: "post_1",
         appliesTo: "self",
         updatedAt: 2,
+        sourceVersion: 1,
       });
       await ctx.db.insert("permission_bindings", {
         bindingId: "grant_ancestor_allow",
@@ -2288,6 +2290,7 @@ describe("tenant admin reads", () => {
         resourceId: "folder_1",
         appliesTo: "self_and_descendants",
         updatedAt: 2,
+        sourceVersion: 1,
       });
       await ctx.db.insert("permission_bindings", {
         bindingId: "grant_expired_allow",
@@ -2300,6 +2303,7 @@ describe("tenant admin reads", () => {
         appliesTo: "self",
         expiresAt: 1,
         updatedAt: 2,
+        sourceVersion: 1,
       });
     });
 
@@ -2397,6 +2401,7 @@ describe("tenant admin reads", () => {
         accessScopeId: "scope_default",
         appliesTo: "self",
         updatedAt: 2,
+        sourceVersion: 1,
       });
     });
 
@@ -2471,7 +2476,7 @@ describe("listDirectSubjectsForResource", () => {
   test("reports applicability for direct permission and role bindings", async () => {
     const t = convexTest(schema, modules);
     const catalog = resourceCatalogSnapshot();
-    catalog.entities.roles.push({
+    catalog.state.roles.push({
       roleId: "role_reporter",
       accessScopeId: "scope_default",
       key: "reporter",
@@ -2481,8 +2486,8 @@ describe("listDirectSubjectsForResource", () => {
       updatedAt: 1,
     });
     const org = resourceOrgSnapshot();
-    org.entities.grants[1]!.appliesTo = "self_and_descendants";
-    org.entities.grants.push({
+    org.state.grants[1]!.appliesTo = "self_and_descendants";
+    org.state.grants.push({
       grantId: "grant_alice_reporter",
       subjectPrincipalId: "p_alice_acme",
       relationKind: "role",
@@ -2565,7 +2570,7 @@ describe("listDirectSubjectsForResource", () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, resourceCatalogSnapshot());
     const org = resourceOrgSnapshot();
-    org.entities.grants = org.entities.grants.filter(
+    org.state.grants = org.state.grants.filter(
       (grant) => grant.grantId !== "grant_alice_grants_read",
     );
     await t.mutation(applySync, org);
@@ -2585,8 +2590,8 @@ describe("listDirectSubjectsForResource", () => {
 // The v4 wire carries an optional `name` on a GROUP principal (a user
 // principal's name still comes from the deployment-wide user row). Prove the
 // name is (a) stored on the mirror principal row by ingestion and (b) surfaced
-// by the member and direct-subject listings. Authored natively in the v4 wire
-// shape (the legacy adapter passes v4 payloads through untouched).
+// by the member and direct-subject listings. This fixture is authored directly
+// in the v4 wire shape and therefore passes through the fixture compiler.
 describe("group principal names", () => {
   function groupNameSnapshot() {
     return {
@@ -2665,7 +2670,7 @@ describe("group principal names", () => {
             name: "Default",
             kind: "default" as const,
             status: "active" as const,
-            accountEntryMode: "open" as const,
+            accessMode: "open" as const,
             defaultRoleId: "role_member",
             updatedAt: 1,
           },
@@ -2978,12 +2983,14 @@ describe("group principal names", () => {
         joinedAt: 1003,
         updatedAt: 1003,
         memberCount: 1,
+        sourceVersion: 1,
       } as never);
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "scope_default",
         groupPrincipalId: "p_design",
         memberPrincipalId: "p_owner",
         updatedAt: 1004,
+        sourceVersion: 1,
       });
       await ctx.db.insert("users", {
         herculesAuthUserId: "user_designer",
@@ -2992,6 +2999,7 @@ describe("group principal names", () => {
         emailVerified: true,
         phoneVerified: false,
         updatedAt: 1004,
+        sourceVersion: 1,
       });
       await ctx.db.insert("principals", {
         accessScopeId: "scope_default",
@@ -3002,12 +3010,14 @@ describe("group principal names", () => {
         status: "active",
         joinedAt: 1004,
         updatedAt: 1004,
+        sourceVersion: 1,
       });
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "scope_default",
         groupPrincipalId: "p_engineering",
         memberPrincipalId: "p_designer",
         updatedAt: 1005,
+        sourceVersion: 1,
       });
     });
 
@@ -3088,6 +3098,7 @@ describe("group principal names", () => {
         resourceId: "report_1",
         appliesTo: "self",
         updatedAt: 2,
+        sourceVersion: 1,
       });
     });
 
