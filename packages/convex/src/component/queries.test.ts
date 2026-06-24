@@ -2897,6 +2897,71 @@ describe("group principal names", () => {
     ).resolves.toMatchObject({ memberCount: 1 });
   });
 
+  test("counts memberships that precede a newly inserted group", async () => {
+    const t = convexTest(schema, modules);
+    expect(await t.mutation(applySync, groupNameSnapshot() as never)).toMatchObject({
+      ok: true,
+      status: "applied",
+    });
+
+    await expect(
+      t.mutation(applySync, {
+        type: "access.projection.event",
+        schemaVersion: 4,
+        eventId: "evt_group_with_member",
+        sourceVersion: 2,
+        scopes: [
+          {
+            accessScopeId: "scope_default",
+            changes: [
+              {
+                entityType: "principal_membership",
+                groupPrincipalId: "p_design",
+                memberPrincipalId: "p_owner",
+                operation: "upsert",
+              },
+              {
+                entityType: "principal",
+                principalId: "p_design",
+                operation: "upsert",
+              },
+            ],
+            principals: [
+              {
+                principalId: "p_design",
+                type: "group",
+                name: "Design",
+                status: "active",
+                joinedAt: 1003,
+                updatedAt: 1003,
+              },
+            ],
+            principalMemberships: [
+              {
+                groupPrincipalId: "p_design",
+                memberPrincipalId: "p_owner",
+                updatedAt: 1003,
+              },
+            ],
+            roles: [],
+            rolePermissionOverrides: [],
+            roleBindings: [],
+            permissionBindings: [],
+          },
+        ],
+      } as never),
+    ).resolves.toMatchObject({ ok: true, status: "applied" });
+
+    await expect(
+      t.run(async (ctx) =>
+        ctx.db
+          .query("principals")
+          .withIndex("by_principal_id", (q) => q.eq("principalId", "p_design"))
+          .unique(),
+      ),
+    ).resolves.toMatchObject({ type: "group", memberCount: 1 });
+  });
+
   test("paginates groups and reads both sides of group membership", async () => {
     const t = convexTest(schema, modules);
     expect(await t.mutation(applySync, groupNameSnapshot() as never)).toMatchObject({

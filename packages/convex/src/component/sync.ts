@@ -403,7 +403,16 @@ export const applySync = mutation({
       const accessScopeId = scope.accessScopeId;
       if (scope.scope) await upsertScope(scope.scope);
 
+      // Membership changes may precede their newly created principals in the
+      // event. Install principal rows first so group member counts stay exact.
       for (const change of scope.changes) {
+        if (change.operation !== "upsert" || change.entityType !== "principal") continue;
+        const principal = scope.principals.find((p) => p.principalId === change.principalId)!;
+        await upsertPrincipal(accessScopeId, principal);
+      }
+
+      for (const change of scope.changes) {
+        if (change.operation === "upsert" && change.entityType === "principal") continue;
         if (change.operation === "delete") {
           switch (change.entityType) {
             case "scope":
@@ -442,11 +451,8 @@ export const applySync = mutation({
           // integrity rule guarantees the metadata row is present.
           case "scope":
             break;
-          case "principal": {
-            const principal = scope.principals.find((p) => p.principalId === change.principalId)!;
-            await upsertPrincipal(accessScopeId, principal);
+          case "principal":
             break;
-          }
           case "principal_membership": {
             const membership = scope.principalMemberships.find(
               (m) =>
