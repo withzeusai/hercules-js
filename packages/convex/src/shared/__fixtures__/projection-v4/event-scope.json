@@ -1,6 +1,6 @@
 {
   "type": "access.projection.event",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "eventId": "evt_scope_cd_demo_0010",
   "sourceVersion": 10,
   "scopes": [

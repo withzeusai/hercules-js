@@ -232,16 +232,16 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx) =>
-            ctx.runAction(internal.iamService.assignRole, {
-              scopeId: "scope_1",
+            ctx.runAction(internal.iamService.replaceUserRoles, {
+              tenantId: "scope_1",
             }),
         });
 
         const removeMember = publicAction({
           args: {},
           handler: async (ctx) =>
-            ctx.runAction(internal.iamService.removeRole, {
-              scopeId: "scope_1",
+            ctx.runAction(internal.iamService.removeUser, {
+              tenantId: "scope_1",
             }),
         });
 
@@ -265,6 +265,47 @@ describe("checkIamSource", () => {
     ).toHaveLength(2);
   });
 
+  test("tracks the current IAM service action surface", () => {
+    const root = createFixture({
+      "convex/iam.ts": `
+        export { createIam } from "@usehercules/convex";
+      `,
+      "convex/services/iamService.ts": `
+        import { createIamServiceActions } from "@usehercules/convex/iam-service";
+        import { internalAction } from "../_generated/server";
+
+        export const {
+          deleteGrant,
+          listAdmissionRules,
+          listAuditEvents,
+          listGroupPermissionOverrides,
+          replaceGroupPermissionOverrides,
+        } = createIamServiceActions({ internalAction });
+      `,
+      "convex/actions.ts": `
+        import { internal } from "./_generated/api";
+        import { authenticatedAction } from "./iam";
+
+        export const run = authenticatedAction({
+          args: {},
+          handler: async (ctx, args) => {
+            await ctx.runAction(internal.services.iamService.deleteGrant, args);
+            await ctx.runAction(internal.services.iamService.listAdmissionRules, args);
+            await ctx.runAction(internal.services.iamService.listAuditEvents, args);
+            await ctx.runAction(internal.services.iamService.listGroupPermissionOverrides, args);
+            await ctx.runAction(internal.services.iamService.replaceGroupPermissionOverrides, args);
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(
+      result.findings.filter((finding) => finding.code === "public_service_authority_call"),
+    ).toHaveLength(5);
+  });
+
   test("reports service-authority references hidden behind same-file helpers", () => {
     const root = createFixture({
       "convex/iam.ts": `
@@ -275,7 +316,7 @@ describe("checkIamSource", () => {
         import { iamAction } from "./iam";
 
         async function replaceAccess(ctx, args) {
-          return await ctx.runAction(internal.iamService.setResourcePermissionRules, args);
+          return await ctx.runAction(internal.iamService.replaceResourcePermissionOverrides, args);
         }
 
         export const share = iamAction({
@@ -306,17 +347,17 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projectMembers.ts": `
         import { authenticatedAction } from "./iam";
-        import { assignRole } from "./accessHelpers";
+        import { replaceUserRoles } from "./accessHelpers";
 
         export const addMember = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => assignRole(ctx, args),
+          handler: async (ctx, args) => replaceUserRoles(ctx, args),
         });
       `,
     });
@@ -346,7 +387,7 @@ describe("checkIamSource", () => {
         export const addMember = auth({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.assignRole, args),
+            ctx.runAction(internal.iamService.replaceUserRoles, args),
         });
       `,
       "convex/namespaced.ts": `
@@ -356,7 +397,7 @@ describe("checkIamSource", () => {
         export const removeMember = access.authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.removeRole, args),
+            ctx.runAction(internal.iamService.removeUser, args),
         });
       `,
     });
@@ -376,18 +417,18 @@ describe("checkIamSource", () => {
       "convex/helpers/iam.ts": `
         import { internal } from "../_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/helpers/index.ts": `
-        export { assignRole } from "./iam.js";
+        export { replaceUserRoles } from "./iam.js";
       `,
       "convex/projectMembers.ts": `
         import { authenticatedAction } from "./iam";
-        import { assignRole as importedAssignRole } from "./helpers/index.js";
+        import { replaceUserRoles as importedReplaceUserRoles } from "./helpers/index.js";
 
-        const delegated = importedAssignRole;
+        const delegated = importedReplaceUserRoles;
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) => delegated(ctx, args),
@@ -415,8 +456,8 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projectMembers.ts": `
@@ -425,7 +466,7 @@ describe("checkIamSource", () => {
 
         export const addMember = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => helpers.assignRole(ctx, args),
+          handler: async (ctx, args) => helpers.replaceUserRoles(ctx, args),
         });
       `,
     });
@@ -458,7 +499,7 @@ describe("checkIamSource", () => {
           args: {},
           handler: async () =>
             inviteMember({
-              scopeId: "scope_1",
+              tenantId: "scope_1",
               email: "member@example.com",
             }),
         });
@@ -467,7 +508,7 @@ describe("checkIamSource", () => {
           args: {},
           handler: async () =>
             iamService.createResourceInvitation({
-              scopeId: "scope_1",
+              tenantId: "scope_1",
               email: "member@example.com",
               resourceType: "app.projects",
               resourceId: "project_1",
@@ -508,7 +549,7 @@ describe("checkIamSource", () => {
           args: {},
           handler: async () =>
             service.inviteMember({
-              scopeId: "scope_1",
+              tenantId: "scope_1",
               email: "member@example.com",
             }),
         });
@@ -536,13 +577,13 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
         const definition = {
           args: {},
-          handler: assignRole.bind(undefined),
+          handler: replaceUserRoles.bind(undefined),
         };
 
         export const update = authenticatedAction(definition);
@@ -565,13 +606,13 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
         const serviceConfig = {
           args: {},
-          handler: assignRole,
+          handler: replaceUserRoles,
         };
         const publicConfig = {
           ...serviceConfig,
@@ -596,12 +637,12 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.removeRole, args);
+        async function removeUser(ctx, args) {
+          return await ctx.runAction(internal.iamService.removeUser, args);
         }
 
         function makeHandler() {
-          return removeRole;
+          return removeUser;
         }
 
         export const update = authenticatedAction({
@@ -627,20 +668,20 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
-        async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.removeRole, args);
+        async function removeUser(ctx, args) {
+          return await ctx.runAction(internal.iamService.removeUser, args);
         }
 
-        const helpers = { assignRole };
+        const helpers = { replaceUserRoles };
 
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) => {
-            const { assignRole: delegated } = helpers;
+            const { replaceUserRoles: delegated } = helpers;
             return await delegated(ctx, args);
           },
         });
@@ -650,7 +691,7 @@ describe("checkIamSource", () => {
           handler: async (ctx, args) => {
             let delegated = async () => null;
             {
-              delegated = removeRole;
+              delegated = removeUser;
             }
             return await delegated(ctx, args);
           },
@@ -674,14 +715,14 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
         export const update = authenticatedAction({
           args: {},
           handler: async () => {
-            let delegated = assignRole;
+            let delegated = replaceUserRoles;
             {
               delegated = async () => null;
             }
@@ -705,8 +746,8 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
         export const update = authenticatedAction({
@@ -714,7 +755,7 @@ describe("checkIamSource", () => {
           handler: async (ctx, args) => {
             let delegated = async () => null;
             if (args.useServiceAuthority) {
-              delegated = assignRole;
+              delegated = replaceUserRoles;
             }
             return await delegated(ctx, args);
           },
@@ -736,8 +777,8 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
         export const throughSwitch = authenticatedAction({
@@ -746,7 +787,7 @@ describe("checkIamSource", () => {
             let delegated = async () => null;
             switch (args.mode) {
               case "service":
-                delegated = assignRole;
+                delegated = replaceUserRoles;
                 break;
             }
             return await delegated(ctx, args);
@@ -758,7 +799,7 @@ describe("checkIamSource", () => {
           handler: async (ctx, args) => {
             let delegated = async () => null;
             for (const value of args.values) {
-              delegated = assignRole;
+              delegated = replaceUserRoles;
             }
             return await delegated(ctx, args);
           },
@@ -780,7 +821,7 @@ describe("checkIamSource", () => {
         import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = createIamServiceActions({ internalAction });
+        export const { replaceUserRoles } = createIamServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -789,7 +830,7 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.assignRole, args),
+            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
         });
       `,
     });
@@ -815,7 +856,7 @@ describe("checkIamSource", () => {
         import * as iamService from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = iamService.createIamServiceActions({ internalAction });
+        export const { replaceUserRoles } = iamService.createIamServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -824,7 +865,7 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.assignRole, args),
+            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
         });
       `,
     });
@@ -851,7 +892,7 @@ describe("checkIamSource", () => {
         import { internalAction } from "../_generated/server";
 
         const actions = createIamServiceActions({ internalAction });
-        export const { assignRole } = actions;
+        export const { replaceUserRoles } = actions;
         export const health = internalAction({
           args: {},
           handler: async () => "ok",
@@ -864,7 +905,7 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.assignRole, args),
+            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
         });
 
         export const health = authenticatedAction({
@@ -900,7 +941,7 @@ describe("checkIamSource", () => {
           ...createIamServiceActions({ internalAction }),
         };
 
-        export const { assignRole, health: exportedHealth } = actions;
+        export const { replaceUserRoles, health: exportedHealth } = actions;
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -909,7 +950,7 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.assignRole, args),
+            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
         });
 
         export const health = authenticatedAction({
@@ -935,23 +976,23 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
-        import { assignRole } from "./accessHelpers";
+        import { replaceUserRoles } from "./accessHelpers";
 
         export const list = authenticatedAction({
           args: {},
           handler: async () => {
-            const assignRole = async () => null;
-            await assignRole();
+            const replaceUserRoles = async () => null;
+            await replaceUserRoles();
 
             async function unused(ctx, args) {
-              return await ctx.runAction(internal.iamService.removeRole, args);
+              return await ctx.runAction(internal.iamService.removeUser, args);
             }
 
             return [];
@@ -974,25 +1015,25 @@ describe("checkIamSource", () => {
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
-        async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
 
-        const helpers = { assignRole };
+        const helpers = { replaceUserRoles };
 
         export const throughObject = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => helpers.assignRole(ctx, args),
+          handler: async (ctx, args) => helpers.replaceUserRoles(ctx, args),
         });
 
         export const throughCall = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => assignRole.call(undefined, ctx, args),
+          handler: async (ctx, args) => replaceUserRoles.call(undefined, ctx, args),
         });
 
         export const throughApply = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => assignRole.apply(undefined, [ctx, args]),
+          handler: async (ctx, args) => replaceUserRoles.apply(undefined, [ctx, args]),
         });
       `,
     });
@@ -1013,7 +1054,7 @@ describe("checkIamSource", () => {
         import { createIamServiceActions } from "@usehercules/convex/iam-service";
         import { internalAction } from "../_generated/server";
 
-        export const { assignRole } = createIamServiceActions({ internalAction });
+        export const { replaceUserRoles } = createIamServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -1025,13 +1066,13 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(rootIamService.assignRole, args),
+            ctx.runAction(rootIamService.replaceUserRoles, args),
         });
 
         export const addProjectMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(nestedIamService.assignRole, args),
+            ctx.runAction(nestedIamService.replaceUserRoles, args),
         });
       `,
     });
@@ -1053,7 +1094,7 @@ describe("checkIamSource", () => {
         import { internalAction } from "../_generated/server";
 
         const createServiceActions = createIamServiceActions;
-        export const { assignRole } = createServiceActions({ internalAction });
+        export const { replaceUserRoles } = createServiceActions({ internalAction });
       `,
       "convex/projectMembers.ts": `
         import { internal } from "./_generated/api";
@@ -1062,7 +1103,7 @@ describe("checkIamSource", () => {
         export const addMember = authenticatedAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.services.iamService.assignRole, args),
+            ctx.runAction(internal.services.iamService.replaceUserRoles, args),
         });
       `,
     });
@@ -1087,34 +1128,34 @@ describe("checkIamSource", () => {
       "convex/defaultHelper.ts": `
         import { internal } from "./_generated/api";
 
-        export default async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export default async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/namedHelper.ts": `
         import { internal } from "./_generated/api";
 
-        export async function removeRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.removeRole, args);
+        export async function removeUser(ctx, args) {
+          return await ctx.runAction(internal.iamService.removeUser, args);
         }
       `,
       "convex/barrel.ts": `
-        import { removeRole } from "./namedHelper";
-        export { removeRole };
+        import { removeUser } from "./namedHelper";
+        export { removeUser };
       `,
       "convex/projectMembers.ts": `
         import { authenticatedAction } from "./iam";
-        import assignRole from "./defaultHelper";
-        import { removeRole } from "./barrel";
+        import replaceUserRoles from "./defaultHelper";
+        import { removeUser } from "./barrel";
 
         export const addMember = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => assignRole(ctx, args),
+          handler: async (ctx, args) => replaceUserRoles(ctx, args),
         });
 
         export const removeMember = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => removeRole(ctx, args),
+          handler: async (ctx, args) => removeUser(ctx, args),
         });
       `,
     });
@@ -1134,21 +1175,21 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projects.ts": `
         import { authenticatedAction } from "./iam";
-        import { assignRole as dangerousAssignRole } from "./accessHelpers";
+        import { replaceUserRoles as dangerousReplaceUserRoles } from "./accessHelpers";
 
         export const update = authenticatedAction({
           args: {},
           handler: async (ctx, args) => {
-            const dangerousClosure = async () => dangerousAssignRole(ctx, args);
+            const dangerousClosure = async () => dangerousReplaceUserRoles(ctx, args);
 
             {
-              const dangerousAssignRole = async () => null;
+              const dangerousReplaceUserRoles = async () => null;
               await dangerousClosure();
             }
           },
@@ -1171,22 +1212,22 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projects.ts": `
         import { authenticatedAction } from "./iam";
-        import { assignRole as dangerousAssignRole } from "./accessHelpers";
+        import { replaceUserRoles as dangerousReplaceUserRoles } from "./accessHelpers";
 
         export const update = authenticatedAction({
           args: {},
           handler: async () => {
-            const assignRole = async () => null;
-            const safeClosure = async () => assignRole();
+            const replaceUserRoles = async () => null;
+            const safeClosure = async () => replaceUserRoles();
 
             {
-              const assignRole = dangerousAssignRole;
+              const replaceUserRoles = dangerousReplaceUserRoles;
               await safeClosure();
             }
           },
@@ -1209,7 +1250,7 @@ describe("checkIamSource", () => {
         import { authenticatedAction } from "./iam";
 
         const handler = async (ctx, args) =>
-          ctx.runAction(internal.iamService.assignRole, args);
+          ctx.runAction(internal.iamService.replaceUserRoles, args);
 
         export const update = authenticatedAction({
           args: {},
@@ -1233,8 +1274,8 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projects.ts": `
@@ -1243,7 +1284,7 @@ describe("checkIamSource", () => {
 
         export const update = authenticatedAction({
           args: {},
-          handler: async (helpers) => helpers.assignRole(),
+          handler: async (helpers) => helpers.replaceUserRoles(),
         });
       `,
     });
@@ -1285,29 +1326,29 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projects.ts": `
         import { internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
-        import { assignRole } from "./accessHelpers";
+        import { replaceUserRoles } from "./accessHelpers";
 
         export const list = authenticatedAction({
           args: {},
           handler: async () => {
-            for (const assignRole of [async () => null]) {
-              await assignRole();
+            for (const replaceUserRoles of [async () => null]) {
+              await replaceUserRoles();
             }
 
             {
               const internal = {
                 iamService: {
-                  assignRole: async () => null,
+                  replaceUserRoles: async () => null,
                 },
               };
-              await internal.iamService.assignRole();
+              await internal.iamService.replaceUserRoles();
             }
 
             return [];
@@ -1337,10 +1378,10 @@ describe("checkIamSource", () => {
               case "safe":
                 const internal = {
                   iamService: {
-                    assignRole: async () => null,
+                    replaceUserRoles: async () => null,
                   },
                 };
-                await internal.iamService.assignRole();
+                await internal.iamService.replaceUserRoles();
                 break;
             }
           },
@@ -1361,25 +1402,25 @@ describe("checkIamSource", () => {
       "convex/accessHelpers.ts": `
         import { internal } from "./_generated/api";
 
-        export async function assignRole(ctx, args) {
-          return await ctx.runAction(internal.iamService.assignRole, args);
+        export async function replaceUserRoles(ctx, args) {
+          return await ctx.runAction(internal.iamService.replaceUserRoles, args);
         }
       `,
       "convex/projects.ts": `
         import { authenticatedAction } from "./iam";
-        import { assignRole } from "./accessHelpers";
+        import { replaceUserRoles } from "./accessHelpers";
 
         const invoke = (callback, ctx, args) => callback(ctx, args);
         const ignore = (_callback) => null;
 
         export const invoked = authenticatedAction({
           args: {},
-          handler: async (ctx, args) => invoke(assignRole, ctx, args),
+          handler: async (ctx, args) => invoke(replaceUserRoles, ctx, args),
         });
 
         export const ignored = authenticatedAction({
           args: {},
-          handler: async () => ignore(assignRole),
+          handler: async () => ignore(replaceUserRoles),
         });
 
         export const safe = authenticatedAction({
@@ -1413,7 +1454,7 @@ describe("checkIamSource", () => {
 
         export const run = authenticatedAction({
           handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.assignRole, args),
+            ctx.runAction(internal.iamService.replaceUserRoles, args),
         });
       `,
       "convex/namespaced.ts": `
@@ -1422,7 +1463,7 @@ describe("checkIamSource", () => {
 
         export const run = fakeBuilders.authenticatedAction({
           handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.assignRole, args),
+            ctx.runAction(internal.iamService.replaceUserRoles, args),
         });
       `,
     });
@@ -1450,7 +1491,7 @@ describe("checkIamSource", () => {
         export const repair = internalAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.assignRole, args),
+            ctx.runAction(internal.iamService.replaceUserRoles, args),
         });
       `,
       "convex/repairs.ts": `
@@ -1460,7 +1501,7 @@ describe("checkIamSource", () => {
         export const repair = internalAction({
           args: {},
           handler: async (ctx, args) =>
-            ctx.runAction(internal.iamService.assignRole, args),
+            ctx.runAction(internal.iamService.replaceUserRoles, args),
         });
       `,
     });
@@ -1504,17 +1545,17 @@ describe("checkIamSource", () => {
     });
   });
 
-  test("reports placeholder Hercules org scope ids", () => {
+  test("reports placeholder Hercules tenant ids", () => {
     const root = createFixture({
-      "convex/organizations.ts": `
+      "convex/tenants.ts": `
         import { authenticatedMutation } from "./iam";
 
         export const create = authenticatedMutation({
           args: {},
           handler: async (ctx) => {
-            await ctx.db.insert("organizations", {
+            await ctx.db.insert("tenants", {
               name: "Acme",
-              herculesScopeId: "",
+              tenantId: "",
             });
           },
         });
@@ -1526,23 +1567,23 @@ describe("checkIamSource", () => {
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
       {
-        code: "placeholder_access_scope_id",
-        filePath: "convex/organizations.ts",
+        code: "placeholder_tenant_id",
+        filePath: "convex/tenants.ts",
       },
     ]);
-    expect(formatIamCheckResult(result)).toContain("Create a Hercules IAM scope first");
+    expect(formatIamCheckResult(result)).toContain("Create a Hercules IAM tenant first");
   });
 
-  test("reports hardcoded IAM scope ids in source", () => {
+  test("reports hardcoded IAM tenant ids in source", () => {
     const root = createFixture({
       "convex/iam.ts": `
         import { createIam } from "@usehercules/convex";
         export const builders = createIam;
 
-        export const CLINIC_SCOPE_ID = "01KTYRQ825E43T3PFRPZZESTPJ";
+        export const CLINIC_TENANT_ID = "01KTYRQ825E43T3PFRPZZESTPJ";
 
-        export function getClinicScopeId() {
-          return CLINIC_SCOPE_ID;
+        export function getClinicTenantId() {
+          return CLINIC_TENANT_ID;
         }
       `,
     });
@@ -1553,15 +1594,15 @@ describe("checkIamSource", () => {
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: "hardcoded_access_scope_id",
+          code: "hardcoded_tenant_id",
           filePath: "convex/iam.ts",
         }),
       ]),
     );
-    expect(formatIamCheckResult(result)).toContain("Do not hardcode IAM scope ids");
+    expect(formatIamCheckResult(result)).toContain("Do not hardcode IAM tenant ids");
   });
 
-  test("reports app-local org membership tables in managed IAM apps", () => {
+  test("reports app-local tenant membership tables in managed IAM apps", () => {
     const root = createFixture({
       "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
@@ -1571,8 +1612,8 @@ describe("checkIamSource", () => {
         import { v } from "convex/values";
 
         export default defineSchema({
-          orgMembers: defineTable({
-            orgId: v.id("organizations"),
+          tenantMembers: defineTable({
+            tenantRecordId: v.id("tenants"),
             userId: v.id("users"),
             role: v.string(),
           }),
@@ -1584,11 +1625,11 @@ describe("checkIamSource", () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
-      { code: "local_org_membership_table", filePath: "convex/schema.ts" },
+      { code: "local_tenant_membership_table", filePath: "convex/schema.ts" },
     ]);
   });
 
-  test("reports optional orgScopeId and global slug lookup on org-scoped rows", () => {
+  test("reports optional tenantId and global slug lookup on tenant-scoped rows", () => {
     const root = createFixture({
       "convex/schema.ts": `
         import { defineSchema, defineTable } from "convex/server";
@@ -1596,25 +1637,25 @@ describe("checkIamSource", () => {
 
         export default defineSchema({
           posts: defineTable({
-            orgScopeId: v.optional(v.string()),
+            tenantId: v.optional(v.string()),
             slug: v.string(),
           }).index("by_slug", ["slug"]),
         });
       `,
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { iamQuery, scopeFromArg } from "./iam";
+        import { iamQuery, tenantFromArg } from "./iam";
 
         export const getBySlug = iamQuery({
           permission: "posts.read",
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string(), slug: v.string() },
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string(), slug: v.string() },
           handler: async (ctx, args) => {
             const post = await ctx.db
               .query("posts")
               .withIndex("by_slug", (q) => q.eq("slug", args.slug))
               .first();
-            return post?.orgScopeId === args.orgScopeId ? post : null;
+            return post?.tenantId === args.tenantId ? post : null;
           },
         });
       `,
@@ -1626,27 +1667,27 @@ describe("checkIamSource", () => {
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: "optional_org_scope_id",
+          code: "optional_tenant_id",
           filePath: "convex/schema.ts",
         }),
         expect.objectContaining({
-          code: "org_scoped_global_slug_lookup",
+          code: "tenant_scoped_global_slug_lookup",
           filePath: "convex/posts.ts",
         }),
       ]),
     );
   });
 
-  test("reports org-owned row mutations authorized from a caller supplied scope", () => {
+  test("reports tenant-owned row mutations authorized from a caller supplied tenant", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { iamMutation, scopeFromArg } from "./iam";
+        import { iamMutation, tenantFromArg } from "./iam";
 
         export const update = iamMutation({
           permission: "posts.update",
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string(), postId: v.id("posts"), title: v.string() },
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string(), postId: v.id("posts"), title: v.string() },
           handler: async (ctx, args) => {
             await ctx.db.patch(args.postId, { title: args.title });
           },
@@ -1660,15 +1701,15 @@ describe("checkIamSource", () => {
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: "org_row_scope_from_arg",
+          code: "tenant_row_from_arg",
           filePath: "convex/posts.ts",
         }),
       ]),
     );
-    expect(formatIamCheckResult(result)).toContain("scopeFromResource");
+    expect(formatIamCheckResult(result)).toContain("tenantFromResource");
   });
 
-  test("reports existing-row IAM operations without a resource scope", () => {
+  test("reports existing-row IAM operations without a resource tenant", () => {
     const root = createFixture({
       "convex/iam.ts": `
         export { createIam } from "@usehercules/convex";
@@ -1694,12 +1735,12 @@ describe("checkIamSource", () => {
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: "existing_row_missing_resource_scope",
+          code: "existing_row_missing_resource_tenant",
           filePath: "convex/tasks.ts",
         }),
       ]),
     );
-    expect(formatIamCheckResult(result)).toContain("scopeFromDefaultResource");
+    expect(formatIamCheckResult(result)).toContain("tenantFromDefaultResource");
   });
 
   test("reports row capability checks without a concrete resource", () => {
@@ -1712,12 +1753,12 @@ describe("checkIamSource", () => {
         import {
           checkPermissions,
           iamQuery,
-          scopeFromDefaultResource,
+          tenantFromDefaultResource,
         } from "./iam";
 
         export const getCapabilities = iamQuery({
           permission: "app.tasks:read",
-          scope: scopeFromDefaultResource("tasks", "taskId"),
+          tenant: tenantFromDefaultResource("tasks", "taskId"),
           args: { taskId: v.id("tasks") },
           handler: async (ctx, args) => {
             const task = await ctx.db.get(args.taskId);
@@ -1754,12 +1795,12 @@ describe("checkIamSource", () => {
         import {
           checkPermissions,
           iamQuery,
-          scopeFromDefaultResource,
+          tenantFromDefaultResource,
         } from "./iam";
 
         export const getCapabilities = iamQuery({
           permission: "app.tasks:read",
-          scope: scopeFromDefaultResource("tasks", "taskId"),
+          tenant: tenantFromDefaultResource("tasks", "taskId"),
           args: { taskId: v.id("tasks") },
           handler: async (ctx, args) => {
             const task = await ctx.db.get(args.taskId);
@@ -1781,7 +1822,7 @@ describe("checkIamSource", () => {
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
-  test("reports authenticated reads of org-owned tables", () => {
+  test("reports authenticated reads of tenant-owned tables", () => {
     const root = createFixture({
       "convex/schema.ts": `
         import { defineSchema, defineTable } from "convex/server";
@@ -1789,7 +1830,7 @@ describe("checkIamSource", () => {
 
         export default defineSchema({
           posts: defineTable({
-            orgScopeId: v.string(),
+            tenantId: v.string(),
             title: v.string(),
           }),
         });
@@ -1799,7 +1840,7 @@ describe("checkIamSource", () => {
         import { authenticatedQuery } from "./iam";
 
         export const listDrafts = authenticatedQuery({
-          args: { orgScopeId: v.string() },
+          args: { tenantId: v.string() },
           handler: async (ctx) => ctx.db.query("posts").collect(),
         });
 
@@ -1816,7 +1857,7 @@ describe("checkIamSource", () => {
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: "authenticated_org_data_read",
+          code: "authenticated_tenant_data_read",
           filePath: "convex/posts.ts",
         }),
       ]),
@@ -1829,10 +1870,10 @@ describe("checkIamSource", () => {
         import { createIam } from "@usehercules/convex";
         export const marker = createIam;
       `,
-      "src/hooks/use-org.tsx": `
-        export function useOrg() {
-          const activeOrg = { role: "admin" as "admin" | "member" };
-          return { isAdmin: activeOrg.role === "admin" };
+      "src/hooks/use-tenant.tsx": `
+        export function useTenant() {
+          const activeTenant = { role: "admin" as "admin" | "member" };
+          return { isAdmin: activeTenant.role === "admin" };
         }
       `,
     });
@@ -1852,14 +1893,16 @@ describe("checkIamSource", () => {
         import { api } from "./_generated/api";
 
         export async function promote(ctx, args) {
-          await ctx.runAction(api.iamManagement.setResourcePermissionRule, {
-            scopeId: args.scopeId,
-            subject: { type: "principal", principalId: args.principalId },
+          await ctx.runAction(api.iamManagement.replaceResourcePermissionOverrides, {
+            tenantId: args.tenantId,
+            subject: { type: "user", userId: args.userId },
             resourceType: "app.projects",
-            target: { mode: "specific", resourceId: args.projectId },
-            permissionKey: "app.projects:manage_members",
-            effect: "allow",
+            target: { type: "resource", resourceId: args.projectId },
             appliesTo: "self_and_descendants",
+            overrides: [{
+              permissionKey: "app.projects:manage_members",
+              effect: "allow",
+            }],
             idToken: args.idToken,
           });
         }
@@ -1893,19 +1936,19 @@ describe("checkIamSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { iamQuery, iamMutation, scopeFromArg } from "./iam";
+        import { iamQuery, iamMutation, tenantFromArg } from "./iam";
 
         export const list = iamQuery({
           permission: "projects:read",
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string() },
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string() },
           handler: async (ctx) => ctx.db.query("projects").collect(),
         });
 
         export const rename = iamMutation({
           permission: "app.projects:update",
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string(), name: v.string() },
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string(), name: v.string() },
           handler: async () => null,
         });
       `,
@@ -1971,28 +2014,28 @@ describe("checkIamSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { iamQuery, scopeFromArg } from "./iam";
+        import { iamQuery, tenantFromArg } from "./iam";
 
         const AUDIT_PERMISSION = "app.audit:read";
 
         export const list = iamQuery({
           permission: "app.projects:read",
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string() },
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string() },
           handler: async (ctx) => ctx.db.query("projects").collect(),
         });
 
         export const members = iamQuery({
-          permission: "system.members:read",
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string() },
+          permission: "system.access.users:read",
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string() },
           handler: async () => [],
         });
 
         export const audit = iamQuery({
           permission: AUDIT_PERMISSION,
-          scope: scopeFromArg("orgScopeId"),
-          args: { orgScopeId: v.string() },
+          tenant: tenantFromArg("tenantId"),
+          args: { tenantId: v.string() },
           handler: async () => [],
         });
       `,
@@ -2006,12 +2049,12 @@ describe("checkIamSource", () => {
   test("skips the catalog permission check when hercules/iam.jsonc is missing or invalid", () => {
     const builderSource = `
       import { v } from "convex/values";
-      import { iamQuery, scopeFromArg } from "./iam";
+      import { iamQuery, tenantFromArg } from "./iam";
 
       export const list = iamQuery({
         permission: "projects:read",
-        scope: scopeFromArg("orgScopeId"),
-        args: { orgScopeId: v.string() },
+        tenant: tenantFromArg("tenantId"),
+        args: { tenantId: v.string() },
         handler: async (ctx) => ctx.db.query("projects").collect(),
       });
     `;

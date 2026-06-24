@@ -7,19 +7,39 @@ import {
   accessProjectionSyncPayloadSchema,
 } from "./projection-protocol";
 
-const fixturesDir = fileURLToPath(new URL("./__fixtures__/projection-v3/", import.meta.url));
+const fixturesDir = fileURLToPath(new URL("./__fixtures__/projection-v4/", import.meta.url));
 
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(`${fixturesDir}${name}`, "utf8"));
 }
 
-describe("IAM projection v3 consumer schemas", () => {
+describe("IAM projection v4 consumer schemas", () => {
   test("snapshot.json parses under the snapshot schema", () => {
     const snapshot = loadFixture("snapshot.json");
 
     const parsed = accessProjectionSnapshotSchema.parse(snapshot);
     expect(parsed).toEqual(snapshot);
     expect(accessProjectionSyncPayloadSchema.parse(snapshot)).toEqual(snapshot);
+  });
+
+  test("rejects v3 snapshots", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      schemaVersion: number;
+    };
+    const v3 = structuredClone(snapshot);
+    v3.schemaVersion = 3;
+
+    expect(accessProjectionSnapshotSchema.safeParse(v3).success).toBe(false);
+  });
+
+  test("requires role descriptions in v4 snapshots", () => {
+    const snapshot = loadFixture("snapshot.json") as {
+      catalog: { roles: { description?: string | null }[] };
+    };
+    const missingDescription = structuredClone(snapshot);
+    delete missingDescription.catalog.roles[0]!.description;
+
+    expect(accessProjectionSnapshotSchema.safeParse(missingDescription).success).toBe(false);
   });
 
   test("event-catalog.json parses under the event schema", () => {
@@ -72,21 +92,18 @@ describe("IAM projection v3 consumer schemas", () => {
     expect(parsed.scopes[0]!.permissionBindings[0]!.appliesTo).toBe("self_and_descendants");
   });
 
-  test("bindings without appliesTo default to self", () => {
-    const snapshot = loadFixture("snapshot.json") as {
-      scopes: {
-        roleBindings: { appliesTo?: string }[];
-        permissionBindings: { appliesTo?: string }[];
-      }[];
-    };
-    const legacyFlatPayload = structuredClone(snapshot);
-    delete legacyFlatPayload.scopes[0]!.roleBindings[0]!.appliesTo;
-    delete legacyFlatPayload.scopes[0]!.permissionBindings[0]!.appliesTo;
+  test.each(["roleBindings", "permissionBindings"] as const)(
+    "rejects %s without appliesTo",
+    (field) => {
+      const snapshot = loadFixture("snapshot.json") as {
+        scopes: Record<typeof field, { appliesTo?: string }[]>[];
+      };
+      const invalid = structuredClone(snapshot);
+      delete invalid.scopes[0]![field][0]!.appliesTo;
 
-    const parsed = accessProjectionSnapshotSchema.parse(legacyFlatPayload);
-    expect(parsed.scopes[0]!.roleBindings[0]!.appliesTo).toBe("self");
-    expect(parsed.scopes[0]!.permissionBindings[0]!.appliesTo).toBe("self");
-  });
+      expect(accessProjectionSnapshotSchema.safeParse(invalid).success).toBe(false);
+    },
+  );
 
   test.each(["roleBindings", "permissionBindings"] as const)(
     "%s require an exact resource when applying to descendants",
@@ -224,7 +241,7 @@ describe("IAM projection v3 consumer schemas", () => {
     // targeting as_org1 (with a matching change identity referencing as_org1).
     const event = {
       type: "access.projection.event" as const,
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       eventId: "evt_cross_scope_0001",
       sourceVersion: 11,
       scopes: [

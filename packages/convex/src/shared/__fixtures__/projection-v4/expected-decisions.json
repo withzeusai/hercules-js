@@ -12,7 +12,7 @@
     "subjectPrincipalId": "pr_default_alice",
     "scopeId": "as_default",
     "action": "manage",
-    "resourceType": "system.members",
+    "resourceType": "system.access.users",
     "expect": "allow"
   },
   {
@@ -32,11 +32,11 @@
     "expect": "deny"
   },
   {
-    "label": "owner_only fence: system.recovery:manage is not grantable to a non-owner admin",
+    "label": "owner_only fence: system.access.recovery:manage is not grantable to a non-owner admin",
     "subjectPrincipalId": "pr_default_alice",
     "scopeId": "as_default",
     "action": "manage",
-    "resourceType": "system.recovery",
+    "resourceType": "system.access.recovery",
     "expect": "deny"
   },
   {
@@ -52,7 +52,7 @@
     "subjectPrincipalId": "pr_default_bob",
     "scopeId": "as_default",
     "action": "manage",
-    "resourceType": "system.members",
+    "resourceType": "system.access.users",
     "expect": "deny"
   }
 ]

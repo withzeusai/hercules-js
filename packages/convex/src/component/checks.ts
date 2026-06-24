@@ -5,12 +5,18 @@ import {
   type QueryBuilder,
 } from "convex/server";
 import { v } from "convex/values";
-import { evaluateAccess, hasExplicitDeny } from "./authz";
+import {
+  explainAccessResolution,
+  hasExplicitDeny,
+  type AccessResolution,
+  type RequestedAccess,
+} from "./authz";
 import {
   evaluateEffectiveAccess,
   isSupersetAction,
   normalizeAuthorizationAncestors,
   type AuthorizationAncestor,
+  type EffectiveAccessEvaluation,
 } from "./effective";
 import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
@@ -23,7 +29,7 @@ type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
 // Mirrors client/index.ts PERMISSION_RESOURCE_TYPE_SENTINEL: the SDK's
-// scopeFromResource extractor cannot know the canonical catalog resource type
+// tenantFromResource extractor cannot know the canonical catalog resource type
 // of the checked permission, so it sends this sentinel and the gate below
 // substitutes the resolved permission's resourceType.
 const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
@@ -32,21 +38,55 @@ const authorizationAncestorValidator = v.object({
   resourceId: v.string(),
 });
 const authorizationCheckValidator = v.object({
-  scopeId: v.optional(v.string()),
+  tenantId: v.optional(v.string()),
   permission: v.string(),
   resourceType: v.optional(v.string()),
   resourceId: v.optional(v.string()),
   ancestors: v.optional(v.array(authorizationAncestorValidator)),
 });
 
+export type PermissionDecision = {
+  allowed: boolean;
+  reasonCode: string;
+  explicitDeny: boolean;
+  sourceVersion?: number;
+  principalId?: string;
+  effectiveRoleIds: string[];
+};
+
+export type ResolvedPermission = {
+  permissionId: string;
+  key: string;
+  resourceType: string;
+  action: string;
+  classification: "delegable" | "owner_only";
+};
+
+export type PermissionDecisionDetails = {
+  decision: PermissionDecision;
+  resolvedPermission?: ResolvedPermission;
+  evaluation?: EffectiveAccessEvaluation;
+  request?: RequestedAccess;
+  accessResolution?: AccessResolution;
+};
+
+type PermissionDecisionArgs = {
+  tokenIdentifier?: string;
+  tenantId?: string;
+  permission: string;
+  resourceType?: string;
+  resourceId?: string;
+  ancestors?: AuthorizationAncestor[];
+};
+
 export const authorize = query({
   args: {
     tokenIdentifier: v.optional(v.string()),
-    scopeId: v.optional(v.string()),
+    tenantId: v.optional(v.string()),
     permission: v.optional(v.string()),
     // DL16 resource grant support. When provided, authorize also walks
     // resource-object grants targeting this resource. App code passes these
-    // via a scope extractor when the permission applies to a specific row.
+    // via a tenant extractor when the permission applies to a specific row.
     resourceType: v.optional(v.string()),
     resourceId: v.optional(v.string()),
     ancestors: v.optional(v.array(authorizationAncestorValidator)),
@@ -78,7 +118,7 @@ export const authorize = query({
 
     return evaluatePermissionDecision(ctx, {
       tokenIdentifier: args.tokenIdentifier,
-      scopeId: args.scopeId,
+      tenantId: args.tenantId,
       permission: args.permission,
       resourceType: args.resourceType,
       resourceId: args.resourceId,
@@ -111,31 +151,31 @@ export const authorizeMany = query({
 /**
  * Resolve a single permission request to an allow/deny decision. This is the
  * canonical permission gate, shared by the `authorize` query (the hot can()
- * path) and the scope-admin list queries, so both apply identical wildcard,
+ * path) and the tenant-admin list queries, so both apply identical wildcard,
  * deny-override, and owner-only-lever semantics. Reads only the local mirror.
  */
 export async function evaluatePermissionDecision(
   ctx: GenericQueryCtx<DataModel>,
-  args: {
-    tokenIdentifier?: string;
-    scopeId?: string;
-    permission: string;
-    resourceType?: string;
-    resourceId?: string;
-    ancestors?: AuthorizationAncestor[];
-  },
-) {
+  args: PermissionDecisionArgs,
+): Promise<PermissionDecision> {
+  return (await evaluatePermissionDecisionDetailed(ctx, args)).decision;
+}
+
+export async function evaluatePermissionDecisionDetailed(
+  ctx: GenericQueryCtx<DataModel>,
+  args: PermissionDecisionArgs & { includeTrace?: boolean },
+): Promise<PermissionDecisionDetails> {
   // Resolve the requested permission's canonical (resourceType, action) by
   // catalog lookup rather than parsing the key string. The producer ships
   // the structured columns verbatim, so this works for canonical
   // (app.appointments:create), dot-action (reports.export), and namespaced
   // keys alike without the runtime having to agree on slug grammar.
-  // Catalog permissions always live in the default scope (DL15). Resolved
+  // Catalog permissions are stored with the default scope row. Resolved
   // BEFORE the effective-access evaluation so the sentinel substitution below
   // feeds the canonical type into the resource-grant walk.
   const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
 
-  // scopeFromResource defers its resource type to the checked permission (it
+  // tenantFromResource defers its resource type to the checked permission (it
   // only sees the table row, not the catalog), so substitute the canonical
   // catalog resourceType for the sentinel. Explicit resource refs keep their
   // caller-provided type and the mismatch fence below.
@@ -145,32 +185,43 @@ export async function evaluatePermissionDecision(
       : args.resourceType;
   const ancestors = normalizeAuthorizationAncestors(args.ancestors);
   if (ancestors === null) {
-    return deny("invalid_request");
+    return {
+      decision: deny("invalid_request"),
+      ...(resolvedPermission ? { resolvedPermission } : {}),
+    };
   }
 
   const evaluation = await evaluateEffectiveAccess(ctx, {
     tokenIdentifier: args.tokenIdentifier,
-    scopeId: args.scopeId,
+    scopeId: args.tenantId,
     resourceType,
     resourceId: args.resourceId,
     ancestors,
+    includeTrace: args.includeTrace,
   });
   if (!evaluation.allowed) {
-    return deny(
-      evaluation.reasonCode,
-      evaluation.sourceVersion,
-      evaluation.principalId,
-      evaluation.effectiveRoleIds,
-    );
+    return {
+      decision: deny(
+        evaluation.reasonCode,
+        evaluation.sourceVersion,
+        evaluation.principalId,
+        evaluation.effectiveRoleIds,
+      ),
+      ...(resolvedPermission ? { resolvedPermission } : {}),
+      evaluation,
+    };
   }
 
   if (!resolvedPermission) {
-    return deny(
-      "permission_missing",
-      evaluation.sourceVersion,
-      evaluation.principalId,
-      evaluation.effectiveRoleIds,
-    );
+    return {
+      decision: deny(
+        "permission_missing",
+        evaluation.sourceVersion,
+        evaluation.principalId,
+        evaluation.effectiveRoleIds,
+      ),
+      evaluation,
+    };
   }
 
   // Requests carry concrete verbs only. A catalog permission whose action is
@@ -183,41 +234,57 @@ export async function evaluatePermissionDecision(
     isSupersetAction(resolvedPermission.action) ||
     (resourceType !== undefined && resourceType !== resolvedPermission.resourceType)
   ) {
-    return deny(
-      "invalid_request",
-      evaluation.sourceVersion,
-      evaluation.principalId,
-      evaluation.effectiveRoleIds,
-    );
+    return {
+      decision: deny(
+        "invalid_request",
+        evaluation.sourceVersion,
+        evaluation.principalId,
+        evaluation.effectiveRoleIds,
+      ),
+      resolvedPermission,
+      evaluation,
+    };
   }
 
-  const request = {
+  const request: RequestedAccess = {
     resourceType: resolvedPermission.resourceType,
     action: resolvedPermission.action,
     classification: resolvedPermission.classification,
     objectId: args.resourceId,
   };
-  const decision = evaluateAccess({
+  const accessResolution = explainAccessResolution({
     wildcard: evaluation.wildcard,
     entries: evaluation.entries,
     request,
   });
 
-  if (decision === "allow") {
-    return allow(
-      evaluation.sourceVersion ?? 0,
-      evaluation.principalId,
-      evaluation.effectiveRoleIds,
-    );
+  if (accessResolution.effect === "allow") {
+    return {
+      decision: allow(
+        evaluation.sourceVersion ?? 0,
+        evaluation.principalId,
+        evaluation.effectiveRoleIds,
+      ),
+      resolvedPermission,
+      evaluation,
+      request,
+      accessResolution,
+    };
   }
 
-  return deny(
-    "permission_denied",
-    evaluation.sourceVersion,
-    evaluation.principalId,
-    evaluation.effectiveRoleIds,
-    hasExplicitDeny(evaluation.entries, request),
-  );
+  return {
+    decision: deny(
+      "permission_denied",
+      evaluation.sourceVersion,
+      evaluation.principalId,
+      evaluation.effectiveRoleIds,
+      hasExplicitDeny(evaluation.entries, request),
+    ),
+    resolvedPermission,
+    evaluation,
+    request,
+    accessResolution,
+  };
 }
 
 async function findCatalogPermissionByKey(ctx: GenericQueryCtx<DataModel>, key: string) {
@@ -234,7 +301,11 @@ async function findCatalogPermissionByKey(ctx: GenericQueryCtx<DataModel>, key: 
     .unique();
 }
 
-function allow(sourceVersion: number, principalId: string | undefined, effectiveRoleIds: string[]) {
+function allow(
+  sourceVersion: number,
+  principalId: string | undefined,
+  effectiveRoleIds: string[],
+): PermissionDecision {
   return {
     allowed: true as const,
     reasonCode: "allowed",
@@ -251,7 +322,7 @@ function deny(
   principalId?: string,
   effectiveRoleIds?: string[],
   explicitDeny = false,
-) {
+): PermissionDecision {
   return {
     allowed: false as const,
     reasonCode,

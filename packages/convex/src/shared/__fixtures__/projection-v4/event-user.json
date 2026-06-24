@@ -1,6 +1,6 @@
 {
   "type": "access.projection.event",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "eventId": "evt_user_cd_demo_0009",
   "sourceVersion": 9,
   "users": {

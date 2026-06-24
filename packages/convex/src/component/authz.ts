@@ -97,8 +97,8 @@ export type WildcardMode = "none" | "immutable" | "default";
  * fences ALL canonical CRUD on that `resourceType`, not just a literal
  * `:manage` request — and since requests never carry `manage`/`*` (see
  * {@link RequestedAccess}), the `manage` levers must expand or they would be
- * dead. The two all-or-nothing Owner domains (billing, owner management) use
- * `manage` so every operation on them is fenced; the two single-verb levers
+ * dead. The all-or-nothing billing domain uses `manage` so every operation on
+ * it is fenced; the two single-verb levers
  * (delete app, transfer ownership) use their concrete verb.
  */
 export const OWNER_ONLY_LEVERS: ReadonlyArray<{
@@ -108,7 +108,6 @@ export const OWNER_ONLY_LEVERS: ReadonlyArray<{
   { resourceType: "system.app", action: "delete" }, // delete app
   { resourceType: "system.ownership", action: "transfer" }, // transfer ownership
   { resourceType: "system.billing", action: MANAGE_ACTION }, // billing (all operations)
-  { resourceType: "system.access.owner", action: MANAGE_ACTION }, // add/remove/demote Owner (all operations)
 ] as const;
 
 /**
@@ -163,7 +162,7 @@ export type ApplicableEntry = {
   objectId?: string;
 };
 
-function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean {
+export function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean {
   // resourceType: exact match or wildcard resourceType.
   if (entry.resourceType !== WILDCARD_ACTION && entry.resourceType !== request.resourceType) {
     return false;
@@ -181,6 +180,19 @@ function entryMatches(entry: ApplicableEntry, request: RequestedAccess): boolean
 export function hasExplicitDeny(entries: ApplicableEntry[], request: RequestedAccess): boolean {
   return entries.some((entry) => entry.effect === "deny" && entryMatches(entry, request));
 }
+
+export type AccessDecisiveReason =
+  | "immutable_wildcard"
+  | "explicit_deny"
+  | "default_wildcard"
+  | "explicit_allow"
+  | "owner_only"
+  | "implicit_deny";
+
+export type AccessResolution = {
+  effect: Effect;
+  decisiveReason: AccessDecisiveReason;
+};
 
 /**
  * Resolve a single access request to allow/deny per §0.4:
@@ -205,20 +217,42 @@ export function evaluateAccess(args: {
   entries: ApplicableEntry[];
   request: RequestedAccess;
 }): Effect {
+  return resolveAccess(args).effect;
+}
+
+export function explainAccessResolution(args: {
+  wildcard: WildcardMode;
+  entries: ApplicableEntry[];
+  request: RequestedAccess;
+}): AccessResolution {
+  return resolveAccess(args);
+}
+
+function resolveAccess(args: {
+  wildcard: WildcardMode;
+  entries: ApplicableEntry[];
+  request: RequestedAccess;
+}): AccessResolution {
   const { wildcard, entries, request } = args;
 
   // 1. Owner short-circuit.
-  if (wildcard === "immutable") return "allow";
+  if (wildcard === "immutable") {
+    return { effect: "allow", decisiveReason: "immutable_wildcard" };
+  }
 
   // 2. Gather matching entries.
   const matching = entries.filter((entry) => entryMatches(entry, request));
 
   // 3. Explicit deny wins.
-  if (matching.some((entry) => entry.effect === "deny")) return "deny";
+  if (matching.some((entry) => entry.effect === "deny")) {
+    return { effect: "deny", decisiveReason: "explicit_deny" };
+  }
 
   // 4. Admin wildcard default (fenced from Owner-only levers).
   if (wildcard === "default") {
-    if (!isOwnerOnlyLever(request)) return "allow";
+    if (!isOwnerOnlyLever(request)) {
+      return { effect: "allow", decisiveReason: "default_wildcard" };
+    }
   }
 
   // 5. Explicit allow. Owner-only levers are conferrable ONLY by the immutable
@@ -226,9 +260,12 @@ export function evaluateAccess(args: {
   // wildcard fence in step 4. This keeps the invariant even if such a permission
   // is somehow created and granted.
   if (!isOwnerOnlyLever(request) && matching.some((entry) => entry.effect === "allow")) {
-    return "allow";
+    return { effect: "allow", decisiveReason: "explicit_allow" };
   }
 
   // 6. Implicit deny.
-  return "deny";
+  return {
+    effect: "deny",
+    decisiveReason: isOwnerOnlyLever(request) ? "owner_only" : "implicit_deny",
+  };
 }

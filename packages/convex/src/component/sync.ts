@@ -41,20 +41,8 @@ const expirePermissionBindingReference = makeFunctionReference<
 // with a clear payload failure rather than letting the mutation abort opaquely.
 const MAX_SNAPSHOT_DOCUMENTS = 16_000;
 
-type IamBindingAppliesTo = "self" | "self_and_descendants";
-
-function bindingAppliesTo(binding: object): IamBindingAppliesTo {
-  if (
-    "appliesTo" in binding &&
-    (binding.appliesTo === "self" || binding.appliesTo === "self_and_descendants")
-  ) {
-    return binding.appliesTo;
-  }
-  return "self";
-}
-
 // The args validator is intentionally loose (the producer ships either payload
-// kind); real validation is the zod parse below. Accept the v3 top-level shape.
+// kind); real validation is the zod parse below. Accept the v4 top-level shape.
 const syncPayloadArgs = {
   type: v.union(v.literal("access.projection.snapshot"), v.literal("access.projection.event")),
   schemaVersion: v.number(),
@@ -70,7 +58,7 @@ const syncPayloadArgs = {
 export const applySync = mutation({
   args: syncPayloadArgs,
   handler: async (ctx, rawArgs) => {
-    if (rawArgs.schemaVersion !== 3) {
+    if (rawArgs.schemaVersion !== 4) {
       return { ok: false as const, status: "unsupported_schema" as const };
     }
 
@@ -225,6 +213,7 @@ export const applySync = mutation({
           key: role.key,
           source: role.source,
           name: role.name,
+          description: role.description,
           baseWildcard: role.baseWildcard,
           updatedAt: role.updatedAt,
         });
@@ -259,10 +248,19 @@ export const applySync = mutation({
       for (const scopeEntry of snapshot.scopes) {
         await insertScope(scopeEntry.scope);
 
+        const groupMemberCounts = new Map<string, number>();
+        for (const membership of scopeEntry.principalMemberships) {
+          groupMemberCounts.set(
+            membership.groupPrincipalId,
+            (groupMemberCounts.get(membership.groupPrincipalId) ?? 0) + 1,
+          );
+        }
         for (const principal of scopeEntry.principals) {
           await ctx.db.insert("principals", {
             accessScopeId: scopeEntry.scope.accessScopeId,
             ...principal,
+            memberCount:
+              principal.type === "group" ? (groupMemberCounts.get(principal.principalId) ?? 0) : 0,
           });
         }
         for (const membership of scopeEntry.principalMemberships) {
@@ -283,6 +281,7 @@ export const applySync = mutation({
             key: role.key,
             source: role.source,
             name: role.name,
+            description: role.description,
             baseWildcard: role.baseWildcard,
             accessScopeId: enclosingScopeId,
             updatedAt: role.updatedAt,
@@ -301,7 +300,6 @@ export const applySync = mutation({
           await ctx.db.insert("role_bindings", {
             ...binding,
             accessScopeId: enclosingScopeId,
-            appliesTo: bindingAppliesTo(binding),
           });
           await scheduleRoleBindingExpiration(binding);
         }
@@ -312,7 +310,6 @@ export const applySync = mutation({
           await ctx.db.insert("permission_bindings", {
             ...binding,
             accessScopeId: enclosingScopeId,
-            appliesTo: bindingAppliesTo(binding),
           });
           await schedulePermissionBindingExpiration(binding);
         }
@@ -353,6 +350,7 @@ export const applySync = mutation({
               key: role.key,
               source: role.source,
               name: role.name,
+              description: role.description,
               baseWildcard: role.baseWildcard,
               updatedAt: role.updatedAt,
             });
@@ -465,6 +463,7 @@ export const applySync = mutation({
               key: role.key,
               source: role.source,
               name: role.name,
+              description: role.description,
               baseWildcard: role.baseWildcard,
               // E4: pin to the ENCLOSING scope, never the row's own
               // accessScopeId.
@@ -616,7 +615,12 @@ export const applySync = mutation({
         .query("principals")
         .withIndex("by_principal_id", (q) => q.eq("principalId", principal.principalId))
         .unique();
-      const row = { accessScopeId, ...principal };
+      const row = {
+        accessScopeId,
+        ...principal,
+        memberCount:
+          principal.type === "group" && existing?.type === "group" ? existing.memberCount : 0,
+      };
       if (existing) await ctx.db.replace(existing._id, row);
       else await ctx.db.insert("principals", row);
     }
@@ -656,6 +660,7 @@ export const applySync = mutation({
         )
         .collect()) {
         await ctx.db.delete(membership._id);
+        await adjustGroupMemberCount(accessScopeId, membership.groupPrincipalId, -1);
       }
       await ctx.db.delete(principal._id);
     }
@@ -679,7 +684,10 @@ export const applySync = mutation({
         .unique();
       const row = { accessScopeId, ...membership };
       if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("principal_memberships", row);
+      else {
+        await ctx.db.insert("principal_memberships", row);
+        await adjustGroupMemberCount(accessScopeId, membership.groupPrincipalId, 1);
+      }
     }
 
     async function deleteMembership(
@@ -696,7 +704,32 @@ export const applySync = mutation({
             .eq("memberPrincipalId", memberPrincipalId),
         )
         .unique();
-      if (membership) await ctx.db.delete(membership._id);
+      if (membership) {
+        await ctx.db.delete(membership._id);
+        await adjustGroupMemberCount(accessScopeId, groupPrincipalId, -1);
+      }
+    }
+
+    async function adjustGroupMemberCount(
+      accessScopeId: string,
+      groupPrincipalId: string,
+      delta: number,
+    ) {
+      const group = await ctx.db
+        .query("principals")
+        .withIndex("by_principal_id", (q) => q.eq("principalId", groupPrincipalId))
+        .unique();
+      if (
+        !group ||
+        group.type !== "group" ||
+        group.accessScopeId !== accessScopeId ||
+        delta === 0
+      ) {
+        return;
+      }
+      await ctx.db.patch(group._id, {
+        memberCount: Math.max(0, group.memberCount + delta),
+      });
     }
 
     async function upsertCatalogRole(role: {
@@ -704,6 +737,7 @@ export const applySync = mutation({
       key: string;
       source: "system" | "iam" | "tenant";
       name: string;
+      description: string | null;
       baseWildcard: "none" | "immutable" | "default";
       updatedAt: number;
     }) {
@@ -721,6 +755,7 @@ export const applySync = mutation({
       key: string;
       source: "system" | "iam" | "tenant";
       name: string;
+      description: string | null;
       baseWildcard: "none" | "immutable" | "default";
       accessScopeId: string;
       updatedAt: number;
@@ -892,7 +927,7 @@ export const applySync = mutation({
         accessScopeId: string;
         resourceType?: string;
         resourceId?: string;
-        appliesTo?: IamBindingAppliesTo;
+        appliesTo: "self" | "self_and_descendants";
         expiresAt?: number;
         updatedAt: number;
       },
@@ -906,9 +941,8 @@ export const applySync = mutation({
         if (existing) await ctx.db.delete(existing._id);
         return;
       }
-      const normalized = { ...binding, appliesTo: bindingAppliesTo(binding) };
-      if (existing) await ctx.db.replace(existing._id, normalized);
-      else await ctx.db.insert("role_bindings", normalized);
+      if (existing) await ctx.db.replace(existing._id, binding);
+      else await ctx.db.insert("role_bindings", binding);
       await scheduleRoleBindingExpiration(binding);
     }
 
@@ -930,7 +964,7 @@ export const applySync = mutation({
         accessScopeId: string;
         resourceType?: string;
         resourceId?: string;
-        appliesTo?: IamBindingAppliesTo;
+        appliesTo: "self" | "self_and_descendants";
         expiresAt?: number;
         updatedAt: number;
       },
@@ -944,9 +978,8 @@ export const applySync = mutation({
         if (existing) await ctx.db.delete(existing._id);
         return;
       }
-      const normalized = { ...binding, appliesTo: bindingAppliesTo(binding) };
-      if (existing) await ctx.db.replace(existing._id, normalized);
-      else await ctx.db.insert("permission_bindings", normalized);
+      if (existing) await ctx.db.replace(existing._id, binding);
+      else await ctx.db.insert("permission_bindings", binding);
       await schedulePermissionBindingExpiration(binding);
     }
 

@@ -1,7 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// IAM projection mirror — v3 deployment-scoped storage.
+// IAM projection mirror — v4 deployment-scoped storage.
 //
 // The deployment-wide catalog (reusable roles, permissions, base role
 // permissions) and deployment-wide users are stored ONCE (never duplicated per
@@ -81,6 +81,8 @@ export default defineSchema({
     // Display name for a `group` principal. A user principal's display name
     // comes from the deployment-wide `users` table, never from this row.
     name: v.optional(v.string()),
+    // Derived from principal_memberships. User principals always store zero.
+    memberCount: v.number(),
     status: principalStatusValidator,
     joinedAt: v.number(),
     updatedAt: v.number(),
@@ -115,6 +117,7 @@ export default defineSchema({
     key: v.string(),
     source: v.union(v.literal("system"), v.literal("iam"), v.literal("tenant")),
     name: v.string(),
+    description: v.union(v.string(), v.null()),
     baseWildcard: wildcardValidator,
     // Undefined for catalog (reusable) roles; the owning org/suite scope for
     // tenant roles. Catalog roles are NEVER per-scope duplicated.

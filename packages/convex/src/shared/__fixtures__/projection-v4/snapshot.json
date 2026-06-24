@@ -1,6 +1,6 @@
 {
   "type": "access.projection.snapshot",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "eventId": "evt_snapshot_cd_demo_0001",
   "mode": "initialize",
   "sourceVersion": 7,
@@ -12,6 +12,7 @@
         "key": "owner",
         "source": "system",
         "name": "Owner",
+        "description": "Full tenant access.",
         "baseWildcard": "immutable",
         "updatedAt": 1767225600000
       },
@@ -20,6 +21,7 @@
         "key": "admin",
         "source": "system",
         "name": "Admin",
+        "description": "Tenant administration access.",
         "baseWildcard": "default",
         "updatedAt": 1767225600000
       },
@@ -28,6 +30,7 @@
         "key": "member",
         "source": "system",
         "name": "Member",
+        "description": "Default tenant member access.",
         "baseWildcard": "none",
         "updatedAt": 1767225600000
       },
@@ -36,6 +39,7 @@
         "key": "editor",
         "source": "iam",
         "name": "Editor",
+        "description": "Edit documents.",
         "baseWildcard": "none",
         "updatedAt": 1767225600000
       }
@@ -43,8 +47,8 @@
     "permissions": [
       {
         "permissionId": "perm_sys_recovery",
-        "key": "system.recovery:manage",
-        "resourceType": "system.recovery",
+        "key": "system.access.recovery:manage",
+        "resourceType": "system.access.recovery",
         "action": "manage",
         "classification": "owner_only",
         "tenantAssignable": false,
@@ -52,8 +56,8 @@
       },
       {
         "permissionId": "perm_sys_members",
-        "key": "system.members:manage",
-        "resourceType": "system.members",
+        "key": "system.access.users:manage",
+        "resourceType": "system.access.users",
         "action": "manage",
         "classification": "delegable",
         "tenantAssignable": true,
@@ -207,6 +211,7 @@
           "key": "org_lead",
           "source": "tenant",
           "name": "Org Lead",
+          "description": "Lead the organization.",
           "baseWildcard": "none",
           "updatedAt": 1767225600000
         }

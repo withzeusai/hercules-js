@@ -30,33 +30,41 @@ const getEffectivePermissions = makeFunctionReference<
   Record<string, unknown>,
   { permissions: string[] }
 >("queries:getEffectivePermissions");
-const listScopeMemberDirectory = makeFunctionReference<
+const listTenantUserDirectory = makeFunctionReference<
   "query",
   Record<string, unknown>,
   {
-    members: Array<{
-      principalId: string;
-      herculesAuthUserId: string;
+    users: Array<{
+      userId: string;
       name: string;
       email: string;
       image?: string;
-      roleKeys: string[];
+      roles: Array<{
+        roleId: string;
+        roleKey: string;
+        roleName: string;
+        roleKind: "system" | "custom";
+      }>;
     }>;
     cursor?: string;
   }
->("queries:listScopeMemberDirectory");
-const getScopeMemberDirectoryEntry = makeFunctionReference<
+>("queries:listTenantUserDirectory");
+const getTenantUserDirectoryEntry = makeFunctionReference<
   "query",
   Record<string, unknown>,
   {
-    principalId: string;
-    herculesAuthUserId: string;
+    userId: string;
     name: string;
     email: string;
     image?: string;
-    roleKeys: string[];
+    roles: Array<{
+      roleId: string;
+      roleKey: string;
+      roleName: string;
+      roleKind: "system" | "custom";
+    }>;
   } | null
->("queries:getScopeMemberDirectoryEntry");
+>("queries:getTenantUserDirectoryEntry");
 
 const ISSUER = "https://auth.example.com";
 
@@ -148,7 +156,7 @@ function hierarchySnapshot(options: {
 
   return {
     type: "access.projection.snapshot" as const,
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     eventId: "evt_hierarchy",
     mode: "initialize" as const,
     sourceVersion: 1,
@@ -160,6 +168,7 @@ function hierarchySnapshot(options: {
           key: "member",
           source: "system" as const,
           name: "Member",
+          description: null,
           baseWildcard: "none" as const,
           updatedAt: 1,
         },
@@ -168,6 +177,7 @@ function hierarchySnapshot(options: {
           key: "task_editor",
           source: "iam" as const,
           name: "Task editor",
+          description: null,
           baseWildcard: "none" as const,
           updatedAt: 1,
         },
@@ -236,7 +246,7 @@ function hierarchySnapshot(options: {
 function checkTask(t: ReturnType<typeof convexTest>, ancestors: unknown[] = []) {
   return t.query(authorize, {
     tokenIdentifier: `${ISSUER}|user_alice`,
-    scopeId: "scope_default",
+    tenantId: "scope_default",
     permission: "app.task:edit",
     resourceType: "app.task",
     resourceId: "task_1",
@@ -270,8 +280,8 @@ function directorySnapshot() {
   snapshot.eventId = "evt_directory";
   snapshot.catalog.permissions.push({
     permissionId: "perm_members_read",
-    key: "app.members:read",
-    resourceType: "app.members",
+    key: "system.access.users:read",
+    resourceType: "system.access.users",
     action: "read",
     classification: "delegable",
     tenantAssignable: false,
@@ -353,7 +363,7 @@ function directorySnapshot() {
 }
 
 describe("hierarchical authorization", () => {
-  test("sync stores bindings without appliesTo as self", async () => {
+  test("sync rejects v4 bindings without appliesTo", async () => {
     const t = convexTest(schema, modules);
     const snapshot = hierarchySnapshot({ childAllow: true });
     delete (
@@ -361,15 +371,11 @@ describe("hierarchical authorization", () => {
         appliesTo?: BindingAppliesTo;
       }
     ).appliesTo;
-    await installSnapshot(t, snapshot);
 
-    const stored = await t.run(async (ctx) =>
-      ctx.db
-        .query("permission_bindings")
-        .withIndex("by_binding_id", (q) => q.eq("bindingId", "pb_child_allow"))
-        .unique(),
-    );
-    expect(stored?.appliesTo).toBe("self");
+    await expect(t.mutation(applySync, snapshot as never)).resolves.toEqual({
+      ok: false,
+      status: "invalid_payload",
+    });
   });
 
   test("a parent role can confer the requested child permission", async () => {
@@ -458,7 +464,7 @@ describe("hierarchical authorization", () => {
     await expect(
       t.query(getEffectivePermissions, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
         resourceType: "app.task",
         ancestors: [{ resourceType: "app.project", resourceId: "project_1" }],
       }),
@@ -496,138 +502,151 @@ describe("hierarchical authorization", () => {
   });
 });
 
-describe("scope member directory", () => {
+describe("tenant user directory", () => {
   test("paginates active user principals and returns only safe fields", async () => {
     const t = convexTest(schema, modules);
     await installSnapshot(t, directorySnapshot());
 
-    const first = await t.query(listScopeMemberDirectory, {
+    const first = await t.query(listTenantUserDirectory, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       limit: 1,
     });
-    expect(first.members).toHaveLength(1);
+    expect(first.users).toHaveLength(1);
     expect(first.cursor).toEqual(expect.any(String));
 
-    const second = await t.query(listScopeMemberDirectory, {
+    const second = await t.query(listTenantUserDirectory, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       cursor: first.cursor,
       limit: 100,
     });
-    const members = [...first.members, ...second.members];
-    expect(members).toEqual([
+    const users = [...first.users, ...second.users];
+    expect(users).toEqual([
       {
-        principalId: "principal_alice",
-        herculesAuthUserId: "user_alice",
+        userId: "user_alice",
         name: "Alice",
         email: "alice@example.com",
-        roleKeys: ["member"],
+        roles: [
+          {
+            roleId: "role_member",
+            roleKey: "member",
+            roleName: "Member",
+            roleKind: "system",
+          },
+        ],
       },
       {
-        principalId: "principal_bob",
-        herculesAuthUserId: "user_bob",
+        userId: "user_bob",
         name: "Bob",
         email: "bob@example.com",
         image: "https://example.com/bob.png",
-        roleKeys: ["member", "task_editor"],
+        roles: [
+          {
+            roleId: "role_member",
+            roleKey: "member",
+            roleName: "Member",
+            roleKind: "system",
+          },
+          {
+            roleId: "role_task_editor",
+            roleKey: "task_editor",
+            roleName: "Task editor",
+            roleKind: "custom",
+          },
+        ],
       },
     ]);
-    expect(Object.keys(members[0]!).sort()).toEqual([
-      "email",
-      "herculesAuthUserId",
-      "name",
-      "principalId",
-      "roleKeys",
-    ]);
+    expect(Object.keys(users[0]!).sort()).toEqual(["email", "name", "roles", "userId"]);
     expect(second.cursor).toBeUndefined();
   });
 
-  test("resolves an active member exactly without trusting a browser-supplied principal id", async () => {
+  test("resolves an active user by canonical user id", async () => {
     const t = convexTest(schema, modules);
     await installSnapshot(t, directorySnapshot());
 
     await expect(
-      t.query(getScopeMemberDirectoryEntry, {
+      t.query(getTenantUserDirectoryEntry, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
-        herculesAuthUserId: "user_bob",
+        tenantId: "scope_default",
+        userId: "user_bob",
       }),
     ).resolves.toEqual({
-      principalId: "principal_bob",
-      herculesAuthUserId: "user_bob",
+      userId: "user_bob",
       name: "Bob",
       email: "bob@example.com",
       image: "https://example.com/bob.png",
-      roleKeys: ["member", "task_editor"],
+      roles: [
+        {
+          roleId: "role_member",
+          roleKey: "member",
+          roleName: "Member",
+          roleKind: "system",
+        },
+        {
+          roleId: "role_task_editor",
+          roleKey: "task_editor",
+          roleName: "Task editor",
+          roleKind: "custom",
+        },
+      ],
     });
   });
 
-  test("resolves an active member by trusted principal id", async () => {
+  test("requires a user id and rejects principal-id lookup fields", async () => {
     const t = convexTest(schema, modules);
     await installSnapshot(t, directorySnapshot());
 
     await expect(
-      t.query(getScopeMemberDirectoryEntry, {
+      t.query(getTenantUserDirectoryEntry, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
         principalId: "principal_bob",
       }),
-    ).resolves.toMatchObject({
-      principalId: "principal_bob",
-      herculesAuthUserId: "user_bob",
-    });
+    ).rejects.toThrow();
   });
 
-  test("rejects ambiguous lookups and hides inactive or non-user principals", async () => {
+  test("hides inactive users and non-user principals", async () => {
     const t = convexTest(schema, modules);
     await installSnapshot(t, directorySnapshot());
 
     await expect(
-      t.query(getScopeMemberDirectoryEntry, {
+      t.query(getTenantUserDirectoryEntry, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
       }),
-    ).rejects.toThrow("exactly one");
+    ).rejects.toThrow();
     await expect(
-      t.query(getScopeMemberDirectoryEntry, {
+      t.query(getTenantUserDirectoryEntry, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
-        principalId: "principal_bob",
-        herculesAuthUserId: "user_bob",
-      }),
-    ).rejects.toThrow("exactly one");
-    await expect(
-      t.query(getScopeMemberDirectoryEntry, {
-        tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
-        principalId: "principal_blocked",
+        tenantId: "scope_default",
+        userId: "user_blocked",
       }),
     ).resolves.toBeNull();
     await expect(
-      t.query(getScopeMemberDirectoryEntry, {
+      t.query(getTenantUserDirectoryEntry, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
-        principalId: "principal_group",
+        tenantId: "scope_default",
+        userId: "principal_group",
       }),
     ).resolves.toBeNull();
   });
 
-  test("returns an empty page when the fixed app.members:read gate fails", async () => {
+  test("returns an empty page when the fixed user-read gate fails", async () => {
     const t = convexTest(schema, modules);
     await installSnapshot(t, directorySnapshot());
 
     await expect(
-      t.query(listScopeMemberDirectory, {
+      t.query(listTenantUserDirectory, {
         tokenIdentifier: `${ISSUER}|user_blocked`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
       }),
-    ).resolves.toEqual({ members: [] });
+    ).resolves.toEqual({ users: [] });
     await expect(
-      t.query(getScopeMemberDirectoryEntry, {
+      t.query(getTenantUserDirectoryEntry, {
         tokenIdentifier: `${ISSUER}|user_blocked`,
-        scopeId: "scope_default",
-        principalId: "principal_alice",
+        tenantId: "scope_default",
+        userId: "user_alice",
       }),
     ).resolves.toBeNull();
   });
@@ -637,9 +656,9 @@ describe("scope member directory", () => {
     await installSnapshot(t, directorySnapshot());
 
     await expect(
-      t.query(listScopeMemberDirectory, {
+      t.query(listTenantUserDirectory, {
         tokenIdentifier: `${ISSUER}|user_alice`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
         limit: 101,
       }),
     ).rejects.toThrow();
@@ -661,14 +680,14 @@ describe("batch authorization", () => {
       tokenIdentifier: `${ISSUER}|user_alice`,
       checks: [
         {
-          scopeId: "scope_default",
+          tenantId: "scope_default",
           permission: "app.task:edit",
           resourceType: "app.task",
           resourceId: "task_1",
           ancestors: [{ resourceType: "app.project", resourceId: "project_1" }],
         },
         {
-          scopeId: "scope_default",
+          tenantId: "scope_default",
           permission: "app.task:edit",
           resourceType: "app.task",
           resourceId: "task_2",
@@ -690,7 +709,7 @@ describe("batch authorization", () => {
       t.query(authorizeMany, {
         tokenIdentifier: `${ISSUER}|user_alice`,
         checks: Array.from({ length: 51 }, (_unused, index) => ({
-          scopeId: "scope_default",
+          tenantId: "scope_default",
           permission: "app.task:edit",
           resourceType: "app.task",
           resourceId: `task_${index}`,

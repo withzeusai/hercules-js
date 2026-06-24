@@ -11,10 +11,10 @@ const authorize = makeFunctionReference<"query">("checks:authorize");
 const NOW = new Date("2026-06-08T12:00:00.000Z").getTime();
 const ISSUER = "https://auth.example.com";
 
-// A time-bound permission_binding is the v3 successor of the old expiring
+// A time-bound permission_binding is the v4 successor of the old expiring
 // direct-permission grant. sync.ts schedules an exact-identity deletion at
 // expiresAt; effective.ts also fails closed on the timestamp if the schedule is
-// delayed. These tests drive the v3 wire shape (top-level catalog + users,
+// delayed. These tests drive the v4 wire shape (top-level catalog + users,
 // per-scope permissionBindings) end to end.
 
 afterEach(() => {
@@ -100,7 +100,7 @@ function snapshotWithBinding(expiresAt: number, updatedAt: number): AccessProjec
 function snapshotWithoutBinding(): AccessProjectionSnapshot {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 3,
+    schemaVersion: 4,
     eventId: "snapshot_1",
     sourceVersion: 1,
     mode: "initialize",
@@ -112,6 +112,7 @@ function snapshotWithoutBinding(): AccessProjectionSnapshot {
           key: "member",
           source: "system",
           name: "Member",
+          description: null,
           baseWildcard: "none",
           updatedAt: 1,
         },
@@ -173,7 +174,7 @@ function snapshotWithoutBinding(): AccessProjectionSnapshot {
 function bindingEvent(expiresAt: number, updatedAt: number): AccessProjectionEvent {
   return {
     type: "access.projection.event",
-    schemaVersion: 3,
+    schemaVersion: 4,
     eventId: `event_${updatedAt}`,
     sourceVersion: 2,
     scopes: [
@@ -204,6 +205,7 @@ function taskBinding(expiresAt: number, updatedAt: number) {
     permissionId: "permission_tasks_create",
     effect: "allow" as const,
     accessScopeId: "scope_default",
+    appliesTo: "self" as const,
     expiresAt,
     updatedAt,
   };
@@ -212,7 +214,7 @@ function taskBinding(expiresAt: number, updatedAt: number) {
 async function authorizeTasksCreate(t: TestConvex<typeof schema>) {
   return await t.query(authorize, {
     tokenIdentifier: `${ISSUER}|user_alice`,
-    scopeId: "scope_default",
+    tenantId: "scope_default",
     permission: "tasks:create",
   });
 }

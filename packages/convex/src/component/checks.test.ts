@@ -2,13 +2,13 @@ import { convexTest as baseConvexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
 import { componentModules as modules } from "../../test/component-modules";
-import { withV3SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
-import { scopeFromResource } from "../client";
+import { withV4SyncFixtures, type LegacySnapshot } from "../../test/legacy-sync";
+import { tenantFromResource } from "../client";
 import schema from "./schema";
 
-// The behavioral fixtures below are authored in the pre-v3 (schemaVersion 2)
-// shape; withV3SyncFixtures upgrades them to the v3 wire shape before forwarding
-// to the real applySync mutation. AccessProjectionSnapshot is the v3 type, so the
+// The behavioral fixtures below are authored in the pre-v4 (schemaVersion 2)
+// shape; withV4SyncFixtures upgrades them to the v4 wire shape before forwarding
+// to the real applySync mutation. AccessProjectionSnapshot is the v4 type, so the
 // fixtures are typed with the legacy shape instead.
 type Snapshot = LegacySnapshot;
 
@@ -17,7 +17,7 @@ const authorize = makeFunctionReference<"query">("checks:authorize");
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>
-  withV3SyncFixtures(baseConvexTest(schemaArg, modulesArg));
+  withV4SyncFixtures(baseConvexTest(schemaArg, modulesArg));
 
 function emptyEntities() {
   return {
@@ -136,7 +136,7 @@ describe("authorize", () => {
     const t = convexTest(schema, modules);
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
     });
     expect(decision.allowed).toBe(false);
@@ -154,7 +154,7 @@ describe("authorize", () => {
     expect(decision.reasonCode).toBe("unexpected_issuer");
   });
 
-  test("authenticated mode (no permission, no scopeId) allows on issuer match", async () => {
+  test("authenticated mode (no permission, no tenantId) allows on issuer match", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
 
@@ -165,7 +165,7 @@ describe("authorize", () => {
     expect(decision.reasonCode).toBe("allowed");
   });
 
-  test("permission mode requires scopeId", async () => {
+  test("permission mode requires tenantId", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
 
@@ -174,10 +174,10 @@ describe("authorize", () => {
       permission: "tasks:create",
     });
     expect(decision.allowed).toBe(false);
-    expect(decision.reasonCode).toBe("scope_missing");
+    expect(decision.reasonCode).toBe("tenant_missing");
   });
 
-  test("permission mode denies on disabled scope", async () => {
+  test("permission mode denies on a disabled tenant", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, defaultScopeSnapshot());
 
@@ -201,11 +201,11 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
     });
     expect(decision.allowed).toBe(false);
-    expect(decision.reasonCode).toBe("scope_disabled");
+    expect(decision.reasonCode).toBe("tenant_disabled");
   });
 
   test("permission mode allows when role grants permission", async () => {
@@ -214,7 +214,7 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
     });
     expect(decision.allowed).toBe(true);
@@ -222,7 +222,7 @@ describe("authorize", () => {
     expect(decision.effectiveRoleIds).toEqual(["role_admin"]);
   });
 
-  // NOTE: the v2-era "deny role grant" tests were removed. In the v3 model a
+  // NOTE: the v2-era "deny role grant" tests were removed. In the v4 model a
   // role_binding is additive-only — it has no `effect` column on the wire or in
   // the schema (effective.ts: "there is no deny role binding on the wire, so
   // membership is purely additive"). A subject is denied a role's authority by a
@@ -235,7 +235,7 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:delete",
     });
     expect(decision.allowed).toBe(false);
@@ -248,7 +248,7 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
       resourceType: "folders",
       resourceId: "folder_1",
@@ -293,7 +293,7 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
     });
     expect(decision.allowed).toBe(false);
@@ -344,7 +344,7 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
     });
     expect(decision.allowed).toBe(false);
@@ -381,7 +381,7 @@ describe("authorize", () => {
 
     const onInstance = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
       resourceType: "tasks",
       resourceId: "task_1",
@@ -393,7 +393,7 @@ describe("authorize", () => {
     // A different instance of the same type is not covered by the grant.
     const otherInstance = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
       resourceType: "tasks",
       resourceId: "task_2",
@@ -404,7 +404,7 @@ describe("authorize", () => {
     // No instance scoping at all => the type-level request is not granted.
     const typeLevel = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
     });
     expect(typeLevel.allowed).toBe(false);
@@ -454,7 +454,7 @@ describe("authorize", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "tasks:create",
       resourceType: "tasks",
       resourceId: "task_1",
@@ -470,7 +470,7 @@ describe("authorize", () => {
 
     const reportDecision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_acme",
+      tenantId: "scope_acme",
       permission: "reports.export",
     });
     expect(reportDecision.allowed).toBe(false);
@@ -483,7 +483,7 @@ describe("authorize", () => {
 
     const loansDecision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_acme",
+      tenantId: "scope_acme",
       permission: "loans.read",
     });
     expect(loansDecision.allowed).toBe(false);
@@ -503,12 +503,12 @@ describe("authorize — wildcard roles", () => {
 
     const admin = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_admin`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.loans:read",
     });
     const owner = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_owner`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.loans:read",
     });
 
@@ -522,7 +522,7 @@ describe("authorize — wildcard roles", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_owner`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       // owner has NO role_permission row for this catalog permission.
       permission: "app.loans:read",
     });
@@ -536,7 +536,7 @@ describe("authorize — wildcard roles", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_admin`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.loans:read",
     });
     expect(decision.allowed).toBe(true);
@@ -559,7 +559,7 @@ describe("authorize — wildcard roles", () => {
 
     const denied = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_admin`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.loans:read",
     });
     expect(denied.allowed).toBe(false);
@@ -568,7 +568,7 @@ describe("authorize — wildcard roles", () => {
     // A different permission with no deny row stays allowed by the wildcard.
     const allowed = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_admin`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.docs:read",
     });
     expect(allowed.allowed).toBe(true);
@@ -581,26 +581,22 @@ describe("authorize — wildcard roles", () => {
     for (const lever of ["system.app:delete", "system.ownership:transfer"]) {
       const decision = await t.query(authorize, {
         tokenIdentifier: `${ISSUER}|user_admin`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
         permission: lever,
       });
       expect(decision.allowed, lever).toBe(false);
       expect(decision.reasonCode, lever).toBe("permission_denied");
     }
 
-    // The two `manage`-levers fence concrete CRUD verbs on their resourceType
-    // even though neither has a deny row — proving the superset (not
-    // literal-key) match. The seeded catalog rows are system.billing:update
-    // and system.access.owner:delete.
-    for (const lever of ["system.billing:update", "system.access.owner:delete"]) {
-      const decision = await t.query(authorize, {
-        tokenIdentifier: `${ISSUER}|user_admin`,
-        scopeId: "scope_default",
-        permission: lever,
-      });
-      expect(decision.allowed, lever).toBe(false);
-      expect(decision.reasonCode, lever).toBe("permission_denied");
-    }
+    // The `manage` billing lever fences concrete CRUD verbs even though it has
+    // no deny row, proving the superset (not literal-key) match.
+    const billing = await t.query(authorize, {
+      tokenIdentifier: `${ISSUER}|user_admin`,
+      tenantId: "scope_default",
+      permission: "system.billing:update",
+    });
+    expect(billing.allowed).toBe(false);
+    expect(billing.reasonCode).toBe("permission_denied");
   });
 
   test("narrowed admin (wildcard none) falls back to enumerated rows", async () => {
@@ -613,7 +609,7 @@ describe("authorize — wildcard roles", () => {
     // No role_permission row for app.loans:read → narrowed admin denied.
     const denied = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_admin`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.loans:read",
     });
     expect(denied.allowed).toBe(false);
@@ -677,14 +673,14 @@ describe("authorize — wildcard roles", () => {
     await expect(
       t.query(authorize, {
         tokenIdentifier: `${ISSUER}|user_admin`,
-        scopeId: "scope_org",
+        tenantId: "scope_org",
         permission: "app.docs:read",
       }),
     ).resolves.toMatchObject({ allowed: true });
     await expect(
       t.query(authorize, {
         tokenIdentifier: `${ISSUER}|user_admin`,
-        scopeId: "scope_org",
+        tenantId: "scope_org",
         permission: "app.loans:read",
       }),
     ).resolves.toMatchObject({
@@ -700,14 +696,14 @@ describe("authorize — wildcard roles", () => {
     for (const action of ["read", "create", "update", "delete", "list"]) {
       const decision = await t.query(authorize, {
         tokenIdentifier: `${ISSUER}|user_member`,
-        scopeId: "scope_default",
+        tenantId: "scope_default",
         permission: `app.docs:${action}`,
       });
       expect(decision.allowed, action).toBe(true);
     }
     const custom = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_member`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       permission: "app.docs:approve",
     });
     expect(custom.allowed).toBe(false);
@@ -720,7 +716,7 @@ describe("authorize — wildcard roles", () => {
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_member`,
-      scopeId: "scope_default",
+      tenantId: "scope_default",
       // app.docs:manage is the catalog manage row backing the member grant.
       permission: "app.docs:manage",
     });
@@ -729,7 +725,7 @@ describe("authorize — wildcard roles", () => {
   });
 
   // NOTE: the v2-era "reject a per-instance wildcard-role grant at ingest" tests
-  // were removed. v3 does not reject binding a wildcard role to a resource at the
+  // were removed. v4 does not reject binding a wildcard role to a resource at the
   // INGEST layer; instead effective.ts (collectResourceRoleEntries) fails closed
   // at EVALUATION — only tenant, effective-wildcard-"none" roles expand onto a
   // resource, so a system/iam Owner/Admin binding confers nothing on the
@@ -841,7 +837,7 @@ function readReport(
 ) {
   return t.query(authorize, {
     tokenIdentifier: `${ISSUER}|user_alice`,
-    scopeId: "scope_default",
+    tenantId: "scope_default",
     permission: "reports.read",
     resourceType,
     resourceId,
@@ -941,7 +937,7 @@ describe("authorize — resource invitation / immediate grant parity", () => {
 
   test("a malformed-resourceType grant confers nothing identically for both origins", async () => {
     // objectResourceType missing => the binding lands with resourceId set but
-    // resourceType undefined, which the v3 evaluator's indexed
+    // resourceType undefined, which the v4 evaluator's indexed
     // (resourceType, resourceId) lookup never matches, so it confers nothing
     // (fail closed). A fail-open fallback to the permission's own resourceType
     // would silently allow here. Same outcome for both origins.
@@ -1058,9 +1054,9 @@ describe("schema gating", () => {
   });
 
   // NOTE: the v2-era "rejects a role row missing wildcard" test was removed.
-  // v3 roles no longer carry a per-role `wildcard` wire field — a catalog role
+  // v4 roles no longer carry a per-role `wildcard` wire field — a catalog role
   // carries an intrinsic `baseWildcard` and the EFFECTIVE wildcard is derived
-  // per scope. The v3 payload validator (zod, applySync) rejects a role row
+  // per scope. The v4 payload validator (zod, applySync) rejects a role row
   // missing baseWildcard with invalid_payload; that gating is covered by the
   // projection-protocol parse tests.
 });
@@ -1068,16 +1064,16 @@ describe("schema gating", () => {
 // B1: the resource-type convention, end to end through the REAL client
 // extractor. The app stores rows in a `projects` table while the catalog names
 // the resource type `app.project` (the canonical `namespace.resourceType:action`
-// grammar the control plane enforces). scopeFromResource defers its resource
+// grammar the control plane enforces). tenantFromResource defers its resource
 // type to the checked permission, so a canonical app.* catalog must resolve
-// through a scopeFromResource-guarded check; emitting the table name instead
+// through a tenantFromResource-guarded check; emitting the table name instead
 // would hit the catalog-mismatch fence and deny EVERYONE with invalid_request.
-describe("scopeFromResource canonical resource type", () => {
+describe("tenantFromResource canonical resource type", () => {
   async function extractProject(projectId: string) {
-    const extract = scopeFromResource("projects", "projectId");
-    return (await extract({ db: { get: async () => ({ orgScopeId: "scope_default" }) } } as never, {
+    const extract = tenantFromResource("projects", "projectId");
+    return (await extract({ db: { get: async () => ({ tenantId: "scope_default" }) } } as never, {
       projectId,
-    })) as { scopeId: string; resourceType: string; resourceId: string };
+    })) as { tenantId: string; resourceType: string; resourceId: string };
   }
 
   async function archiveDecision(
@@ -1088,7 +1084,7 @@ describe("scopeFromResource canonical resource type", () => {
     const extracted = await extractProject(projectId);
     return (await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|${user}`,
-      scopeId: extracted.scopeId,
+      tenantId: extracted.tenantId,
       permission: "app.project:archive",
       resourceType: extracted.resourceType,
       resourceId: extracted.resourceId,
@@ -1139,7 +1135,7 @@ describe("app-level standing fence (H2)", () => {
     await t.mutation(applySync, appStandingOrgSnapshot());
     return (await t.query(authorize, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      scopeId: "scope_org",
+      tenantId: "scope_org",
       permission: "app.docs:read",
     })) as { allowed: boolean; reasonCode: string };
   }
@@ -1292,15 +1288,6 @@ function wildcardSnapshot(): Snapshot {
           updatedAt: 1,
         },
         {
-          permissionId: "perm_access_owner_delete",
-          accessScopeId: "scope_default",
-          key: "system.access.owner:delete",
-          resourceType: "system.access.owner",
-          action: "delete",
-          tenantAssignable: false,
-          updatedAt: 1,
-        },
-        {
           permissionId: "perm_docs_manage",
           accessScopeId: "scope_default",
           key: "app.docs:manage",
@@ -1412,7 +1399,7 @@ function wildcardSnapshot(): Snapshot {
   };
 }
 
-// Canonical app.* catalog for the scopeFromResource convention tests: the
+// Canonical app.* catalog for the tenantFromResource convention tests: the
 // `app.project:archive` permission lives on resource type `app.project` while
 // the app's rows live in a `projects` table. alice is entitled through a scope
 // role, bob is an unentitled member, and carol holds a direct resource grant on

@@ -1,4 +1,4 @@
-// IAM projection sync — v3 wire contract.
+// IAM projection sync — v4 wire contract.
 //
 // This module is the consumer-side entry point for the signed projection sync
 // channel. The wire shapes themselves live in `./projection-protocol` (the zod
@@ -9,13 +9,13 @@
 //     by client/http.ts and consumed by the producer's reconciler).
 //
 // There is NO v2 compatibility: the old per-scope `scopes[].entities` + composite
-// `changes` wire schema is gone. v3 carries a deployment-wide catalog + users at
+// `changes` wire schema is gone. v4 carries a deployment-wide catalog + users at
 // the top level and per-scope runtime state, with typed discriminated change
 // identities (see projection-protocol.ts).
 
 export const IAM_SYNC_PATH = "/_hercules/iam/sync";
 
-// ── v3 wire schema + types (re-exported from the protocol mirror) ────────────
+// ── v4 wire schema + types (re-exported from the protocol mirror) ────────────
 export {
   accessProjectionSyncPayloadSchema,
   accessProjectionSnapshotSchema,

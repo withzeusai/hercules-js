@@ -1,10 +1,10 @@
-// Test-only adapter: upgrades pre-v3 (schemaVersion 2) behavioral fixtures into
-// the FINAL v3 projection wire shape so the existing behavioral suites
+// Test-only adapter: upgrades pre-v4 (schemaVersion 2) behavioral fixtures into
+// the FINAL v4 projection wire shape so the existing behavioral suites
 // (checks.test.ts, queries.test.ts) keep exercising the real applySync ->
 // schema -> effective -> authorize pipeline without re-authoring every fixture.
 //
 // It is a faithful, mechanical translation of the old per-scope `entities`
-// model into the v3 layout the producer now ships:
+// model into the v4 layout the producer now ships:
 //   • the deployment-wide CATALOG (system/iam roles, permissions, base
 //     role->permission map) and USERS lift to the TOP LEVEL,
 //   • each scope keeps only its runtime state (principals, memberships, tenant
@@ -29,6 +29,7 @@ type LegacyRole = {
   kind: string;
   source?: string;
   name?: string;
+  description?: string | null;
   wildcard?: "none" | "immutable" | "default";
   updatedAt: number;
 };
@@ -144,8 +145,8 @@ function baseWildcardFor(role: LegacyRole): "none" | "immutable" | "default" {
 
 // The wrapped TestConvex: identical to the base, except `mutation` additionally
 // accepts a legacy (schemaVersion 2) payload as its second argument (the adapter
-// upgrades it to v3 before forwarding). Everything else passes through unchanged.
-export type WithV3SyncFixtures<T extends { mutation: (...args: never[]) => unknown }> = Omit<
+// upgrades it to v4 before forwarding). Everything else passes through unchanged.
+export type WithV4SyncFixtures<T extends { mutation: (...args: never[]) => unknown }> = Omit<
   T,
   "mutation"
 > & {
@@ -153,14 +154,14 @@ export type WithV3SyncFixtures<T extends { mutation: (...args: never[]) => unkno
 };
 
 /**
- * Keeps pre-v3 behavioral fixtures useful while exercising the v3-only runtime.
+ * Keeps pre-v4 behavioral fixtures useful while exercising the v4-only runtime.
  * This adapter is test-only and never ships in the package.
  */
-export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => unknown }>(
+export function withV4SyncFixtures<T extends { mutation: (...args: never[]) => unknown }>(
   target: T,
-): WithV3SyncFixtures<T> {
+): WithV4SyncFixtures<T> {
   // Per-scope accumulator of the latest entities/scope seen, so a multi-scope
-  // bootstrap (scope A snapshot then scope B snapshot) re-aggregates into one v3
+  // bootstrap (scope A snapshot then scope B snapshot) re-aggregates into one v4
   // snapshot, matching the old per-scope-snapshot behavior the fixtures rely on.
   const scopeStates = new Map<string, { scope: LegacyScope; entities: LegacyEntities }>();
   let initialized = false;
@@ -186,7 +187,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
         return result;
       };
     },
-  }) as unknown as WithV3SyncFixtures<T>;
+  }) as unknown as WithV4SyncFixtures<T>;
 
   function upgradePayload(payload: unknown): unknown {
     if (!isLegacyPayload(payload) || payload.schemaVersion !== 2) return payload;
@@ -203,7 +204,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     const { catalog, users } = buildCatalogAndUsers(defaultScope.accessScopeId);
     return {
       type: payload.type,
-      schemaVersion: 3,
+      schemaVersion: 4,
       eventId: payload.eventId,
       mode: initialized ? "reset" : "initialize",
       sourceVersion: payload.sourceVersion,
@@ -220,7 +221,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     // The fixtures only ever drive scope-metadata changes (e.g. disabling a
     // scope) and otherwise carry empty entities/changes, so the event upgrade
     // only needs to re-stamp the scope metadata plus any entity deltas it does
-    // carry. Translate the carried entities into a v3 scope delta with full
+    // carry. Translate the carried entities into a v4 scope delta with full
     // upsert rows (the wire always ships complete rows for upserts).
     const split = splitEntities(payload.entities, payload.scope, defaultScopeId);
     const scopeChanges: Array<Record<string, unknown>> = [];
@@ -232,7 +233,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     const scopeMetaChanged = payload.changes.length === 0;
     return {
       type: payload.type,
-      schemaVersion: 3,
+      schemaVersion: 4,
       eventId: payload.eventId,
       sourceVersion: payload.sourceVersion,
       catalog:
@@ -298,6 +299,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
           key: role.key,
           source: catalogRoleSource(role),
           name: role.name ?? role.key,
+          description: role.description ?? null,
           baseWildcard: baseWildcardFor(role),
           updatedAt: role.updatedAt,
         });
@@ -359,7 +361,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     });
   }
 
-  // Split one scope's old `entities` blob into the v3 per-scope arrays plus the
+  // Split one scope's old `entities` blob into the v4 per-scope arrays plus the
   // catalog-eligible rows it contributes (used by upgradeEvent).
   function splitEntities(entities: LegacyEntities, scope: LegacyScope, defaultScopeId: string) {
     const tenantRoles: Array<Record<string, unknown>> = [];
@@ -371,6 +373,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
           key: role.key,
           source: catalogRoleSource(role),
           name: role.name ?? role.key,
+          description: role.description ?? null,
           baseWildcard: baseWildcardFor(role),
           updatedAt: role.updatedAt,
         });
@@ -382,6 +385,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
         key: role.key,
         source: "tenant",
         name: role.name ?? role.key,
+        description: role.description ?? null,
         baseWildcard: "none",
         updatedAt: role.updatedAt,
       });
@@ -413,7 +417,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     for (const grant of entities.grants) {
       const resourceType = grant.objectType === "resource" ? grant.objectResourceType : undefined;
       // The old wire used objectId "*" to mean "every instance of the type"
-      // (the inherited/parent-level grant). v3 expresses that as a type-wide
+      // (the inherited/parent-level grant). v4 expresses that as a type-wide
       // target: resourceType set, resourceId undefined.
       const resourceId =
         grant.objectType === "resource" && grant.objectId !== "*" ? grant.objectId : undefined;
@@ -497,7 +501,7 @@ function normalizeUser(user: Record<string, unknown>) {
   };
 }
 
-// Old principal/membership rows carried accessScopeId inline; the v3 wire keys
+// Old principal/membership rows carried accessScopeId inline; the v4 wire keys
 // scope membership by the enclosing scope, so drop the redundant column.
 function stripScopeId(row: Record<string, unknown>): Record<string, unknown> {
   const { accessScopeId: _drop, ...rest } = row;
@@ -513,7 +517,7 @@ function stripUndefined(row: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-// Translate a legacy change descriptor into a v3 scope change identity. The
+// Translate a legacy change descriptor into a v4 scope change identity. The
 // fixtures rarely drive these (most events carry empty changes), so only the
 // shapes the fixtures actually use are mapped.
 function translateChange(change: Record<string, unknown>): Record<string, unknown> | null {

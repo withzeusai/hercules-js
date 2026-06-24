@@ -2,14 +2,14 @@ import { ConvexError } from "convex/values";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import type { ComponentApi } from "../_generated/component";
 import {
-  DEFAULT_SCOPE_SENTINEL,
+  DEFAULT_TENANT_SENTINEL,
   PERMISSION_RESOURCE_TYPE_SENTINEL,
   createIam,
-  scopeFromArg,
-  scopeFromDefaultParentResource,
-  scopeFromDefaultResource,
-  scopeFromParentResource,
-  scopeFromResource,
+  tenantFromArg,
+  tenantFromDefaultParentResource,
+  tenantFromDefaultResource,
+  tenantFromParentResource,
+  tenantFromResource,
   type IamComponent,
 } from "./index";
 
@@ -23,11 +23,22 @@ const component = {
   checks: { authorize: "authorize", authorizeMany: "authorizeMany" },
   queries: {
     getDeploymentEntryStatus: "getDeploymentEntryStatus",
-    listMyMemberships: "listMyMemberships",
+    listMyTenants: "listMyTenants",
     listMyRoles: "listMyRoles",
     getEffectivePermissions: "getEffectivePermissions",
-    listScopeMemberDirectory: "listScopeMemberDirectory",
-    getScopeMemberDirectoryEntry: "getScopeMemberDirectoryEntry",
+    getTenant: "getTenant",
+    listTenantUsers: "listTenantUsers",
+    listTenantGroups: "listTenantGroups",
+    listTenantUserDirectory: "listTenantUserDirectory",
+    getTenantUserDirectoryEntry: "getTenantUserDirectoryEntry",
+    listGroupMembers: "listGroupMembers",
+    listUserGroups: "listUserGroups",
+    listTenantRoles: "listTenantRoles",
+    getTenantRole: "getTenantRole",
+    listTenantPermissions: "listTenantPermissions",
+    getResourcePermissionOverrides: "getResourcePermissionOverrides",
+    explainAccess: "explainAccess",
+    listDirectSubjectsForResource: "listDirectSubjectsForResource",
   },
 };
 
@@ -80,7 +91,7 @@ describe("createIam", () => {
     expect(() =>
       builders.iamMutation({
         args: {},
-        scope: scopeFromArg("scopeId"),
+        tenant: tenantFromArg("tenantId"),
         handler: async () => null,
       } as never),
     ).toThrow("iam* builders require a non-empty permission.");
@@ -122,7 +133,7 @@ describe("createIam", () => {
     await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBeUndefined();
   });
 
-  test("defaults IAM builders to the app scope", async () => {
+  test("defaults IAM builders to the default tenant", async () => {
     const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -152,8 +163,10 @@ describe("createIam", () => {
     await expect(handler.handler(ctx, {})).resolves.toBe("ok");
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: DEFAULT_TENANT_SENTINEL,
       permission: "tasks:create",
+      resourceType: undefined,
+      resourceId: undefined,
     });
   });
 
@@ -185,12 +198,14 @@ describe("createIam", () => {
     await expect(handler.handler(ctx)).rejects.toBeInstanceOf(ConvexError);
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: undefined,
+      tenantId: undefined,
       permission: undefined,
+      resourceType: undefined,
+      resourceId: undefined,
     });
   });
 
-  test("IAM builders pass the extracted scope and permission to the component check", async () => {
+  test("IAM builders pass the extracted tenant and permission to the component check", async () => {
     const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -199,7 +214,7 @@ describe("createIam", () => {
     });
     const handler = builders.iamMutation({
       permission: "appointments:create",
-      scope: scopeFromArg("orgScopeId"),
+      tenant: tenantFromArg("tenantId"),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as { handler: Function };
@@ -219,11 +234,13 @@ describe("createIam", () => {
       }),
     };
 
-    await expect(handler.handler(ctx, { orgScopeId: "scope_abc" })).resolves.toBe("ok");
+    await expect(handler.handler(ctx, { tenantId: "tenant_abc" })).resolves.toBe("ok");
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_abc",
+      tenantId: "tenant_abc",
       permission: "appointments:create",
+      resourceType: undefined,
+      resourceId: undefined,
     });
   });
 
@@ -255,9 +272,10 @@ describe("createIam", () => {
             allowed: true,
             reasonCode: "allowed",
             sourceVersion: 1,
-            scopeId: "scope_abc",
+            tenantId: "tenant_abc",
             principalId: "principal_1",
             effectiveRoleIds: ["role_member"],
+            wildcard: "none",
             permissions: ["tasks.read"],
           };
         }
@@ -269,24 +287,27 @@ describe("createIam", () => {
             stateVersion: 1,
           };
         }
-        if (ref === "listMyMemberships") {
-          return [
-            {
-              scopeId: "scope_abc",
-              scopeName: "Acme",
-              kind: "org",
-              roles: [
-                {
-                  roleId: "role_member",
-                  roleKey: "member",
-                  roleName: "Member",
-                  roleKind: "system",
-                },
-              ],
-              joinedAt: 1,
-              status: "active",
-            },
-          ];
+        if (ref === "listMyTenants") {
+          return {
+            tenants: [
+              {
+                tenantId: "tenant_abc",
+                tenantName: "Acme",
+                kind: "custom",
+                roles: [
+                  {
+                    roleId: "role_member",
+                    roleKey: "member",
+                    roleName: "Member",
+                    roleKind: "system",
+                  },
+                ],
+                joinedAt: 1,
+                status: "active",
+              },
+            ],
+            cursor: "tenant_cursor_2",
+          };
         }
         if (ref === "listMyRoles") {
           return [
@@ -298,27 +319,118 @@ describe("createIam", () => {
             },
           ];
         }
-        if (ref === "listScopeMemberDirectory") {
+        if (ref === "listTenantUserDirectory") {
           return {
-            members: [
+            users: [
               {
-                principalId: "principal_1",
-                herculesAuthUserId: "user_1",
+                userId: "user_1",
                 name: "Alice",
                 email: "alice@example.com",
-                roleKeys: ["member"],
+                roles: [
+                  {
+                    roleId: "role_member",
+                    roleKey: "member",
+                    roleName: "Member",
+                    roleKind: "system",
+                  },
+                ],
               },
             ],
             cursor: "cursor_2",
           };
         }
-        if (ref === "getScopeMemberDirectoryEntry") {
+        if (ref === "getTenantUserDirectoryEntry") {
           return {
-            principalId: "principal_1",
-            herculesAuthUserId: "user_1",
+            userId: "user_1",
             name: "Alice",
             email: "alice@example.com",
-            roleKeys: ["member"],
+            roles: [
+              {
+                roleId: "role_member",
+                roleKey: "member",
+                roleName: "Member",
+                roleKind: "system",
+              },
+            ],
+          };
+        }
+        if (ref === "listTenantUsers") {
+          return {
+            users: [
+              {
+                userId: "user_1",
+                status: "active",
+                joinedAt: 1,
+                roles: [],
+                directRoleGrants: [],
+              },
+            ],
+            cursor: "users_cursor_2",
+          };
+        }
+        if (ref === "listTenantGroups") {
+          return {
+            groups: [
+              {
+                groupId: "group_1",
+                status: "active",
+                joinedAt: 1,
+                memberCount: 1,
+                roles: [],
+                directRoleGrants: [],
+              },
+            ],
+            cursor: "groups_cursor_2",
+          };
+        }
+        if (ref === "listGroupMembers") {
+          return {
+            users: [
+              {
+                userId: "user_1",
+                status: "active",
+                joinedAt: 1,
+                roles: [],
+                directRoleGrants: [],
+              },
+            ],
+            cursor: "members_cursor_2",
+          };
+        }
+        if (ref === "listUserGroups") {
+          return {
+            groups: [
+              {
+                groupId: "group_1",
+                status: "active",
+                joinedAt: 1,
+                memberCount: 1,
+                roles: [],
+                directRoleGrants: [],
+              },
+            ],
+            cursor: "user_groups_cursor_2",
+          };
+        }
+        if (ref === "listDirectSubjectsForResource") {
+          return {
+            subjects: [
+              {
+                type: "user",
+                userId: "user_1",
+                status: "active",
+                grant: {
+                  grantId: "grant_1",
+                  type: "permission",
+                  permissionId: "permission_1",
+                  permissionKey: "tasks.read",
+                  effect: "allow",
+                  expiresAt: null,
+                  appliesTo: "self",
+                },
+              },
+            ],
+            cursor: "subjects_cursor_2",
           };
         }
         if (ref === "authorizeMany") {
@@ -338,14 +450,14 @@ describe("createIam", () => {
 
     await expect(
       builders.hasPermission(ctx as never, {
-        scopeId: "scope_abc",
+        tenantId: "tenant_abc",
         permission: "tasks.read",
         resource: { type: "tasks", id: "task_1" },
       }),
     ).resolves.toBe(true);
     await expect(
       builders.getEffectivePermissions(ctx as never, {
-        scopeId: "scope_abc",
+        tenantId: "tenant_abc",
         resource: { type: "app.projects" },
       }),
     ).resolves.toEqual(["tasks.read"]);
@@ -355,8 +467,29 @@ describe("createIam", () => {
       status: "active",
       stateVersion: 1,
     });
-    await expect(builders.listMyMemberships(ctx as never)).resolves.toHaveLength(1);
-    await expect(builders.listMyRoles(ctx as never, { scopeId: "scope_abc" })).resolves.toEqual([
+    await expect(
+      builders.listMyTenants(ctx as never, { cursor: "tenant_cursor_1", limit: 25 }),
+    ).resolves.toEqual({
+      tenants: [
+        {
+          tenantId: "tenant_abc",
+          tenantName: "Acme",
+          kind: "custom",
+          roles: [
+            {
+              roleId: "role_member",
+              roleKey: "member",
+              roleName: "Member",
+              roleKind: "system",
+            },
+          ],
+          joinedAt: 1,
+          status: "active",
+        },
+      ],
+      nextCursor: "tenant_cursor_2",
+    });
+    await expect(builders.listMyRoles(ctx as never, { tenantId: "tenant_abc" })).resolves.toEqual([
       {
         roleId: "role_member",
         roleKey: "member",
@@ -365,39 +498,154 @@ describe("createIam", () => {
       },
     ]);
     await expect(
-      builders.listScopeMemberDirectory(ctx as never, {
-        scopeId: "scope_abc",
+      builders.listTenantUserDirectory(ctx as never, {
+        tenantId: "tenant_abc",
         cursor: "cursor_1",
         limit: 25,
       }),
     ).resolves.toEqual({
-      members: [
+      users: [
         {
-          principalId: "principal_1",
-          herculesAuthUserId: "user_1",
+          userId: "user_1",
           name: "Alice",
           email: "alice@example.com",
-          roleKeys: ["member"],
+          roles: [
+            {
+              roleId: "role_member",
+              roleKey: "member",
+              roleName: "Member",
+              roleKind: "system",
+            },
+          ],
         },
       ],
       nextCursor: "cursor_2",
     });
     await expect(
-      builders.getScopeMemberDirectoryEntry(ctx as never, {
-        scopeId: "scope_abc",
-        herculesAuthUserId: "user_1",
+      builders.getTenantUserDirectoryEntry(ctx as never, {
+        tenantId: "tenant_abc",
+        userId: "user_1",
       }),
     ).resolves.toEqual({
-      principalId: "principal_1",
-      herculesAuthUserId: "user_1",
+      userId: "user_1",
       name: "Alice",
       email: "alice@example.com",
-      roleKeys: ["member"],
+      roles: [
+        {
+          roleId: "role_member",
+          roleKey: "member",
+          roleName: "Member",
+          roleKind: "system",
+        },
+      ],
+    });
+    await expect(
+      builders.listTenantUsers(ctx as never, {
+        tenantId: "tenant_abc",
+        cursor: "users_cursor_1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      users: [
+        {
+          userId: "user_1",
+          status: "active",
+          joinedAt: 1,
+          roles: [],
+          directRoleGrants: [],
+        },
+      ],
+      nextCursor: "users_cursor_2",
+    });
+    await expect(
+      builders.listTenantGroups(ctx as never, {
+        tenantId: "tenant_abc",
+        cursor: "groups_cursor_1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      groups: [
+        {
+          groupId: "group_1",
+          status: "active",
+          joinedAt: 1,
+          memberCount: 1,
+          roles: [],
+          directRoleGrants: [],
+        },
+      ],
+      nextCursor: "groups_cursor_2",
+    });
+    await expect(
+      builders.listGroupMembers(ctx as never, {
+        tenantId: "tenant_abc",
+        groupId: "group_1",
+        cursor: "members_cursor_1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      users: [
+        {
+          userId: "user_1",
+          status: "active",
+          joinedAt: 1,
+          roles: [],
+          directRoleGrants: [],
+        },
+      ],
+      nextCursor: "members_cursor_2",
+    });
+    await expect(
+      builders.listUserGroups(ctx as never, {
+        tenantId: "tenant_abc",
+        userId: "user_1",
+        cursor: "user_groups_cursor_1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      groups: [
+        {
+          groupId: "group_1",
+          status: "active",
+          joinedAt: 1,
+          memberCount: 1,
+          roles: [],
+          directRoleGrants: [],
+        },
+      ],
+      nextCursor: "user_groups_cursor_2",
+    });
+    await expect(
+      builders.listDirectSubjectsForResource(ctx as never, {
+        tenantId: "tenant_abc",
+        resourceType: "tasks",
+        resourceId: "task_1",
+        cursor: "subjects_cursor_1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      subjects: [
+        {
+          type: "user",
+          userId: "user_1",
+          status: "active",
+          grant: {
+            grantId: "grant_1",
+            type: "permission",
+            permissionId: "permission_1",
+            permissionKey: "tasks.read",
+            effect: "allow",
+            expiresAt: null,
+            appliesTo: "self",
+          },
+        },
+      ],
+      nextCursor: "subjects_cursor_2",
     });
     await expect(
       builders.checkPermissions(ctx as never, [
         {
-          scopeId: "scope_abc",
+          tenantId: "tenant_abc",
           permission: "tasks.read",
           resource: { type: "tasks", id: "task_1" },
         },
@@ -411,14 +659,14 @@ describe("createIam", () => {
 
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_abc",
+      tenantId: "tenant_abc",
       permission: "tasks.read",
       resourceType: "tasks",
       resourceId: "task_1",
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("getEffectivePermissions", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_abc",
+      tenantId: "tenant_abc",
       resourceType: "app.projects",
       resourceId: undefined,
       ancestors: undefined,
@@ -426,22 +674,47 @@ describe("createIam", () => {
     expect(ctx.runQuery).toHaveBeenCalledWith("getDeploymentEntryStatus", {
       tokenIdentifier: "https://auth.example.com|user_1",
     });
-    expect(ctx.runQuery).toHaveBeenCalledWith("listScopeMemberDirectory", {
+    expect(ctx.runQuery).toHaveBeenCalledWith("listMyTenants", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_abc",
+      cursor: "tenant_cursor_1",
+      limit: 25,
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("listTenantUserDirectory", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      tenantId: "tenant_abc",
       cursor: "cursor_1",
       limit: 25,
     });
-    expect(ctx.runQuery).toHaveBeenCalledWith("getScopeMemberDirectoryEntry", {
+    expect(ctx.runQuery).toHaveBeenCalledWith("getTenantUserDirectoryEntry", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_abc",
-      herculesAuthUserId: "user_1",
+      tenantId: "tenant_abc",
+      userId: "user_1",
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("listTenantUsers", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      tenantId: "tenant_abc",
+      cursor: "users_cursor_1",
+      limit: 25,
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("listTenantGroups", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      tenantId: "tenant_abc",
+      cursor: "groups_cursor_1",
+      limit: 25,
+    });
+    expect(ctx.runQuery).toHaveBeenCalledWith("listDirectSubjectsForResource", {
+      tokenIdentifier: "https://auth.example.com|user_1",
+      tenantId: "tenant_abc",
+      resourceType: "tasks",
+      resourceId: "task_1",
+      cursor: "subjects_cursor_1",
+      limit: 25,
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("authorizeMany", {
       tokenIdentifier: "https://auth.example.com|user_1",
       checks: [
         {
-          scopeId: "scope_abc",
+          tenantId: "tenant_abc",
           permission: "tasks.read",
           resourceType: "tasks",
           resourceId: "task_1",
@@ -473,7 +746,7 @@ describe("createIam", () => {
 
     await expect(
       builders.hasPermission(ctx, {
-        scopeId: "scope_1",
+        tenantId: "tenant_1",
         permission: "app.tasks:update",
         resource: { type: "app.tasks", id: "task_1" },
         ancestors: [{ type: "app.projects", id: "project_1" }],
@@ -482,7 +755,7 @@ describe("createIam", () => {
 
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       permission: "app.tasks:update",
       resourceType: "app.tasks",
       resourceId: "task_1",
@@ -515,8 +788,10 @@ describe("createIam", () => {
     await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: DEFAULT_TENANT_SENTINEL,
       permission: "tasks.create",
+      resourceType: undefined,
+      resourceId: undefined,
     });
   });
 
@@ -547,7 +822,7 @@ describe("createIam", () => {
     const result = await builders.filterAuthorizedResources(ctx as never, {
       resources: rows,
       permission: "app.project:view",
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       resource: (row) => ({ type: "app.project", id: row._id }),
     });
 
@@ -555,7 +830,7 @@ describe("createIam", () => {
     expect(ctx.runQuery).toHaveBeenCalledTimes(2);
     expect(ctx.runQuery).toHaveBeenNthCalledWith(1, "authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       permission: "app.project:view",
       resourceType: "app.project",
       resourceId: "p1",
@@ -586,7 +861,7 @@ describe("createIam", () => {
     const result = await builders.filterAuthorizedResources(ctx as never, {
       resources: rows,
       permission: "app.tasks:read",
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       resource: (row) => ({ type: "app.tasks", id: row._id }),
       ancestors: (row) => [{ type: "app.projects", id: row.projectId }],
     });
@@ -594,7 +869,7 @@ describe("createIam", () => {
     expect(result).toEqual(rows);
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       permission: "app.tasks:read",
       resourceType: "app.tasks",
       resourceId: "task_1",
@@ -658,7 +933,7 @@ describe("createIam", () => {
     expect(ctx.runQuery).not.toHaveBeenCalled();
   });
 
-  test("IAM builders surface a ConvexError when scope extraction returns no scope", async () => {
+  test("IAM builders surface a ConvexError when tenant extraction returns no tenant", async () => {
     const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -667,7 +942,7 @@ describe("createIam", () => {
     });
     const handler = builders.iamMutation({
       permission: "appointments:create",
-      scope: scopeFromArg("orgScopeId"),
+      tenant: tenantFromArg("tenantId"),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as { handler: Function };
@@ -685,45 +960,45 @@ describe("createIam", () => {
     expect(ctx.runQuery).not.toHaveBeenCalled();
   });
 
-  test("scopeFromResource reads the scope field from the loaded row", async () => {
-    const extract = scopeFromResource("loans", "loanId");
+  test("tenantFromResource reads the tenant field from the loaded row", async () => {
+    const extract = tenantFromResource("loans", "loanId");
     const ctx = {
-      db: { get: vi.fn().mockResolvedValue({ orgScopeId: "scope_xyz" }) },
+      db: { get: vi.fn().mockResolvedValue({ tenantId: "tenant_xyz" }) },
     };
     // The resource type defers to the checked permission's canonical catalog
     // type (sentinel substituted by the authorize gate), NOT the table name:
     // resource grants are pinned to the catalog type, so emitting the table
     // name would make every resource-scoped check deny.
     await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
-      scopeId: "scope_xyz",
+      tenantId: "tenant_xyz",
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "loan_1",
     });
     expect(ctx.db.get).toHaveBeenCalledWith("loan_1");
   });
 
-  test("scopeFromResource accepts a custom scopeField", async () => {
-    const extract = scopeFromResource("loans", "loanId", {
-      scopeField: "accessScopeId",
+  test("tenantFromResource accepts a custom tenantField", async () => {
+    const extract = tenantFromResource("loans", "loanId", {
+      tenantField: "accessScopeId",
     });
     const ctx = {
       db: { get: vi.fn().mockResolvedValue({ accessScopeId: "scope_custom" }) },
     };
     await expect(extract(ctx as never, { loanId: "loan_1" })).resolves.toEqual({
-      scopeId: "scope_custom",
+      tenantId: "scope_custom",
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "loan_1",
     });
   });
 
-  test("scopeFromResource throws when the row is missing the scope field", async () => {
-    const extract = scopeFromResource("loans", "loanId");
+  test("tenantFromResource throws when the row is missing the tenant field", async () => {
+    const extract = tenantFromResource("loans", "loanId");
     const ctx = { db: { get: vi.fn().mockResolvedValue({}) } };
     await expect(extract(ctx as never, { loanId: "loan_1" })).rejects.toBeInstanceOf(ConvexError);
   });
 });
 
-describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
+describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
   function makeTaskMutation(
     authorizeAgainst?: (row: Record<string, unknown>) => Array<{ type: string; id: string }>,
   ) {
@@ -735,7 +1010,7 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     });
     return builders.iamMutation({
       permission: "app.task:edit",
-      scope: scopeFromResource("tasks", "taskId", { authorizeAgainst }),
+      tenant: tenantFromResource("tasks", "taskId", { authorizeAgainst }),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as {
@@ -746,7 +1021,7 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   function makeCtx(
     runQuery: ReturnType<typeof vi.fn>,
     row: Record<string, unknown> = {
-      orgScopeId: "scope_1",
+      tenantId: "tenant_1",
       projectId: "proj_1",
     },
   ) {
@@ -777,7 +1052,7 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     expect(runQuery).toHaveBeenCalledTimes(1);
     expect(runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       permission: "app.task:edit",
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "task_1",
@@ -847,22 +1122,22 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
     expect(runQuery).not.toHaveBeenCalled();
   });
 
-  test("scopeFromParentResource authorizes child creation against its loaded parent", async () => {
-    const extract = scopeFromParentResource("projects", "projectId", {
+  test("tenantFromParentResource authorizes child creation against its loaded parent", async () => {
+    const extract = tenantFromParentResource("projects", "projectId", {
       parentResourceType: "app.projects",
       authorizeAgainst: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
     });
     const ctx = {
       db: {
         get: vi.fn().mockResolvedValue({
-          orgScopeId: "scope_1",
+          tenantId: "tenant_1",
           workspaceId: "workspace_1",
         }),
       },
     };
 
     await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
-      scopeId: "scope_1",
+      tenantId: "tenant_1",
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       ancestors: [
         { resourceType: "app.projects", resourceId: "project_1" },
@@ -872,9 +1147,9 @@ describe("scopeFromResource hierarchy (authorizeAgainst)", () => {
   });
 });
 
-describe("default-scope resource extractors", () => {
-  test("scopeFromDefaultResource loads a row without a stored scope id", async () => {
-    const extract = scopeFromDefaultResource("documents", "documentId");
+describe("default-tenant resource extractors", () => {
+  test("tenantFromDefaultResource loads a row without a stored tenant id", async () => {
+    const extract = tenantFromDefaultResource("documents", "documentId");
     const ctx = {
       db: {
         get: vi.fn().mockResolvedValue({ _id: "document_1", title: "Draft" }),
@@ -882,14 +1157,14 @@ describe("default-scope resource extractors", () => {
     };
 
     await expect(extract(ctx as never, { documentId: "document_1" })).resolves.toEqual({
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: DEFAULT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "document_1",
     });
   });
 
-  test("scopeFromDefaultResource includes trusted ancestors from the loaded row", async () => {
-    const extract = scopeFromDefaultResource("tasks", "taskId", {
+  test("tenantFromDefaultResource includes trusted ancestors from the loaded row", async () => {
+    const extract = tenantFromDefaultResource("tasks", "taskId", {
       authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
     });
     const ctx = {
@@ -899,15 +1174,15 @@ describe("default-scope resource extractors", () => {
     };
 
     await expect(extract(ctx as never, { taskId: "task_1" })).resolves.toEqual({
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: DEFAULT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "task_1",
       ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
     });
   });
 
-  test("scopeFromDefaultParentResource authorizes creation against a loaded parent", async () => {
-    const extract = scopeFromDefaultParentResource("projects", "projectId", {
+  test("tenantFromDefaultParentResource authorizes creation against a loaded parent", async () => {
+    const extract = tenantFromDefaultParentResource("projects", "projectId", {
       parentResourceType: "app.projects",
     });
     const ctx = {
@@ -917,7 +1192,7 @@ describe("default-scope resource extractors", () => {
     };
 
     await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: DEFAULT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
     });

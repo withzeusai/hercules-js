@@ -16,14 +16,14 @@ export type IamCheckFinding = {
   code:
     | "convex_dir_missing"
     | "raw_exported_convex_builder"
-    | "placeholder_access_scope_id"
-    | "hardcoded_access_scope_id"
-    | "local_org_membership_table"
-    | "optional_org_scope_id"
-    | "org_scoped_global_slug_lookup"
-    | "org_row_scope_from_arg"
-    | "authenticated_org_data_read"
-    | "existing_row_missing_resource_scope"
+    | "placeholder_tenant_id"
+    | "hardcoded_tenant_id"
+    | "local_tenant_membership_table"
+    | "optional_tenant_id"
+    | "tenant_scoped_global_slug_lookup"
+    | "tenant_row_from_arg"
+    | "authenticated_tenant_data_read"
+    | "existing_row_missing_resource_tenant"
     | "resource_capability_missing_resource"
     | "privileged_resource_permission_rule"
     | "public_service_authority_call"
@@ -76,40 +76,41 @@ const iamServicePackageNames = new Set([
 ]);
 const serviceAuthorityHelperNames = new Set(["createIamInvitation", "createResourceInvitation"]);
 const iamServiceActionNames = new Set([
-  "archiveScope",
-  "setDefaultRole",
-  "createInvitation",
-  "revokeInvitation",
-  "assignRole",
-  "removeRole",
-  "createOrgCustomRole",
-  "updateRolePermissions",
-  "setUserExceptions",
-  "createResourceGrant",
-  "replaceResourceGrants",
-  "replaceMemberRoles",
-  "createResourceInvitation",
-  "setResourcePermissionRule",
-  "setResourcePermissionRules",
-  "revokeResourceGrant",
-  "setGrantExpiry",
-  "setRoleOverride",
-  "addMember",
-  "setMemberStatus",
-  "removeMember",
-  "approveMember",
-  "upsertAdmissionRule",
-  "archiveAdmissionRule",
-  "setAccountEntryMode",
-  "createGroup",
-  "renameGroup",
-  "archiveGroup",
-  "listGroups",
   "addGroupMember",
+  "archiveAdmissionRule",
+  "archiveGroup",
+  "archiveRole",
+  "archiveTenant",
+  "createAdmissionRule",
+  "createGroup",
+  "createInvitation",
+  "createResourceGrant",
+  "createRole",
+  "createUser",
+  "deleteGrant",
+  "evaluateGrantableRoles",
+  "listAdmissionRules",
+  "listAuditEvents",
+  "listGroupPermissionOverrides",
+  "listInvitations",
+  "listRolePermissionOverrides",
+  "listUserPermissionOverrides",
   "removeGroupMember",
-  "listResourceInvitations",
-  "getRoleOverrides",
-  "getUserExceptions",
+  "removeUser",
+  "replaceGroupPermissionOverrides",
+  "replaceGroupRoles",
+  "replaceResourceGrants",
+  "replaceResourcePermissionOverrides",
+  "replaceRolePermissionOverrides",
+  "replaceUserPermissionOverrides",
+  "replaceUserRoles",
+  "revokeInvitation",
+  "updateAdmissionRule",
+  "updateGrant",
+  "updateGroup",
+  "updateRole",
+  "updateTenant",
+  "updateUser",
 ]);
 
 export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckResult {
@@ -163,7 +164,7 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
       }),
     ]),
   ];
-  const orgOwnedTables = collectOrgOwnedTables(sourceFiles);
+  const tenantOwnedTables = collectTenantOwnedTables(sourceFiles);
   const catalogPermissionKeys = loadCatalogPermissionKeys(cwd);
   const fixedFiles = options.fixAuthenticated
     ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir))
@@ -172,7 +173,7 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath)),
     ...checkPublicServiceAuthorityCalls(cwd, convexDir, markerFiles, authoritySourceFiles),
-    ...markerFiles.flatMap((filePath) => checkHardcodedAccessScopeIds(cwd, filePath)),
+    ...markerFiles.flatMap((filePath) => checkHardcodedTenantIds(cwd, filePath)),
     ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) => checkRuntimeSupersetPermissionKeys(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) =>
@@ -180,7 +181,7 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
     ),
     ...sourceFiles.flatMap((filePath) => checkIamResourcePatterns(cwd, filePath)),
     ...[...sourceFiles, ...appSourceFiles].flatMap((filePath) =>
-      checkIamOrgPatterns(cwd, filePath, orgOwnedTables),
+      checkIamTenantPatterns(cwd, filePath, tenantOwnedTables),
     ),
   ];
 
@@ -307,10 +308,10 @@ function checkSourceFile(cwd: string, filePath: string): IamCheckFinding[] {
     .map((candidate) => createFinding(cwd, sourceFile, candidate));
 }
 
-function checkIamOrgPatterns(
+function checkIamTenantPatterns(
   cwd: string,
   filePath: string,
-  orgOwnedTables: Set<string>,
+  tenantOwnedTables: Set<string>,
 ): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
@@ -321,12 +322,13 @@ function checkIamOrgPatterns(
     cwd,
     filePath,
     sourceText,
-    code: "placeholder_access_scope_id",
-    pattern: /\b(?:herculesScopeId|accessScopeId|orgScopeId)\s*:\s*["']{2}/,
+    code: "placeholder_tenant_id",
+    pattern:
+      /\b(?:herculesTenantId|tenantId|herculesScopeId|accessScopeId|orgScopeId)\s*:\s*["']{2}/,
     message:
-      "Do not store a blank Hercules IAM scope id. Create a Hercules IAM scope first, then persist the returned accessScopeId.",
+      "Do not store a blank Hercules IAM tenant id. Create a Hercules IAM tenant first, then persist the returned tenantId.",
     suggestion:
-      "Use createIamScope from @usehercules/convex/iam-management before inserting org metadata.",
+      "Use createIamTenant from @usehercules/convex/iam-management before inserting tenant metadata.",
   });
 
   addPatternFinding({
@@ -334,11 +336,12 @@ function checkIamOrgPatterns(
     cwd,
     filePath,
     sourceText,
-    code: "local_org_membership_table",
-    pattern: /\b(?:memberships|membership|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
-    message: "Managed IAM apps should not define app-local org membership tables.",
+    code: "local_tenant_membership_table",
+    pattern:
+      /\b(?:memberships|membership|tenantMembers|orgMembers|organizationMembers)\s*:\s*defineTable\b/,
+    message: "Managed IAM apps should not define app-local tenant membership tables.",
     suggestion:
-      "Use Hercules IAM scopes, principals, and role grants. Store only org metadata in app tables.",
+      "Use Hercules IAM users, groups, and role grants. Store only tenant metadata in app tables.",
   });
 
   addPatternFinding({
@@ -346,24 +349,27 @@ function checkIamOrgPatterns(
     cwd,
     filePath,
     sourceText,
-    code: "optional_org_scope_id",
-    pattern: /\borgScopeId\s*:\s*v\.optional\s*\(\s*v\.string\s*\(\s*\)\s*\)/,
-    message: "Org-owned rows should require orgScopeId.",
+    code: "optional_tenant_id",
+    pattern: /\b(?:tenantId|orgScopeId)\s*:\s*v\.optional\s*\(\s*v\.string\s*\(\s*\)\s*\)/,
+    message: "Tenant-owned rows should require tenantId.",
     suggestion:
-      "Backfill existing rows during conversion, then store orgScopeId as v.string() on org-owned tables.",
+      "Backfill existing rows during conversion, then store tenantId as v.string() on tenant-owned tables.",
   });
 
-  if (/\borgScopeId\b/.test(sourceText) && /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)) {
+  if (
+    /\b(?:tenantId|orgScopeId)\b/.test(sourceText) &&
+    /\.withIndex\s*\(\s*["']by_slug["']/.test(sourceText)
+  ) {
     addPatternFinding({
       findings,
       cwd,
       filePath,
       sourceText,
-      code: "org_scoped_global_slug_lookup",
+      code: "tenant_scoped_global_slug_lookup",
       pattern: /\.withIndex\s*\(\s*["']by_slug["']/,
-      message: "Org-scoped slug lookups must include the org scope id in the index.",
+      message: "Tenant-scoped slug lookups must include tenantId in the index.",
       suggestion:
-        'Use an index such as by_org_and_slug on ["orgScopeId", "slug"] and query both values together.',
+        'Use an index such as by_tenant_and_slug on ["tenantId", "slug"] and query both values together.',
     });
   }
 
@@ -373,7 +379,7 @@ function checkIamOrgPatterns(
     "iamAction",
   ])) {
     if (
-      /\bscopeFromArg\s*\(\s*["']orgScopeId["']\s*\)/.test(definition.text) &&
+      /\btenantFromArg\s*\(\s*["']tenantId["']\s*\)/.test(definition.text) &&
       /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text)
     ) {
       findings.push(
@@ -381,18 +387,18 @@ function checkIamOrgPatterns(
           cwd,
           sourceFile,
           node: definition.node,
-          code: "org_row_scope_from_arg",
+          code: "tenant_row_from_arg",
           message:
-            "Operations on an org-owned row id must authorize against the stored row scope, not a caller supplied scope id.",
+            "Operations on a tenant-owned row id must authorize against the stored row tenant, not a caller supplied tenant id.",
           suggestion:
-            'Use scopeFromResource("tableName", "rowIdArg") for row read, update, publish, moderation, and delete operations.',
+            'Use tenantFromResource("tableName", "rowIdArg") for row read, update, publish, moderation, and delete operations.',
         }),
       );
     }
   }
 
   for (const definition of collectManagedBuilderDefinitions(sourceFile, ["authenticatedQuery"])) {
-    const readsOrgOwnedTable = [...orgOwnedTables].some((tableName) => {
+    const readsTenantOwnedTable = [...tenantOwnedTables].some((tableName) => {
       const escapedName = escapeRegExp(tableName);
       return (
         new RegExp(`\\.query\\s*\\(\\s*["']${escapedName}["']`).test(definition.text) ||
@@ -400,16 +406,16 @@ function checkIamOrgPatterns(
           /\bctx\.db\.get\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text))
       );
     });
-    if (readsOrgOwnedTable) {
+    if (readsTenantOwnedTable) {
       findings.push(
         createPatternFindingAtNode({
           cwd,
           sourceFile,
           node: definition.node,
-          code: "authenticated_org_data_read",
-          message: "Authenticated reads of org-owned data do not prove organization membership.",
+          code: "authenticated_tenant_data_read",
+          message: "Authenticated reads of tenant-owned data do not prove tenant access.",
           suggestion:
-            "Use iamQuery for private organization data. Use publicQuery only for explicitly public rows filtered to public state.",
+            "Use iamQuery for private tenant data. Use publicQuery only for explicitly public rows filtered to public state.",
         }),
       );
     }
@@ -432,16 +438,16 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
     if (!findDirectArgsRowAccess(definition.definition)) continue;
 
     const config = unwrapExpression(definition.definition);
-    if (ts.isObjectLiteralExpression(config) && !hasObjectProperty(config, "scope")) {
+    if (ts.isObjectLiteralExpression(config) && !hasObjectProperty(config, "tenant")) {
       findings.push(
         createPatternFindingAtNode({
           cwd,
           sourceFile,
           node: definition.node,
-          code: "existing_row_missing_resource_scope",
+          code: "existing_row_missing_resource_tenant",
           message: "Existing-row IAM operations must authorize against the loaded resource.",
           suggestion:
-            'Use scopeFromDefaultResource("tableName", "rowIdArg") for the default app scope or scopeFromResource("tableName", "rowIdArg") for an organization scope.',
+            'Use tenantFromDefaultResource("tableName", "rowIdArg") for the default tenant or tenantFromResource("tableName", "rowIdArg") for any other tenant.',
         }),
       );
     }
@@ -484,7 +490,7 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
   return findings;
 }
 
-function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
+function collectTenantOwnedTables(sourceFiles: string[]): Set<string> {
   const tableNames = new Set<string>();
   for (const filePath of sourceFiles) {
     if (!/^schema\.(?:ts|tsx|js|jsx)$/.test(basename(filePath))) continue;
@@ -492,7 +498,7 @@ function collectOrgOwnedTables(sourceFiles: string[]): Set<string> {
     const sourceText = readFileSync(filePath, "utf8");
     const tablePattern = /\b([A-Za-z_$][\w$]*)\s*:\s*defineTable\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
     for (const match of sourceText.matchAll(tablePattern)) {
-      if (/\borgScopeId\s*:/.test(match[2] ?? "")) {
+      if (/\b(?:tenantId|orgScopeId)\s*:/.test(match[2] ?? "")) {
         tableNames.add(match[1]!);
       }
     }
@@ -618,7 +624,7 @@ function hasObjectProperty(object: ts.ObjectLiteralExpression, propertyName: str
   });
 }
 
-function checkHardcodedAccessScopeIds(cwd: string, filePath: string): IamCheckFinding[] {
+function checkHardcodedTenantIds(cwd: string, filePath: string): IamCheckFinding[] {
   const sourceText = readFileSync(filePath, "utf8");
   const findings: IamCheckFinding[] = [];
 
@@ -627,12 +633,12 @@ function checkHardcodedAccessScopeIds(cwd: string, filePath: string): IamCheckFi
     cwd,
     filePath,
     sourceText,
-    code: "hardcoded_access_scope_id",
+    code: "hardcoded_tenant_id",
     pattern:
-      /\b(?:[A-Z][A-Z0-9_]*_)?(?:ACCESS_)?SCOPE_ID\b\s*=\s*["']01[A-Z0-9]{24}["']|\bscopeId\s*:\s*["']01[A-Z0-9]{24}["']/,
-    message: "Do not hardcode IAM scope ids.",
+      /\b(?:[A-Z][A-Z0-9_]*_)?(?:(?:ACCESS_)?SCOPE|TENANT)_ID\b\s*=\s*["']01[A-Z0-9]{24}["']|\b(?:scopeId|tenantId)\s*:\s*["']01[A-Z0-9]{24}["']/,
+    message: "Do not hardcode IAM tenant ids.",
     suggestion:
-      'Use the "default" scope sentinel for the app scope, or store org scope ids returned by createIamScope/createOrgScope on app rows and load them from the row.',
+      "Use the default tenant helper, or store tenant ids returned by createIamTenant on app rows and load them from the row.",
   });
 
   return findings;

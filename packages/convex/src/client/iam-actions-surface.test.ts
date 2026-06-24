@@ -1,90 +1,110 @@
-import { describe, expect, test, vi } from "vitest";
-import { createIamManagementActions, createDeploymentEntryAction } from "./iam-management";
-import { createIamServiceActions } from "./iam-service";
+import { readdir } from "node:fs/promises";
+import { describe, expect, test } from "vitest";
+import * as management from "./iam-management";
+import * as service from "./iam-service";
 
-const ID_TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.c2lnbmF0dXJl";
+const sharedActionNames = [
+  "addGroupMember",
+  "archiveAdmissionRule",
+  "archiveGroup",
+  "archiveRole",
+  "createAdmissionRule",
+  "createGroup",
+  "createInvitation",
+  "createResourceGrant",
+  "createRole",
+  "createUser",
+  "deleteGrant",
+  "evaluateGrantableRoles",
+  "listAdmissionRules",
+  "listAuditEvents",
+  "listGroupPermissionOverrides",
+  "listInvitations",
+  "listRolePermissionOverrides",
+  "listUserPermissionOverrides",
+  "removeGroupMember",
+  "removeUser",
+  "replaceGroupRoles",
+  "replaceGroupPermissionOverrides",
+  "replaceResourceGrants",
+  "replaceResourcePermissionOverrides",
+  "replaceRolePermissionOverrides",
+  "replaceUserPermissionOverrides",
+  "replaceUserRoles",
+  "revokeInvitation",
+  "updateAdmissionRule",
+  "updateGrant",
+  "updateGroup",
+  "updateRole",
+  "updateTenant",
+  "updateUser",
+] as const;
+
 const identityBuilder = ((definition: unknown) => definition) as never;
 
-function getHandler(value: unknown) {
-  return (
-    value as {
-      handler: (ctx: unknown, args: Record<string, unknown>) => unknown;
-    }
-  ).handler;
-}
-
-describe("IAM action surfaces", () => {
-  test("keeps deployment entry separate from IAM management", async () => {
-    const post = vi.fn().mockResolvedValue({
-      allowed: true,
-      reason: "open_allowed",
-      status: "active",
-      principal_id: "principal_1",
-      state_version: 3,
-      changed: true,
-      projection_ids: ["projection_1"],
-    });
-    const action = createDeploymentEntryAction({
-      authenticatedAction: identityBuilder,
-      client: { post },
-    });
-    const management = createIamManagementActions({
-      authenticatedAction: identityBuilder,
-      client: { post },
-    });
-
-    await expect(getHandler(action)({}, { idToken: ID_TOKEN })).resolves.toMatchObject({
-      allowed: true,
-      status: "active",
-      principalId: "principal_1",
-    });
-    expect(management).not.toHaveProperty("enterDeployment");
+describe("IAM action surface", () => {
+  test("exports only the tenant-based management helpers", () => {
+    expect(Object.keys(management).sort()).toEqual([
+      "acceptIamInvitation",
+      "createDeploymentEntryAction",
+      "createIamManagementActions",
+      "createIamTenant",
+      "createIamTenantAction",
+      "createResourceCreatorBootstrapAction",
+    ]);
   });
 
-  test("maps explicit user and principal recipients", async () => {
-    const post = vi.fn().mockResolvedValue({ changed: true });
-    const service = createIamServiceActions({
-      internalAction: identityBuilder,
-      client: { post },
-    });
-    const management = createIamManagementActions({
+  test("exports only the tenant-based service factory", () => {
+    expect(Object.keys(service).sort()).toEqual(["createIamServiceActions"]);
+  });
+
+  test("exposes the exact management and service action collections", () => {
+    const client = {
+      get: async () => ({}),
+      post: async () => ({}),
+      patch: async () => ({}),
+      put: async () => ({}),
+      delete: async () => ({}),
+    };
+    const managementActions = management.createIamManagementActions({
       authenticatedAction: identityBuilder,
-      client: { post },
+      client,
+    });
+    const serviceActions = service.createIamServiceActions({
+      internalAction: identityBuilder,
+      client,
     });
 
-    await getHandler(service.assignRole)(
-      {},
-      {
-        scopeId: "scope_1",
-        recipient: { type: "user", herculesAuthUserId: "user_1" },
-        roleKey: "reviewer",
-      },
+    expect(Object.keys(managementActions).sort()).toEqual(
+      [...sharedActionNames, "evaluateTenantEntry"].sort(),
     );
-    await getHandler(management.assignRole)(
-      {},
-      {
-        scopeId: "scope_1",
-        recipient: { type: "principal", principalId: "principal_1" },
-        roleKey: "reviewer",
-        idToken: ID_TOKEN,
-      },
+    expect(Object.keys(serviceActions).sort()).toEqual(
+      [...sharedActionNames, "archiveTenant"].sort(),
     );
+  });
 
-    expect(post).toHaveBeenNthCalledWith(1, "/v1/iam/roles/assign", {
-      body: expect.objectContaining({
-        hercules_auth_user_id: "user_1",
-        actor_mode: "service",
-      }),
-    });
-    expect(post).toHaveBeenNthCalledWith(2, "/v1/iam/roles/assign", {
-      body: expect.objectContaining({
-        principal_id: "principal_1",
-        actor_mode: "app_user",
-      }),
-    });
-    const serviceBody = post.mock.calls[0]?.[1].body;
-    const managementBody = post.mock.calls[1]?.[1].body;
-    expect(serviceBody).not.toHaveProperty("principal_id");
-    expect(managementBody).not.toHaveProperty("hercules_auth_user_id");
+  test("organizes implementation by IAM resource", async () => {
+    const files = await readdir(new URL("./iam", import.meta.url));
+
+    expect(files.sort()).toEqual(
+      [
+        "admission-rules.ts",
+        "audit-events.ts",
+        "factory.ts",
+        "grants.ts",
+        "groups.ts",
+        "invitations.ts",
+        "payloads.ts",
+        "resources.ts",
+        "responses.ts",
+        "roles.ts",
+        "shared.ts",
+        "tenants.ts",
+        "transport.ts",
+        "types.ts",
+        "users.ts",
+        "validators.ts",
+      ].sort(),
+    );
   });
 });
