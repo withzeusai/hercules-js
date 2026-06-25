@@ -25,7 +25,7 @@ type RoleSummary = {
 type TenantSummary = {
   tenantId: string;
   tenantName: string;
-  kind: string;
+  isDefault: boolean;
   joinedAt: number;
   accessStatus: string;
   lifecycleStatus: string;
@@ -70,7 +70,7 @@ type DirectSubjectsPage = { subjects: DirectSubject[]; cursor?: string };
 type TenantDetail = {
   tenantId: string;
   tenantName: string;
-  kind: string;
+  isDefault: boolean;
   lifecycleStatus: string;
   accessMode: string;
   defaultRoleId: string;
@@ -645,9 +645,9 @@ describe("listMyTenants", () => {
     expect(memberships).toHaveLength(2);
     const byTenant = new Map(memberships.map((tenant) => [tenant.tenantId, tenant]));
     expect(byTenant.get("scope_default")?.roles[0]?.roleKey).toBe("owner");
-    expect(byTenant.get("scope_default")?.kind).toBe("default");
+    expect(byTenant.get("scope_default")?.isDefault).toBe(true);
     expect(byTenant.get("scope_acme")?.roles[0]?.roleKey).toBe("admin");
-    expect(byTenant.get("scope_acme")?.kind).toBe("custom");
+    expect(byTenant.get("scope_acme")?.isDefault).toBe(false);
     expect(byTenant.get("scope_default")?.joinedAt).toBe(1001);
     expect(byTenant.get("scope_acme")?.joinedAt).toBe(1002);
     expect(byTenant.get("scope_default")).toMatchObject({
@@ -821,7 +821,7 @@ describe("listMyTenants", () => {
     expect(page.tenants.find((tenant) => tenant.tenantId === "scope_acme")).toEqual({
       tenantId: "scope_acme",
       tenantName: "Acme",
-      kind: "custom",
+      isDefault: false,
       roles: [],
       joinedAt: 1001,
       accessStatus: "active",
@@ -1058,7 +1058,7 @@ describe("listMyTenants", () => {
     expect(second.tenants).toEqual([
       expect.objectContaining({
         tenantId: "scope_default",
-        kind: "default",
+        isDefault: true,
         accessStatus: "suspended",
         lifecycleStatus: "active",
       }),
@@ -1158,7 +1158,7 @@ async function seedActiveTenantRows(
 }
 
 describe("listMyActiveTenants", () => {
-  test("returns only active memberships in active tenants with optional kind filtering", async () => {
+  test("returns only active memberships in active tenants with optional default filtering", async () => {
     const t = convexTest(schema, modules);
     await seedActiveTenantRows(t, [
       {
@@ -1210,7 +1210,7 @@ describe("listMyActiveTenants", () => {
 
     const page = await t.query(listMyActiveTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
-      kind: "custom",
+      isDefault: false,
       limit: 2,
     });
 
@@ -1218,13 +1218,13 @@ describe("listMyActiveTenants", () => {
       tenants: [
         expect.objectContaining({
           tenantId: "scope_custom_1",
-          kind: "custom",
+          isDefault: false,
           accessStatus: "active",
           lifecycleStatus: "active",
         }),
         expect.objectContaining({
           tenantId: "scope_custom_2",
-          kind: "custom",
+          isDefault: false,
           accessStatus: "active",
           lifecycleStatus: "active",
         }),
@@ -1292,14 +1292,14 @@ describe("listMyActiveTenants", () => {
     const first = await t.query(listMyActiveTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
       limit: 1,
-      kind: "custom",
+      isDefault: false,
     });
     expect(first).toEqual({ tenants: [], cursor: expect.any(String) });
 
     const second = await t.query(listMyActiveTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
       limit: 1,
-      kind: "custom",
+      isDefault: false,
       cursor: first.cursor,
     });
     expect(second).toEqual({ tenants: [] });
@@ -2742,7 +2742,7 @@ describe("tenant admin reads", () => {
     expect(tenant).toEqual({
       tenantId: "scope_default",
       tenantName: "Default",
-      kind: "default",
+      isDefault: true,
       lifecycleStatus: "active",
       accessMode: "open",
       defaultRoleId: "role_member",

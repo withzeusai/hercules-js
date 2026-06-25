@@ -39,7 +39,7 @@ type AuthorizationDecision = {
 
 type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
 type ListMyActiveTenantsArgs = ListMyTenantsArgs & {
-  kind?: "default" | "custom";
+  isDefault?: boolean;
 };
 type GetTargetTenantSyncStatusArgs = {
   tokenIdentifier?: string;
@@ -214,7 +214,7 @@ type DirectResourceSubject = DirectResourceSubjectBase &
 type TenantSummary = {
   tenantId: string;
   tenantName: string;
-  kind: "default" | "custom";
+  isDefault: boolean;
   roles: RoleSummary[];
   joinedAt: number;
   accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
@@ -257,7 +257,7 @@ type TargetTenantSyncStatus =
 type TenantDetail = {
   tenantId: string;
   tenantName: string;
-  kind: "default" | "custom";
+  isDefault: boolean;
   lifecycleStatus: "active" | "archived";
   accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
