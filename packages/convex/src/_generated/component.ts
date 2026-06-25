@@ -38,6 +38,14 @@ type AuthorizationDecision = {
 };
 
 type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
+type ListMyActiveTenantsArgs = ListMyTenantsArgs & {
+  kind?: "default" | "custom";
+};
+type GetTargetTenantSyncStatusArgs = {
+  tokenIdentifier?: string;
+  tenantId: string;
+  sourceVersion: number;
+};
 type GetTenantAccessStatusArgs = { tokenIdentifier?: string };
 type ListMyRolesArgs = { tokenIdentifier?: string; tenantId: string };
 type GetEffectivePermissionsArgs = {
@@ -53,6 +61,23 @@ type ListTenantPageArgs = ListTenantArgs & {
   limit?: number;
 };
 type ListTenantUserDirectoryArgs = ListTenantArgs & {
+  cursor?: string;
+  limit?: number;
+};
+type ListTenantMemberPickerUsersArgs = ListTenantArgs & {
+  permission: string;
+  resourceType?: string;
+  resourceId?: string;
+  ancestors?: AuthorizationAncestor[];
+  cursor?: string;
+  limit?: number;
+};
+type ListResourceSharingRecipientsArgs = ListTenantArgs & {
+  permission: string;
+  resourceType: string;
+  resourceId: string;
+  ancestors?: AuthorizationAncestor[];
+  recipientType: "user" | "group";
   cursor?: string;
   limit?: number;
 };
@@ -112,6 +137,37 @@ type TenantUserDirectoryPage = {
   cursor?: string;
 };
 
+type TenantMemberPickerUser = {
+  userId: string;
+  name: string;
+  email: string;
+  image?: string;
+};
+
+type TenantMemberPickerUsersPage = {
+  users: TenantMemberPickerUser[];
+  cursor?: string;
+};
+
+type SharingRecipient =
+  | {
+      type: "user";
+      userId: string;
+      name: string;
+      email: string;
+      image?: string;
+    }
+  | {
+      type: "group";
+      groupId: string;
+      name?: string;
+    };
+
+type SharingRecipientsPage = {
+  recipients: SharingRecipient[];
+  cursor?: string;
+};
+
 type TenantRoleSummary = RoleSummary & { shared: boolean };
 
 type TenantPermissionSummary = {
@@ -161,14 +217,48 @@ type TenantSummary = {
   kind: "default" | "custom";
   roles: RoleSummary[];
   joinedAt: number;
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  lifecycleStatus: "active" | "archived";
 };
+
+type ActiveTenantSummary = Omit<TenantSummary, "accessStatus" | "lifecycleStatus"> & {
+  accessStatus: "active";
+  lifecycleStatus: "active";
+};
+
+type TargetTenantSyncStatus =
+  | {
+      state: "syncing";
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    }
+  | {
+      state: "ready";
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId: string;
+      principalId: string;
+    }
+  | {
+      state: "denied";
+      reasonCode: string;
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId?: string;
+      principalId?: string;
+    }
+  | {
+      state: "failed";
+      reasonCode: string;
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    };
 
 type TenantDetail = {
   tenantId: string;
   tenantName: string;
   kind: "default" | "custom";
-  status: "active" | "disabled";
+  lifecycleStatus: "active" | "archived";
   accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
   updatedAt: number;
@@ -361,6 +451,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       { tenants: TenantSummary[]; cursor?: string },
       Name
     >;
+    listMyActiveTenants: FunctionReference<
+      "query",
+      "public",
+      ListMyActiveTenantsArgs,
+      { tenants: ActiveTenantSummary[]; cursor?: string },
+      Name
+    >;
+    getTargetTenantSyncStatus: FunctionReference<
+      "query",
+      "public",
+      GetTargetTenantSyncStatusArgs,
+      TargetTenantSyncStatus,
+      Name
+    >;
     listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[], Name>;
     getEffectivePermissions: FunctionReference<
       "query",
@@ -375,6 +479,20 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "public",
       ListTenantUserDirectoryArgs,
       TenantUserDirectoryPage,
+      Name
+    >;
+    listTenantMemberPickerUsers: FunctionReference<
+      "query",
+      "public",
+      ListTenantMemberPickerUsersArgs,
+      TenantMemberPickerUsersPage,
+      Name
+    >;
+    listResourceSharingRecipients: FunctionReference<
+      "query",
+      "public",
+      ListResourceSharingRecipientsArgs,
+      SharingRecipientsPage,
       Name
     >;
     getTenantUserDirectoryEntry: FunctionReference<

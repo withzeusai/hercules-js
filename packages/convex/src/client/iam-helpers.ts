@@ -62,7 +62,11 @@ export type ResourceCreatorBootstrapResult =
     };
 
 export type ResourceCreatorBootstrapTenantPage = {
-  tenants: Array<{ tenantId: string; status: string }>;
+  tenants: Array<{
+    tenantId: string;
+    accessStatus: string;
+    lifecycleStatus: string;
+  }>;
   cursor?: string;
 };
 
@@ -91,7 +95,7 @@ type ActivateResourceReference = FunctionReference<
   "mutation",
   "internal",
   ResourceCreatorBootstrapActivationArgs,
-  void
+  null
 >;
 
 export type ResourceCreatorBootstrapClient = {
@@ -257,7 +261,12 @@ async function callerHasActiveTargetTenant<DataModel extends GenericDataModel>(
       limit: TENANT_PAGE_LIMIT,
     });
     if (
-      page.tenants.some((tenant) => tenant.tenantId === args.tenantId && tenant.status === "active")
+      page.tenants.some(
+        (tenant) =>
+          tenant.tenantId === args.tenantId &&
+          tenant.accessStatus === "active" &&
+          tenant.lifecycleStatus === "active",
+      )
     ) {
       return true;
     }

@@ -3,6 +3,11 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 
 type RawConvexBuilder = "query" | "mutation" | "action";
+type TenantResourceHelperName =
+  | "tenantFromResource"
+  | "tenantFromDefaultResource"
+  | "tenantFromParentResource"
+  | "tenantFromDefaultParentResource";
 
 type RawBuilderCandidate = {
   builder: RawConvexBuilder;
@@ -27,8 +32,10 @@ export type IamCheckFinding = {
     | "resource_capability_missing_resource"
     | "privileged_resource_permission_rule"
     | "unsafe_sdk_iam_call"
+    | "authorization_args_from_public_input"
     | "runtime_superset_permission"
-    | "noncanonical_permission_key";
+    | "noncanonical_permission_key"
+    | "invalid_creator_bootstrap_role";
   severity: "error";
   filePath: string;
   line: number;
@@ -74,6 +81,22 @@ const herculesSdkPackageName = "@usehercules/sdk";
 const iamHelpersPackageName = `${iamPackageName}/iam-helpers`;
 const resourceCreatorBootstrapHelperName = "createResourceCreatorBootstrapAction";
 const generatedServerModuleSpecifier = "convex:_generated/server";
+const tenantResourceHelperNames = new Set<TenantResourceHelperName>([
+  "tenantFromResource",
+  "tenantFromDefaultResource",
+  "tenantFromParentResource",
+  "tenantFromDefaultParentResource",
+]);
+const iamAuthorizationRequestFunctionNames = new Set([
+  "hasPermission",
+  "requirePermission",
+  "requireAnyPermission",
+  "getEffectivePermissions",
+]);
+
+function isTenantResourceHelperName(name: string): name is TenantResourceHelperName {
+  return tenantResourceHelperNames.has(name as TenantResourceHelperName);
+}
 
 function isHerculesSdkModuleSpecifier(moduleSpecifier: string): boolean {
   return (
@@ -126,7 +149,8 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
   const sourceFiles = collectSourceFiles(convexDir);
   const appSourceFiles = collectAppSourceFiles(cwd, convexDir);
   const tenantOwnedTables = collectTenantOwnedTables(sourceFiles);
-  const catalogPermissionKeys = loadCatalogPermissionKeys(cwd);
+  const iamCatalog = loadIamCatalog(cwd);
+  const catalogPermissionKeys = iamCatalog?.canonicalPermissionKeys ?? null;
   const fixedFiles = options.fixAuthenticated
     ? sourceFiles.filter((filePath) => fixSourceFileToAuthenticatedBuilders(filePath, convexDir))
         .length
@@ -135,7 +159,7 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
   const checkerSourceFiles = createCheckerSourceFiles(authoritySourceFiles);
   const findings = [
     ...sourceFiles.flatMap((filePath) => checkSourceFile(cwd, filePath, checkerSourceFiles)),
-    ...checkSdkIamCalls(cwd, convexDir, markerFiles, checkerSourceFiles),
+    ...checkSdkIamCalls(cwd, convexDir, markerFiles, checkerSourceFiles, iamCatalog),
     ...markerFiles.flatMap((filePath) => checkHardcodedTenantIds(cwd, filePath)),
     ...markerFiles.flatMap((filePath) => checkPrivilegedResourcePermissionRules(cwd, filePath)),
     ...sourceFiles.flatMap((filePath) => checkRuntimeSupersetPermissionKeys(cwd, filePath)),
@@ -415,7 +439,7 @@ function checkIamTenantPatterns(
   ])) {
     if (
       /\btenantFromArg\s*\(\s*["']tenantId["']\s*\)/.test(definition.text) &&
-      /\bctx\.db\.(?:get|patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text)
+      /\bctx\.db\.(?:patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text)
     ) {
       findings.push(
         createPatternFindingAtNode({
@@ -424,9 +448,9 @@ function checkIamTenantPatterns(
           node: definition.node,
           code: "tenant_row_from_arg",
           message:
-            "Operations on a tenant-owned row id must authorize against the stored row tenant, not a caller supplied tenant id.",
+            "Mutations of a tenant-owned row id must authorize against the stored row tenant, not a caller supplied tenant id.",
           suggestion:
-            'Use tenantFromResource("tableName", "rowIdArg") for row read, update, publish, moderation, and delete operations.',
+            'Use tenantFromResource("tableName", "rowIdArg") for update, publish, moderation, and delete operations.',
         }),
       );
     }
@@ -790,7 +814,13 @@ type StaticValue =
         | "herculesSdkConstructor"
         | "herculesSdkClient"
         | "herculesSdkIam"
+        | "iamCheckPermissions"
+        | "iamAuthorizationRequestFunction"
+        | "iamResourceSharingRecipientsFunction"
+        | "createIamFactory"
+        | "iamBuilders"
         | "resourceCreatorBootstrapFactory"
+        | TenantResourceHelperName
         | ConvexFunctionBuilder;
     };
 
@@ -812,6 +842,8 @@ type SdkIamAuthorityMode = "user" | "service" | "reject";
 type AuthorityState = {
   mode: SdkIamAuthorityMode;
   ctxBindings: Set<ScopedBinding>;
+  publicArgsBindings: Set<ScopedBinding>;
+  trackPublicArgs: boolean;
   checkedTokenBindings: Set<ScopedBinding>;
   checkedIdentityTokenBindings: Set<ScopedBinding>;
 };
@@ -852,6 +884,7 @@ function checkSdkIamCalls(
   convexDir: string,
   rootFilePaths: string[],
   sourceFiles: Map<string, CheckerSourceFile>,
+  iamCatalog: IamCatalog | null,
 ): IamCheckFinding[] {
   const convexModules = new Map<string, CheckerSourceFile>();
   for (const info of sourceFiles.values()) {
@@ -864,6 +897,7 @@ function checkSdkIamCalls(
   const visitedCallables = new Set<string>();
   const visitedConvexFunctions = new Set<string>();
   const visitedResourceCreatorBootstraps = new Set<string>();
+  const visitedAuthorizationProviders = new Set<string>();
 
   const addFinding = (info: CheckerSourceFile, node: ts.Node, state: AuthorityState) => {
     const key = `${info.filePath}:${node.getStart(info.sourceFile)}`;
@@ -888,6 +922,53 @@ function checkSdkIamCalls(
     );
   };
 
+  const addAuthorizationArgsFinding = (
+    info: CheckerSourceFile,
+    node: ts.Node,
+    kind: "resource type" | "ancestors" | "permission",
+  ) => {
+    const key = `${info.filePath}:authorization-args:${kind}:${node.getStart(info.sourceFile)}`;
+    if (findingKeys.has(key)) return;
+    findingKeys.add(key);
+    findings.push(
+      createPatternFindingAtNode({
+        cwd,
+        sourceFile: info.sourceFile,
+        node,
+        code: "authorization_args_from_public_input",
+        message:
+          kind === "resource type"
+            ? "Authorization resource type must not be copied directly from public function args."
+            : kind === "ancestors"
+              ? "Authorization ancestors must not be copied directly from public function args."
+              : "Authorization permission must not be copied directly from public function args.",
+        suggestion:
+          kind === "resource type"
+            ? "Use a fixed catalog resource type, or load the app row server-side and derive authorization from trusted data."
+            : kind === "ancestors"
+              ? "Load the app row or parent row server-side and derive ancestors from trusted app data before authorizing."
+              : "Use a fixed catalog permission, or derive the permission server-side from trusted data before authorizing.",
+      }),
+    );
+  };
+
+  const addBootstrapFinding = (info: CheckerSourceFile, node: ts.Node, message: string) => {
+    const key = `${info.filePath}:bootstrap-role:${node.getStart(info.sourceFile)}:${message}`;
+    if (findingKeys.has(key)) return;
+    findingKeys.add(key);
+    findings.push(
+      createPatternFindingAtNode({
+        cwd,
+        sourceFile: info.sourceFile,
+        node,
+        code: "invalid_creator_bootstrap_role",
+        message,
+        suggestion:
+          "Use a fixed reusable catalog role whose privileged permissions are grantable on the bootstrap resource type, or leave dynamic tenant-created roles to runtime validation.",
+      }),
+    );
+  };
+
   const visitCallableNode = (
     info: CheckerSourceFile,
     node: ts.Node,
@@ -900,17 +981,27 @@ function checkSdkIamCalls(
       callScope?: LexicalScope | null;
     } = {},
   ): void => {
+    const argumentInfo = options.callInfo ?? info;
+    const argumentScope = options.callScope ?? null;
     const ctxArgumentMask =
       options.callArguments
         ?.map((argument) =>
-          isActionCtxExpression(info, argument, options.callScope ?? null, state, new Set())
+          isActionCtxExpression(argumentInfo, argument, argumentScope, state, new Set())
             ? "1"
             : "0",
         )
         .join("") ?? "";
+    const publicArgsArgumentSignature =
+      options.callArguments
+        ?.map((argument) =>
+          containsDirectPublicArgsValue(argumentInfo, argument, argumentScope, state)
+            ? `${argumentInfo.filePath}@${argument.getStart(argumentInfo.sourceFile)}`
+            : "0",
+        )
+        .join(",") ?? "";
     const callableKey = `${info.filePath}:${node.getStart(info.sourceFile)}:${state.mode}:${
       options.markFirstParameterAsCtx === true ? "handler" : "helper"
-    }:${ctxArgumentMask}`;
+    }:${ctxArgumentMask}:${publicArgsArgumentSignature}`;
     if (visitedCallables.has(callableKey)) return;
     visitedCallables.add(callableKey);
 
@@ -941,9 +1032,9 @@ function checkSdkIamCalls(
         (options.markFirstParameterAsCtx === true && index === 0) ||
         (options.callArguments?.[index] !== undefined &&
           isActionCtxExpression(
-            info,
+            argumentInfo,
             options.callArguments[index]!,
-            options.callScope ?? null,
+            argumentScope,
             state,
             new Set(),
           ));
@@ -951,6 +1042,22 @@ function checkSdkIamCalls(
         for (const name of collectBindingNames(parameter.name)) {
           const binding = functionScope.bindings.get(name);
           if (binding) functionState.ctxBindings.add(binding);
+        }
+      }
+      const markAsPublicArgs =
+        (state.trackPublicArgs && options.markFirstParameterAsCtx === true && index === 1) ||
+        (options.callArguments?.[index] !== undefined &&
+          isDirectPublicArgsValue(
+            argumentInfo,
+            options.callArguments[index]!,
+            argumentScope,
+            state,
+            new Set(),
+          ));
+      if (markAsPublicArgs) {
+        for (const name of collectBindingNames(parameter.name)) {
+          const binding = functionScope.bindings.get(name);
+          if (binding) functionState.publicArgsBindings.add(binding);
         }
       }
     });
@@ -1012,6 +1119,12 @@ function checkSdkIamCalls(
         ? [{ kind: "known", value: "herculesSdkConstructor" }]
         : [];
     }
+    if (target.moduleSpecifier === iamPackageName && exportedName === "createIam") {
+      return [{ kind: "known", value: "createIamFactory" }];
+    }
+    if (target.moduleSpecifier === iamPackageName && isTenantResourceHelperName(exportedName)) {
+      return [{ kind: "known", value: exportedName }];
+    }
     if (
       target.moduleSpecifier === iamHelpersPackageName &&
       exportedName === resourceCreatorBootstrapHelperName
@@ -1038,8 +1151,10 @@ function checkSdkIamCalls(
     if (resolving.has(symbolKey)) return [];
     const nextResolving = new Set(resolving).add(symbolKey);
 
-    if (isIamWiringSourceFile(info.filePath, convexDir) && publicBuilderNames.has(exportedName)) {
-      return [{ kind: "known", value: exportedName as ConvexFunctionBuilder }];
+    if (isIamWiringSourceFile(info.filePath, convexDir)) {
+      if (publicBuilderNames.has(exportedName)) {
+        return [{ kind: "known", value: exportedName as ConvexFunctionBuilder }];
+      }
     }
 
     const localName = info.exportBindings.get(exportedName);
@@ -1133,6 +1248,23 @@ function checkSdkIamCalls(
       }
       if (value.value === "herculesSdkIam") {
         return [{ kind: "known", value: "herculesSdkIam" }];
+      }
+      if (value.value === "iamBuilders") {
+        if (propertyName === "checkPermissions") {
+          return [{ kind: "known", value: "iamCheckPermissions" }];
+        }
+        if (iamAuthorizationRequestFunctionNames.has(propertyName)) {
+          return [{ kind: "known", value: "iamAuthorizationRequestFunction" }];
+        }
+        if (propertyName === "listResourceSharingRecipients") {
+          return [{ kind: "known", value: "iamResourceSharingRecipientsFunction" }];
+        }
+        if (propertyName === "listTenantMemberPickerUsers") {
+          return [{ kind: "known", value: "iamAuthorizationRequestFunction" }];
+        }
+        if (publicBuilderNames.has(propertyName)) {
+          return [{ kind: "known", value: propertyName as ConvexFunctionBuilder }];
+        }
       }
       return [];
     }
@@ -1261,6 +1393,8 @@ function checkSdkIamCalls(
           });
         } else if (callable.kind === "known" && callable.value === "herculesSdkConstructor") {
           values.push({ kind: "known", value: "herculesSdkClient" });
+        } else if (callable.kind === "known" && callable.value === "createIamFactory") {
+          values.push({ kind: "known", value: "iamBuilders" });
         } else if (
           callable.kind === "known" &&
           callable.value === "resourceCreatorBootstrapFactory"
@@ -1440,6 +1574,7 @@ function checkSdkIamCalls(
         : null;
 
     for (const binding of bindings) {
+      state.publicArgsBindings.delete(binding);
       state.checkedTokenBindings.delete(binding);
       state.checkedIdentityTokenBindings.delete(binding);
       if (binding === directAssignmentBinding) {
@@ -1689,6 +1824,14 @@ function checkSdkIamCalls(
       if (isSdkIamCallTarget(info, target, scope)) {
         validateSdkIamCall(info, node, scope, state);
       }
+      if (state.trackPublicArgs) {
+        const iamAuthorizationCallKind = iamAuthorizationCallTargetKind(info, target, scope);
+        if (iamAuthorizationCallKind === "checkPermissions") {
+          validateCheckPermissionsCall(info, node, scope, state);
+        } else if (iamAuthorizationCallKind === "authorizationObject") {
+          validateAuthorizationObjectArgumentCall(info, node, scope, state);
+        }
+      }
       visitRunActionTarget(info, node, scope, state);
       visitCallableReference(info, target, scope, state, {
         callArguments: [...node.arguments],
@@ -1779,6 +1922,7 @@ function checkSdkIamCalls(
     const rootKey = `${root.info.filePath}:${root.call.getStart(root.info.sourceFile)}`;
     if (visitedResourceCreatorBootstraps.has(rootKey)) return;
     visitedResourceCreatorBootstraps.add(rootKey);
+    validateResourceCreatorBootstrap(root);
     visitFactoryArguments(
       root.info,
       root.call,
@@ -1786,6 +1930,125 @@ function checkSdkIamCalls(
       createAuthorityState("reject"),
     );
   };
+
+  function validateResourceCreatorBootstrap(
+    root: Extract<StaticValue, { kind: "resourceCreatorBootstrap" }>,
+  ): void {
+    if (!iamCatalog) return;
+    const configArgument = root.call.arguments[0];
+    if (!configArgument) return;
+    const configValues = resolveStaticValues(
+      root.info,
+      configArgument,
+      root.declarationScope,
+    ).filter(
+      (value): value is Extract<StaticValue, { kind: "node" }> =>
+        value.kind === "node" && ts.isObjectLiteralExpression(value.node),
+    );
+    if (configValues.length !== 1) return;
+    const config = configValues[0]!;
+    const configObject = config.node as ts.ObjectLiteralExpression;
+    if (objectHasDynamicSpread(config.info, configObject, config.declarationScope)) return;
+
+    const resourceType = literalStringProperty(
+      config.info,
+      configObject,
+      "resourceType",
+      config.declarationScope,
+    );
+    const managerRole = deterministicObjectProperty(
+      config.info,
+      configObject,
+      "managerRole",
+      config.declarationScope,
+      new Set(),
+    );
+    if (!resourceType || managerRole.kind !== "found") return;
+
+    const roleReference = literalRoleReference(
+      managerRole.info,
+      managerRole.expression,
+      managerRole.scope,
+    );
+    if (!roleReference) return;
+
+    const roleResolution = resolveCatalogRole(iamCatalog, roleReference);
+    if (roleResolution.kind !== "resolved") return;
+
+    const appliesTo =
+      literalStringProperty(config.info, configObject, "appliesTo", config.declarationScope)
+        ?.value ?? null;
+    const validation = validateBootstrapRoleForResource(
+      iamCatalog,
+      roleResolution.role,
+      resourceType.value,
+      appliesTo,
+    );
+    if (!validation) return;
+    addBootstrapFinding(
+      roleReference.info,
+      roleReference.node,
+      `Creator bootstrap role "${roleResolution.role.key}" cannot be granted on "${resourceType.value}": ${validation}.`,
+    );
+  }
+
+  function literalStringProperty(
+    info: CheckerSourceFile,
+    objectLiteral: ts.ObjectLiteralExpression,
+    propertyName: string,
+    scope: LexicalScope | null,
+  ): { value: string; node: ts.Node } | null {
+    const property = deterministicObjectProperty(
+      info,
+      objectLiteral,
+      propertyName,
+      scope,
+      new Set(),
+    );
+    if (property.kind !== "found") return null;
+    const expression = unwrapExpression(property.expression);
+    return ts.isStringLiteralLike(expression) ? { value: expression.text, node: expression } : null;
+  }
+
+  function literalRoleReference(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+  ): {
+    kind: "key" | "id";
+    value: string;
+    description: string;
+    info: CheckerSourceFile;
+    node: ts.Node;
+  } | null {
+    const values = resolveStaticValues(info, expression, scope).filter(
+      (value): value is Extract<StaticValue, { kind: "node" }> =>
+        value.kind === "node" && ts.isObjectLiteralExpression(value.node),
+    );
+    if (values.length !== 1) return null;
+    const value = values[0]!;
+    const objectLiteral = value.node as ts.ObjectLiteralExpression;
+    if (objectHasDynamicSpread(value.info, objectLiteral, value.declarationScope)) return null;
+    const key = literalStringProperty(value.info, objectLiteral, "key", value.declarationScope);
+    if (key) {
+      return {
+        kind: "key",
+        value: key.value,
+        description: `"${key.value}"`,
+        info: value.info,
+        node: key.node,
+      };
+    }
+    const id = literalStringProperty(value.info, objectLiteral, "id", value.declarationScope);
+    if (!id) return null;
+    return {
+      kind: "id",
+      value: id.value,
+      description: `id "${id.value}"`,
+      info: value.info,
+      node: id.node,
+    };
+  }
 
   const visitConfigObject = (
     info: CheckerSourceFile,
@@ -1848,6 +2111,9 @@ function checkSdkIamCalls(
         continue;
       }
       const initializer = unwrapExpression(property.initializer);
+      if (state.trackPublicArgs && propertyName === "tenant") {
+        validateAuthorizationProvider(info, initializer, scope, state);
+      }
       visitCallableReference(info, initializer, scope, state, {
         markFirstParameterAsCtx: propertyName === "handler",
       });
@@ -2126,6 +2392,496 @@ function checkSdkIamCalls(
     return false;
   }
 
+  function isDirectPublicArgsValue(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string>,
+  ): boolean {
+    const target = unwrapExpression(expression);
+    if (ts.isIdentifier(target)) {
+      const binding = findAnyBinding(info, scope, target.text);
+      if (!binding) return false;
+      if (state.publicArgsBindings.has(binding)) return true;
+      if (binding.value.kind !== "expression") return false;
+      const bindingKey = `${info.filePath}:public-args:${binding.id}`;
+      if (resolving.has(bindingKey)) return false;
+      const expressionInfo = binding.value.expressionInfo ?? info;
+      return isDirectPublicArgsValue(
+        expressionInfo,
+        binding.value.expression,
+        binding.value.scope,
+        state,
+        new Set(resolving).add(bindingKey),
+      );
+    }
+
+    if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
+      return isDirectPublicArgsValue(info, target.expression, scope, state, resolving);
+    }
+
+    return false;
+  }
+
+  function containsDirectPublicArgsValue(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    resolving: Set<string> = new Set(),
+  ): boolean {
+    const target = unwrapExpression(expression);
+    if (isDirectPublicArgsValue(info, target, scope, state, resolving)) return true;
+
+    if (ts.isArrayLiteralExpression(target)) {
+      return target.elements.some((element) => {
+        if (ts.isOmittedExpression(element)) return false;
+        return containsDirectPublicArgsValue(
+          info,
+          ts.isSpreadElement(element) ? element.expression : element,
+          scope,
+          state,
+          resolving,
+        );
+      });
+    }
+
+    if (ts.isObjectLiteralExpression(target)) {
+      return target.properties.some((property) => {
+        if (ts.isSpreadAssignment(property)) {
+          return containsDirectPublicArgsValue(info, property.expression, scope, state, resolving);
+        }
+        if (ts.isPropertyAssignment(property)) {
+          return (
+            (property.name &&
+              ts.isComputedPropertyName(property.name) &&
+              containsDirectPublicArgsValue(
+                info,
+                property.name.expression,
+                scope,
+                state,
+                resolving,
+              )) ||
+            containsDirectPublicArgsValue(info, property.initializer, scope, state, resolving)
+          );
+        }
+        if (ts.isShorthandPropertyAssignment(property)) {
+          return containsDirectPublicArgsValue(info, property.name, scope, state, resolving);
+        }
+        return false;
+      });
+    }
+
+    return false;
+  }
+
+  type AuthorizationObjectValidationOptions = {
+    validatePermission?: boolean;
+  };
+
+  function validateAuthorizationObject(
+    info: CheckerSourceFile,
+    objectLiteral: ts.ObjectLiteralExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    options: AuthorizationObjectValidationOptions = {},
+  ): void {
+    if (options.validatePermission === true) {
+      validateAuthorizationObjectPermission(info, objectLiteral, scope, state);
+    }
+
+    validateAuthorizationObjectResourceType(info, objectLiteral, scope, state, [
+      "resourceType",
+      "resource_type",
+    ]);
+
+    const ancestors = deterministicObjectProperty(
+      info,
+      objectLiteral,
+      "ancestors",
+      scope,
+      new Set(),
+    );
+    if (
+      ancestors.kind === "found" &&
+      containsDirectPublicArgsValue(ancestors.info, ancestors.expression, ancestors.scope, state)
+    ) {
+      addAuthorizationArgsFinding(ancestors.info, ancestors.expression, "ancestors");
+    }
+
+    const resource = deterministicObjectProperty(info, objectLiteral, "resource", scope, new Set());
+    if (resource.kind !== "found") return;
+    if (
+      isDirectPublicArgsValue(resource.info, resource.expression, resource.scope, state, new Set())
+    ) {
+      addAuthorizationArgsFinding(resource.info, resource.expression, "resource type");
+    }
+    for (const value of resolveStaticValues(resource.info, resource.expression, resource.scope)) {
+      if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
+        validateAuthorizationObjectResourceType(
+          value.info,
+          value.node,
+          value.declarationScope,
+          state,
+          ["type", "resourceType"],
+        );
+      }
+    }
+  }
+
+  function validateAuthorizationObjectPermission(
+    info: CheckerSourceFile,
+    objectLiteral: ts.ObjectLiteralExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const permission = deterministicObjectProperty(
+      info,
+      objectLiteral,
+      "permission",
+      scope,
+      new Set(),
+    );
+    if (
+      permission.kind === "found" &&
+      isDirectPublicArgsValue(
+        permission.info,
+        permission.expression,
+        permission.scope,
+        state,
+        new Set(),
+      )
+    ) {
+      addAuthorizationArgsFinding(permission.info, permission.expression, "permission");
+    }
+
+    const permissions = deterministicObjectProperty(
+      info,
+      objectLiteral,
+      "permissions",
+      scope,
+      new Set(),
+    );
+    if (
+      permissions.kind === "found" &&
+      containsDirectPublicArgsValue(
+        permissions.info,
+        permissions.expression,
+        permissions.scope,
+        state,
+      )
+    ) {
+      addAuthorizationArgsFinding(permissions.info, permissions.expression, "permission");
+    }
+  }
+
+  function validateAuthorizationObjectResourceType(
+    info: CheckerSourceFile,
+    objectLiteral: ts.ObjectLiteralExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    propertyNames: string[],
+  ): void {
+    for (const propertyName of propertyNames) {
+      const property = deterministicObjectProperty(
+        info,
+        objectLiteral,
+        propertyName,
+        scope,
+        new Set(),
+      );
+      if (
+        property.kind === "found" &&
+        isDirectPublicArgsValue(
+          property.info,
+          property.expression,
+          property.scope,
+          state,
+          new Set(),
+        )
+      ) {
+        addAuthorizationArgsFinding(property.info, property.expression, "resource type");
+      }
+    }
+  }
+
+  function validateCheckPermissionsCall(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const requests = call.arguments[1];
+    if (!requests) return;
+    for (const value of resolveStaticValues(info, requests, scope)) {
+      if (value.kind !== "node") continue;
+      if (ts.isArrayLiteralExpression(value.node)) {
+        for (const element of value.node.elements) {
+          if (ts.isOmittedExpression(element) || ts.isSpreadElement(element)) continue;
+          validateAuthorizationRequestExpression(
+            value.info,
+            element,
+            value.declarationScope,
+            state,
+            { validatePermission: true },
+          );
+        }
+      } else if (ts.isObjectLiteralExpression(value.node)) {
+        validateAuthorizationObject(value.info, value.node, value.declarationScope, state, {
+          validatePermission: true,
+        });
+      }
+    }
+  }
+
+  function validateAuthorizationRequestExpression(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+    options: AuthorizationObjectValidationOptions = {},
+  ): void {
+    for (const value of resolveStaticValues(info, expression, scope)) {
+      if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
+        validateAuthorizationObject(value.info, value.node, value.declarationScope, state, options);
+      }
+    }
+  }
+
+  function validateAuthorizationObjectArgumentCall(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const request = call.arguments[1];
+    if (request) {
+      validateAuthorizationRequestExpression(info, request, scope, state, {
+        validatePermission: true,
+      });
+    }
+  }
+
+  function iamAuthorizationCallTargetKind(
+    info: CheckerSourceFile,
+    target: ts.Expression,
+    scope: LexicalScope | null,
+  ): "checkPermissions" | "authorizationObject" | null {
+    const kinds = new Set<"checkPermissions" | "authorizationObject">();
+    for (const value of resolveStaticValues(info, target, scope)) {
+      if (value.kind !== "known") continue;
+      if (value.value === "iamCheckPermissions") {
+        kinds.add("checkPermissions");
+      } else if (
+        value.value === "iamAuthorizationRequestFunction" ||
+        value.value === "iamResourceSharingRecipientsFunction"
+      ) {
+        kinds.add("authorizationObject");
+      }
+    }
+    return kinds.size === 1 ? [...kinds][0]! : null;
+  }
+
+  function validateAuthorizationProvider(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    scanTenantAuthorizationHelpers(info, expression, scope, state);
+    for (const value of resolveStaticValues(info, expression, scope)) {
+      if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
+        validateAuthorizationObject(value.info, value.node, value.declarationScope, state);
+      } else if (value.kind === "node" && isCallableNode(value.node)) {
+        validateAuthorizationProviderCallable(
+          value.info,
+          value.node,
+          value.declarationScope,
+          state,
+        );
+      }
+    }
+  }
+
+  function validateAuthorizationProviderCallable(
+    info: CheckerSourceFile,
+    node: ts.FunctionLikeDeclaration,
+    declarationScope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const key = `${info.filePath}:authorization-provider:${node.getStart(info.sourceFile)}`;
+    if (visitedAuthorizationProviders.has(key)) return;
+    visitedAuthorizationProviders.add(key);
+    if (!node.body) return;
+
+    const functionScope = createChildScope(declarationScope);
+    const functionState = cloneAuthorityState(state);
+    node.parameters.forEach((parameter, index) => {
+      addBindingNames(functionScope, parameter.name, parameter, functionScope);
+      if (state.trackPublicArgs && index === 1) {
+        for (const name of collectBindingNames(parameter.name)) {
+          const binding = functionScope.bindings.get(name);
+          if (binding) functionState.publicArgsBindings.add(binding);
+        }
+      }
+    });
+
+    validateCallableAuthorizationReturns(info, node.body, functionScope, functionState, (expr) => {
+      validateAuthorizationProvider(info, expr, functionScope, functionState);
+    });
+  }
+
+  function validateAuthorizeAgainstProvider(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    if (containsDirectPublicArgsValue(info, expression, scope, state)) {
+      addAuthorizationArgsFinding(info, expression, "ancestors");
+      return;
+    }
+    for (const value of resolveStaticValues(info, expression, scope)) {
+      if (value.kind === "node" && isCallableNode(value.node) && value.node.body) {
+        const functionScope = createChildScope(value.declarationScope);
+        for (const parameter of value.node.parameters) {
+          addBindingNames(functionScope, parameter.name, parameter, functionScope);
+        }
+        validateCallableAuthorizationReturns(
+          value.info,
+          value.node.body,
+          functionScope,
+          state,
+          (expr) => {
+            if (containsDirectPublicArgsValue(value.info, expr, functionScope, state)) {
+              addAuthorizationArgsFinding(value.info, expr, "ancestors");
+            }
+          },
+        );
+      }
+    }
+  }
+
+  function validateCallableAuthorizationReturns(
+    info: CheckerSourceFile,
+    body: ts.ConciseBody,
+    functionScope: LexicalScope,
+    state: AuthorityState,
+    validateReturn: (expression: ts.Expression) => void,
+  ): void {
+    if (!ts.isBlock(body)) {
+      validateReturn(body);
+      return;
+    }
+
+    const blockScope = createChildScope(functionScope);
+    collectDirectBlockBindings(body, blockScope);
+    for (const statement of body.statements) {
+      if (ts.isFunctionDeclaration(statement)) continue;
+      if (ts.isReturnStatement(statement)) {
+        if (statement.expression) validateReturn(statement.expression);
+        continue;
+      }
+      visitReachable(info, statement, blockScope, state);
+    }
+  }
+
+  function scanTenantAuthorizationHelpers(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        validateTenantAuthorizationHelperCall(info, node, scope, state);
+      }
+      if (isCallableNode(node)) return;
+      ts.forEachChild(node, visit);
+    };
+    visit(expression);
+  }
+
+  function validateTenantAuthorizationHelperCall(
+    info: CheckerSourceFile,
+    call: ts.CallExpression,
+    scope: LexicalScope | null,
+    state: AuthorityState,
+  ): void {
+    const target = unwrapExpression(call.expression);
+    const helperName = tenantAuthorizationHelperName(info, target, scope);
+    if (!helperName) return;
+    const options = call.arguments[2];
+    if (!options) return;
+    for (const value of resolveStaticValues(info, options, scope)) {
+      if (value.kind !== "node" || !ts.isObjectLiteralExpression(value.node)) continue;
+      if (
+        (helperName === "tenantFromParentResource" ||
+          helperName === "tenantFromDefaultParentResource") &&
+        deterministicObjectProperty(
+          value.info,
+          value.node,
+          "parentResourceType",
+          value.declarationScope,
+          new Set(),
+        ).kind === "found"
+      ) {
+        const parentResourceType = deterministicObjectProperty(
+          value.info,
+          value.node,
+          "parentResourceType",
+          value.declarationScope,
+          new Set(),
+        );
+        if (
+          parentResourceType.kind === "found" &&
+          isDirectPublicArgsValue(
+            parentResourceType.info,
+            parentResourceType.expression,
+            parentResourceType.scope,
+            state,
+            new Set(),
+          )
+        ) {
+          addAuthorizationArgsFinding(
+            parentResourceType.info,
+            parentResourceType.expression,
+            "resource type",
+          );
+        }
+      }
+      const authorizeAgainst = deterministicObjectProperty(
+        value.info,
+        value.node,
+        "authorizeAgainst",
+        value.declarationScope,
+        new Set(),
+      );
+      if (authorizeAgainst.kind === "found") {
+        validateAuthorizeAgainstProvider(
+          authorizeAgainst.info,
+          authorizeAgainst.expression,
+          authorizeAgainst.scope,
+          state,
+        );
+      }
+    }
+  }
+
+  function tenantAuthorizationHelperName(
+    info: CheckerSourceFile,
+    expression: ts.Expression,
+    scope: LexicalScope | null,
+  ): TenantResourceHelperName | null {
+    for (const value of resolveStaticValues(info, expression, scope)) {
+      if (value.kind === "known" && isTenantResourceHelperName(value.value)) {
+        return value.value;
+      }
+    }
+    return null;
+  }
+
   function isVerifiedUserTokenIdentifier(
     info: CheckerSourceFile,
     expression: ts.Expression,
@@ -2372,7 +3128,10 @@ function checkSdkIamCalls(
         }
         const mode = authorityModeForBuilder(root.builder);
         if (mode) {
-          visitConvexFunction(root, createAuthorityState(mode));
+          visitConvexFunction(
+            root,
+            createAuthorityState(mode, isBrowserCallableBuilder(root.builder)),
+          );
         }
       }
     }
@@ -2423,10 +3182,30 @@ function authorityModeForBuilder(builder: ConvexFunctionBuilder): SdkIamAuthorit
   }
 }
 
-function createAuthorityState(mode: SdkIamAuthorityMode): AuthorityState {
+function isBrowserCallableBuilder(builder: ConvexFunctionBuilder): boolean {
+  switch (builder) {
+    case "publicQuery":
+    case "publicMutation":
+    case "publicAction":
+    case "authenticatedQuery":
+    case "authenticatedMutation":
+    case "authenticatedAction":
+    case "iamQuery":
+    case "iamMutation":
+    case "iamAction":
+      return true;
+    case "rawAction":
+    case "internalAction":
+      return false;
+  }
+}
+
+function createAuthorityState(mode: SdkIamAuthorityMode, trackPublicArgs = false): AuthorityState {
   return {
     mode,
     ctxBindings: new Set(),
+    publicArgsBindings: new Set(),
+    trackPublicArgs,
     checkedTokenBindings: new Set(),
     checkedIdentityTokenBindings: new Set(),
   };
@@ -2436,6 +3215,8 @@ function cloneAuthorityState(state: AuthorityState): AuthorityState {
   return {
     mode: state.mode,
     ctxBindings: new Set(state.ctxBindings),
+    publicArgsBindings: new Set(state.publicArgsBindings),
+    trackPublicArgs: state.trackPublicArgs,
     checkedTokenBindings: new Set(state.checkedTokenBindings),
     checkedIdentityTokenBindings: new Set(state.checkedIdentityTokenBindings),
   };
@@ -2447,6 +3228,8 @@ function snapshotAuthorityState(state: AuthorityState): AuthorityState {
 
 function restoreAuthorityState(state: AuthorityState, snapshot: AuthorityState): void {
   state.ctxBindings = new Set(snapshot.ctxBindings);
+  state.publicArgsBindings = new Set(snapshot.publicArgsBindings);
+  state.trackPublicArgs = snapshot.trackPublicArgs;
   state.checkedTokenBindings = new Set(snapshot.checkedTokenBindings);
   state.checkedIdentityTokenBindings = new Set(snapshot.checkedIdentityTokenBindings);
 }
@@ -2459,6 +3242,11 @@ function conservativelyMergeAuthorityStates(
   for (const alternative of alternatives) {
     for (const binding of merged.ctxBindings) {
       if (!alternative.ctxBindings.has(binding)) merged.ctxBindings.delete(binding);
+    }
+    for (const binding of merged.publicArgsBindings) {
+      if (!alternative.publicArgsBindings.has(binding)) {
+        merged.publicArgsBindings.delete(binding);
+      }
     }
     for (const binding of merged.checkedTokenBindings) {
       if (!alternative.checkedTokenBindings.has(binding)) {
@@ -3215,12 +4003,32 @@ function checkRuntimeSupersetPermissionKeys(cwd: string, filePath: string): IamC
   return findings;
 }
 
+type IamCatalogPermission = {
+  key: string;
+  resourceType: string;
+  action: string;
+};
+
+type IamCatalogRole = {
+  key: string;
+  type: "built_in" | "custom" | "unknown";
+  id?: string;
+};
+
+type IamCatalog = {
+  canonicalPermissionKeys: Set<string> | null;
+  permissionsByKey: Map<string, IamCatalogPermission>;
+  rolesByKey: Map<string, IamCatalogRole>;
+  rolesById: Map<string, IamCatalogRole>;
+  rolePermissionsByRoleKey: Map<string, string[]>;
+};
+
 // The IAM catalog is file-only: hercules/iam.jsonc at the app root declares
-// every app permission key, and the control plane seeds the platform
-// system.* keys. Returns null when the file is missing or does not parse as
-// a permissions catalog, which disables the noncanonical_permission_key
-// check instead of risking false positives.
-function loadCatalogPermissionKeys(cwd: string): Set<string> | null {
+// every app permission key, reusable role, and reusable role-permission mapping.
+// Returns null when the file is missing or cannot be parsed as JSONC. Individual
+// malformed sections are treated as unresolved so the checker does not invent
+// false positives for a file the real compiler will reject separately.
+function loadIamCatalog(cwd: string): IamCatalog | null {
   const iamFilePath = join(cwd, "hercules", "iam.jsonc");
   if (!existsSync(iamFilePath) || !statSync(iamFilePath).isFile()) {
     return null;
@@ -3232,11 +4040,157 @@ function loadCatalogPermissionKeys(cwd: string): Set<string> | null {
   if (parsed.error) {
     return null;
   }
-  const permissions = (parsed.config as { permissions?: unknown } | undefined)?.permissions;
-  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) {
+  const config = parsed.config as Record<string, unknown> | undefined;
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
     return null;
   }
-  return new Set(Object.keys(permissions));
+
+  const permissionsByKey = parseCatalogPermissions(config.permissions);
+  const rolesByKey = parseCatalogRoles(config.roles);
+  const rolesById = new Map<string, IamCatalogRole>();
+  for (const role of rolesByKey.values()) {
+    if (role.id) rolesById.set(role.id, role);
+  }
+
+  return {
+    canonicalPermissionKeys:
+      isPlainObject(config.permissions) && permissionsByKey !== null
+        ? new Set(Object.keys(config.permissions))
+        : null,
+    permissionsByKey: permissionsByKey ?? new Map(),
+    rolesByKey,
+    rolesById,
+    rolePermissionsByRoleKey: parseCatalogRolePermissions(config.rolePermissions),
+  };
+}
+
+function parseCatalogPermissions(value: unknown): Map<string, IamCatalogPermission> | null {
+  if (!isPlainObject(value)) return null;
+  const permissions = new Map<string, IamCatalogPermission>();
+  for (const key of Object.keys(value)) {
+    const parsed = parseCatalogPermissionKey(key);
+    if (parsed) permissions.set(key, parsed);
+  }
+  return permissions;
+}
+
+function parseCatalogRoles(value: unknown): Map<string, IamCatalogRole> {
+  const roles = new Map<string, IamCatalogRole>();
+  if (!isPlainObject(value)) return roles;
+
+  for (const [key, rawRole] of Object.entries(value)) {
+    const role = isPlainObject(rawRole) ? rawRole : {};
+    const type = role.type === "built_in" || role.type === "custom" ? role.type : "unknown";
+    const id =
+      typeof role.id === "string"
+        ? role.id
+        : typeof role.roleId === "string"
+          ? role.roleId
+          : undefined;
+    roles.set(key, { key, type, ...(id ? { id } : {}) });
+  }
+  return roles;
+}
+
+function parseCatalogRolePermissions(value: unknown): Map<string, string[]> {
+  const rolePermissions = new Map<string, string[]>();
+  if (!isPlainObject(value)) return rolePermissions;
+
+  for (const [roleKey, rawPermissions] of Object.entries(value)) {
+    if (!Array.isArray(rawPermissions)) continue;
+    const permissionKeys = rawPermissions.filter(
+      (permission): permission is string => typeof permission === "string",
+    );
+    rolePermissions.set(roleKey, permissionKeys);
+  }
+  return rolePermissions;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCatalogPermissionKey(key: string): IamCatalogPermission | null {
+  const separator = key.indexOf(":");
+  if (separator <= 0 || separator === key.length - 1) return null;
+  return {
+    key,
+    resourceType: key.slice(0, separator),
+    action: key.slice(separator + 1),
+  };
+}
+
+function resolveCatalogRole(
+  catalog: IamCatalog,
+  reference: { kind: "key" | "id"; value: string },
+): { kind: "resolved"; role: IamCatalogRole } | { kind: "missing" } | { kind: "unresolved" } {
+  if (reference.kind === "key") {
+    return catalog.rolesByKey.has(reference.value)
+      ? { kind: "resolved", role: catalog.rolesByKey.get(reference.value)! }
+      : { kind: "missing" };
+  }
+
+  if (catalog.rolesById.size === 0) return { kind: "unresolved" };
+  return catalog.rolesById.has(reference.value)
+    ? { kind: "resolved", role: catalog.rolesById.get(reference.value)! }
+    : { kind: "missing" };
+}
+
+function validateBootstrapRoleForResource(
+  catalog: IamCatalog,
+  role: IamCatalogRole,
+  resourceType: string,
+  appliesTo: string | null,
+): string | null {
+  if (role.type === "built_in") {
+    return "built-in roles are platform roles and cannot be granted on an exact resource";
+  }
+
+  const permissionKeys = catalog.rolePermissionsByRoleKey.get(role.key) ?? [];
+  if (permissionKeys.length === 0) {
+    return "the role has no catalog permissions to grant";
+  }
+
+  for (const permissionKey of permissionKeys) {
+    const parsed =
+      catalog.permissionsByKey.get(permissionKey) ?? parseCatalogPermissionKey(permissionKey);
+    if (!parsed) {
+      return `permission "${permissionKey}" is not a valid catalog permission key`;
+    }
+    if (parsed.action === "*") {
+      return `permission "${permissionKey}" is a wildcard permission, which cannot be granted on a resource`;
+    }
+  }
+
+  const managerLever = `${resourceType}:manage_members`;
+  const privilegedKeys = permissionKeys.filter(isPrivilegedCatalogPermissionKey);
+  if (privilegedKeys.length > 0) {
+    const invalidPrivilegedKey = privilegedKeys.find(
+      (permissionKey) => permissionKey !== managerLever,
+    );
+    if (invalidPrivilegedKey) {
+      return `permission "${invalidPrivilegedKey}" is privileged and is not the target resource's own manage_members permission`;
+    }
+    return null;
+  }
+
+  const hasTargetTypePermission = permissionKeys.some((permissionKey) => {
+    const parsed =
+      catalog.permissionsByKey.get(permissionKey) ?? parseCatalogPermissionKey(permissionKey);
+    return parsed?.resourceType === resourceType;
+  });
+  if (!hasTargetTypePermission && appliesTo !== "self_and_descendants") {
+    return "the role grants no permission for the bootstrap resource type";
+  }
+
+  return null;
+}
+
+function isPrivilegedCatalogPermissionKey(permissionKey: string): boolean {
+  if (permissionKey.startsWith("system.")) return true;
+  const parsed = parseCatalogPermissionKey(permissionKey);
+  if (!parsed) return false;
+  return parsed.action === "manage_members" || parsed.action === "manage_access";
 }
 
 // The runtime authorize gate resolves a requested permission by exact key

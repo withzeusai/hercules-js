@@ -95,6 +95,7 @@ export default defineSchema({
     .index("by_scope", ["accessScopeId"])
     .index("by_scope_auth_user", ["accessScopeId", "herculesAuthUserId"])
     .index("by_auth_user", ["herculesAuthUserId"])
+    .index("by_auth_user_status", ["herculesAuthUserId", "status"])
     .index("by_scope_type", ["accessScopeId", "type"])
     .index("by_scope_status", ["accessScopeId", "status"])
     .index("by_scope_status_type", ["accessScopeId", "status", "type"]),

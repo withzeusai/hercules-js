@@ -59,13 +59,52 @@ type TenantSummary = {
   kind: "default" | "custom";
   roles: RoleSummary[];
   joinedAt: number;
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  lifecycleStatus: "active" | "archived";
+};
+
+type ActiveTenantSummary = Omit<TenantSummary, "accessStatus" | "lifecycleStatus"> & {
+  accessStatus: "active";
+  lifecycleStatus: "active";
 };
 
 type TenantSummariesPage = {
   tenants: TenantSummary[];
   cursor?: string;
 };
+
+type ActiveTenantSummariesPage = {
+  tenants: ActiveTenantSummary[];
+  cursor?: string;
+};
+
+type TargetTenantSyncStatus =
+  | {
+      state: "syncing";
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    }
+  | {
+      state: "ready";
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId: string;
+      principalId: string;
+    }
+  | {
+      state: "denied";
+      reasonCode: string;
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId?: string;
+      principalId?: string;
+    }
+  | {
+      state: "failed";
+      reasonCode: string;
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    };
 
 type EffectivePermissionsResult = {
   allowed: boolean;
@@ -90,6 +129,37 @@ type TenantUserDirectoryEntry = {
   email: string;
   image?: string;
   roles: RoleSummary[];
+};
+
+type TenantMemberPickerUser = {
+  userId: string;
+  name: string;
+  email: string;
+  image?: string;
+};
+
+type TenantMemberPickerUsersPage = {
+  users: TenantMemberPickerUser[];
+  cursor?: string;
+};
+
+type SharingRecipient =
+  | {
+      type: "user";
+      userId: string;
+      name: string;
+      email: string;
+      image?: string;
+    }
+  | {
+      type: "group";
+      groupId: string;
+      name?: string;
+    };
+
+type SharingRecipientsPage = {
+  recipients: SharingRecipient[];
+  cursor?: string;
 };
 
 type TenantUser = {
@@ -120,7 +190,7 @@ type TenantDetail = {
   tenantId: string;
   tenantName: string;
   kind: "default" | "custom";
-  status: "active" | "disabled";
+  lifecycleStatus: "active" | "archived";
   accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
   updatedAt: number;
@@ -344,6 +414,10 @@ export const listMyTenants = query({
     const token = parseTokenIdentifier(args.tokenIdentifier);
     if (!token || token.issuer !== state.expectedIssuer) return { tenants: [] };
 
+    const defaultStanding = await resolveDefaultUserPrincipal(ctx, token.subject);
+    const hasActiveDefaultStanding =
+      defaultStanding?.scope.status === "active" && defaultStanding.principal.status === "active";
+
     const limit = pageLimit("listMyTenants", args.limit);
     const page = await paginator(ctx.db, schema)
       .query("principals")
@@ -357,7 +431,22 @@ export const listMyTenants = query({
             .query("scopes")
             .withIndex("by_scope_id", (q) => q.eq("accessScopeId", principal.accessScopeId))
             .unique();
-          if (!scope || scope.status === "disabled") return null;
+          if (!scope) return null;
+          const isDefaultPrincipal =
+            defaultStanding !== null &&
+            principal.accessScopeId === defaultStanding.scope.accessScopeId &&
+            principal.principalId === defaultStanding.principal.principalId;
+          if (!isDefaultPrincipal && !hasActiveDefaultStanding) return null;
+          if (
+            scope.status === "disabled" &&
+            (principal.status !== "active" ||
+              !(await principalHasDirectImmutableOwnerRole(ctx, {
+                principalId: principal.principalId,
+                scopeId: principal.accessScopeId,
+              })))
+          ) {
+            return null;
+          }
 
           const roles = await collectPrincipalScopeRoles(ctx, {
             principalId: principal.principalId,
@@ -370,7 +459,8 @@ export const listMyTenants = query({
             kind: scope.kind === "default" ? "default" : "custom",
             roles,
             joinedAt: principal.joinedAt,
-            status: principal.status,
+            accessStatus: principal.status,
+            lifecycleStatus: publicTenantLifecycleStatus(scope.status),
           };
         }),
       )
@@ -380,6 +470,152 @@ export const listMyTenants = query({
       tenants,
       ...(page.isDone ? {} : { cursor: page.continueCursor }),
     };
+  },
+});
+
+const ACTIVE_TENANT_SCAN_CAP = 500;
+
+export const listMyActiveTenants = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    kind: v.optional(v.union(v.literal("default"), v.literal("custom"))),
+  },
+  handler: async (ctx, args): Promise<ActiveTenantSummariesPage> => {
+    if (!args.tokenIdentifier) return { tenants: [] };
+
+    const state = await ctx.db.query("sync_state").unique();
+    if (!state) return { tenants: [] };
+
+    const token = parseTokenIdentifier(args.tokenIdentifier);
+    if (!token || token.issuer !== state.expectedIssuer) return { tenants: [] };
+
+    const defaultStanding = await resolveDefaultUserPrincipal(ctx, token.subject);
+    if (
+      defaultStanding?.scope.status !== "active" ||
+      defaultStanding.principal.status !== "active"
+    ) {
+      return { tenants: [] };
+    }
+
+    const limit = pageLimit("listMyActiveTenants", args.limit);
+    const tenants: ActiveTenantSummary[] = [];
+    let cursor: string | null = args.cursor ?? null;
+    let scanned = 0;
+    let nextCursor: string | undefined;
+
+    while (tenants.length < limit && scanned < ACTIVE_TENANT_SCAN_CAP) {
+      const remainingResults = limit - tenants.length;
+      const remainingScan = ACTIVE_TENANT_SCAN_CAP - scanned;
+      const page = await paginator(ctx.db, schema)
+        .query("principals")
+        .withIndex("by_auth_user_status", (q) =>
+          q.eq("herculesAuthUserId", token.subject).eq("status", "active"),
+        )
+        .paginate({ cursor, numItems: Math.min(remainingResults, remainingScan) });
+
+      scanned += page.page.length;
+      nextCursor = page.isDone ? undefined : page.continueCursor;
+
+      for (const principal of page.page) {
+        const scope = await ctx.db
+          .query("scopes")
+          .withIndex("by_scope_id", (q) => q.eq("accessScopeId", principal.accessScopeId))
+          .unique();
+        if (!scope || scope.status !== "active") continue;
+        const kind = scope.kind === "default" ? "default" : "custom";
+        if (args.kind && args.kind !== kind) continue;
+
+        const roles = await collectPrincipalScopeRoles(ctx, {
+          principalId: principal.principalId,
+          scopeId: principal.accessScopeId,
+        });
+        tenants.push({
+          tenantId: scope.accessScopeId,
+          tenantName: scope.name,
+          kind,
+          roles,
+          joinedAt: principal.joinedAt,
+          accessStatus: "active",
+          lifecycleStatus: "active",
+        });
+      }
+
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+
+    return {
+      tenants,
+      ...(nextCursor === undefined ? {} : { cursor: nextCursor }),
+    };
+  },
+});
+
+export const getTargetTenantSyncStatus = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    tenantId: v.string(),
+    sourceVersion: v.number(),
+  },
+  handler: async (ctx, args): Promise<TargetTenantSyncStatus> => {
+    const targetSourceVersion = args.sourceVersion;
+    const state = await ctx.db.query("sync_state").unique();
+    if (!state) {
+      return { state: "syncing", targetSourceVersion };
+    }
+
+    if (state.sourceVersion < targetSourceVersion) {
+      return {
+        state: "syncing",
+        currentSourceVersion: state.sourceVersion,
+        targetSourceVersion,
+      };
+    }
+
+    if (!args.tokenIdentifier) {
+      return syncFailed("identity_missing", state.sourceVersion, targetSourceVersion);
+    }
+    const token = parseTokenIdentifier(args.tokenIdentifier);
+    if (!token) {
+      return syncFailed("identity_invalid", state.sourceVersion, targetSourceVersion);
+    }
+    if (token.issuer !== state.expectedIssuer) {
+      return syncFailed("unexpected_issuer", state.sourceVersion, targetSourceVersion);
+    }
+
+    const scope = await resolveScopeRow(ctx, args.tenantId);
+    if (!scope) {
+      return syncFailed("tenant_missing", state.sourceVersion, targetSourceVersion);
+    }
+
+    const evaluation = await evaluateEffectiveAccess(ctx, {
+      tokenIdentifier: args.tokenIdentifier,
+      scopeId: args.tenantId,
+    });
+    if (evaluation.allowed && evaluation.scopeId && evaluation.principalId) {
+      return {
+        state: "ready",
+        currentSourceVersion: state.sourceVersion,
+        targetSourceVersion,
+        tenantId: evaluation.scopeId,
+        principalId: evaluation.principalId,
+      };
+    }
+
+    if (isCompletedAccessDenial(evaluation.reasonCode)) {
+      return {
+        state: "denied",
+        reasonCode: evaluation.reasonCode,
+        currentSourceVersion: state.sourceVersion,
+        targetSourceVersion,
+        ...(evaluation.scopeId === undefined ? {} : { tenantId: evaluation.scopeId }),
+        ...(evaluation.principalId === undefined ? {} : { principalId: evaluation.principalId }),
+      };
+    }
+
+    return syncFailed(evaluation.reasonCode, state.sourceVersion, targetSourceVersion);
   },
 });
 
@@ -505,6 +741,50 @@ export const listTenantUserDirectory = query({
   },
 });
 
+export const listTenantMemberPickerUsers = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    tenantId: v.string(),
+    permission: v.string(),
+    resourceType: v.optional(v.string()),
+    resourceId: v.optional(v.string()),
+    ancestors: v.optional(v.array(v.object({ resourceType: v.string(), resourceId: v.string() }))),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<TenantMemberPickerUsersPage> => {
+    const decision = await evaluatePermissionDecision(ctx, {
+      tokenIdentifier: args.tokenIdentifier,
+      tenantId: args.tenantId,
+      permission: args.permission,
+      resourceType: args.resourceType,
+      resourceId: args.resourceId,
+      ancestors: args.ancestors,
+    });
+    if (!decision.allowed) return { users: [] };
+
+    const scope = await resolveScopeRow(ctx, args.tenantId);
+    if (!scope) return { users: [] };
+
+    const limit = pageLimit("listTenantMemberPickerUsers", args.limit);
+    const page = await paginator(ctx.db, schema)
+      .query("principals")
+      .withIndex("by_scope_status_type", (q) =>
+        q.eq("accessScopeId", scope.accessScopeId).eq("status", "active").eq("type", "user"),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: limit });
+
+    const users = (
+      await Promise.all(page.page.map((principal) => tenantPickerUserFromPrincipal(ctx, principal)))
+    ).filter((user): user is TenantMemberPickerUser => user !== null);
+
+    return {
+      users,
+      ...(page.isDone ? {} : { cursor: page.continueCursor }),
+    };
+  },
+});
+
 export const getTenantUserDirectoryEntry = query({
   args: {
     tokenIdentifier: v.optional(v.string()),
@@ -556,6 +836,60 @@ export const getTenantUserDirectoryEntry = query({
   },
 });
 
+export const listResourceSharingRecipients = query({
+  args: {
+    tokenIdentifier: v.optional(v.string()),
+    tenantId: v.string(),
+    permission: v.string(),
+    resourceType: v.string(),
+    resourceId: v.string(),
+    ancestors: v.optional(v.array(v.object({ resourceType: v.string(), resourceId: v.string() }))),
+    recipientType: v.union(v.literal("user"), v.literal("group")),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<SharingRecipientsPage> => {
+    const details = await evaluatePermissionDecisionDetailed(ctx, {
+      tokenIdentifier: args.tokenIdentifier,
+      tenantId: args.tenantId,
+      permission: args.permission,
+      resourceType: args.resourceType,
+      resourceId: args.resourceId,
+      ancestors: args.ancestors,
+    });
+    if (
+      !details.decision.allowed ||
+      details.resolvedPermission?.resourceType !== args.resourceType ||
+      details.resolvedPermission.action !== "manage_members"
+    ) {
+      return { recipients: [] };
+    }
+
+    const scope = await resolveScopeRow(ctx, args.tenantId);
+    if (!scope) return { recipients: [] };
+
+    const limit = pageLimit("listResourceSharingRecipients", args.limit);
+    const page = await paginator(ctx.db, schema)
+      .query("principals")
+      .withIndex("by_scope_status_type", (q) =>
+        q
+          .eq("accessScopeId", scope.accessScopeId)
+          .eq("status", "active")
+          .eq("type", args.recipientType),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: limit });
+
+    const recipients = (
+      await Promise.all(page.page.map((principal) => sharingRecipientFromPrincipal(ctx, principal)))
+    ).filter((recipient): recipient is SharingRecipient => recipient !== null);
+
+    return {
+      recipients,
+      ...(page.isDone ? {} : { cursor: page.continueCursor }),
+    };
+  },
+});
+
 export const getTenant = query({
   args: { tokenIdentifier: v.optional(v.string()), tenantId: v.string() },
   handler: async (ctx, args): Promise<TenantDetail | null> => {
@@ -566,7 +900,7 @@ export const getTenant = query({
       tenantId: scope.accessScopeId,
       tenantName: scope.name,
       kind: scope.kind === "default" ? "default" : "custom",
-      status: scope.status,
+      lifecycleStatus: publicTenantLifecycleStatus(scope.status),
       accessMode: scope.accessMode,
       defaultRoleId: scope.defaultRoleId,
       updatedAt: scope.updatedAt,
@@ -1599,12 +1933,63 @@ async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, tenantId: string
     .unique();
 }
 
+async function resolveDefaultUserPrincipal(ctx: GenericQueryCtx<DataModel>, authUserId: string) {
+  const scopes = await ctx.db
+    .query("scopes")
+    .withIndex("by_kind", (q) => q.eq("kind", "default"))
+    .collect();
+  if (scopes.length !== 1) return null;
+  const scope = scopes[0]!;
+
+  const principals = await ctx.db
+    .query("principals")
+    .withIndex("by_scope_auth_user", (q) =>
+      q.eq("accessScopeId", scope.accessScopeId).eq("herculesAuthUserId", authUserId),
+    )
+    .collect();
+  if (principals.length !== 1) return null;
+
+  const principal = principals[0]!;
+  if (principal.type !== "user") return null;
+
+  return { scope, principal };
+}
+
 function pageLimit(operation: string, limit: number | undefined): number {
   const value = limit ?? 50;
   if (!Number.isInteger(value) || value < 1 || value > 100) {
     throw new Error(`${operation} limit must be an integer from 1 to 100`);
   }
   return value;
+}
+
+function syncFailed(
+  reasonCode: string,
+  currentSourceVersion: number | undefined,
+  targetSourceVersion: number,
+): TargetTenantSyncStatus {
+  return {
+    state: "failed",
+    reasonCode,
+    ...(currentSourceVersion === undefined ? {} : { currentSourceVersion }),
+    targetSourceVersion,
+  };
+}
+
+function isCompletedAccessDenial(reasonCode: string): boolean {
+  return (
+    reasonCode === "tenant_disabled" ||
+    reasonCode === "principal_missing" ||
+    reasonCode.startsWith("principal_") ||
+    reasonCode === "app_principal_missing" ||
+    reasonCode.startsWith("app_principal_")
+  );
+}
+
+function publicTenantLifecycleStatus(
+  status: "active" | "disabled",
+): TenantDetail["lifecycleStatus"] {
+  return status === "disabled" ? "archived" : "active";
 }
 
 type DirectResourceSubjectsCursor = {
@@ -1713,6 +2098,48 @@ async function tenantUserFromPrincipal(
   };
 }
 
+async function tenantPickerUserFromPrincipal(
+  ctx: GenericQueryCtx<DataModel>,
+  principal: {
+    type: "user" | "group";
+    herculesAuthUserId?: string;
+  },
+): Promise<TenantMemberPickerUser | null> {
+  if (principal.type !== "user" || !principal.herculesAuthUserId) return null;
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", principal.herculesAuthUserId!))
+    .unique();
+  if (!user) return null;
+  return {
+    userId: user.herculesAuthUserId,
+    name: user.name,
+    email: user.email,
+    ...(user.image === undefined ? {} : { image: user.image }),
+  };
+}
+
+async function sharingRecipientFromPrincipal(
+  ctx: GenericQueryCtx<DataModel>,
+  principal: {
+    principalId: string;
+    type: "user" | "group";
+    herculesAuthUserId?: string;
+    name?: string;
+  },
+): Promise<SharingRecipient | null> {
+  if (principal.type === "group") {
+    return {
+      type: "group",
+      groupId: principal.principalId,
+      ...(principal.name === undefined ? {} : { name: principal.name }),
+    };
+  }
+
+  const user = await tenantPickerUserFromPrincipal(ctx, principal);
+  return user ? { type: "user", ...user } : null;
+}
+
 async function tenantGroupFromPrincipal(
   ctx: GenericQueryCtx<DataModel>,
   principal: {
@@ -1803,6 +2230,34 @@ async function collectPrincipalScopeRoles(
       a.roleId.localeCompare(b.roleId),
   );
   return roles;
+}
+
+async function principalHasDirectImmutableOwnerRole(
+  ctx: GenericQueryCtx<DataModel>,
+  args: { principalId: string; scopeId: string },
+): Promise<boolean> {
+  const bindings = await ctx.db
+    .query("role_bindings")
+    .withIndex("by_subject_scope_resource", (q) =>
+      q
+        .eq("subjectPrincipalId", args.principalId)
+        .eq("accessScopeId", args.scopeId)
+        .eq("resourceType", undefined)
+        .eq("resourceId", undefined),
+    )
+    .collect();
+  const now = Date.now();
+  for (const binding of bindings) {
+    if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+    const role = await ctx.db
+      .query("roles")
+      .withIndex("by_role_id", (q) => q.eq("roleId", binding.roleId))
+      .unique();
+    if (role?.source === "system" && role.key === "owner" && role.baseWildcard === "immutable") {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function collectPrincipalDirectScopeRoleGrants(

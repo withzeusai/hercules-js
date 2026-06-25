@@ -27,8 +27,13 @@ type TenantSummary = {
   tenantName: string;
   kind: string;
   joinedAt: number;
-  status: string;
+  accessStatus: string;
+  lifecycleStatus: string;
   roles: RoleSummary[];
+};
+type ActiveTenantSummary = TenantSummary & {
+  accessStatus: "active";
+  lifecycleStatus: "active";
 };
 type PermissionSummary = {
   permissionId: string;
@@ -66,11 +71,59 @@ type TenantDetail = {
   tenantId: string;
   tenantName: string;
   kind: string;
-  status: string;
+  lifecycleStatus: string;
   accessMode: string;
   defaultRoleId: string;
   updatedAt: number;
 };
+type TargetTenantSyncStatus =
+  | {
+      state: "syncing";
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    }
+  | {
+      state: "ready";
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId: string;
+      principalId: string;
+    }
+  | {
+      state: "denied";
+      reasonCode: string;
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId?: string;
+      principalId?: string;
+    }
+  | {
+      state: "failed";
+      reasonCode: string;
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    };
+type TenantMemberPickerUser = {
+  userId: string;
+  name: string;
+  email: string;
+  image?: string;
+};
+type TenantMemberPickerPage = { users: TenantMemberPickerUser[]; cursor?: string };
+type SharingRecipient =
+  | {
+      type: "user";
+      userId: string;
+      name: string;
+      email: string;
+      image?: string;
+    }
+  | {
+      type: "group";
+      groupId: string;
+      name?: string;
+    };
+type SharingRecipientsPage = { recipients: SharingRecipient[]; cursor?: string };
 type TenantRoleDetail = RoleSummary & {
   description: string | null;
   shared: boolean;
@@ -162,6 +215,16 @@ const listMyTenants = makeFunctionReference<
   Record<string, unknown>,
   { tenants: TenantSummary[]; cursor?: string }
 >("queries:listMyTenants");
+const listMyActiveTenants = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  { tenants: ActiveTenantSummary[]; cursor?: string }
+>("queries:listMyActiveTenants");
+const getTargetTenantSyncStatus = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  TargetTenantSyncStatus
+>("queries:getTargetTenantSyncStatus");
 const listMyRoles = makeFunctionReference<"query", Record<string, unknown>, RoleSummary[]>(
   "queries:listMyRoles",
 );
@@ -208,6 +271,16 @@ const listTenantPermissions = makeFunctionReference<
   Record<string, unknown>,
   PermissionSummary[]
 >("queries:listTenantPermissions");
+const listTenantMemberPickerUsers = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  TenantMemberPickerPage
+>("queries:listTenantMemberPickerUsers");
+const listResourceSharingRecipients = makeFunctionReference<
+  "query",
+  Record<string, unknown>,
+  SharingRecipientsPage
+>("queries:listResourceSharingRecipients");
 const listDirectSubjectsForResource = makeFunctionReference<
   "query",
   Record<string, unknown>,
@@ -370,6 +443,9 @@ function memberSnapshot(
     grantId: string;
     sourceVersion: number;
     eventId: string;
+    roleKey?: string;
+    roleName?: string;
+    roleWildcard?: "none" | "immutable" | "default";
   },
 ): Snapshot {
   return {
@@ -402,10 +478,10 @@ function memberSnapshot(
         {
           roleId: options.roleId,
           accessScopeId: tenantId,
-          key: scopeKind === "default" ? "owner" : "admin",
+          key: options.roleKey ?? (scopeKind === "default" ? "owner" : "admin"),
           kind: "system",
-          name: scopeKind === "default" ? "Owner" : "Admin",
-          wildcard: scopeKind === "default" ? "immutable" : "default",
+          name: options.roleName ?? (scopeKind === "default" ? "Owner" : "Admin"),
+          wildcard: options.roleWildcard ?? (scopeKind === "default" ? "immutable" : "default"),
           updatedAt: 1,
         },
       ],
@@ -423,6 +499,34 @@ function memberSnapshot(
       ],
     },
   };
+}
+
+async function seedDefaultStanding(
+  t: ReturnType<typeof convexTest>,
+  options: {
+    principalId?: string;
+    status?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+    joinedAt?: number;
+  } = {},
+) {
+  await t.run(async (ctx) => {
+    const scope = await ctx.db
+      .query("scopes")
+      .withIndex("by_kind", (q) => q.eq("kind", "default"))
+      .unique();
+    if (!scope) throw new Error("Expected default scope fixture");
+    await ctx.db.insert("principals", {
+      accessScopeId: scope.accessScopeId,
+      principalId: options.principalId ?? "p_alice_default_standing",
+      type: "user",
+      herculesAuthUserId: "user_alice",
+      memberCount: 0,
+      status: options.status ?? "active",
+      joinedAt: options.joinedAt ?? 999,
+      updatedAt: 1,
+      sourceVersion: scope.sourceVersion,
+    });
+  });
 }
 
 function effectiveRoleReadSnapshot(options: {
@@ -546,6 +650,15 @@ describe("listMyTenants", () => {
     expect(byTenant.get("scope_acme")?.kind).toBe("custom");
     expect(byTenant.get("scope_default")?.joinedAt).toBe(1001);
     expect(byTenant.get("scope_acme")?.joinedAt).toBe(1002);
+    expect(byTenant.get("scope_default")).toMatchObject({
+      accessStatus: "active",
+      lifecycleStatus: "active",
+    });
+    expect(byTenant.get("scope_acme")).toMatchObject({
+      accessStatus: "active",
+      lifecycleStatus: "active",
+    });
+    expect(byTenant.get("scope_default")).not.toHaveProperty("status");
   });
 
   test("returns all roles for a membership in one scope", async () => {
@@ -621,13 +734,14 @@ describe("listMyTenants", () => {
         ],
       },
     } satisfies Snapshot);
+    await seedDefaultStanding(t);
 
     const { tenants: memberships } = await t.query(listMyTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
     });
+    const acme = memberships.find((tenant) => tenant.tenantId === "scope_acme");
 
-    expect(memberships).toHaveLength(1);
-    expect(memberships[0]).toMatchObject({
+    expect(acme).toMatchObject({
       tenantId: "scope_acme",
       roles: [
         {
@@ -699,23 +813,20 @@ describe("listMyTenants", () => {
         ],
       },
     } satisfies Snapshot);
+    await seedDefaultStanding(t);
 
-    await expect(
-      t
-        .query(listMyTenants, {
-          tokenIdentifier: `${ISSUER}|user_alice`,
-        })
-        .then((page) => page.tenants),
-    ).resolves.toEqual([
-      {
-        tenantId: "scope_acme",
-        tenantName: "Acme",
-        kind: "custom",
-        roles: [],
-        joinedAt: 1001,
-        status: "active",
-      },
-    ]);
+    const page = await t.query(listMyTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+    });
+    expect(page.tenants.find((tenant) => tenant.tenantId === "scope_acme")).toEqual({
+      tenantId: "scope_acme",
+      tenantName: "Acme",
+      kind: "custom",
+      roles: [],
+      joinedAt: 1001,
+      accessStatus: "active",
+      lifecycleStatus: "active",
+    });
   });
 
   test("lists roles for one scope", async () => {
@@ -756,6 +867,7 @@ describe("listMyTenants", () => {
         grants: [engineerGroupGrant],
       }),
     );
+    await seedDefaultStanding(t);
 
     const { tenants: memberships } = await t.query(listMyTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
@@ -764,8 +876,9 @@ describe("listMyTenants", () => {
       tokenIdentifier: `${ISSUER}|user_alice`,
       tenantId: "scope_acme",
     });
+    const acme = memberships.find((tenant) => tenant.tenantId === "scope_acme");
 
-    expect(memberships[0]?.roles).toEqual([
+    expect(acme?.roles).toEqual([
       {
         roleId: "role_engineer",
         roleKey: "engineer",
@@ -773,7 +886,7 @@ describe("listMyTenants", () => {
         roleKind: "custom",
       },
     ]);
-    expect(roles).toEqual(memberships[0]?.roles);
+    expect(roles).toEqual(acme?.roles);
   });
 
   // L9 (consumer-plane blocked-group fence): collectPrincipalScopeRoles must share
@@ -805,7 +918,7 @@ describe("listMyTenants", () => {
   // membership listing for the additive case is covered by the surrounding
   // listMyTenants / listMyRoles tests.
 
-  test("skips disabled scopes", async () => {
+  test("returns archived tenants only for retained direct Owners", async () => {
     const t = convexTest(schema, modules);
 
     await t.mutation(
@@ -820,12 +933,25 @@ describe("listMyTenants", () => {
     );
     await t.mutation(
       applySync,
-      memberSnapshot("scope_archived", "Archived", "org", "disabled", {
-        userPrincipalId: "p_alice_archived",
-        roleId: "role_archived_admin",
-        grantId: "grant_alice_archived",
+      memberSnapshot("scope_archived_owner", "Archived Owner", "org", "disabled", {
+        userPrincipalId: "p_alice_archived_owner",
+        roleId: "role_owner",
+        grantId: "grant_alice_archived_owner",
         sourceVersion: 2,
-        eventId: "evt_archived",
+        eventId: "evt_archived_owner",
+        roleKey: "owner",
+        roleName: "Owner",
+        roleWildcard: "immutable",
+      }),
+    );
+    await t.mutation(
+      applySync,
+      memberSnapshot("scope_archived_admin", "Archived Admin", "org", "disabled", {
+        userPrincipalId: "p_alice_archived_admin",
+        roleId: "role_admin",
+        grantId: "grant_alice_archived_admin",
+        sourceVersion: 3,
+        eventId: "evt_archived_admin",
       }),
     );
 
@@ -833,8 +959,117 @@ describe("listMyTenants", () => {
       tokenIdentifier: `${ISSUER}|user_alice`,
     });
 
-    expect(memberships).toHaveLength(1);
-    expect(memberships[0]!.tenantId).toBe("scope_default");
+    expect(memberships).toHaveLength(2);
+    expect(memberships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tenantId: "scope_default",
+          lifecycleStatus: "active",
+        }),
+        expect.objectContaining({
+          tenantId: "scope_archived_owner",
+          accessStatus: "active",
+          lifecycleStatus: "archived",
+        }),
+      ]),
+    );
+    expect(memberships).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tenantId: "scope_archived_admin",
+        }),
+      ]),
+    );
+  });
+
+  test("surfaces principal access status separately from active tenant lifecycle", async () => {
+    const t = convexTest(schema, modules);
+
+    await t.mutation(
+      applySync,
+      memberSnapshot("scope_acme", "Acme", "org", "active", {
+        userPrincipalId: "p_alice_acme",
+        roleId: "role_member",
+        grantId: "grant_alice_acme",
+        sourceVersion: 1,
+        eventId: "evt_acme",
+      }),
+    );
+    await seedDefaultStanding(t);
+    await t.run(async (ctx) => {
+      const principal = await ctx.db
+        .query("principals")
+        .withIndex("by_principal_id", (q) => q.eq("principalId", "p_alice_acme"))
+        .unique();
+      await ctx.db.patch(principal!._id, { status: "suspended" });
+    });
+
+    const page = await t.query(listMyTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+    });
+    expect(page.tenants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tenantId: "scope_acme",
+          accessStatus: "suspended",
+          lifecycleStatus: "active",
+        }),
+      ]),
+    );
+    expect(page.tenants.find((tenant) => tenant.tenantId === "scope_acme")).not.toHaveProperty(
+      "status",
+    );
+  });
+
+  test("hides custom tenants when default standing is suspended but still pages default status", async () => {
+    const t = convexTest(schema, modules);
+    await seedActiveTenantRows(t, [
+      {
+        scopeId: "scope_custom",
+        scopeName: "Custom",
+        scopeKind: "org",
+        scopeStatus: "active",
+        principalId: "p_custom",
+        principalStatus: "active",
+        joinedAt: 1,
+      },
+      {
+        scopeId: "scope_default",
+        scopeName: "Default",
+        scopeKind: "default",
+        scopeStatus: "active",
+        principalId: "p_default",
+        principalStatus: "suspended",
+        joinedAt: 2,
+      },
+    ]);
+
+    const first = await t.query(listMyTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      limit: 1,
+    });
+    expect(first).toEqual({ tenants: [], cursor: expect.any(String) });
+
+    const second = await t.query(listMyTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      limit: 1,
+      cursor: first.cursor,
+    });
+    expect(second.tenants).toEqual([
+      expect.objectContaining({
+        tenantId: "scope_default",
+        kind: "default",
+        accessStatus: "suspended",
+        lifecycleStatus: "active",
+      }),
+    ]);
+    expect([...first.tenants, ...second.tenants]).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tenantId: "scope_custom",
+        }),
+      ]),
+    );
   });
 
   test("returns empty list when user has no principals", async () => {
@@ -875,6 +1110,412 @@ describe("listMyTenants", () => {
       tokenIdentifier: "https://other.example.com|user_alice",
     });
     expect(memberships).toEqual([]);
+  });
+});
+
+async function seedActiveTenantRows(
+  t: ReturnType<typeof convexTest>,
+  rows: Array<{
+    scopeId: string;
+    scopeName: string;
+    scopeKind: "default" | "org" | "suite";
+    scopeStatus: "active" | "disabled";
+    principalId: string;
+    principalStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+    joinedAt: number;
+  }>,
+) {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("sync_state", {
+      sourceVersion: 10,
+      expectedIssuer: ISSUER,
+      lastSyncedAt: 1,
+    });
+    for (const row of rows) {
+      await ctx.db.insert("scopes", {
+        accessScopeId: row.scopeId,
+        name: row.scopeName,
+        kind: row.scopeKind,
+        status: row.scopeStatus,
+        accessMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 1,
+        sourceVersion: 10,
+      });
+      await ctx.db.insert("principals", {
+        accessScopeId: row.scopeId,
+        principalId: row.principalId,
+        type: "user",
+        herculesAuthUserId: "user_alice",
+        memberCount: 0,
+        status: row.principalStatus,
+        joinedAt: row.joinedAt,
+        updatedAt: 1,
+        sourceVersion: 10,
+      });
+    }
+  });
+}
+
+describe("listMyActiveTenants", () => {
+  test("returns only active memberships in active tenants with optional kind filtering", async () => {
+    const t = convexTest(schema, modules);
+    await seedActiveTenantRows(t, [
+      {
+        scopeId: "scope_default",
+        scopeName: "Default",
+        scopeKind: "default",
+        scopeStatus: "active",
+        principalId: "p_default",
+        principalStatus: "active",
+        joinedAt: 1,
+      },
+      {
+        scopeId: "scope_disabled",
+        scopeName: "Disabled",
+        scopeKind: "org",
+        scopeStatus: "disabled",
+        principalId: "p_disabled",
+        principalStatus: "active",
+        joinedAt: 2,
+      },
+      {
+        scopeId: "scope_inactive_membership",
+        scopeName: "Inactive Membership",
+        scopeKind: "org",
+        scopeStatus: "active",
+        principalId: "p_inactive",
+        principalStatus: "blocked",
+        joinedAt: 3,
+      },
+      {
+        scopeId: "scope_custom_1",
+        scopeName: "Custom 1",
+        scopeKind: "org",
+        scopeStatus: "active",
+        principalId: "p_custom_1",
+        principalStatus: "active",
+        joinedAt: 4,
+      },
+      {
+        scopeId: "scope_custom_2",
+        scopeName: "Custom 2",
+        scopeKind: "suite",
+        scopeStatus: "active",
+        principalId: "p_custom_2",
+        principalStatus: "active",
+        joinedAt: 5,
+      },
+    ]);
+
+    const page = await t.query(listMyActiveTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      kind: "custom",
+      limit: 2,
+    });
+
+    expect(page).toEqual({
+      tenants: [
+        expect.objectContaining({
+          tenantId: "scope_custom_1",
+          kind: "custom",
+          accessStatus: "active",
+          lifecycleStatus: "active",
+        }),
+        expect.objectContaining({
+          tenantId: "scope_custom_2",
+          kind: "custom",
+          accessStatus: "active",
+          lifecycleStatus: "active",
+        }),
+      ],
+      cursor: expect.any(String),
+    });
+    expect(page.tenants[0]).not.toHaveProperty("status");
+  });
+
+  test("continues across sparse filtered source pages and preserves scan-cap cursor", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("sync_state", {
+        sourceVersion: 10,
+        expectedIssuer: ISSUER,
+        lastSyncedAt: 1,
+      });
+      await ctx.db.insert("scopes", {
+        accessScopeId: "scope_default",
+        name: "Default",
+        kind: "default",
+        status: "active",
+        accessMode: "open",
+        defaultRoleId: "role_member",
+        updatedAt: 1,
+        sourceVersion: 10,
+      });
+      await ctx.db.insert("principals", {
+        accessScopeId: "scope_default",
+        principalId: "p_default",
+        type: "user",
+        herculesAuthUserId: "user_alice",
+        memberCount: 0,
+        status: "active",
+        joinedAt: -1,
+        updatedAt: 1,
+        sourceVersion: 10,
+      });
+      for (let i = 0; i < 501; i += 1) {
+        const scopeId = `scope_disabled_${i}`;
+        await ctx.db.insert("scopes", {
+          accessScopeId: scopeId,
+          name: `Disabled ${i}`,
+          kind: "org",
+          status: "disabled",
+          accessMode: "open",
+          defaultRoleId: "role_member",
+          updatedAt: 1,
+          sourceVersion: 10,
+        });
+        await ctx.db.insert("principals", {
+          accessScopeId: scopeId,
+          principalId: `p_disabled_${i}`,
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          memberCount: 0,
+          status: "active",
+          joinedAt: i,
+          updatedAt: 1,
+          sourceVersion: 10,
+        });
+      }
+    });
+
+    const first = await t.query(listMyActiveTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      limit: 1,
+      kind: "custom",
+    });
+    expect(first).toEqual({ tenants: [], cursor: expect.any(String) });
+
+    const second = await t.query(listMyActiveTenants, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      limit: 1,
+      kind: "custom",
+      cursor: first.cursor,
+    });
+    expect(second).toEqual({ tenants: [] });
+  });
+
+  test("returns no active tenants when default standing is suspended", async () => {
+    const t = convexTest(schema, modules);
+    await seedActiveTenantRows(t, [
+      {
+        scopeId: "scope_default",
+        scopeName: "Default",
+        scopeKind: "default",
+        scopeStatus: "active",
+        principalId: "p_default",
+        principalStatus: "suspended",
+        joinedAt: 1,
+      },
+      {
+        scopeId: "scope_custom",
+        scopeName: "Custom",
+        scopeKind: "org",
+        scopeStatus: "active",
+        principalId: "p_custom",
+        principalStatus: "active",
+        joinedAt: 2,
+      },
+    ]);
+
+    await expect(
+      t.query(listMyActiveTenants, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+      }),
+    ).resolves.toEqual({ tenants: [] });
+  });
+});
+
+function targetSyncDefaultSnapshot(
+  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed" = "active",
+): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    eventId: `evt_default_${status}`,
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accessMode: "open",
+      defaultRoleId: "role_member",
+      updatedAt: 1,
+    },
+    state: {
+      ...emptyState(),
+      principals: [
+        {
+          principalId: "p_alice_default",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status,
+          joinedAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+function targetSyncTenantSnapshot(
+  options: {
+    scopeStatus?: "active" | "disabled";
+    principalStatus?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+    sourceVersion?: number;
+  } = {},
+): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    eventId: `evt_target_${options.scopeStatus ?? "active"}_${
+      options.principalStatus ?? "active"
+    }_${options.sourceVersion ?? 2}`,
+    sourceVersion: options.sourceVersion ?? 2,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_acme",
+      name: "Acme",
+      kind: "org",
+      status: options.scopeStatus ?? "active",
+      accessMode: "open",
+      defaultRoleId: "role_member",
+      updatedAt: 1,
+    },
+    state: {
+      ...emptyState(),
+      principals: [
+        {
+          principalId: "p_alice_acme",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: options.principalStatus ?? "active",
+          joinedAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+describe("getTargetTenantSyncStatus", () => {
+  test("reports syncing while the global mirror is behind the promised source version", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, targetSyncDefaultSnapshot());
+
+    await expect(
+      t.query(getTargetTenantSyncStatus, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_acme",
+        sourceVersion: 2,
+      }),
+    ).resolves.toEqual({
+      state: "syncing",
+      currentSourceVersion: 1,
+      targetSourceVersion: 2,
+    });
+  });
+
+  test("returns ready once the barrier is reached and both target and app standing are active", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, targetSyncDefaultSnapshot());
+    await t.mutation(applySync, targetSyncTenantSnapshot());
+
+    await expect(
+      t.query(getTargetTenantSyncStatus, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_acme",
+        sourceVersion: 2,
+      }),
+    ).resolves.toEqual({
+      state: "ready",
+      currentSourceVersion: 2,
+      targetSourceVersion: 2,
+      tenantId: "scope_acme",
+      principalId: "p_alice_acme",
+    });
+  });
+
+  test("fails when the target tenant is still missing after the promised barrier", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, {
+      ...targetSyncDefaultSnapshot(),
+      sourceVersion: 4,
+      eventId: "evt_default_after_target_write",
+    });
+
+    await expect(
+      t.query(getTargetTenantSyncStatus, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_missing",
+        sourceVersion: 4,
+      }),
+    ).resolves.toEqual({
+      state: "failed",
+      reasonCode: "tenant_missing",
+      currentSourceVersion: 4,
+      targetSourceVersion: 4,
+    });
+  });
+
+  test.each([
+    ["tenant_disabled", targetSyncTenantSnapshot({ scopeStatus: "disabled" })],
+    ["principal_suspended", targetSyncTenantSnapshot({ principalStatus: "suspended" })],
+    ["app_principal_blocked", null],
+  ] as const)("returns denied for completed access denial %s", async (reasonCode, target) => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      applySync,
+      reasonCode === "app_principal_blocked"
+        ? targetSyncDefaultSnapshot("blocked")
+        : targetSyncDefaultSnapshot(),
+    );
+    await t.mutation(applySync, target ?? targetSyncTenantSnapshot());
+
+    await expect(
+      t.query(getTargetTenantSyncStatus, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_acme",
+        sourceVersion: 2,
+      }),
+    ).resolves.toMatchObject({
+      state: "denied",
+      reasonCode,
+      currentSourceVersion: 2,
+      targetSourceVersion: 2,
+    });
+  });
+
+  test.each([
+    ["not-a-token", "identity_invalid"],
+    ["https://other.example|user_alice", "unexpected_issuer"],
+  ])("returns failed for identity problem %s", async (tokenIdentifier, reasonCode) => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, targetSyncDefaultSnapshot());
+    await t.mutation(applySync, targetSyncTenantSnapshot());
+
+    await expect(
+      t.query(getTargetTenantSyncStatus, {
+        tokenIdentifier,
+        tenantId: "scope_acme",
+        sourceVersion: 2,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed",
+      reasonCode,
+      currentSourceVersion: 2,
+      targetSourceVersion: 2,
+    });
   });
 });
 
@@ -2094,20 +2735,20 @@ describe("tenant admin reads", () => {
     const t = convexTest(schema, modules);
     await t.mutation(applySync, adminReadSnapshot());
 
-    await expect(
-      t.query(getTenant, {
-        tokenIdentifier: `${ISSUER}|user_owner`,
-        tenantId: "scope_default",
-      }),
-    ).resolves.toEqual({
+    const tenant = await t.query(getTenant, {
+      tokenIdentifier: `${ISSUER}|user_owner`,
+      tenantId: "scope_default",
+    });
+    expect(tenant).toEqual({
       tenantId: "scope_default",
       tenantName: "Default",
       kind: "default",
-      status: "active",
+      lifecycleStatus: "active",
       accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 1,
     });
+    expect(tenant).not.toHaveProperty("status");
 
     const firstPage = await t.query(listTenantUsers, {
       tokenIdentifier: `${ISSUER}|user_owner`,
@@ -2440,6 +3081,403 @@ describe("tenant admin reads", () => {
         target: { type: "tenant" },
       }),
     ).resolves.toBeNull();
+  });
+});
+
+function pickerSnapshot(): Snapshot {
+  return {
+    type: "access.projection.snapshot",
+    eventId: "evt_picker",
+    sourceVersion: 1,
+    expectedIssuer: ISSUER,
+    scope: {
+      accessScopeId: "scope_default",
+      name: "Default",
+      kind: "default",
+      status: "active",
+      accessMode: "open",
+      defaultRoleId: "role_member",
+      updatedAt: 1,
+    },
+    state: {
+      ...emptyState(),
+      users: [
+        {
+          herculesAuthUserId: "user_alice",
+          name: "Alice",
+          email: "alice@example.com",
+          emailVerified: true,
+          phoneVerified: false,
+          updatedAt: 1,
+        },
+        {
+          herculesAuthUserId: "user_bob",
+          name: "Bob",
+          email: "bob@example.com",
+          emailVerified: true,
+          image: "https://example.com/bob.png",
+          phoneVerified: false,
+          updatedAt: 1,
+        },
+        {
+          herculesAuthUserId: "user_inactive",
+          name: "Inactive",
+          email: "inactive@example.com",
+          emailVerified: true,
+          phoneVerified: false,
+          updatedAt: 1,
+        },
+      ],
+      principals: [
+        {
+          principalId: "p_alice",
+          type: "user",
+          herculesAuthUserId: "user_alice",
+          status: "active",
+          joinedAt: 1,
+          updatedAt: 1,
+        },
+        {
+          principalId: "p_bob",
+          type: "user",
+          herculesAuthUserId: "user_bob",
+          status: "active",
+          joinedAt: 2,
+          updatedAt: 1,
+        },
+        {
+          principalId: "p_inactive",
+          type: "user",
+          herculesAuthUserId: "user_inactive",
+          status: "blocked",
+          joinedAt: 3,
+          updatedAt: 1,
+        },
+        {
+          principalId: "p_team",
+          type: "group",
+          name: "Team",
+          status: "active",
+          joinedAt: 4,
+          updatedAt: 1,
+        },
+        {
+          principalId: "p_archived_team",
+          type: "group",
+          name: "Archived Team",
+          status: "removed",
+          joinedAt: 5,
+          updatedAt: 1,
+        },
+      ],
+      permissions: [
+        {
+          permissionId: "perm_tasks_assign",
+          accessScopeId: "scope_default",
+          key: "app.tasks:assign",
+          resourceType: "app.tasks",
+          action: "assign",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
+          permissionId: "perm_docs_manage_members",
+          accessScopeId: "scope_default",
+          key: "app.docs:manage_members",
+          resourceType: "app.docs",
+          action: "manage_members",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+        {
+          permissionId: "perm_docs_read",
+          accessScopeId: "scope_default",
+          key: "app.docs:read",
+          resourceType: "app.docs",
+          action: "read",
+          tenantAssignable: true,
+          updatedAt: 1,
+        },
+      ],
+      grants: [
+        {
+          grantId: "grant_alice_assign",
+          subjectPrincipalId: "p_alice",
+          relationKind: "direct_permission",
+          permissionId: "perm_tasks_assign",
+          effect: "allow",
+          objectType: "scope",
+          objectId: "scope_default",
+          updatedAt: 1,
+        },
+        {
+          grantId: "grant_bob_task_assign",
+          subjectPrincipalId: "p_bob",
+          relationKind: "direct_permission",
+          permissionId: "perm_tasks_assign",
+          effect: "allow",
+          objectType: "resource",
+          objectResourceType: "app.tasks",
+          objectId: "task_1",
+          updatedAt: 1,
+        },
+        {
+          grantId: "grant_bob_project_task_assign",
+          subjectPrincipalId: "p_bob",
+          relationKind: "direct_permission",
+          permissionId: "perm_tasks_assign",
+          effect: "allow",
+          objectType: "resource",
+          objectResourceType: "app.projects",
+          objectId: "project_1",
+          appliesTo: "self_and_descendants",
+          updatedAt: 1,
+        },
+        {
+          grantId: "grant_alice_doc_share",
+          subjectPrincipalId: "p_alice",
+          relationKind: "direct_permission",
+          permissionId: "perm_docs_manage_members",
+          effect: "allow",
+          objectType: "resource",
+          objectResourceType: "app.docs",
+          objectId: "doc_1",
+          updatedAt: 1,
+        },
+        {
+          grantId: "grant_alice_doc_read",
+          subjectPrincipalId: "p_alice",
+          relationKind: "direct_permission",
+          permissionId: "perm_docs_read",
+          effect: "allow",
+          objectType: "resource",
+          objectResourceType: "app.docs",
+          objectId: "doc_1",
+          updatedAt: 1,
+        },
+        {
+          grantId: "grant_alice_folder_share",
+          subjectPrincipalId: "p_alice",
+          relationKind: "direct_permission",
+          permissionId: "perm_docs_manage_members",
+          effect: "allow",
+          objectType: "resource",
+          objectResourceType: "app.folders",
+          objectId: "folder_1",
+          appliesTo: "self_and_descendants",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+}
+
+describe("least-privilege picker reads", () => {
+  test("lists active tenant users behind the supplied app permission with narrow fields", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    const first = await t.query(listTenantMemberPickerUsers, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      tenantId: "scope_default",
+      permission: "app.tasks:assign",
+      limit: 1,
+    });
+    expect(first.users).toEqual([
+      {
+        userId: "user_alice",
+        name: "Alice",
+        email: "alice@example.com",
+      },
+    ]);
+    expect(first.cursor).toEqual(expect.any(String));
+
+    const second = await t.query(listTenantMemberPickerUsers, {
+      tokenIdentifier: `${ISSUER}|user_alice`,
+      tenantId: "scope_default",
+      permission: "app.tasks:assign",
+      cursor: first.cursor,
+      limit: 100,
+    });
+    expect(second).toEqual({
+      users: [
+        {
+          userId: "user_bob",
+          name: "Bob",
+          email: "bob@example.com",
+          image: "https://example.com/bob.png",
+        },
+      ],
+    });
+    expect(Object.keys(second.users[0]!).sort()).toEqual(["email", "image", "name", "userId"]);
+  });
+
+  test("returns an empty member picker page when the supplied permission gate denies", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    await expect(
+      t.query(listTenantMemberPickerUsers, {
+        tokenIdentifier: `${ISSUER}|user_bob`,
+        tenantId: "scope_default",
+        permission: "app.tasks:assign",
+      }),
+    ).resolves.toEqual({ users: [] });
+  });
+
+  test("gates member picker users with exact resource authorization", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    await expect(
+      t.query(listTenantMemberPickerUsers, {
+        tokenIdentifier: `${ISSUER}|user_bob`,
+        tenantId: "scope_default",
+        permission: "app.tasks:assign",
+        resourceType: "app.tasks",
+        resourceId: "task_2",
+      }),
+    ).resolves.toEqual({ users: [] });
+
+    const allowed = await t.query(listTenantMemberPickerUsers, {
+      tokenIdentifier: `${ISSUER}|user_bob`,
+      tenantId: "scope_default",
+      permission: "app.tasks:assign",
+      resourceType: "app.tasks",
+      resourceId: "task_1",
+    });
+    expect(allowed.users.map((user) => user.userId).sort()).toEqual(["user_alice", "user_bob"]);
+  });
+
+  test("gates member picker users with trusted inherited ancestor authorization", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    await expect(
+      t.query(listTenantMemberPickerUsers, {
+        tokenIdentifier: `${ISSUER}|user_bob`,
+        tenantId: "scope_default",
+        permission: "app.tasks:assign",
+        resourceType: "app.tasks",
+        resourceId: "task_2",
+      }),
+    ).resolves.toEqual({ users: [] });
+
+    const allowed = await t.query(listTenantMemberPickerUsers, {
+      tokenIdentifier: `${ISSUER}|user_bob`,
+      tenantId: "scope_default",
+      permission: "app.tasks:assign",
+      resourceType: "app.tasks",
+      resourceId: "task_2",
+      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
+    });
+    expect(allowed.users.map((user) => user.userId).sort()).toEqual(["user_alice", "user_bob"]);
+  });
+
+  test("lists sharing recipients by recipient type behind exact resource manage_members", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    await expect(
+      t.query(listResourceSharingRecipients, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_default",
+        permission: "app.docs:manage_members",
+        resourceType: "app.docs",
+        resourceId: "doc_1",
+        recipientType: "user",
+      }),
+    ).resolves.toEqual({
+      recipients: [
+        {
+          type: "user",
+          userId: "user_alice",
+          name: "Alice",
+          email: "alice@example.com",
+        },
+        {
+          type: "user",
+          userId: "user_bob",
+          name: "Bob",
+          email: "bob@example.com",
+          image: "https://example.com/bob.png",
+        },
+      ],
+    });
+
+    await expect(
+      t.query(listResourceSharingRecipients, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_default",
+        permission: "app.docs:manage_members",
+        resourceType: "app.docs",
+        resourceId: "doc_1",
+        recipientType: "group",
+      }),
+    ).resolves.toEqual({
+      recipients: [
+        {
+          type: "group",
+          groupId: "p_team",
+          name: "Team",
+        },
+      ],
+    });
+  });
+
+  test("fails closed when the supplied exact resource permission is not manage_members", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    await expect(
+      t.query(listResourceSharingRecipients, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_default",
+        permission: "app.docs:read",
+        resourceType: "app.docs",
+        resourceId: "doc_1",
+        recipientType: "user",
+      }),
+    ).resolves.toEqual({ recipients: [] });
+  });
+
+  test("requires exact resource or trusted ancestor authorization for sharing recipients", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(applySync, pickerSnapshot());
+
+    await expect(
+      t.query(listResourceSharingRecipients, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_default",
+        permission: "app.docs:manage_members",
+        resourceType: "app.docs",
+        resourceId: "doc_2",
+        recipientType: "user",
+      }),
+    ).resolves.toEqual({ recipients: [] });
+
+    await expect(
+      t.query(listResourceSharingRecipients, {
+        tokenIdentifier: `${ISSUER}|user_alice`,
+        tenantId: "scope_default",
+        permission: "app.docs:manage_members",
+        resourceType: "app.docs",
+        resourceId: "doc_2",
+        ancestors: [{ resourceType: "app.folders", resourceId: "folder_1" }],
+        recipientType: "user",
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      recipients: [
+        {
+          type: "user",
+          userId: "user_alice",
+          name: "Alice",
+          email: "alice@example.com",
+        },
+      ],
+      cursor: expect.any(String),
+    });
   });
 });
 

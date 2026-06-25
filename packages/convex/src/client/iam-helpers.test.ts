@@ -26,7 +26,7 @@ const activateResource = "internal.projects.activateResource" as unknown as Func
   "mutation",
   "internal",
   ResourceCreatorBootstrapActivationArgs,
-  void
+  null
 >;
 
 const rawGrant: GrantCreateResponse = {
@@ -126,7 +126,7 @@ function makeCtx(options: {
       }
       throw new Error(`Unexpected query reference ${String(ref)} with ${JSON.stringify(args)}`);
     }),
-    runMutation: vi.fn().mockResolvedValue(undefined),
+    runMutation: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -149,7 +149,9 @@ describe("resource creator bootstrap", () => {
     const { client, create } = makeClient();
     const action = makeAction(client);
     const ctx = makeCtx({
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      tenantPages: [
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).resolves.toEqual({
@@ -197,7 +199,9 @@ describe("resource creator bootstrap", () => {
         creatorHerculesAuthUserId: "user_1",
         state: "active",
       },
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      tenantPages: [
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).resolves.toEqual({
@@ -219,7 +223,9 @@ describe("resource creator bootstrap", () => {
         creatorHerculesAuthUserId: "user_2",
         state: "provisioning",
       },
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      tenantPages: [
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({
@@ -256,7 +262,17 @@ describe("resource creator bootstrap", () => {
     const { client, create } = makeClient();
     const action = makeAction(client);
     const ctx = makeCtx({
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "pending_approval" }] }],
+      tenantPages: [
+        {
+          tenants: [
+            {
+              tenantId: "tenant_1",
+              accessStatus: "pending_approval",
+              lifecycleStatus: "active",
+            },
+          ],
+        },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({
@@ -278,7 +294,11 @@ describe("resource creator bootstrap", () => {
           status,
           stateVersion: 4,
         },
-        tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+        tenantPages: [
+          {
+            tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }],
+          },
+        ],
       });
 
       await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({
@@ -299,7 +319,9 @@ describe("resource creator bootstrap", () => {
         reason: "principal_missing",
         stateVersion: 4,
       },
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      tenantPages: [
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({
@@ -315,8 +337,11 @@ describe("resource creator bootstrap", () => {
     const action = makeAction(client);
     const ctx = makeCtx({
       tenantPages: [
-        { tenants: [{ tenantId: "tenant_0", status: "active" }], cursor: "cursor_1" },
-        { tenants: [{ tenantId: "tenant_1", status: "active" }] },
+        {
+          tenants: [{ tenantId: "tenant_0", accessStatus: "active", lifecycleStatus: "active" }],
+          cursor: "cursor_1",
+        },
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
       ],
     });
 
@@ -345,8 +370,8 @@ describe("resource creator bootstrap", () => {
     const action = makeAction(client);
     const ctx = makeCtx({
       tenantPages: [
-        { tenants: [{ tenantId: "tenant_1", status: "active" }] },
-        { tenants: [{ tenantId: "tenant_1", status: "active" }] },
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
       ],
     });
     ctx.runMutation.mockRejectedValueOnce(new Error("activation failed"));
@@ -408,7 +433,9 @@ describe("resource creator bootstrap", () => {
     });
     const action = makeAction(client);
     const ctx = makeCtx({
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      tenantPages: [
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toThrow(
@@ -425,7 +452,9 @@ describe("resource creator bootstrap", () => {
         tokenIdentifier: "https://issuer.example|user_1",
         subject: "user_2",
       },
-      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      tenantPages: [
+        { tenants: [{ tenantId: "tenant_1", accessStatus: "active", lifecycleStatus: "active" }] },
+      ],
     });
 
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({

@@ -39,11 +39,15 @@ export const {
   getTenantAccessStatus,
   getEffectivePermissions,
   listMyTenants,
+  listMyActiveTenants,
+  getTargetTenantSyncStatus,
   listMyRoles,
   getTenant,
   listTenantUsers,
   listTenantGroups,
   listTenantUserDirectory,
+  listTenantMemberPickerUsers,
+  listResourceSharingRecipients,
   getTenantUserDirectoryEntry,
   listGroupMembers,
   listUserGroups,
@@ -152,8 +156,34 @@ tenant: tenantFromResource("tasks", "taskId", {
 
 The target and ancestors are evaluated atomically. An applicable deny wins.
 
-`filterAuthorizedResources` filters a bounded page of app-owned rows by running
-a resource check for each row. It does not load or paginate app data.
+`filterAuthorizedResources` filters a bounded page of app-owned rows with the
+canonical `authorizeMany` gate in chunks of at most 50 checks. It does not load
+or paginate app data.
+
+Use it only after an indexed app-owned `.paginate` call, and pass only
+`page.page`:
+
+```ts
+const page = await ctx.db
+  .query("documents")
+  .withIndex("by_tenant", (q) => q.eq("tenantId", args.tenantId))
+  .paginate(args.paginationOpts);
+
+const documents = await filterAuthorizedResources(ctx, {
+  resources: page.page,
+  tenantId: args.tenantId,
+  permission: "app.documents:read",
+  resource: (document) => ({ type: "app.documents", id: document._id }),
+  ancestors: (document) => [{ type: "app.folders", id: document.folderId }],
+});
+
+return { ...page, page: documents };
+```
+
+Return the original `continueCursor` and done state even when the authorized
+page is sparse. Do not call `.collect()`, do not treat a fixed limit as a
+complete list, and do not loop unbounded to fill an authorized page. No generic
+abstraction should hide or forge Convex cursors.
 
 ## Mirrored Reads
 
@@ -161,12 +191,16 @@ Reads come from the local Convex mirror:
 
 - `getTenantAccessStatus(ctx)`
 - `listMyTenants(ctx, { cursor, limit })`
+- `listMyActiveTenants(ctx, { cursor, limit, kind })`
+- `getTargetTenantSyncStatus(ctx, { tenantId, sourceVersion })`
 - `listMyRoles(ctx, { tenantId })`
 - `getEffectivePermissions(ctx, { tenantId, resource })`
 - `getTenant(ctx, { tenantId })`
 - `listTenantUsers(ctx, { tenantId, cursor, limit })`
 - `listTenantGroups(ctx, { tenantId, cursor, limit })`
 - `listTenantUserDirectory(ctx, { tenantId, cursor, limit })`
+- `listTenantMemberPickerUsers(ctx, { tenantId, permission, resource, ancestors, cursor, limit })`
+- `listResourceSharingRecipients(ctx, args)`
 - `getTenantUserDirectoryEntry(ctx, { tenantId, userId })`
 - `listGroupMembers(ctx, { tenantId, groupId, cursor, limit })`
 - `listUserGroups(ctx, { tenantId, userId, cursor, limit })`
@@ -180,14 +214,25 @@ Reads come from the local Convex mirror:
 User and group reads are separate. Tenant APIs use `user`; group APIs use
 `member`.
 
-`getTenantAccessStatus` returns the signed-in user's status in the default app
-tenant, or a typed fallback when that status is unavailable. `listMyTenants`
-returns `{ tenants, nextCursor? }`. `listTenantUsers` returns
-`{ users, nextCursor? }`. `listTenantGroups` returns `{ groups, nextCursor? }`.
-Each page contains at most 100 records. User and group rows include
-`directRoleGrants` with full role grant shape and nullable expiry. Effective
-`roles` may include roles inherited through groups. `listTenantGroups` includes
-the current direct `memberCount`.
+`getTenantAccessStatus` returns the signed-in user's access status in the
+default app tenant, or a typed fallback when that status is unavailable.
+`listMyTenants` returns `{ tenants, nextCursor? }`; each tenant summary uses
+`accessStatus` for the signed-in user's principal and `lifecycleStatus` for the
+tenant. It includes an archived tenant only for its retained active direct
+built-in Owner, with `lifecycleStatus: "archived"`; use the authoritative SDK
+tenant lifecycle reads for complete archive-management views.
+`listMyActiveTenants` returns only active memberships in active tenants and
+narrows both statuses to `"active"`. Pass `kind: "default"` or
+`kind: "custom"` to filter without assuming array order.
+Custom tenant results require active standing in the default app tenant. When
+default standing is inactive, `listMyTenants` may still expose the default
+tenant's own `accessStatus` for boundary UI but omits custom tenants, and
+`listMyActiveTenants` returns an empty page.
+`listTenantUsers` returns `{ users, nextCursor? }`. `listTenantGroups` returns
+`{ groups, nextCursor? }`. Each page contains at most 100 records. User and
+group rows include `directRoleGrants` with full role grant shape and nullable
+expiry. Effective `roles` may include roles inherited through groups.
+`listTenantGroups` includes the current direct `memberCount`.
 
 `listGroupMembers` returns `{ users, nextCursor? }`, `listUserGroups` returns
 `{ groups, nextCursor? }`, and `listDirectSubjectsForResource` returns
@@ -196,6 +241,21 @@ the current direct `memberCount`.
 and effective permissions. `listDirectSubjectsForResource` requires
 `system.access.grants:read` in the tenant.
 
+Use `listTenantMemberPickerUsers` for least-privilege app pickers such as task
+assignment. The trusted server call site supplies the concrete app permission
+for the operation, for example `app.tasks:assign`. Pass optional `resource` and
+trusted `ancestors` when the protected operation is resource-scoped; omit them
+for tenant-level operations. The helper returns only active users with
+picker-safe fields: `userId`, `name`, `email`, and optional `image`.
+
+Use `listResourceSharingRecipients` for exact-resource sharing pickers. Supply
+the concrete resource permission for the target resource type with action
+exactly `manage_members`, the exact `{ resourceType, resourceId }`, optional
+trusted ancestors, and one `recipientType` (`"user"` or `"group"`). The helper
+returns only active users or active groups with picker-safe fields and returns
+an empty page when the caller is unauthenticated, not authorized, or supplies a
+permission that resolves to any other resource type or action.
+
 Select the default app tenant by `kind`, not array order:
 
 ```ts
@@ -203,6 +263,15 @@ const { tenants } = await listMyTenants(ctx, { limit: 100 });
 const tenant = tenants.find(({ kind }) => kind === "default");
 if (!tenant) throw new Error("Default IAM tenant not found");
 ```
+
+After a control-plane write that returns `sourceVersion`, keep that value and
+call `getTargetTenantSyncStatus(ctx, { tenantId, sourceVersion })` before
+treating target-tenant mirror reads as complete. A `syncing` result means the
+local mirror has not reached the write yet. `ready` means the target tenant,
+target principal, and default app standing are active after the barrier.
+`denied` is a completed access denial after the barrier. `failed` means the
+identity, issuer, mirror, or target tenant is invalid after the promised
+version. Do not treat missing target mirror data before the barrier as denial.
 
 `listTenantRoles` is the complete mirrored role catalog. Back tenant assignment
 pickers with `hercules.iam.tenants.grantableRoles` and exact resource pickers
@@ -419,7 +488,8 @@ to the trusted creator of a provisioning row.
 - The browser passes only `resourceId`.
 - Trusted app data supplies `tenantId` and creator user id.
 - Resource type, role, and descendant behavior are fixed in code.
-- The creator must be active in the default app tenant and target tenant.
+- The creator must have active default app access and active target tenant
+  access; the target tenant lifecycle must also be active.
 - An active row is never bootstrapped again.
 
 ```ts
@@ -445,7 +515,7 @@ The helper performs the `runQuery` and `runMutation` calls. Define
 `{ resourceId: string }` and returns
 `{ tenantId, resourceId, creatorHerculesAuthUserId, state } | null`. Define
 `activateCreatorBootstrap` as an internal mutation that accepts
-`{ resourceId, creatorHerculesAuthUserId, grant }` and returns `void`.
+`{ resourceId, creatorHerculesAuthUserId, grant }` and returns `null`.
 
 ## Static Checker
 
