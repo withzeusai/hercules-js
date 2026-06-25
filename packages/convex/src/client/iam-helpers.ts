@@ -10,6 +10,7 @@ import type {
   GenericDataModel,
 } from "convex/server";
 import { ConvexError, v } from "convex/values";
+import type { IamTenantAccessStatusResult } from "./index.js";
 
 const DEFAULT_API_VERSION = "2025-12-09";
 const DEFAULT_API_KEY_ENV_VAR = "HERCULES_API_KEY";
@@ -79,6 +80,13 @@ type ListMyTenantsReference = FunctionReference<
   ResourceCreatorBootstrapTenantPage
 >;
 
+type GetTenantAccessStatusReference = FunctionReference<
+  "query",
+  "public",
+  { tokenIdentifier?: string },
+  IamTenantAccessStatusResult
+>;
+
 type ActivateResourceReference = FunctionReference<
   "mutation",
   "internal",
@@ -103,6 +111,7 @@ export type CreateResourceCreatorBootstrapActionOptions<DataModel extends Generi
   resourceType: string;
   managerRole: IamRoleReference;
   appliesTo: IamBindingAppliesTo;
+  getTenantAccessStatus: GetTenantAccessStatusReference;
   listMyTenants: ListMyTenantsReference;
   getBootstrapTarget: BootstrapTargetReference;
   activateResource: ActivateResourceReference;
@@ -129,11 +138,20 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         throwIamDenied();
       }
 
-      const hasActiveTenant = await callerHasActiveTenant(ctx, options.listMyTenants, {
+      const hasActiveDefaultTenant = await callerHasActiveDefaultTenant(
+        ctx,
+        options.getTenantAccessStatus,
+        tokenIdentifier,
+      );
+      if (!hasActiveDefaultTenant) {
+        throwIamDenied();
+      }
+
+      const hasActiveTargetTenant = await callerHasActiveTargetTenant(ctx, options.listMyTenants, {
         tenantId: target.tenantId,
         tokenIdentifier,
       });
-      if (!hasActiveTenant) {
+      if (!hasActiveTargetTenant) {
         throwIamDenied();
       }
 
@@ -215,7 +233,18 @@ function isValidTargetForCaller(
   );
 }
 
-async function callerHasActiveTenant<DataModel extends GenericDataModel>(
+async function callerHasActiveDefaultTenant<DataModel extends GenericDataModel>(
+  ctx: Pick<GenericActionCtx<DataModel>, "runQuery">,
+  getTenantAccessStatus: GetTenantAccessStatusReference,
+  tokenIdentifier: string,
+) {
+  const accessStatus = await ctx.runQuery(getTenantAccessStatus, {
+    tokenIdentifier,
+  });
+  return accessStatus.kind === "principal" && accessStatus.status === "active";
+}
+
+async function callerHasActiveTargetTenant<DataModel extends GenericDataModel>(
   ctx: Pick<GenericActionCtx<DataModel>, "runQuery">,
   listMyTenants: ListMyTenantsReference,
   args: { tenantId: string; tokenIdentifier: string },

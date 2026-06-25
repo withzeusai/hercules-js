@@ -22,7 +22,7 @@ const identityBuilder = ((definition: unknown) => definition) as never;
 const component = {
   checks: { authorize: "authorize", authorizeMany: "authorizeMany" },
   queries: {
-    getDeploymentEntryStatus: "getDeploymentEntryStatus",
+    getTenantAccessStatus: "getTenantAccessStatus",
     listMyTenants: "listMyTenants",
     listMyRoles: "listMyRoles",
     getEffectivePermissions: "getEffectivePermissions",
@@ -279,7 +279,7 @@ describe("createIam", () => {
             permissions: ["tasks.read"],
           };
         }
-        if (ref === "getDeploymentEntryStatus") {
+        if (ref === "getTenantAccessStatus") {
           return {
             kind: "principal",
             principalId: "principal_1",
@@ -461,7 +461,7 @@ describe("createIam", () => {
         resource: { type: "app.projects" },
       }),
     ).resolves.toEqual(["tasks.read"]);
-    await expect(builders.getDeploymentEntryStatus(ctx as never)).resolves.toEqual({
+    await expect(builders.getTenantAccessStatus(ctx as never)).resolves.toEqual({
       kind: "principal",
       principalId: "principal_1",
       status: "active",
@@ -671,7 +671,7 @@ describe("createIam", () => {
       resourceId: undefined,
       ancestors: undefined,
     });
-    expect(ctx.runQuery).toHaveBeenCalledWith("getDeploymentEntryStatus", {
+    expect(ctx.runQuery).toHaveBeenCalledWith("getTenantAccessStatus", {
       tokenIdentifier: "https://auth.example.com|user_1",
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("listMyTenants", {

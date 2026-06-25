@@ -36,7 +36,7 @@ export const {
   checkPermissions,
   filterAuthorizedResources,
   getCurrentHerculesAuthUserId,
-  getDeploymentEntryStatus,
+  getTenantAccessStatus,
   getEffectivePermissions,
   listMyTenants,
   listMyRoles,
@@ -159,6 +159,7 @@ a resource check for each row. It does not load or paginate app data.
 
 Reads come from the local Convex mirror:
 
+- `getTenantAccessStatus(ctx)`
 - `listMyTenants(ctx, { cursor, limit })`
 - `listMyRoles(ctx, { tenantId })`
 - `getEffectivePermissions(ctx, { tenantId, resource })`
@@ -179,7 +180,9 @@ Reads come from the local Convex mirror:
 User and group reads are separate. Tenant APIs use `user`; group APIs use
 `member`.
 
-`listMyTenants` returns `{ tenants, nextCursor? }`. `listTenantUsers` returns
+`getTenantAccessStatus` returns the signed-in user's status in the default app
+tenant, or a typed fallback when that status is unavailable. `listMyTenants`
+returns `{ tenants, nextCursor? }`. `listTenantUsers` returns
 `{ users, nextCursor? }`. `listTenantGroups` returns `{ groups, nextCursor? }`.
 Each page contains at most 100 records. User and group rows include
 `directRoleGrants` with full role grant shape and nullable expiry. Effective
@@ -416,7 +419,7 @@ to the trusted creator of a provisioning row.
 - The browser passes only `resourceId`.
 - Trusted app data supplies `tenantId` and creator user id.
 - Resource type, role, and descendant behavior are fixed in code.
-- The creator must be active in the tenant.
+- The creator must be active in the default app tenant and target tenant.
 - An active row is never bootstrapped again.
 
 ```ts
@@ -429,13 +432,14 @@ export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
   resourceType: "app.projects",
   managerRole: { key: "project_manager" },
   appliesTo: "self_and_descendants",
+  getTenantAccessStatus: components.hercules.queries.getTenantAccessStatus,
   listMyTenants: components.hercules.queries.listMyTenants,
   getBootstrapTarget: internal.projects.getCreatorBootstrapTarget,
   activateResource: internal.projects.activateCreatorBootstrap,
 });
 ```
 
-The three query and mutation options are generated `FunctionReference` values.
+The four query and mutation options are generated `FunctionReference` values.
 The helper performs the `runQuery` and `runMutation` calls. Define
 `getCreatorBootstrapTarget` as an internal query that accepts
 `{ resourceId: string }` and returns

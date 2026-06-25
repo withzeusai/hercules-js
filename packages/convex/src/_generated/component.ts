@@ -38,7 +38,7 @@ type AuthorizationDecision = {
 };
 
 type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
-type GetDeploymentEntryStatusArgs = { tokenIdentifier?: string };
+type GetTenantAccessStatusArgs = { tokenIdentifier?: string };
 type ListMyRolesArgs = { tokenIdentifier?: string; tenantId: string };
 type GetEffectivePermissionsArgs = {
   tokenIdentifier?: string;
@@ -293,7 +293,7 @@ type ExplainAccessResult = {
   };
 };
 
-type DeploymentEntryStatus =
+type TenantAccessStatus =
   | {
       kind: "principal";
       principalId: string;
@@ -347,11 +347,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     >;
   };
   queries: {
-    getDeploymentEntryStatus: FunctionReference<
+    getTenantAccessStatus: FunctionReference<
       "query",
       "public",
-      GetDeploymentEntryStatusArgs,
-      DeploymentEntryStatus,
+      GetTenantAccessStatusArgs,
+      TenantAccessStatus,
       Name
     >;
     listMyTenants: FunctionReference<

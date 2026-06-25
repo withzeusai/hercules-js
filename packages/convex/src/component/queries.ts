@@ -266,7 +266,7 @@ type ExplainAccessResult = {
   };
 };
 
-export const getDeploymentEntryStatus = query({
+export const getTenantAccessStatus = query({
   args: { tokenIdentifier: v.optional(v.string()) },
   handler: async (ctx, args) => {
     if (!args.tokenIdentifier) {

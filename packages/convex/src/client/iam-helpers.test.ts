@@ -9,6 +9,7 @@ import {
   type ResourceCreatorBootstrapTarget,
   type ResourceCreatorBootstrapTenantPage,
 } from "./iam-helpers";
+import type { IamTenantAccessStatusResult } from "./index.js";
 
 const authenticatedAction = ((definition: unknown) => definition) as never;
 const getBootstrapTarget = "internal.projects.getBootstrapTarget" as unknown as FunctionReference<
@@ -19,6 +20,8 @@ const getBootstrapTarget = "internal.projects.getBootstrapTarget" as unknown as 
 >;
 const listMyTenants =
   "components.hercules.queries.listMyTenants" as unknown as ComponentApi["queries"]["listMyTenants"];
+const getTenantAccessStatus =
+  "components.hercules.queries.getTenantAccessStatus" as unknown as ComponentApi["queries"]["getTenantAccessStatus"];
 const activateResource = "internal.projects.activateResource" as unknown as FunctionReference<
   "mutation",
   "internal",
@@ -81,6 +84,7 @@ function makeClient() {
 function makeCtx(options: {
   identity?: { tokenIdentifier?: string; subject?: string } | null;
   target?: unknown;
+  tenantAccessStatus?: IamTenantAccessStatusResult;
   tenantPages?: ResourceCreatorBootstrapTenantPage[];
 }) {
   const tenantPages = [...(options.tenantPages ?? [{ tenants: [] }])];
@@ -100,6 +104,12 @@ function makeCtx(options: {
           creatorHerculesAuthUserId: "user_1",
           state: "provisioning",
         };
+  const tenantAccessStatus = options.tenantAccessStatus ?? {
+    kind: "principal",
+    principalId: "app_principal_1",
+    status: "active",
+    stateVersion: 4,
+  };
   return {
     auth: {
       getUserIdentity: vi.fn().mockResolvedValue(identity),
@@ -107,6 +117,9 @@ function makeCtx(options: {
     runQuery: vi.fn(async (ref: unknown, args: unknown) => {
       if (ref === getBootstrapTarget) {
         return target;
+      }
+      if (ref === getTenantAccessStatus) {
+        return tenantAccessStatus;
       }
       if (ref === listMyTenants) {
         return tenantPages.shift() ?? { tenants: [] };
@@ -124,6 +137,7 @@ function makeAction(client: ResourceCreatorBootstrapClient) {
     managerRole: { key: "project_manager" },
     appliesTo: "self_and_descendants",
     getBootstrapTarget,
+    getTenantAccessStatus,
     listMyTenants,
     activateResource,
     client,
@@ -149,7 +163,10 @@ describe("resource creator bootstrap", () => {
     expect(ctx.runQuery).toHaveBeenNthCalledWith(1, getBootstrapTarget, {
       resourceId: "project_1",
     });
-    expect(ctx.runQuery).toHaveBeenNthCalledWith(2, listMyTenants, {
+    expect(ctx.runQuery).toHaveBeenNthCalledWith(2, getTenantAccessStatus, {
+      tokenIdentifier: "https://issuer.example|user_1",
+    });
+    expect(ctx.runQuery).toHaveBeenNthCalledWith(3, listMyTenants, {
       tokenIdentifier: "https://issuer.example|user_1",
       cursor: undefined,
       limit: 100,
@@ -249,6 +266,50 @@ describe("resource creator bootstrap", () => {
     expect(ctx.runMutation).not.toHaveBeenCalled();
   });
 
+  test.each(["blocked", "suspended", "pending_approval", "removed"] as const)(
+    "denies an active target tenant when default tenant access is %s",
+    async (status) => {
+      const { client, create } = makeClient();
+      const action = makeAction(client);
+      const ctx = makeCtx({
+        tenantAccessStatus: {
+          kind: "principal",
+          principalId: "app_principal_1",
+          status,
+          stateVersion: 4,
+        },
+        tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+      });
+
+      await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({
+        data: { code: "ACCESS_DENIED" },
+      });
+      expect(ctx.runQuery).toHaveBeenCalledTimes(2);
+      expect(create).not.toHaveBeenCalled();
+      expect(ctx.runMutation).not.toHaveBeenCalled();
+    },
+  );
+
+  test("denies when default tenant access is unavailable", async () => {
+    const { client, create } = makeClient();
+    const action = makeAction(client);
+    const ctx = makeCtx({
+      tenantAccessStatus: {
+        kind: "fallback",
+        reason: "principal_missing",
+        stateVersion: 4,
+      },
+      tenantPages: [{ tenants: [{ tenantId: "tenant_1", status: "active" }] }],
+    });
+
+    await expect(getHandler(action)(ctx, { resourceId: "project_1" })).rejects.toMatchObject({
+      data: { code: "ACCESS_DENIED" },
+    });
+    expect(ctx.runQuery).toHaveBeenCalledTimes(2);
+    expect(create).not.toHaveBeenCalled();
+    expect(ctx.runMutation).not.toHaveBeenCalled();
+  });
+
   test("walks tenant pages before granting", async () => {
     const { client, create } = makeClient();
     const action = makeAction(client);
@@ -262,7 +323,7 @@ describe("resource creator bootstrap", () => {
     await expect(getHandler(action)(ctx, { resourceId: "project_1" })).resolves.toMatchObject({
       bootstrapped: true,
     });
-    expect(ctx.runQuery).toHaveBeenNthCalledWith(3, listMyTenants, {
+    expect(ctx.runQuery).toHaveBeenNthCalledWith(4, listMyTenants, {
       tokenIdentifier: "https://issuer.example|user_1",
       cursor: "cursor_1",
       limit: 100,
@@ -303,7 +364,7 @@ describe("resource creator bootstrap", () => {
     expect(ctx.runQuery).toHaveBeenNthCalledWith(1, getBootstrapTarget, {
       resourceId: "project_1",
     });
-    expect(ctx.runQuery).toHaveBeenNthCalledWith(3, getBootstrapTarget, {
+    expect(ctx.runQuery).toHaveBeenNthCalledWith(4, getBootstrapTarget, {
       resourceId: "project_1",
     });
     expect(create).toHaveBeenCalledTimes(2);

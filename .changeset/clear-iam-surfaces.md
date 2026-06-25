@@ -17,6 +17,9 @@ Paginate tenant users, tenant groups, group members, user groups, and direct
 resource subjects in pages of at most 100. Add role descriptions through the
 v4-only projection protocol with required role descriptions.
 
-Keep deployment entry, signed-in management, and trusted service authority on
-separate package surfaces. Reject existing-row IAM handlers without a loaded
-resource tenant and row capability checks without a concrete resource.
+Keep tenant access evaluation, signed-in management, and trusted service
+authority on separate package surfaces. Reject existing-row IAM handlers
+without a loaded resource tenant and row capability checks without a concrete
+resource. Rename the default-tenant mirror read to `getTenantAccessStatus`.
+Require creator bootstrap workflows to verify active access in both the default
+app tenant and the target tenant before using service authority.

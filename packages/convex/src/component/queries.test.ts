@@ -138,7 +138,7 @@ type DirectSubject = {
     | { grant: DirectResourceRoleGrant; role: RoleSummary }
     | { grant: DirectResourcePermissionGrant }
   );
-type DeploymentEntryStatus =
+type TenantAccessStatus =
   | {
       kind: "principal";
       principalId: string;
@@ -213,11 +213,11 @@ const listDirectSubjectsForResource = makeFunctionReference<
   Record<string, unknown>,
   DirectSubjectsPage
 >("queries:listDirectSubjectsForResource");
-const getDeploymentEntryStatus = makeFunctionReference<
+const getTenantAccessStatus = makeFunctionReference<
   "query",
   Record<string, unknown>,
-  DeploymentEntryStatus
->("queries:getDeploymentEntryStatus");
+  TenantAccessStatus
+>("queries:getTenantAccessStatus");
 
 const ISSUER = "https://auth.example.com";
 const convexTest = (schemaArg: typeof schema, modulesArg: typeof modules) =>
@@ -235,7 +235,7 @@ function emptyState() {
   };
 }
 
-async function seedDeploymentEntryMirror(
+async function seedTenantAccessMirror(
   t: ReturnType<typeof convexTest>,
   options: {
     sourceVersion: number;
@@ -279,12 +279,12 @@ async function seedDeploymentEntryMirror(
   });
 }
 
-describe("getDeploymentEntryStatus", () => {
+describe("getTenantAccessStatus", () => {
   test.each(["active", "blocked", "suspended", "pending_approval", "removed"] as const)(
     "returns the default-scope principal's %s status from the mirror",
     async (status) => {
       const t = convexTest(schema, modules);
-      await seedDeploymentEntryMirror(t, {
+      await seedTenantAccessMirror(t, {
         sourceVersion: 7,
         principal: {
           id: "principal_1",
@@ -295,7 +295,7 @@ describe("getDeploymentEntryStatus", () => {
       });
 
       await expect(
-        t.query(getDeploymentEntryStatus, {
+        t.query(getTenantAccessStatus, {
           tokenIdentifier: `${ISSUER}|user_1`,
         }),
       ).resolves.toEqual({
@@ -307,12 +307,12 @@ describe("getDeploymentEntryStatus", () => {
     },
   );
 
-  test("falls back when the principal has not entered this deployment", async () => {
+  test("falls back when the default tenant has no user principal", async () => {
     const t = convexTest(schema, modules);
-    await seedDeploymentEntryMirror(t, { sourceVersion: 3 });
+    await seedTenantAccessMirror(t, { sourceVersion: 3 });
 
     await expect(
-      t.query(getDeploymentEntryStatus, {
+      t.query(getTenantAccessStatus, {
         tokenIdentifier: `${ISSUER}|new_user`,
       }),
     ).resolves.toEqual({
@@ -324,7 +324,7 @@ describe("getDeploymentEntryStatus", () => {
 
   test("never treats a malformed group principal as the signed-in user", async () => {
     const t = convexTest(schema, modules);
-    await seedDeploymentEntryMirror(t, {
+    await seedTenantAccessMirror(t, {
       sourceVersion: 4,
       principal: {
         id: "group_1",
@@ -335,7 +335,7 @@ describe("getDeploymentEntryStatus", () => {
     });
 
     await expect(
-      t.query(getDeploymentEntryStatus, {
+      t.query(getTenantAccessStatus, {
         tokenIdentifier: `${ISSUER}|user_1`,
       }),
     ).resolves.toEqual({
@@ -349,7 +349,7 @@ describe("getDeploymentEntryStatus", () => {
     const t = convexTest(schema, modules);
 
     await expect(
-      t.query(getDeploymentEntryStatus, {
+      t.query(getTenantAccessStatus, {
         tokenIdentifier: `${ISSUER}|user_1`,
       }),
     ).resolves.toEqual({

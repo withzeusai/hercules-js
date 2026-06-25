@@ -990,7 +990,7 @@ describe("checkIamSource", () => {
       `,
       "convex/resources.ts": `
         import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
-        import { api, internal } from "./_generated/api";
+        import { components, internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
         export const bootstrapProjectCreator = createResourceCreatorBootstrapAction({
@@ -998,7 +998,8 @@ describe("checkIamSource", () => {
           resourceType: "app.projects",
           managerRole: { key: "project_manager" },
           appliesTo: "self_and_descendants",
-          listMyTenants: api.iam.listMyTenants,
+          getTenantAccessStatus: components.hercules.queries.getTenantAccessStatus,
+          listMyTenants: components.hercules.queries.listMyTenants,
           getBootstrapTarget: internal.projects.getCreatorBootstrapTarget,
           activateResource: internal.projects.activateCreatorBootstrap,
         });
@@ -1018,7 +1019,7 @@ describe("checkIamSource", () => {
       "convex/resources.ts": `
         import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
         import { Hercules } from "@usehercules/sdk";
-        import { api, internal } from "./_generated/api";
+        import { components, internal } from "./_generated/api";
         import { authenticatedAction } from "./iam";
 
         const hercules = new Hercules({ apiKey: "test" });
@@ -1028,7 +1029,8 @@ describe("checkIamSource", () => {
           resourceType: "app.projects",
           managerRole: { key: "project_manager" },
           appliesTo: "self_and_descendants",
-          listMyTenants: api.iam.listMyTenants,
+          getTenantAccessStatus: components.hercules.queries.getTenantAccessStatus,
+          listMyTenants: components.hercules.queries.listMyTenants,
           getBootstrapTarget: (() => {
             hercules.iam.tenants.archive("tenant_1", {
               user_token_identifier: null,

@@ -46,7 +46,7 @@ type AuthorizationCheckArgs = Omit<AuthorizationArgs, "tokenIdentifier"> & {
 };
 
 type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
-type GetDeploymentEntryStatusArgs = { tokenIdentifier?: string };
+type GetTenantAccessStatusArgs = { tokenIdentifier?: string };
 type ListMyRolesArgs = { tokenIdentifier?: string; tenantId: string };
 type GetEffectivePermissionsArgs = {
   tokenIdentifier?: string;
@@ -129,7 +129,7 @@ export type IamPrincipalStatus =
   | "pending_approval"
   | "removed";
 
-export type IamDeploymentEntryMirrorResult =
+export type IamTenantAccessStatusResult =
   | {
       kind: "principal";
       principalId: string;
@@ -418,11 +418,11 @@ export type IamComponent = {
     >;
   };
   queries: {
-    getDeploymentEntryStatus: FunctionReference<
+    getTenantAccessStatus: FunctionReference<
       "query",
       "public",
-      GetDeploymentEntryStatusArgs,
-      IamDeploymentEntryMirrorResult
+      GetTenantAccessStatusArgs,
+      IamTenantAccessStatusResult
     >;
     listMyTenants: FunctionReference<
       "query",
@@ -610,7 +610,7 @@ export type IamBuilders<DataModel extends GenericDataModel> = {
    * rows to the signed-in user instead of parsing `tokenIdentifier`.
    */
   getCurrentHerculesAuthUserId: (ctx: IamContext<DataModel>) => Promise<string | undefined>;
-  getDeploymentEntryStatus: (ctx: IamContext<DataModel>) => Promise<IamDeploymentEntryMirrorResult>;
+  getTenantAccessStatus: (ctx: IamContext<DataModel>) => Promise<IamTenantAccessStatusResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
   // real `iamQuery`. Use this for "list my projects" style lists: the app
@@ -794,7 +794,7 @@ export function createIam<DataModel extends GenericDataModel>(
     getEffectivePermissions: makeGetEffectivePermissions(component),
     checkPermissions: makeCheckPermissions(component),
     getCurrentHerculesAuthUserId,
-    getDeploymentEntryStatus: makeGetDeploymentEntryStatus(component),
+    getTenantAccessStatus: makeGetTenantAccessStatus(component),
     filterAuthorizedResources: makeFilterAuthorizedResources(component),
     listMyTenants: makeListMyTenants(component),
     listMyRoles: makeListMyRoles(component),
@@ -1394,14 +1394,14 @@ function makeListMyTenants(component: IamComponent) {
   };
 }
 
-function makeGetDeploymentEntryStatus(component: IamComponent) {
-  return async (ctx: IamContext): Promise<IamDeploymentEntryMirrorResult> => {
+function makeGetTenantAccessStatus(component: IamComponent) {
+  return async (ctx: IamContext): Promise<IamTenantAccessStatusResult> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) {
       return { kind: "fallback", reason: "identity_missing" };
     }
 
-    return await ctx.runQuery(component.queries.getDeploymentEntryStatus, {
+    return await ctx.runQuery(component.queries.getTenantAccessStatus, {
       tokenIdentifier,
     });
   };
