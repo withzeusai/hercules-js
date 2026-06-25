@@ -406,7 +406,7 @@ export const createTenant = authenticatedAction({
 
 The creator becomes Owner automatically. Do not add a second signup role.
 Create an app tenant metadata row only when the product needs extra fields.
-Store the returned `tenantId`.
+Store the returned `tenant_id`.
 
 ## Resource Creator Bootstrap
 

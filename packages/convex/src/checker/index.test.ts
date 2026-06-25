@@ -236,8 +236,7 @@ describe("checkIamSource", () => {
           handler: async (ctx) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
-            await hercules.iam.tenants.invitations.createTenant({
-              tenant_id: "tenant_1",
+            await hercules.iam.tenants.invitations.createTenant("tenant_1", {
               email: "member@example.com",
               user_token_identifier: identity.tokenIdentifier,
             });
@@ -254,6 +253,8 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.resources.grants.create("project_1", {
               tenant_id: "tenant_1",
               resource_type: "app.projects",
+              role: { key: "member" },
+              subject: { type: "user", user_id: "user_1" },
               user_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -444,9 +445,7 @@ describe("checkIamSource", () => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
-            await hercules.iam.tenants.evaluateAccess("default", {
-              tenant_id: "default",
-            });
+            await hercules.iam.tenants.evaluateAccess("default", {});
             await hercules.iam.tenants.users.update(args.userId, {
               tenant_id: args.tenantId,
               user_token_identifier: args.userTokenIdentifier,
@@ -492,16 +491,18 @@ describe("checkIamSource", () => {
 
         export const fromArgs = authenticatedAction({
           args: {},
-          handler: async (_ctx, args) => hercules.iam.tenants.users.create({
-            tenant_id: "tenant_1",
+          handler: async (_ctx, args) => hercules.iam.tenants.users.create("tenant_1", {
+            roles: [],
+            user_id: "user_1",
             user_token_identifier: args.userTokenIdentifier,
           }),
         });
 
         export const fromConstant = authenticatedAction({
           args: {},
-          handler: async () => hercules.iam.tenants.users.create({
-            tenant_id: "tenant_1",
+          handler: async () => hercules.iam.tenants.users.create("tenant_1", {
+            roles: [],
+            user_id: "user_1",
             user_token_identifier: constantToken,
           }),
         });
@@ -511,8 +512,9 @@ describe("checkIamSource", () => {
           handler: async (ctx) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
-            await hercules.iam.tenants.users.create({
-              tenant_id: "tenant_1",
+            await hercules.iam.tenants.users.create("tenant_1", {
+              roles: [],
+              user_id: "user_1",
               userTokenIdentifier: identity.tokenIdentifier,
             });
           },
@@ -522,8 +524,9 @@ describe("checkIamSource", () => {
           args: {},
           handler: async (ctx) => {
             const identity = await ctx.auth.getUserIdentity();
-            await hercules.iam.tenants.users.create({
-              tenant_id: "tenant_1",
+            await hercules.iam.tenants.users.create("tenant_1", {
+              roles: [],
+              user_id: "user_1",
               user_token_identifier: identity?.tokenIdentifier,
             });
           },
@@ -534,8 +537,9 @@ describe("checkIamSource", () => {
           handler: async (ctx) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity) throw new Error("Authentication required");
-            await hercules.iam.tenants.users.create({
-              tenant_id: "tenant_1",
+            await hercules.iam.tenants.users.create("tenant_1", {
+              roles: [],
+              user_id: "user_1",
               user_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -543,8 +547,9 @@ describe("checkIamSource", () => {
 
         export const omitted = authenticatedAction({
           args: {},
-          handler: async () => hercules.iam.tenants.users.create({
-            tenant_id: "tenant_1",
+          handler: async () => hercules.iam.tenants.users.create("tenant_1", {
+            roles: [],
+            user_id: "user_1",
           }),
         });
 
@@ -553,9 +558,10 @@ describe("checkIamSource", () => {
           handler: async (ctx, args) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
-            await hercules.iam.tenants.users.create({
+            await hercules.iam.tenants.users.create("tenant_1", {
               ...args,
-              tenant_id: "tenant_1",
+              roles: [],
+              user_id: "user_1",
               user_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -667,10 +673,10 @@ describe("checkIamSource", () => {
           const { tokenIdentifier } = identity;
           if (!tokenIdentifier) throw new Error("Authentication required");
           const authority = { user_token_identifier: tokenIdentifier };
-          return await users.create({
+          return await users.create("tenant_1", {
             ...authority,
-            tenant_id: "tenant_1",
-            email: "member@example.com",
+            roles: [],
+            user_id: "user_1",
           });
         }
       `,
@@ -742,8 +748,9 @@ describe("checkIamSource", () => {
       `,
       "convex/accessHelpers.ts": `
         export async function createUser(hercules, token) {
-          return await hercules.iam.tenants.users.create({
-            tenant_id: "tenant_1",
+          return await hercules.iam.tenants.users.create("tenant_1", {
+            roles: [],
+            user_id: "user_1",
             user_token_identifier: token,
           });
         }
@@ -768,8 +775,9 @@ describe("checkIamSource", () => {
           args: {},
           handler: async (ctx) => {
             const identity = await ctx.auth.getUserIdentity();
-            await hercules.iam.tenants.users.create({
-              tenant_id: "tenant_1",
+            await hercules.iam.tenants.users.create("tenant_1", {
+              roles: [],
+              user_id: "user_1",
               user_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -859,16 +867,16 @@ describe("checkIamSource", () => {
 
         export const publicInvite = publicAction({
           args: {},
-          handler: async () => hercules.iam.tenants.invitations.createTenant({
-            tenant_id: "tenant_1",
+          handler: async () => hercules.iam.tenants.invitations.createTenant("tenant_1", {
+            email: "member@example.com",
             user_token_identifier: null,
           }),
         });
 
         export const rawInvite = action({
           args: {},
-          handler: async () => hercules.iam.tenants.invitations.createTenant({
-            tenant_id: "tenant_1",
+          handler: async () => hercules.iam.tenants.invitations.createTenant("tenant_1", {
+            email: "member@example.com",
             user_token_identifier: null,
           }),
         });
@@ -1428,8 +1436,8 @@ describe("checkIamSource", () => {
           handler: async (ctx, args) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
-            await hercules.iam.tenants.resources.permissionOverrides.update(args.projectId, {
-              tenant_id: args.tenantId,
+            await hercules.iam.tenants.resources.permissionOverrides.update(args.tenantId, {
+              resource: { type: "resource", resource_id: args.projectId },
               resource_type: "app.projects",
               subject: { type: "user", user_id: args.userId },
               applies_to: "self_and_descendants",
