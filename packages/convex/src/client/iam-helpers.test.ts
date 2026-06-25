@@ -1,11 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
+import type { GrantCreateResponse } from "@usehercules/sdk/resources/iam/tenants/resources/grants";
 import type { FunctionReference } from "convex/server";
 import type { ComponentApi } from "../_generated/component";
 import {
   createResourceCreatorBootstrapAction,
   type ResourceCreatorBootstrapActivationArgs,
   type ResourceCreatorBootstrapClient,
-  type ResourceCreatorBootstrapRawGrantWriteResult,
   type ResourceCreatorBootstrapTarget,
   type ResourceCreatorBootstrapTenantPage,
 } from "./iam-helpers";
@@ -26,7 +26,7 @@ const activateResource = "internal.projects.activateResource" as unknown as Func
   void
 >;
 
-const rawGrant: ResourceCreatorBootstrapRawGrantWriteResult = {
+const rawGrant: GrantCreateResponse = {
   tenant_id: "tenant_1",
   changed: true,
   source_version: 4,

@@ -1,5 +1,9 @@
 import { Hercules } from "@usehercules/sdk";
 import type {
+  GrantCreateParams,
+  GrantCreateResponse,
+} from "@usehercules/sdk/resources/iam/tenants/resources/grants";
+import type {
   ActionBuilder,
   FunctionReference,
   GenericActionCtx,
@@ -28,20 +32,6 @@ export type IamResourceGrantWriteResult = {
   sourceVersion: number;
   projectionIds: string[];
   grant: IamResourceRoleGrant;
-};
-
-export type ResourceCreatorBootstrapRawGrantWriteResult = {
-  tenant_id: string;
-  changed: boolean;
-  source_version: number;
-  projection_ids: string[];
-  grant: {
-    grant_id: string;
-    type: "resource_role";
-    role_id: string;
-    expires_at: string | null;
-    applies_to: IamBindingAppliesTo;
-  };
 };
 
 export type ResourceCreatorBootstrapTarget = {
@@ -101,30 +91,11 @@ export type ResourceCreatorBootstrapClient = {
     tenants: {
       resources: {
         grants: {
-          create(
-            resourceId: string,
-            body: {
-              tenant_id: string;
-              resource_type: string;
-              user_token_identifier: string | null;
-              subject: { type: "user"; user_id: string };
-              role: IamRoleReference;
-              applies_to: IamBindingAppliesTo;
-            },
-          ): Promise<ResourceCreatorBootstrapRawGrantWriteResult>;
+          create: Hercules["iam"]["tenants"]["resources"]["grants"]["create"];
         };
       };
     };
   };
-};
-
-type ResourceGrantCreateBody = {
-  tenant_id: string;
-  resource_type: string;
-  user_token_identifier: string | null;
-  subject: { type: "user"; user_id: string };
-  role: IamRoleReference;
-  applies_to: IamBindingAppliesTo;
 };
 
 export type CreateResourceCreatorBootstrapActionOptions<DataModel extends GenericDataModel> = {
@@ -182,7 +153,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         subject: { type: "user", user_id: userId },
         role: options.managerRole,
         applies_to: options.appliesTo,
-      } satisfies ResourceGrantCreateBody;
+      } satisfies GrantCreateParams;
       const grant = normalizeResourceGrantWriteResult(
         await client.iam.tenants.resources.grants.create(target.resourceId, grantBody),
       );
@@ -280,13 +251,13 @@ function createClient(options: {
   return new Hercules({
     apiKey,
     apiVersion: options.apiVersion ?? DEFAULT_API_VERSION,
-  }) as unknown as ResourceCreatorBootstrapClient;
+  });
 }
 
 function normalizeResourceGrantWriteResult(
-  result: ResourceCreatorBootstrapRawGrantWriteResult,
+  result: GrantCreateResponse,
 ): IamResourceGrantWriteResult {
-  if ((result.grant as { type?: unknown }).type !== "resource_role") {
+  if (result.grant.type !== "resource_role" || result.grant.applies_to === undefined) {
     throw new Error("Hercules IAM response has invalid resource grant type.");
   }
 
