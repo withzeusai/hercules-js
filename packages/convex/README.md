@@ -112,6 +112,17 @@ permissions.
 `iamQuery`, `iamMutation`, and `iamAction` require a `permission`. Their
 optional `tenant` extractor defaults to the app's default tenant.
 
+For the default tenant, omit `tenantId` from Convex IAM permission and mirror
+helpers where it is optional. Never pass `tenantId: "default"` to a Convex IAM
+helper. If a helper requires a specific target tenant, pass its persisted
+canonical ID. The public `"default"` sentinel is only for generated SDK/REST
+management methods that require a tenant identifier.
+
+```ts
+await requirePermission(ctx, { permission: "app.tasks:read" });
+const permissions = await getEffectivePermissions(ctx);
+```
+
 | Operation    | Default tenant                         | Explicit tenant                 |
 | ------------ | -------------------------------------- | ------------------------------- |
 | Create/list  | omit `tenant`                          | `tenantFromArg("tenantId")`     |

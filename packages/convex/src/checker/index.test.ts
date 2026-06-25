@@ -32,6 +32,8 @@ const realManagedIamFixture = `
     requirePermission,
     requireAnyPermission,
     getEffectivePermissions,
+    getTargetTenantSyncStatus,
+    listTenantUsers,
     listTenantMemberPickerUsers,
     listResourceSharingRecipients,
   } = iam;
@@ -1337,6 +1339,104 @@ describe("checkIamSource", () => {
     expect(
       result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
     ).toHaveLength(6);
+  });
+
+  test("reports the default tenant sentinel passed to Convex IAM helpers", () => {
+    const root = createFixture({
+      "convex/iam.ts": realManagedIamFixture,
+      "convex/access.ts": `
+        import {
+          checkPermissions,
+          getEffectivePermissions as getPermissions,
+          getTargetTenantSyncStatus,
+          hasPermission,
+          iamQuery,
+          listResourceSharingRecipients,
+          listTenantMemberPickerUsers,
+          listTenantUsers,
+        } from "./iam.js";
+
+        const DEFAULT_TENANT_ID = "default";
+
+        export const explain = iamQuery({
+          permission: "app.documents:read",
+          args: {},
+          handler: async (ctx) => {
+            await hasPermission(ctx, {
+              tenantId: "default",
+              permission: "app.documents:read",
+            });
+            await getPermissions(ctx, {
+              tenantId: DEFAULT_TENANT_ID,
+            });
+            await checkPermissions(ctx, [{
+              tenantId: "default",
+              permission: "app.documents:read",
+            }]);
+            await listTenantUsers(ctx, {
+              tenantId: DEFAULT_TENANT_ID,
+            });
+            await listTenantMemberPickerUsers(ctx, {
+              tenantId: "default",
+              permission: "app.documents:read",
+            });
+            await listResourceSharingRecipients(ctx, {
+              tenantId: DEFAULT_TENANT_ID,
+              permission: "app.documents:manage_members",
+              resourceType: "app.documents",
+              resourceId: "document_123",
+              recipientType: "user",
+            });
+            await getTargetTenantSyncStatus(ctx, {
+              tenantId: "default",
+              sourceVersion: 1,
+            });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+    const findings = result.findings.filter(
+      (finding) => finding.code === "default_tenant_literal_in_convex_helper",
+    );
+
+    expect(findings).toHaveLength(7);
+    expect(findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ filePath: "convex/access.ts" })]),
+    );
+    expect(formatIamCheckResult(result)).toContain(
+      'Use "default" only with generated SDK or REST APIs.',
+    );
+  });
+
+  test("allows the default tenant sentinel in generated SDK calls", () => {
+    const root = createFixture({
+      "convex/iam.ts": realManagedIamFixture,
+      "convex/access.ts": `
+        import { Hercules } from "@usehercules/sdk";
+        import { authenticatedAction, getEffectivePermissions } from "./iam.js";
+
+        const hercules = new Hercules({ apiKey: "test" });
+
+        export const explain = authenticatedAction({
+          args: {},
+          handler: async (ctx) => {
+            const identity = await ctx.auth.getUserIdentity();
+            if (!identity?.tokenIdentifier) throw new Error("Authentication required");
+
+            await hercules.iam.tenants.evaluateAccess("default", {
+              user_token_identifier: identity.tokenIdentifier,
+            });
+            await getEffectivePermissions(ctx);
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
   test("reports public permission fields in managed permission evaluators", () => {
