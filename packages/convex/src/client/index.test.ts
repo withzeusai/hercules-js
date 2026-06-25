@@ -297,7 +297,7 @@ describe("createIam", () => {
               {
                 tenantId: "tenant_abc",
                 tenantName: "Acme",
-                isDefault: false,
+                isRoot: false,
                 roles: [
                   {
                     roleId: "role_member",
@@ -320,7 +320,7 @@ describe("createIam", () => {
               {
                 tenantId: "tenant_abc",
                 tenantName: "Acme",
-                isDefault: false,
+                isRoot: false,
                 roles: [],
                 joinedAt: 1,
                 accessStatus: "active",
@@ -343,7 +343,7 @@ describe("createIam", () => {
           return {
             tenantId: "tenant_abc",
             tenantName: "Acme",
-            isDefault: false,
+            isRoot: false,
             lifecycleStatus: "disabled",
             accessMode: "open",
             defaultRoleId: "role_member",
@@ -539,7 +539,7 @@ describe("createIam", () => {
         {
           tenantId: "tenant_abc",
           tenantName: "Acme",
-          isDefault: false,
+          isRoot: false,
           roles: [
             {
               roleId: "role_member",
@@ -559,14 +559,14 @@ describe("createIam", () => {
       builders.listMyActiveTenants(ctx as never, {
         cursor: "active_tenant_cursor_1",
         limit: 25,
-        isDefault: false,
+        isRoot: false,
       }),
     ).resolves.toEqual({
       tenants: [
         {
           tenantId: "tenant_abc",
           tenantName: "Acme",
-          isDefault: false,
+          isRoot: false,
           roles: [],
           joinedAt: 1,
           accessStatus: "active",
@@ -590,7 +590,7 @@ describe("createIam", () => {
     await expect(builders.getTenant(ctx as never, { tenantId: "tenant_abc" })).resolves.toEqual({
       tenantId: "tenant_abc",
       tenantName: "Acme",
-      isDefault: false,
+      isRoot: false,
       lifecycleStatus: "archived",
       accessMode: "open",
       defaultRoleId: "role_member",
@@ -830,7 +830,7 @@ describe("createIam", () => {
       tokenIdentifier: "https://auth.example.com|user_1",
       cursor: "active_tenant_cursor_1",
       limit: 25,
-      isDefault: false,
+      isRoot: false,
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("getTargetTenantSyncStatus", {
       tokenIdentifier: "https://auth.example.com|user_1",

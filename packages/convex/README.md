@@ -202,7 +202,7 @@ Reads come from the local Convex mirror:
 
 - `getTenantAccessStatus(ctx)`
 - `listMyTenants(ctx, { cursor, limit })`
-- `listMyActiveTenants(ctx, { cursor, limit, isDefault })`
+- `listMyActiveTenants(ctx, { cursor, limit, isRoot })`
 - `getTargetTenantSyncStatus(ctx, { tenantId, sourceVersion })`
 - `listMyRoles(ctx, { tenantId })`
 - `getEffectivePermissions(ctx, { tenantId, resource })`
@@ -233,8 +233,8 @@ tenant. It includes an archived tenant only for its retained active direct
 built-in Owner, with `lifecycleStatus: "archived"`; use the authoritative SDK
 tenant lifecycle reads for complete archive-management views.
 `listMyActiveTenants` returns only active memberships in active tenants and
-narrows both statuses to `"active"`. Pass `isDefault: true` or
-`isDefault: false` to filter without assuming array order.
+narrows both statuses to `"active"`. Pass `isRoot: true` or
+`isRoot: false` to filter without assuming array order.
 Custom tenant results require active standing in the default app tenant. When
 default standing is inactive, `listMyTenants` may still expose the default
 tenant's own `accessStatus` for boundary UI but omits custom tenants, and
@@ -267,12 +267,12 @@ returns only active users or active groups with picker-safe fields and returns
 an empty page when the caller is unauthenticated, not authorized, or supplies a
 permission that resolves to any other resource type or action.
 
-Select the default app tenant by `isDefault`, not array order:
+Select the root app tenant by `isRoot`, not array order:
 
 ```ts
 const { tenants } = await listMyTenants(ctx, { limit: 100 });
-const tenant = tenants.find(({ isDefault }) => isDefault);
-if (!tenant) throw new Error("Default IAM tenant not found");
+const tenant = tenants.find(({ isRoot }) => isRoot);
+if (!tenant) throw new Error("Root IAM tenant not found");
 ```
 
 After a control-plane write that returns `sourceVersion`, keep that value and

@@ -47,7 +47,7 @@ type AuthorizationCheckArgs = Omit<AuthorizationArgs, "tokenIdentifier"> & {
 
 type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
 type ListMyActiveTenantsArgs = ListMyTenantsArgs & {
-  isDefault?: boolean;
+  isRoot?: boolean;
 };
 type GetTargetTenantSyncStatusArgs = {
   tokenIdentifier?: string;
@@ -120,11 +120,11 @@ export type TenantDirectRoleGrant = RoleSummary & {
   expiresAt: number | null;
 };
 
-/** One tenant returned by `listMyTenants`. Select the default tenant by `isDefault`. */
+/** One tenant returned by `listMyTenants`. Select the root tenant by `isRoot`. */
 export type TenantSummary = {
   tenantId: string;
   tenantName: string;
-  isDefault: boolean;
+  isRoot: boolean;
   roles: RoleSummary[];
   joinedAt: number;
   accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
@@ -177,7 +177,7 @@ export type TargetTenantSyncStatus =
 export type TenantDetail = {
   tenantId: string;
   tenantName: string;
-  isDefault: boolean;
+  isRoot: boolean;
   lifecycleStatus: "active" | "archived";
   accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
@@ -750,7 +750,7 @@ export type IamBuilders<DataModel extends GenericDataModel> = {
   ) => Promise<TenantSummariesPage>;
   listMyActiveTenants: (
     ctx: IamContext<DataModel>,
-    args?: { cursor?: string; limit?: number; isDefault?: boolean },
+    args?: { cursor?: string; limit?: number; isRoot?: boolean },
   ) => Promise<ActiveTenantSummariesPage>;
   getTargetTenantSyncStatus: (
     ctx: IamContext<DataModel>,
@@ -1559,7 +1559,7 @@ function makeListMyTenants(component: IamComponent) {
 function makeListMyActiveTenants(component: IamComponent) {
   return async (
     ctx: IamContext,
-    args: { cursor?: string; limit?: number; isDefault?: boolean } = {},
+    args: { cursor?: string; limit?: number; isRoot?: boolean } = {},
   ): Promise<ActiveTenantSummariesPage> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return { tenants: [] };
@@ -1568,7 +1568,7 @@ function makeListMyActiveTenants(component: IamComponent) {
       tokenIdentifier,
       cursor: args.cursor,
       limit: args.limit,
-      isDefault: args.isDefault,
+      isRoot: args.isRoot,
     });
     return {
       tenants: result.tenants,

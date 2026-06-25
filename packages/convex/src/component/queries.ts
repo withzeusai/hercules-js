@@ -56,7 +56,7 @@ function roleKindFromSource(source: "system" | "iam" | "tenant"): "system" | "cu
 type TenantSummary = {
   tenantId: string;
   tenantName: string;
-  isDefault: boolean;
+  isRoot: boolean;
   roles: RoleSummary[];
   joinedAt: number;
   accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
@@ -189,7 +189,7 @@ type TenantGroupsPage = { groups: TenantGroup[]; cursor?: string };
 type TenantDetail = {
   tenantId: string;
   tenantName: string;
-  isDefault: boolean;
+  isRoot: boolean;
   lifecycleStatus: "active" | "archived";
   accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
@@ -456,7 +456,7 @@ export const listMyTenants = query({
           return {
             tenantId: scope.accessScopeId,
             tenantName: scope.name,
-            isDefault: scope.kind === "default",
+            isRoot: scope.kind === "default",
             roles,
             joinedAt: principal.joinedAt,
             accessStatus: principal.status,
@@ -480,7 +480,7 @@ export const listMyActiveTenants = query({
     tokenIdentifier: v.optional(v.string()),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
-    isDefault: v.optional(v.boolean()),
+    isRoot: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<ActiveTenantSummariesPage> => {
     if (!args.tokenIdentifier) return { tenants: [] };
@@ -524,8 +524,8 @@ export const listMyActiveTenants = query({
           .withIndex("by_scope_id", (q) => q.eq("accessScopeId", principal.accessScopeId))
           .unique();
         if (!scope || scope.status !== "active") continue;
-        const isDefault = scope.kind === "default";
-        if (args.isDefault !== undefined && args.isDefault !== isDefault) continue;
+        const isRoot = scope.kind === "default";
+        if (args.isRoot !== undefined && args.isRoot !== isRoot) continue;
 
         const roles = await collectPrincipalScopeRoles(ctx, {
           principalId: principal.principalId,
@@ -534,7 +534,7 @@ export const listMyActiveTenants = query({
         tenants.push({
           tenantId: scope.accessScopeId,
           tenantName: scope.name,
-          isDefault,
+          isRoot,
           roles,
           joinedAt: principal.joinedAt,
           accessStatus: "active",
@@ -899,7 +899,7 @@ export const getTenant = query({
     return {
       tenantId: scope.accessScopeId,
       tenantName: scope.name,
-      isDefault: scope.kind === "default",
+      isRoot: scope.kind === "default",
       lifecycleStatus: publicTenantLifecycleStatus(scope.status),
       accessMode: scope.accessMode,
       defaultRoleId: scope.defaultRoleId,
