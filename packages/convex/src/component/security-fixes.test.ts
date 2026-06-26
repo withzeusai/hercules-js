@@ -14,7 +14,7 @@ import { convexTest, type TestConvex } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
 import { componentModules as modules } from "../../test/component-modules";
-import snapshotFixture from "../shared/__fixtures__/projection-v3/snapshot.json";
+import snapshotFixture from "../shared/__fixtures__/projection-v4/snapshot.json";
 import schema from "./schema";
 
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
@@ -30,7 +30,7 @@ const listMyRoles = makeFunctionReference<
 >("queries:listMyRoles");
 
 const GOLDEN_ISSUER = "hercules-platform:cd_demo";
-const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
+const ROOT_TENANT_SENTINEL = "__hercules_root_tenant__";
 
 type ConvexTest = TestConvex<typeof schema>;
 
@@ -65,7 +65,7 @@ describe("E1 - impersonation via a group principal carrying a victim's authUserI
     // fail-closed deny (principal_missing).
     const decision = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.docs:read",
     });
     expect(decision.allowed).toBe(false);
@@ -78,7 +78,7 @@ describe("E1 - impersonation via a group principal carrying a victim's authUserI
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.docs:read",
     });
     expect(decision.allowed).toBe(true);
@@ -106,20 +106,24 @@ describe("E3 - a blocked group must grant nothing", () => {
         classification: "delegable",
         tenantAssignable: true,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("principals", {
         accessScopeId: "as_default",
         principalId: "pr_default_admins_group",
         type: "group",
+        memberCount: 0,
         status: "active",
         joinedAt: now,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "as_default",
         groupPrincipalId: "pr_default_admins_group",
         memberPrincipalId: "pr_default_bob",
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("role_bindings", {
         bindingId: "rb_default_group_admin",
@@ -128,6 +132,7 @@ describe("E3 - a blocked group must grant nothing", () => {
         accessScopeId: "as_default",
         appliesTo: "self",
         updatedAt: now,
+        sourceVersion: 7,
       });
     });
 
@@ -135,7 +140,7 @@ describe("E3 - a blocked group must grant nothing", () => {
     // wildcard grants app.reports:read (a delegable, non-owner-only permission).
     const whileActive = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.reports:read",
     });
     expect(whileActive.allowed).toBe(true);
@@ -155,7 +160,7 @@ describe("E3 - a blocked group must grant nothing", () => {
     // nothing, so the permission is denied.
     const whileBlocked = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.reports:read",
     });
     expect(whileBlocked.allowed).toBe(false);
@@ -180,18 +185,20 @@ describe("E3 - a blocked group must grant nothing", () => {
         classification: "delegable",
         tenantAssignable: true,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("principal_memberships", {
         accessScopeId: "as_default",
         groupPrincipalId: "pr_default_alice",
         memberPrincipalId: "pr_default_bob",
         updatedAt: now,
+        sourceVersion: 7,
       });
     });
 
     const decision = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.reports:read",
     });
     expect(decision.allowed).toBe(false);
@@ -278,7 +285,7 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
     // applySync returns invalid_payload and nothing is written.
     const event = {
       type: "access.projection.event" as const,
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       eventId: "evt_e4_cross_scope_0001",
       sourceVersion: 8,
       scopes: [
@@ -304,6 +311,7 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
               effect: "allow" as const,
               // Foreign scope: this binding would land in as_org1.
               accessScopeId: "as_org1",
+              appliesTo: "self" as const,
               updatedAt: 1780444800000,
             },
           ],
@@ -341,7 +349,7 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
     // accepted path too.
     const event = {
       type: "access.projection.event" as const,
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       eventId: "evt_e4_pin_0001",
       sourceVersion: 8,
       scopes: [
@@ -366,6 +374,7 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
               permissionId: "perm_docs_read",
               effect: "allow" as const,
               accessScopeId: "as_default",
+              appliesTo: "self" as const,
               updatedAt: 1780444800000,
             },
           ],
@@ -389,8 +398,8 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
   });
 });
 
-describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
-  test("listMyRoles(__hercules_default_scope__) returns the caller's default-scope roles", async () => {
+describe("E5 - listMyRoles resolves the root-tenant sentinel", () => {
+  test("listMyRoles(__hercules_root_tenant__) returns the caller's root-tenant roles", async () => {
     const t = convexTest(schema, modules);
     await ingestGolden(t);
 
@@ -399,7 +408,7 @@ describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
     // (the default-scope admin) gets the Admin role back.
     const roles = await t.query(listMyRoles, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
     });
     expect(roles).toEqual([
       {
@@ -411,17 +420,17 @@ describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
     ]);
   });
 
-  test("the explicit default-scope id resolves identically (control)", async () => {
+  test("the explicit root scope id resolves identically (control)", async () => {
     const t = convexTest(schema, modules);
     await ingestGolden(t);
 
     const viaSentinel = await t.query(listMyRoles, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      scopeId: DEFAULT_SCOPE_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
     });
     const viaExplicit = await t.query(listMyRoles, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      scopeId: "as_default",
+      tenantId: "as_default",
     });
     expect(viaSentinel).toEqual(viaExplicit);
   });
@@ -454,12 +463,14 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
         classification: "delegable",
         tenantAssignable: true,
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("role_permissions", {
         roleId: "role_editor",
         permissionId: "perm_widgets_approve",
         effect: "allow",
         updatedAt: now,
+        sourceVersion: 7,
       });
       await ctx.db.insert("role_bindings", {
         bindingId: "rb_default_bob_editor_widget1",
@@ -470,6 +481,7 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
         resourceId: "widget_1",
         appliesTo: "self",
         updatedAt: now,
+        sourceVersion: 7,
       });
     });
 
@@ -477,7 +489,7 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
     // permission — the iam role is bound only to the single resource.
     const atScope = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.widgets:approve",
     });
     expect(atScope.allowed).toBe(false);
@@ -487,7 +499,7 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
     // plane). Pre-fix this denied because the iam role was skipped.
     const onResource = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.widgets:approve",
       resourceType: "app.widgets",
       resourceId: "widget_1",
@@ -497,7 +509,7 @@ describe("H8 - an iam-source role granted on a resource is honored at runtime", 
     // The grant is scoped to widget_1 only, so a sibling resource stays denied.
     const onOtherResource = await t.query(authorize, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_bob`,
-      scopeId: "as_default",
+      tenantId: "as_default",
       permission: "app.widgets:approve",
       resourceType: "app.widgets",
       resourceId: "widget_2",

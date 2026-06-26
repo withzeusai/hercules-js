@@ -1,21 +1,21 @@
-// Access Control projection sync — v3 wire contract.
+// IAM projection sync — v4 wire contract.
 //
 // This module is the consumer-side entry point for the signed projection sync
 // channel. The wire shapes themselves live in `./projection-protocol` (the zod
 // mirror of the producer's source of truth); this file re-exports them and adds
 // the non-wire pieces the HTTP handler and the Convex component need:
-//   • ACCESS_CONTROL_SYNC_PATH — the webhook route the producer posts to.
+//   • IAM_SYNC_PATH — the webhook route the producer posts to.
 //   • SyncResponse — the mutation's response contract (mapped to HTTP statuses
 //     by client/http.ts and consumed by the producer's reconciler).
 //
 // There is NO v2 compatibility: the old per-scope `scopes[].entities` + composite
-// `changes` wire schema is gone. v3 carries a deployment-wide catalog + users at
+// `changes` wire schema is gone. v4 carries a deployment-wide catalog + users at
 // the top level and per-scope runtime state, with typed discriminated change
 // identities (see projection-protocol.ts).
 
-export const ACCESS_CONTROL_SYNC_PATH = "/_hercules/access-control/sync";
+export const IAM_SYNC_PATH = "/_hercules/iam/sync";
 
-// ── v3 wire schema + types (re-exported from the protocol mirror) ────────────
+// ── v4 wire schema + types (re-exported from the protocol mirror) ────────────
 export {
   accessProjectionSyncPayloadSchema,
   accessProjectionSnapshotSchema,
@@ -26,7 +26,7 @@ export {
   accessProjectionPermissionClassificationSchema,
   accessProjectionScopeKindSchema,
   accessProjectionScopeStatusSchema,
-  accessProjectionAccountEntryModeSchema,
+  accessProjectionAccessModeSchema,
   accessProjectionPrincipalStatusSchema,
   projectionUserSchema,
   projectionCatalogRoleSchema,
@@ -44,7 +44,7 @@ export {
   projectionScopeDeltaSchema,
   projectionCatalogDeltaSchema,
   projectionUserDeltaSchema,
-} from "./projection-protocol";
+} from "./projection-protocol.js";
 
 export type {
   AccessProjectionSyncPayload,
@@ -56,7 +56,7 @@ export type {
   AccessProjectionPermissionClassification,
   AccessProjectionScopeKind,
   AccessProjectionScopeStatus,
-  AccessProjectionAccountEntryMode,
+  AccessProjectionAccessMode,
   AccessProjectionPrincipalStatus,
   ProjectionUser,
   ProjectionCatalogRole,
@@ -79,13 +79,13 @@ export type {
   ProjectionEntityType,
   ProjectionCatalogChange,
   ProjectionScopeChange,
-} from "./projection-protocol";
+} from "./projection-protocol.js";
 
 // ── compatibility aliases for non-wire consumers ─────────────────────────────
 // `ScopeKind` is imported by client/index.ts and the generated component shape.
 // It is the same enum as the wire scope kind; alias it so those imports keep
 // resolving without depending on the protocol module's longer name.
-import type { AccessProjectionScopeKind } from "./projection-protocol";
+import type { AccessProjectionScopeKind } from "./projection-protocol.js";
 export type ScopeKind = AccessProjectionScopeKind;
 
 // ── mutation response contract ───────────────────────────────────────────────

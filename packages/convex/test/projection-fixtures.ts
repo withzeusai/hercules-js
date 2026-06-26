@@ -1,39 +1,28 @@
-// Test-only adapter: upgrades pre-v3 (schemaVersion 2) behavioral fixtures into
-// the FINAL v3 projection wire shape so the existing behavioral suites
-// (checks.test.ts, queries.test.ts) keep exercising the real applySync ->
-// schema -> effective -> authorize pipeline without re-authoring every fixture.
+// Test-only compiler for the large authorization and query fixture suites.
+// Fixtures use compact per-tenant semantic state; this helper materializes that
+// state into the current v4 projection wire shape before calling applySync.
 //
-// It is a faithful, mechanical translation of the old per-scope `entities`
-// model into the v3 layout the producer now ships:
-//   • the deployment-wide CATALOG (system/iam roles, permissions, base
-//     role->permission map) and USERS lift to the TOP LEVEL,
-//   • each scope keeps only its runtime state (principals, memberships, tenant
-//     roles, per-scope role-permission OVERRIDES, role bindings, permission
-//     bindings),
-//   • the old polymorphic `grants` array splits into role_bindings (relationKind
-//     "role") and permission_bindings (relationKind "direct_permission"), with
-//     (objectType, objectId, objectResourceType) collapsing to the nullable
-//     (resourceType, resourceId) target tuple,
-//   • a role's intrinsic `baseWildcard` is carried verbatim (the old fixtures
-//     already set `wildcard`), and per-scope role-permission rows whose
-//     accessScopeId is NOT the default scope become role_permission_overrides.
+// The shorthand keeps deployment catalog rows and tenant runtime rows together
+// while authoring a scenario. Materialization lifts reusable roles, permissions,
+// role-permission mappings, and users to the top level; keeps tenant rows inside
+// their scope; and expands grant declarations into role or permission bindings.
 //
-// This adapter NEVER ships in the package. It produces the same wire shape the
-// real producer does, so a mis-translation surfaces as a failing behavioral
-// assertion (the real pipeline computes the decision) rather than a false pass.
+// This helper never ships in the package. Assertions still exercise the real
+// applySync -> schema -> effective -> authorize pipeline.
 
-type LegacyRole = {
+type FixtureRole = {
   roleId: string;
   accessScopeId?: string;
   key: string;
   kind: string;
   source?: string;
   name?: string;
+  description?: string | null;
   wildcard?: "none" | "immutable" | "default";
   updatedAt: number;
 };
 
-type LegacyPermission = {
+type FixturePermission = {
   permissionId: string;
   accessScopeId?: string;
   key: string;
@@ -44,7 +33,7 @@ type LegacyPermission = {
   updatedAt: number;
 };
 
-type LegacyRolePermission = {
+type FixtureRolePermission = {
   roleId: string;
   permissionId: string;
   accessScopeId?: string;
@@ -52,7 +41,7 @@ type LegacyRolePermission = {
   updatedAt: number;
 };
 
-type LegacyGrant = {
+type FixtureGrant = {
   grantId: string;
   subjectPrincipalId?: string;
   subjectRoleId?: string;
@@ -68,49 +57,60 @@ type LegacyGrant = {
   updatedAt: number;
 };
 
-type LegacyEntities = {
+type FixtureState = {
   users: Array<Record<string, unknown>>;
   principals: Array<Record<string, unknown>>;
   principalMemberships: Array<Record<string, unknown>>;
-  roles: LegacyRole[];
-  permissions: LegacyPermission[];
-  rolePermissions: LegacyRolePermission[];
-  grants: LegacyGrant[];
+  roles: FixtureRole[];
+  permissions: FixturePermission[];
+  rolePermissions: FixtureRolePermission[];
+  grants: FixtureGrant[];
 };
 
-type LegacyScope = {
+type FixtureEventChange =
+  | {
+      entityType: "principal";
+      entityId: string;
+      operation: "upsert" | "delete";
+    }
+  | {
+      entityType: "grant";
+      entityId: string;
+      relationKind: "role" | "direct_permission";
+      operation: "upsert" | "delete";
+    };
+
+type FixtureScope = {
   accessScopeId: string;
   name: string;
   kind: "default" | "org" | "suite";
   status: "active" | "disabled";
-  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string;
   updatedAt: number;
 };
 
-export type LegacySnapshot = {
+export type ProjectionFixtureSnapshot = {
   type: "access.projection.snapshot";
-  schemaVersion: number;
   eventId: string;
   sourceVersion: number;
   expectedIssuer: string;
-  scope: LegacyScope;
-  entities: LegacyEntities;
+  scope: FixtureScope;
+  state: FixtureState;
 };
 
-export type LegacyEvent = {
+export type ProjectionFixtureEvent = {
   type: "access.projection.event";
-  schemaVersion: number;
   eventId: string;
   sourceVersion: number;
-  scope: LegacyScope;
-  changes: Array<Record<string, unknown>>;
-  entities: LegacyEntities;
+  scope: FixtureScope;
+  changes: FixtureEventChange[];
+  state: FixtureState;
 };
 
-export type LegacyPayload = LegacySnapshot | LegacyEvent;
+export type ProjectionFixturePayload = ProjectionFixtureSnapshot | ProjectionFixtureEvent;
 
-const emptyEntities = (): LegacyEntities => ({
+const emptyState = (): FixtureState => ({
   users: [],
   principals: [],
   principalMemberships: [],
@@ -120,49 +120,44 @@ const emptyEntities = (): LegacyEntities => ({
   grants: [],
 });
 
-// A catalog role is a deployment-wide reusable role (system/iam). A tenant role
-// (kind org/custom) is owned by its scope. The old fixtures encode reusable
-// roles as kind "system"/"default"/"iam"; tenant roles as kind "org"/"custom".
-// `kind` is authoritative — a tenant role pinned to the default scope is still a
-// tenant role, so the accessScopeId is NOT used to classify.
-function isCatalogRole(role: LegacyRole, _defaultScopeId: string): boolean {
+// `kind` classifies reusable catalog roles versus tenant-owned roles. It stays
+// authoritative when a tenant role is attached to the default scope.
+function isCatalogRole(role: FixtureRole, _defaultScopeId: string): boolean {
   void _defaultScopeId;
   if (role.kind === "system" || role.kind === "default" || role.kind === "iam") return true;
   if (role.source === "iam" || role.source === "system") return true;
   return false;
 }
 
-function catalogRoleSource(role: LegacyRole): "system" | "iam" {
+function catalogRoleSource(role: FixtureRole): "system" | "iam" {
   return role.source === "iam" ? "iam" : "system";
 }
 
-function baseWildcardFor(role: LegacyRole): "none" | "immutable" | "default" {
+function baseWildcardFor(role: FixtureRole): "none" | "immutable" | "default" {
   if (role.wildcard === "immutable") return "immutable";
   if (role.wildcard === "default") return "default";
   return "none";
 }
 
-// The wrapped TestConvex: identical to the base, except `mutation` additionally
-// accepts a legacy (schemaVersion 2) payload as its second argument (the adapter
-// upgrades it to v3 before forwarding). Everything else passes through unchanged.
-export type WithV3SyncFixtures<T extends { mutation: (...args: never[]) => unknown }> = Omit<
+// The wrapped TestConvex additionally accepts compact projection fixtures as a
+// mutation payload. Non-fixture payloads pass through unchanged.
+export type WithProjectionFixtures<T extends { mutation: (...args: never[]) => unknown }> = Omit<
   T,
   "mutation"
 > & {
-  mutation: T["mutation"] & ((reference: never, payload: LegacyPayload) => Promise<unknown>);
+  mutation: T["mutation"] &
+    ((reference: never, payload: ProjectionFixturePayload) => Promise<unknown>);
 };
 
 /**
- * Keeps pre-v3 behavioral fixtures useful while exercising the v3-only runtime.
- * This adapter is test-only and never ships in the package.
+ * Materializes compact semantic fixtures into the current projection protocol.
  */
-export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => unknown }>(
+export function withProjectionFixtures<T extends { mutation: (...args: never[]) => unknown }>(
   target: T,
-): WithV3SyncFixtures<T> {
-  // Per-scope accumulator of the latest entities/scope seen, so a multi-scope
-  // bootstrap (scope A snapshot then scope B snapshot) re-aggregates into one v3
-  // snapshot, matching the old per-scope-snapshot behavior the fixtures rely on.
-  const scopeStates = new Map<string, { scope: LegacyScope; entities: LegacyEntities }>();
+): WithProjectionFixtures<T> {
+  // Accumulate the latest state for every fixture scope so sequential snapshots
+  // materialize into one complete deployment snapshot.
+  const scopeStates = new Map<string, { scope: FixtureScope; state: FixtureState }>();
   let initialized = false;
   const mutation = target.mutation.bind(target);
 
@@ -170,15 +165,15 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     get(object, property, receiver) {
       if (property !== "mutation") return Reflect.get(object, property, receiver);
       return async (reference: unknown, payload: unknown) => {
-        const upgraded = upgradePayload(payload);
+        const materialized = materializePayload(payload);
         const result = await (mutation as (...args: unknown[]) => Promise<unknown>)(
           reference,
-          upgraded,
+          materialized,
         );
         if (
-          upgraded &&
-          typeof upgraded === "object" &&
-          (upgraded as { type?: string }).type === "access.projection.snapshot" &&
+          materialized &&
+          typeof materialized === "object" &&
+          (materialized as { type?: string }).type === "access.projection.snapshot" &&
           (result as { ok?: boolean }).ok
         ) {
           initialized = true;
@@ -186,24 +181,24 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
         return result;
       };
     },
-  }) as unknown as WithV3SyncFixtures<T>;
+  }) as unknown as WithProjectionFixtures<T>;
 
-  function upgradePayload(payload: unknown): unknown {
-    if (!isLegacyPayload(payload) || payload.schemaVersion !== 2) return payload;
-    if (payload.type === "access.projection.event") return upgradeEvent(payload);
-    return upgradeSnapshot(payload);
+  function materializePayload(payload: unknown): unknown {
+    if (!isProjectionFixturePayload(payload)) return payload;
+    if (payload.type === "access.projection.event") return materializeEvent(payload);
+    return materializeSnapshot(payload);
   }
 
-  function upgradeSnapshot(payload: LegacySnapshot) {
+  function materializeSnapshot(payload: ProjectionFixtureSnapshot) {
     scopeStates.set(payload.scope.accessScopeId, {
       scope: payload.scope,
-      entities: payload.entities,
+      state: payload.state,
     });
     const defaultScope = ensureDefaultScope();
     const { catalog, users } = buildCatalogAndUsers(defaultScope.accessScopeId);
     return {
       type: payload.type,
-      schemaVersion: 3,
+      schemaVersion: 4,
       eventId: payload.eventId,
       mode: initialized ? "reset" : "initialize",
       sourceVersion: payload.sourceVersion,
@@ -214,25 +209,31 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     };
   }
 
-  function upgradeEvent(payload: LegacyEvent) {
+  function materializeEvent(payload: ProjectionFixtureEvent) {
     const defaultScope = ensureDefaultScope();
     const defaultScopeId = defaultScope.accessScopeId;
-    // The fixtures only ever drive scope-metadata changes (e.g. disabling a
-    // scope) and otherwise carry empty entities/changes, so the event upgrade
-    // only needs to re-stamp the scope metadata plus any entity deltas it does
-    // carry. Translate the carried entities into a v3 scope delta with full
-    // upsert rows (the wire always ships complete rows for upserts).
-    const split = splitEntities(payload.entities, payload.scope, defaultScopeId);
-    const scopeChanges: Array<Record<string, unknown>> = [];
-    for (const change of payload.changes) {
-      const translated = translateChange(change);
-      if (translated) scopeChanges.push(translated);
+    // Materialize the compact state as a v4 scope delta with complete rows for
+    // every upsert.
+    const split = splitState(payload.state, payload.scope, defaultScopeId);
+    if (
+      payload.state.users.length > 0 ||
+      split.catalogRoles.length > 0 ||
+      split.permissions.length > 0 ||
+      split.basRolePermissions.length > 0 ||
+      split.principalMemberships.length > 0 ||
+      split.tenantRoles.length > 0 ||
+      split.overrides.length > 0
+    ) {
+      throw new Error(
+        "Projection fixture events only support scope metadata, principals, and grants. Author other event deltas directly in the v4 wire shape.",
+      );
     }
+    const scopeChanges = payload.changes.map(translateChange);
     // A scope-metadata upsert is implicit when the scope row ships.
     const scopeMetaChanged = payload.changes.length === 0;
     return {
       type: payload.type,
-      schemaVersion: 3,
+      schemaVersion: 4,
       eventId: payload.eventId,
       sourceVersion: payload.sourceVersion,
       catalog:
@@ -244,9 +245,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
               rolePermissions: split.basRolePermissions,
             }
           : undefined,
-      users: payload.entities.users.length
-        ? { changes: [], users: payload.entities.users }
-        : undefined,
+      users: payload.state.users.length ? { changes: [], users: payload.state.users } : undefined,
       scopes: [
         {
           accessScopeId: payload.scope.accessScopeId,
@@ -263,19 +262,19 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     };
   }
 
-  function ensureDefaultScope(): LegacyScope {
+  function ensureDefaultScope(): FixtureScope {
     const existing = [...scopeStates.values()].find((entry) => entry.scope.kind === "default");
     if (existing) return existing.scope;
-    const scope: LegacyScope = {
+    const scope: FixtureScope = {
       accessScopeId: "scope_default",
       name: "Default",
       kind: "default",
       status: "active",
-      accountEntryMode: "open",
+      accessMode: "open",
       defaultRoleId: "role_member",
       updatedAt: 0,
     };
-    scopeStates.set(scope.accessScopeId, { scope, entities: emptyEntities() });
+    scopeStates.set(scope.accessScopeId, { scope, state: emptyState() });
     return scope;
   }
 
@@ -287,22 +286,23 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     const rolePermissions: Array<Record<string, unknown>> = [];
     const usersById = new Map<string, Record<string, unknown>>();
 
-    for (const { entities } of scopeStates.values()) {
-      for (const user of entities.users) {
+    for (const { state } of scopeStates.values()) {
+      for (const user of state.users) {
         usersById.set(String(user.herculesAuthUserId), normalizeUser(user));
       }
-      for (const role of entities.roles) {
+      for (const role of state.roles) {
         if (!isCatalogRole(role, defaultScopeId)) continue;
         rolesById.set(role.roleId, {
           roleId: role.roleId,
           key: role.key,
           source: catalogRoleSource(role),
           name: role.name ?? role.key,
+          description: role.description ?? null,
           baseWildcard: baseWildcardFor(role),
           updatedAt: role.updatedAt,
         });
       }
-      for (const permission of entities.permissions) {
+      for (const permission of state.permissions) {
         permissionsById.set(permission.permissionId, {
           permissionId: permission.permissionId,
           key: permission.key,
@@ -313,7 +313,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
           updatedAt: permission.updatedAt,
         });
       }
-      for (const rp of entities.rolePermissions) {
+      for (const rp of state.rolePermissions) {
         // Base role-permission rows are those scoped to the default scope (or
         // unscoped). Per-org rows become overrides in buildScopes.
         if (rp.accessScopeId !== undefined && rp.accessScopeId !== defaultScopeId) continue;
@@ -338,8 +338,8 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
 
   function buildScopes(defaultScopeId: string) {
     const scopes: Array<Record<string, unknown>> = [];
-    for (const { scope, entities } of scopeStates.values()) {
-      const split = splitEntities(entities, scope, defaultScopeId);
+    for (const { scope, state } of scopeStates.values()) {
+      const split = splitState(state, scope, defaultScopeId);
       scopes.push({
         scope: toScopeMetadata(scope),
         principals: split.principals,
@@ -351,26 +351,26 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
       });
     }
     return scopes.sort((left, right) => {
-      if ((left.scope as LegacyScope).kind === "default") return -1;
-      if ((right.scope as LegacyScope).kind === "default") return 1;
-      return (left.scope as LegacyScope).accessScopeId.localeCompare(
-        (right.scope as LegacyScope).accessScopeId,
+      if ((left.scope as FixtureScope).kind === "default") return -1;
+      if ((right.scope as FixtureScope).kind === "default") return 1;
+      return (left.scope as FixtureScope).accessScopeId.localeCompare(
+        (right.scope as FixtureScope).accessScopeId,
       );
     });
   }
 
-  // Split one scope's old `entities` blob into the v3 per-scope arrays plus the
-  // catalog-eligible rows it contributes (used by upgradeEvent).
-  function splitEntities(entities: LegacyEntities, scope: LegacyScope, defaultScopeId: string) {
+  // Split compact fixture state into current per-scope arrays and catalog rows.
+  function splitState(state: FixtureState, scope: FixtureScope, defaultScopeId: string) {
     const tenantRoles: Array<Record<string, unknown>> = [];
     const catalogRoles: Array<Record<string, unknown>> = [];
-    for (const role of entities.roles) {
+    for (const role of state.roles) {
       if (isCatalogRole(role, defaultScopeId)) {
         catalogRoles.push({
           roleId: role.roleId,
           key: role.key,
           source: catalogRoleSource(role),
           name: role.name ?? role.key,
+          description: role.description ?? null,
           baseWildcard: baseWildcardFor(role),
           updatedAt: role.updatedAt,
         });
@@ -382,6 +382,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
         key: role.key,
         source: "tenant",
         name: role.name ?? role.key,
+        description: role.description ?? null,
         baseWildcard: "none",
         updatedAt: role.updatedAt,
       });
@@ -389,7 +390,7 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
 
     const overrides: Array<Record<string, unknown>> = [];
     const basRolePermissions: Array<Record<string, unknown>> = [];
-    for (const rp of entities.rolePermissions) {
+    for (const rp of state.rolePermissions) {
       if (rp.accessScopeId !== undefined && rp.accessScopeId !== defaultScopeId) {
         overrides.push({
           accessScopeId: rp.accessScopeId,
@@ -410,11 +411,9 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
 
     const roleBindings: Array<Record<string, unknown>> = [];
     const permissionBindings: Array<Record<string, unknown>> = [];
-    for (const grant of entities.grants) {
+    for (const grant of state.grants) {
       const resourceType = grant.objectType === "resource" ? grant.objectResourceType : undefined;
-      // The old wire used objectId "*" to mean "every instance of the type"
-      // (the inherited/parent-level grant). v3 expresses that as a type-wide
-      // target: resourceType set, resourceId undefined.
+      // Fixture objectId "*" is shorthand for a type-wide resource target.
       const resourceId =
         grant.objectType === "resource" && grant.objectId !== "*" ? grant.objectId : undefined;
       if (grant.relationKind === "role") {
@@ -451,13 +450,13 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
     }
 
     return {
-      principals: entities.principals.map((row) => stripScopeId(row)),
-      principalMemberships: entities.principalMemberships.map((row) => stripScopeId(row)),
+      principals: state.principals.map((row) => stripScopeId(row)),
+      principalMemberships: state.principalMemberships.map((row) => stripScopeId(row)),
       tenantRoles,
       catalogRoles,
       overrides,
       basRolePermissions,
-      permissions: entities.permissions.map((permission) => ({
+      permissions: state.permissions.map((permission) => ({
         permissionId: permission.permissionId,
         key: permission.key,
         resourceType: permission.resourceType,
@@ -472,13 +471,13 @@ export function withV3SyncFixtures<T extends { mutation: (...args: never[]) => u
   }
 }
 
-function toScopeMetadata(scope: LegacyScope) {
+function toScopeMetadata(scope: FixtureScope) {
   return {
     accessScopeId: scope.accessScopeId,
     name: scope.name,
     kind: scope.kind,
     status: scope.status,
-    accountEntryMode: scope.accountEntryMode,
+    accessMode: scope.accessMode,
     defaultRoleId: scope.defaultRoleId,
     updatedAt: scope.updatedAt,
   };
@@ -497,8 +496,8 @@ function normalizeUser(user: Record<string, unknown>) {
   };
 }
 
-// Old principal/membership rows carried accessScopeId inline; the v3 wire keys
-// scope membership by the enclosing scope, so drop the redundant column.
+// Fixture principal rows may carry accessScopeId for readability; the current
+// wire keys scope membership by the enclosing scope.
 function stripScopeId(row: Record<string, unknown>): Record<string, unknown> {
   const { accessScopeId: _drop, ...rest } = row;
   void _drop;
@@ -513,33 +512,32 @@ function stripUndefined(row: Record<string, unknown>): Record<string, unknown> {
   return result;
 }
 
-// Translate a legacy change descriptor into a v3 scope change identity. The
-// fixtures rarely drive these (most events carry empty changes), so only the
-// shapes the fixtures actually use are mapped.
-function translateChange(change: Record<string, unknown>): Record<string, unknown> | null {
-  const entityType = String(change.entityType);
-  const operation = String(change.operation ?? "upsert");
-  switch (entityType) {
+// Translate the compact change descriptors used by these fixtures into current
+// scope change identities.
+function translateChange(change: FixtureEventChange): Record<string, unknown> {
+  switch (change.entityType) {
     case "principal":
-      return { entityType, principalId: String(change.entityId), operation };
+      return {
+        entityType: change.entityType,
+        principalId: change.entityId,
+        operation: change.operation,
+      };
     case "grant": {
-      // A legacy grant change maps to a role_binding or permission_binding
-      // change; without the row we cannot tell which, so default to the
-      // binding kind carried on the change when present.
+      // A grant change maps to the binding kind declared on the fixture change.
       const kind =
         change.relationKind === "direct_permission" ? "permission_binding" : "role_binding";
       return {
         entityType: kind,
-        bindingId: String(change.entityId),
-        operation,
+        bindingId: change.entityId,
+        operation: change.operation,
       };
     }
-    default:
-      return null;
   }
 }
 
-function isLegacyPayload(payload: unknown): payload is LegacySnapshot | LegacyEvent {
+function isProjectionFixturePayload(
+  payload: unknown,
+): payload is ProjectionFixtureSnapshot | ProjectionFixtureEvent {
   return (
     payload !== null &&
     typeof payload === "object" &&

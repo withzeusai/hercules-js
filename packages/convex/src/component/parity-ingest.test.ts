@@ -1,16 +1,16 @@
-// Consumer PARITY + INGEST tests for the v3 projection rewrite.
+// Consumer PARITY + INGEST tests for the v4 projection contract.
 //
-// These prove that a producer-shipped v3 payload, once ingested through the REAL
-// `applySync` mutation into the REAL v3 schema, evaluates IDENTICALLY to what the
+// These prove that a producer-shipped v4 payload, once ingested through the REAL
+// `applySync` mutation into the REAL v4 schema, evaluates IDENTICALLY to what the
 // producer intended (the cross-repo golden contract). They exercise two real,
 // already-rewritten layers end to end:
-//   1. ingestion  — component/sync.ts -> component/schema.ts (the v3 tables),
+//   1. ingestion  — component/sync.ts -> component/schema.ts (the v4 tables),
 //   2. the algebra — the PURE evaluateAccess() in component/authz.ts.
 //
 // The intermediate "assemble entries from the mirror" reader (effective.ts /
 // queries.ts / checks.ts) is still being rewired by the assembly agents and does
-// NOT yet compile against the v3 schema, so it is NOT used here. Instead this file
-// reproduces the documented v3 assembly model (base role_permissions folded with
+// NOT yet compile against the v4 schema, so it is NOT used here. Instead this file
+// reproduces the documented v4 assembly model (base role_permissions folded with
 // per-scope role_permission_overrides, principal/role permission_bindings, and the
 // per-scope effective-wildcard derivation) directly over the ingested tables, then
 // feeds the assembled (wildcard, entries) into the canonical evaluateAccess(). That
@@ -22,11 +22,11 @@
 import { convexTest, type TestConvex } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import { describe, expect, test } from "vitest";
-import eventCatalog from "../shared/__fixtures__/projection-v3/event-catalog.json";
-import eventScope from "../shared/__fixtures__/projection-v3/event-scope.json";
-import eventUser from "../shared/__fixtures__/projection-v3/event-user.json";
-import expectedDecisions from "../shared/__fixtures__/projection-v3/expected-decisions.json";
-import snapshotFixture from "../shared/__fixtures__/projection-v3/snapshot.json";
+import eventCatalog from "../shared/__fixtures__/projection-v4/event-catalog.json";
+import eventScope from "../shared/__fixtures__/projection-v4/event-scope.json";
+import eventUser from "../shared/__fixtures__/projection-v4/event-user.json";
+import expectedDecisions from "../shared/__fixtures__/projection-v4/expected-decisions.json";
+import snapshotFixture from "../shared/__fixtures__/projection-v4/snapshot.json";
 import { evaluateAccess, type ApplicableEntry, type WildcardMode } from "./authz";
 import schema from "./schema";
 
@@ -47,10 +47,10 @@ const GOLDEN_AUTH_USER_BY_PRINCIPAL: Record<string, string> = {
 type ConvexTest = TestConvex<typeof schema>;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Consumer evaluator over the ingested v3 mirror.
+// Consumer evaluator over the ingested v4 mirror.
 //
-// This is a faithful re-implementation of the documented v3 assembly model. It
-// reads ONLY the v3 tables (no `grants`, no roles.kind/wildcard, no
+// This is a faithful re-implementation of the documented v4 assembly model. It
+// reads ONLY the v4 tables (no `grants`, no roles.kind/wildcard, no
 // role_permissions.accessScopeId) and produces the exact (wildcard, entries)
 // pair the algebra consumes. It deliberately mirrors effective.ts's intended
 // behavior so this file becomes the executable spec the assembly readers must
@@ -297,7 +297,20 @@ function foldRows(
 // 1. Ingest parity: every expected-decisions case evaluates as the producer says.
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("v3 golden snapshot — ingest + decision parity", () => {
+describe("v4 golden snapshot — ingest + decision parity", () => {
+  test("rejects v3 snapshots", async () => {
+    const t = convexTest(schema, modules);
+    const v3 = structuredClone(snapshotFixture) as {
+      schemaVersion: number;
+    };
+    v3.schemaVersion = 3;
+
+    await expect(t.mutation(applySync, v3 as never)).resolves.toEqual({
+      ok: false,
+      status: "unsupported_schema",
+    });
+  });
+
   test("the golden snapshot ingests cleanly through applySync", async () => {
     const t = convexTest(schema, modules);
     const result = await t.mutation(applySync, snapshotFixture as never);
@@ -307,7 +320,7 @@ describe("v3 golden snapshot — ingest + decision parity", () => {
       acknowledgedVersion: 7,
     });
 
-    // Spot-check the install landed in the v3 tables.
+    // Spot-check the install landed in the v4 tables.
     const counts = await t.run(async (ctx) => ({
       roles: (await ctx.db.query("roles").collect()).length,
       permissions: (await ctx.db.query("permissions").collect()).length,
@@ -384,7 +397,7 @@ describe("v3 golden snapshot — ingest + decision parity", () => {
       const authUserId = GOLDEN_AUTH_USER_BY_PRINCIPAL[decision.subjectPrincipalId];
       const result = (await t.query(authorize, {
         tokenIdentifier: `${GOLDEN_ISSUER}|${authUserId}`,
-        scopeId: decision.scopeId,
+        tenantId: decision.scopeId,
         // The golden catalog keys follow `<resourceType>:<action>`.
         permission: `${decision.resourceType}:${decision.action}`,
         resourceType: decision.resourceType,
@@ -399,14 +412,14 @@ describe("v3 golden snapshot — ingest + decision parity", () => {
 // 2. C1 narrowing parity (the user-required tests).
 // ───────────────────────────────────────────────────────────────────────────
 
-// Minimal hand-built v3 snapshot so the C1 narrowing axes can be isolated. Admin
+// Minimal hand-built v4 snapshot so the C1 narrowing axes can be isolated. Admin
 // (role_admin, baseWildcard "default") is bound to one principal in BOTH a
 // default scope and an org scope. The org scope carries the narrowing overrides
 // under test. app.docs:read and app.docs:write are the two governed permissions.
 function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" | "deny" }>) {
   return {
     type: "access.projection.snapshot",
-    schemaVersion: 3,
+    schemaVersion: 4,
     eventId: "evt_c1_snapshot",
     mode: "initialize",
     sourceVersion: 1,
@@ -418,6 +431,7 @@ function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" 
           key: "admin",
           source: "system",
           name: "Admin",
+          description: null,
           baseWildcard: "default",
           updatedAt: 1,
         },
@@ -461,7 +475,7 @@ function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" 
           name: "c1",
           kind: "default",
           status: "active",
-          accountEntryMode: "open",
+          accessMode: "open",
           defaultRoleId: "role_admin",
           updatedAt: 1,
         },
@@ -484,6 +498,7 @@ function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" 
             subjectPrincipalId: "pr_default_admin",
             roleId: "role_admin",
             accessScopeId: "as_default",
+            appliesTo: "self",
             updatedAt: 1,
           },
         ],
@@ -495,7 +510,7 @@ function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" 
           name: "Org A",
           kind: "org",
           status: "active",
-          accountEntryMode: "invite_only",
+          accessMode: "invite_only",
           defaultRoleId: "role_admin",
           updatedAt: 1,
         },
@@ -524,6 +539,7 @@ function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" 
             subjectPrincipalId: "pr_org_admin",
             roleId: "role_admin",
             accessScopeId: "as_org",
+            appliesTo: "self",
             updatedAt: 1,
           },
         ],
@@ -539,11 +555,11 @@ function c1Snapshot(orgOverrides: Array<{ permissionId: string; effect: "allow" 
 // authorize() path accepts (unlike `manage`).
 async function c1Authorize(
   t: ConvexTest,
-  args: { authUserId: string; scopeId: string; action: "read" | "write" },
+  args: { authUserId: string; tenantId: string; action: "read" | "write" },
 ): Promise<Decision> {
   const result = (await t.query(authorize, {
     tokenIdentifier: `hercules-platform:c1|${args.authUserId}`,
-    scopeId: args.scopeId,
+    tenantId: args.tenantId,
     permission: `app.docs:${args.action}`,
     resourceType: "app.docs",
   })) as { allowed: boolean };
@@ -597,21 +613,21 @@ describe("C1 narrowing parity", () => {
     await expect(
       c1Authorize(t, {
         authUserId: "u_admin",
-        scopeId: "as_default",
+        tenantId: "as_default",
         action: "write",
       }),
     ).resolves.toBe("allow");
     await expect(
       c1Authorize(t, {
         authUserId: "u_admin",
-        scopeId: "as_org",
+        tenantId: "as_org",
         action: "read",
       }),
     ).resolves.toBe("allow");
     await expect(
       c1Authorize(t, {
         authUserId: "u_admin",
-        scopeId: "as_org",
+        tenantId: "as_org",
         action: "write",
       }),
     ).resolves.toBe("deny");
@@ -661,21 +677,21 @@ describe("C1 narrowing parity", () => {
     await expect(
       c1Authorize(t, {
         authUserId: "u_admin",
-        scopeId: "as_org",
+        tenantId: "as_org",
         action: "read",
       }),
     ).resolves.toBe("allow");
     await expect(
       c1Authorize(t, {
         authUserId: "u_admin",
-        scopeId: "as_org",
+        tenantId: "as_org",
         action: "write",
       }),
     ).resolves.toBe("deny");
     await expect(
       c1Authorize(t, {
         authUserId: "u_admin",
-        scopeId: "as_default",
+        tenantId: "as_default",
         action: "write",
       }),
     ).resolves.toBe("allow");
@@ -724,7 +740,7 @@ async function ingestEventsThrough(t: ConvexTest, target: 8 | 9 | 10) {
   }
 }
 
-describe("v3 event application", () => {
+describe("v4 event application", () => {
   test("event-catalog adds the new permission and base role-permission at v8", async () => {
     const t = convexTest(schema, modules);
     await ingestSnapshot(t);

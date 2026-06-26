@@ -2,7 +2,7 @@ import type { HttpRouter } from "convex/server";
 import { Webhook } from "standardwebhooks";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { AccessProjectionEvent, AccessProjectionSnapshot } from "../shared/sync";
-import { registerAccessControlRoutes } from "./http";
+import { registerIamRoutes } from "./http";
 
 // A captured route's shape, narrowed to what the tests invoke. The handler is
 // called with a fake `{ runMutation }` ctx and a Request, returning a Response.
@@ -16,7 +16,7 @@ type TestRoute = {
 };
 
 // Build a fake HttpRouter whose `route` records every spec, cast through the
-// real HttpRouter type so registerAccessControlRoutes type-checks against the
+// real HttpRouter type so registerIamRoutes type-checks against the
 // production signature while the test keeps a plain array of captured routes.
 function collectRoutes(): { router: HttpRouter; routes: TestRoute[] } {
   const routes: TestRoute[] = [];
@@ -32,7 +32,7 @@ const secret = `whsec_${Buffer.from("test-secret").toString("base64")}`;
 
 const snapshot: AccessProjectionSnapshot = {
   type: "access.projection.snapshot",
-  schemaVersion: 3,
+  schemaVersion: 4,
   eventId: "evt_1",
   mode: "initialize",
   sourceVersion: 1,
@@ -46,7 +46,7 @@ const snapshot: AccessProjectionSnapshot = {
         name: "Default",
         kind: "default",
         status: "active",
-        accountEntryMode: "open",
+        accessMode: "open",
         defaultRoleId: "role_member",
         updatedAt: 1,
       },
@@ -62,7 +62,7 @@ const snapshot: AccessProjectionSnapshot = {
 
 const event: AccessProjectionEvent = {
   type: "access.projection.event",
-  schemaVersion: 3,
+  schemaVersion: 4,
   eventId: "evt_2",
   sourceVersion: 2,
   catalog: {
@@ -89,7 +89,7 @@ const event: AccessProjectionEvent = {
   },
 };
 
-describe("registerAccessControlRoutes", () => {
+describe("registerIamRoutes", () => {
   beforeEach(() => {
     process.env.HERCULES_SYNC_SECRET = secret;
   });
@@ -134,7 +134,7 @@ describe("registerAccessControlRoutes", () => {
 
   test("resolves the Hercules-mounted component by default", async () => {
     const { router, routes } = collectRoutes();
-    registerAccessControlRoutes(router, {
+    registerIamRoutes(router, {
       httpAction: (handler) => handler as never,
       components: { hercules: { sync: { applySync: "herculesApplySync" } } },
     });
@@ -216,7 +216,7 @@ describe("registerAccessControlRoutes", () => {
 
 function registerRouteForTest() {
   const { router, routes } = collectRoutes();
-  registerAccessControlRoutes(router, {
+  registerIamRoutes(router, {
     httpAction: (handler) => handler as never,
     component: { sync: { applySync: "applySync" as never } },
   });

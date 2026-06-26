@@ -1,7 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// Access Control projection mirror — v3 deployment-scoped storage.
+// IAM projection mirror — v4 deployment-scoped storage.
 //
 // The deployment-wide catalog (reusable roles, permissions, base role
 // permissions) and deployment-wide users are stored ONCE (never duplicated per
@@ -15,7 +15,7 @@ const bindingAppliesToValidator = v.union(v.literal("self"), v.literal("self_and
 const wildcardValidator = v.union(v.literal("none"), v.literal("immutable"), v.literal("default"));
 const scopeKindValidator = v.union(v.literal("default"), v.literal("org"), v.literal("suite"));
 const scopeStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
-const accountEntryModeValidator = v.union(
+const accessModeValidator = v.union(
   v.literal("open"),
   v.literal("allowlisted_only"),
   v.literal("invite_only"),
@@ -50,6 +50,7 @@ export default defineSchema({
     phone: v.optional(v.string()),
     phoneVerified: v.boolean(),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   }).index("by_auth_user_id", ["herculesAuthUserId"]),
 
   scopes: defineTable({
@@ -57,9 +58,10 @@ export default defineSchema({
     name: v.string(),
     kind: scopeKindValidator,
     status: scopeStatusValidator,
-    accountEntryMode: accountEntryModeValidator,
+    accessMode: accessModeValidator,
     defaultRoleId: v.string(),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_scope_id", ["accessScopeId"])
     .index("by_kind", ["kind"]),
@@ -69,8 +71,9 @@ export default defineSchema({
     accessScopeId: v.string(),
     name: v.string(),
     status: scopeStatusValidator,
-    accountEntryMode: accountEntryModeValidator,
+    accessMode: accessModeValidator,
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   }).index("by_scope_id", ["accessScopeId"]),
 
   principals: defineTable({
@@ -81,14 +84,18 @@ export default defineSchema({
     // Display name for a `group` principal. A user principal's display name
     // comes from the deployment-wide `users` table, never from this row.
     name: v.optional(v.string()),
+    // Derived from principal_memberships. User principals always store zero.
+    memberCount: v.number(),
     status: principalStatusValidator,
     joinedAt: v.number(),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_principal_id", ["principalId"])
     .index("by_scope", ["accessScopeId"])
     .index("by_scope_auth_user", ["accessScopeId", "herculesAuthUserId"])
     .index("by_auth_user", ["herculesAuthUserId"])
+    .index("by_auth_user_status", ["herculesAuthUserId", "status"])
     .index("by_scope_type", ["accessScopeId", "type"])
     .index("by_scope_status", ["accessScopeId", "status"])
     .index("by_scope_status_type", ["accessScopeId", "status", "type"]),
@@ -98,6 +105,7 @@ export default defineSchema({
     groupPrincipalId: v.string(),
     memberPrincipalId: v.string(),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_scope", ["accessScopeId"])
     .index("by_group", ["accessScopeId", "groupPrincipalId"])
@@ -115,11 +123,13 @@ export default defineSchema({
     key: v.string(),
     source: v.union(v.literal("system"), v.literal("iam"), v.literal("tenant")),
     name: v.string(),
+    description: v.union(v.string(), v.null()),
     baseWildcard: wildcardValidator,
     // Undefined for catalog (reusable) roles; the owning org/suite scope for
     // tenant roles. Catalog roles are NEVER per-scope duplicated.
     accessScopeId: v.optional(v.string()),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_role_id", ["roleId"])
     .index("by_scope", ["accessScopeId"])
@@ -140,6 +150,7 @@ export default defineSchema({
     // tenantAssignable=false hides this permission from org-admin role editors.
     tenantAssignable: v.boolean(),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_permission_id", ["permissionId"])
     .index("by_scope", ["accessScopeId"])
@@ -154,6 +165,7 @@ export default defineSchema({
     permissionId: v.string(),
     effect: effectValidator,
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_role", ["roleId"])
     .index("by_permission", ["permissionId"])
@@ -168,6 +180,7 @@ export default defineSchema({
     permissionId: v.string(),
     effect: effectValidator,
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_scope", ["accessScopeId"])
     .index("by_scope_role", ["accessScopeId", "roleId"])
@@ -189,6 +202,7 @@ export default defineSchema({
     appliesTo: bindingAppliesToValidator,
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_binding_id", ["bindingId"])
     .index("by_scope", ["accessScopeId"])
@@ -220,6 +234,7 @@ export default defineSchema({
     appliesTo: bindingAppliesToValidator,
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
+    sourceVersion: v.number(),
   })
     .index("by_binding_id", ["bindingId"])
     .index("by_scope", ["accessScopeId"])

@@ -5,8 +5,8 @@ allowBuilds:
   esbuild: true
 
 minimumReleaseAge: 4320 # 3 days
-# minimumReleaseAgeExclude:
-#   - excluded package name
+minimumReleaseAgeExclude:
+  - "@usehercules/sdk"
 
 onlyBuiltDependencies:
   - esbuild

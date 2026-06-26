@@ -1,4 +1,4 @@
-// Hercules Access Control projection wire protocol — v3 (schemaVersion 3).
+// Hercules IAM projection wire protocol — v4 (schemaVersion 4).
 //
 // CONSUMER side. This module mirrors, as zod schemas, the producer-side source of
 // truth at packages/backend-shared/src/access-control/projection-protocol.ts in the
@@ -38,15 +38,13 @@ export type AccessProjectionScopeKind = z.infer<typeof accessProjectionScopeKind
 export const accessProjectionScopeStatusSchema = z.enum(["active", "disabled"]);
 export type AccessProjectionScopeStatus = z.infer<typeof accessProjectionScopeStatusSchema>;
 
-export const accessProjectionAccountEntryModeSchema = z.enum([
+export const accessProjectionAccessModeSchema = z.enum([
   "open",
   "allowlisted_only",
   "invite_only",
   "approval_required",
 ]);
-export type AccessProjectionAccountEntryMode = z.infer<
-  typeof accessProjectionAccountEntryModeSchema
->;
+export type AccessProjectionAccessMode = z.infer<typeof accessProjectionAccessModeSchema>;
 
 // "blocked" and "pending_approval" are POLICY states (admission reconciliation
 // may move principals among active/pending_approval/blocked). "suspended" and
@@ -82,6 +80,7 @@ export const projectionCatalogRoleSchema = z.strictObject({
   key: z.string().min(1),
   source: z.enum(["system", "iam"]),
   name: z.string().min(1),
+  description: z.string().nullable(),
   baseWildcard: accessProjectionWildcardModeSchema,
   updatedAt: z.number().int().nonnegative(),
 });
@@ -121,7 +120,7 @@ export const projectionScopeMetadataSchema = z.strictObject({
   name: z.string().min(1),
   kind: accessProjectionScopeKindSchema,
   status: accessProjectionScopeStatusSchema,
-  accountEntryMode: accessProjectionAccountEntryModeSchema,
+  accessMode: accessProjectionAccessModeSchema,
   defaultRoleId: z.string().min(1),
   updatedAt: z.number().int().nonnegative(),
 });
@@ -178,6 +177,7 @@ export const projectionScopeTenantRoleSchema = z.strictObject({
   key: z.string().min(1),
   source: z.literal("tenant"),
   name: z.string().min(1),
+  description: z.string().nullable(),
   // E2 (tenant role wildcard fence): a tenant (org-authored) role is ALWAYS a
   // non-wildcard role. The effective wildcard derivation (resolvePrincipalWildcard)
   // trusts baseWildcard, so a tenant role carrying "default"/"immutable" on a
@@ -209,7 +209,7 @@ export const projectionScopeRoleBindingSchema = z
     accessScopeId: z.string().min(1),
     resourceType: z.string().min(1).optional(),
     resourceId: z.string().min(1).optional(),
-    appliesTo: accessProjectionApplicabilitySchema.default("self"),
+    appliesTo: accessProjectionApplicabilitySchema,
     expiresAt: z.number().int().nonnegative().optional(),
     updatedAt: z.number().int().nonnegative(),
   })
@@ -239,7 +239,7 @@ export const projectionScopePermissionBindingSchema = z
     accessScopeId: z.string().min(1),
     resourceType: z.string().min(1).optional(),
     resourceId: z.string().min(1).optional(),
-    appliesTo: accessProjectionApplicabilitySchema.default("self"),
+    appliesTo: accessProjectionApplicabilitySchema,
     expiresAt: z.number().int().nonnegative().optional(),
     updatedAt: z.number().int().nonnegative(),
   })
@@ -326,7 +326,7 @@ export type ProjectionScope = z.infer<typeof projectionScopeSchema>;
 export const accessProjectionSnapshotSchema = z
   .strictObject({
     type: z.literal("access.projection.snapshot"),
-    schemaVersion: z.literal(3),
+    schemaVersion: z.literal(4),
     eventId: z.string().min(1),
     mode: z.enum(["initialize", "reset"]),
     sourceVersion: z.number().int().nonnegative(),
@@ -564,7 +564,7 @@ export type ProjectionScopeDelta = z.infer<typeof projectionScopeDeltaSchema>;
 export const accessProjectionEventSchema = z
   .strictObject({
     type: z.literal("access.projection.event"),
-    schemaVersion: z.literal(3),
+    schemaVersion: z.literal(4),
     eventId: z.string().min(1),
     sourceVersion: z.number().int().nonnegative(),
     catalog: projectionCatalogDeltaSchema.optional(),

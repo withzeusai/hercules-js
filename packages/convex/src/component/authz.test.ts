@@ -27,7 +27,7 @@ describe("action taxonomy", () => {
     expect(expandAction(WILDCARD_ACTION)).toEqual([WILDCARD_ACTION]);
   });
 
-  test("the reserved Access Control action set is centralized", () => {
+  test("the reserved IAM action set is centralized", () => {
     expect([...RESERVED_ACCESS_CONTROL_ACTIONS]).toEqual(["manage_members", "manage_access"]);
   });
 
@@ -37,7 +37,7 @@ describe("action taxonomy", () => {
     expect(actionMatches(WILDCARD_ACTION, "future_product_action")).toBe(true);
   });
 
-  test("actionMatches: wildcard excludes reserved Access Control actions", () => {
+  test("actionMatches: wildcard excludes reserved IAM actions", () => {
     for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
       expect(actionMatches(WILDCARD_ACTION, action)).toBe(false);
     }
@@ -54,7 +54,7 @@ describe("action taxonomy", () => {
       expect(actionMatches(MANAGE_ACTION, verb)).toBe(true);
     }
     // identity: a `manage` grant satisfies a `manage` request (a real catalog
-    // action, e.g. system.roles:manage), not just the CRUD it covers.
+    // action, e.g. system.access.roles:manage), not just the CRUD it covers.
     expect(actionMatches(MANAGE_ACTION, MANAGE_ACTION)).toBe(true);
     expect(actionMatches(MANAGE_ACTION, "approve")).toBe(false);
   });
@@ -66,12 +66,11 @@ describe("action taxonomy", () => {
 });
 
 describe("owner-only levers (cross-repo invariant)", () => {
-  test("the canonical fence is exactly these four levers", () => {
+  test("the canonical fence is exactly these algebra-only levers", () => {
     expect([...OWNER_ONLY_LEVERS]).toEqual([
       { resourceType: "system.app", action: "delete" },
       { resourceType: "system.ownership", action: "transfer" },
       { resourceType: "system.billing", action: MANAGE_ACTION },
-      { resourceType: "system.access.owner", action: MANAGE_ACTION },
     ]);
   });
 
@@ -83,7 +82,6 @@ describe("owner-only levers (cross-repo invariant)", () => {
   test("manage levers fence ALL canonical CRUD on the resourceType, not just :manage", () => {
     for (const verb of CANONICAL_ACTIONS) {
       expect(isOwnerOnlyLever({ resourceType: "system.billing", action: verb })).toBe(true);
-      expect(isOwnerOnlyLever({ resourceType: "system.access.owner", action: verb })).toBe(true);
     }
     expect(isOwnerOnlyLever({ resourceType: "system.billing", action: "export" })).toBe(false);
   });
@@ -135,7 +133,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     ).toBe("allow");
   });
 
-  test("owner and admin wildcard modes retain reserved Access Control authority", () => {
+  test("owner and admin wildcard modes retain reserved IAM authority", () => {
     for (const wildcard of ["immutable", "default"] as const) {
       for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
         expect(
@@ -213,7 +211,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
 
   test("catalog delegable classification remains conferrable", () => {
     const request = {
-      resourceType: "system.members",
+      resourceType: "system.access.users",
       action: "read",
       classification: "delegable" as const,
     };
@@ -222,7 +220,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     expect(
       evaluateAccess({
         wildcard: "none",
-        entries: [allow("system.members", "read")],
+        entries: [allow("system.access.users", "read")],
         request,
       }),
     ).toBe("allow");
@@ -275,7 +273,7 @@ describe("evaluateAccess — §0.4 deny-override algebra", () => {
     ).toBe("deny");
   });
 
-  test("explicit reserved allows confer reserved Access Control authority", () => {
+  test("explicit reserved allows confer reserved IAM authority", () => {
     for (const action of RESERVED_ACCESS_CONTROL_ACTIONS) {
       expect(
         evaluateAccess({

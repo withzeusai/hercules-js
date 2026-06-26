@@ -104,8 +104,8 @@ importers:
   packages/convex:
     dependencies:
       '@usehercules/sdk':
-        specifier: ^1.14.5
-        version: 1.14.5
+        specifier: ^1.15.7
+        version: 1.15.7
       convex-helpers:
         specifier: 0.1.119
         version: 0.1.119(@standard-schema/spec@1.1.0)(convex@1.41.0(react@19.2.7))(react@19.2.7)(typescript@5.9.3)(zod@4.4.3)
@@ -1435,8 +1435,8 @@ packages:
     resolution: {integrity: sha512-QVLZu3ZPQEE+HICQyAMZ2yLQhxf0meY/wx6Hx14YcTNj13JB3qHlX3lJ02L3fLGHgERRH71kvYDwiXIguT3AjQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@usehercules/sdk@1.14.5':
-    resolution: {integrity: sha512-kyDIMvBBZjcjs4DQfEQnDIzKFU8xajBP0EZAWuK/G2T2yQSa0BditOce1/yRNq82ynaA8mNi39WeeoLW037Dxg==}
+  '@usehercules/sdk@1.15.7':
+    resolution: {integrity: sha512-07/CAaTWGJ/MJFCI46Eh4pDY9tDfU12oarMwvmZNe0DTGPqZ6pt08rLP2Q/Yb9o1KkwvWf8fkDe7/+g9NrImew==}
 
   '@vitest/expect@4.1.8':
     resolution: {integrity: sha512-h3nDO677RDLEGlBxyQ5CW8RlMThSKSRLUePLOx09gNIWRL40edgA1GCZSZgf1W55MFAG6/Sw14KeaAnqv0NKdQ==}
@@ -3653,7 +3653,7 @@ snapshots:
       '@typescript-eslint/types': 8.61.0
       eslint-visitor-keys: 5.0.1
 
-  '@usehercules/sdk@1.14.5': {}
+  '@usehercules/sdk@1.15.7': {}
 
   '@vitest/expect@4.1.8':
     dependencies:

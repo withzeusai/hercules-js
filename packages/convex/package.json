@@ -1,7 +1,7 @@
 {
   "name": "@usehercules/convex",
   "version": "1.0.0",
-  "description": "Convex Access Control utilities for Hercules applications",
+  "description": "Convex IAM utilities for Hercules applications",
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -9,13 +9,9 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
-    "./access-admin": {
-      "types": "./dist/client/access-admin.d.ts",
-      "default": "./dist/client/access-admin.js"
-    },
-    "./access-admin.js": {
-      "types": "./dist/client/access-admin.d.ts",
-      "default": "./dist/client/access-admin.js"
+    "./iam-helpers": {
+      "types": "./dist/client/iam-helpers.d.ts",
+      "default": "./dist/client/iam-helpers.js"
     },
     "./http": {
       "types": "./dist/client/http.d.ts",
@@ -44,7 +40,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "hercules-convex-access-check": "./dist/checker/cli.js"
+    "hercules-convex-iam-check": "./dist/checker/cli.js"
   },
   "author": "Hercules Team",
   "license": "MIT",
@@ -60,12 +56,13 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc --project ./tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "build": "pnpm run clean && tsc --project ./tsconfig.build.json && node ./scripts/check-esm-exports.mjs",
     "dev": "tsc --project ./tsconfig.build.json --watch",
     "test": "vitest --run"
   },
   "dependencies": {
-    "@usehercules/sdk": "^1.14.5",
+    "@usehercules/sdk": "^1.15.7",
     "convex-helpers": "0.1.119",
     "standardwebhooks": "^1.0.0",
     "tslib": "^2.8.1",

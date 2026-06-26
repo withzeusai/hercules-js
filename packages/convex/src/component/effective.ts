@@ -12,7 +12,7 @@ import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 
-const DEFAULT_SCOPE_SENTINEL = "__hercules_default_scope__";
+const ROOT_SCOPE_SENTINEL = "__hercules_root_tenant__";
 const MAX_AUTHORIZATION_ANCESTORS = 10;
 
 export type AuthorizationAncestor = {
@@ -64,7 +64,61 @@ type CatalogPermission = {
 // catalog keys themselves are control-plane-only and are filtered from the
 // enumeration (see isSupersetAction). The evaluator (evaluateAccess) ignores
 // this extra field.
-type RuntimeEntry = ApplicableEntry & { permissionId?: string };
+export type AccessEntrySource =
+  | { kind: "role_permission"; roleId: string }
+  | {
+      kind: "permission_grant";
+      grantId: string;
+      subject: AccessGrantSubject;
+      inherited: boolean;
+    }
+  | {
+      kind: "resource_role";
+      grantId: string;
+      roleId: string;
+      subject: AccessGrantSubject;
+      inherited: boolean;
+    };
+
+export type RuntimeEntry = ApplicableEntry & {
+  permissionId?: string;
+  source?: AccessEntrySource;
+};
+
+export type AccessGrantSubject =
+  | { type: "user"; id: string }
+  | { type: "group"; id: string }
+  | { type: "role"; id: string };
+
+export type AccessGrantTarget =
+  | { type: "tenant" }
+  | { type: "resource"; resourceType: string; resourceId?: string };
+
+export type AccessGrantTrace = {
+  grantId: string;
+  grantType: "role" | "permission";
+  subject: AccessGrantSubject;
+  roleId?: string;
+  permissionId?: string;
+  effect: "allow" | "deny";
+  target: AccessGrantTarget;
+  appliesTo: "self" | "self_and_descendants";
+  expiresAt: number | null;
+  inherited: boolean;
+};
+
+export type AccessGroupMembershipTrace = {
+  groupId: string;
+  groupName?: string;
+  status?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  active: boolean;
+};
+
+export type EffectiveAccessTrace = {
+  groupMemberships: AccessGroupMembershipTrace[];
+  appliedGrants: AccessGrantTrace[];
+  expiredIgnoredGrants: AccessGrantTrace[];
+};
 
 export type EffectiveAccessEvaluation = {
   allowed: boolean;
@@ -88,6 +142,7 @@ export type EffectiveAccessEvaluation = {
   // checks entrypoint can run evaluateAccess for a concrete request, plus the
   // permissionId used by enumeratePermissions for membership reporting.
   entries: RuntimeEntry[];
+  trace?: EffectiveAccessTrace;
 };
 
 export async function evaluateEffectiveAccess(
@@ -98,6 +153,7 @@ export async function evaluateEffectiveAccess(
     resourceType?: string;
     resourceId?: string;
     ancestors?: AuthorizationAncestor[];
+    includeTrace?: boolean;
   },
 ): Promise<EffectiveAccessEvaluation> {
   if (!args.tokenIdentifier) {
@@ -117,7 +173,7 @@ export async function evaluateEffectiveAccess(
     return deny("unexpected_issuer");
   }
   if (!args.scopeId) {
-    return deny("scope_missing", state.sourceVersion);
+    return deny("tenant_missing", state.sourceVersion);
   }
   if (args.resourceId !== undefined && args.resourceType === undefined) {
     return deny("invalid_request", state.sourceVersion);
@@ -127,28 +183,28 @@ export async function evaluateEffectiveAccess(
     return deny("invalid_request", state.sourceVersion);
   }
 
-  const defaultScope = await ctx.db
+  const rootScope = await ctx.db
     .query("scopes")
     .withIndex("by_kind", (q) => q.eq("kind", "default"))
     .unique();
-  if (!defaultScope) {
-    return deny("default_scope_missing", state.sourceVersion);
+  if (!rootScope) {
+    return deny("root_tenant_missing", state.sourceVersion);
   }
 
   const effectiveScopeId =
-    args.scopeId === DEFAULT_SCOPE_SENTINEL ? defaultScope.accessScopeId : args.scopeId;
+    args.scopeId === ROOT_SCOPE_SENTINEL ? rootScope.accessScopeId : args.scopeId;
   const scope =
-    effectiveScopeId === defaultScope.accessScopeId
-      ? defaultScope
+    effectiveScopeId === rootScope.accessScopeId
+      ? rootScope
       : await ctx.db
           .query("scopes")
           .withIndex("by_scope_id", (q) => q.eq("accessScopeId", effectiveScopeId))
           .unique();
   if (!scope) {
-    return deny("scope_missing", state.sourceVersion);
+    return deny("tenant_missing", state.sourceVersion);
   }
   if (scope.status === "disabled") {
-    return deny("scope_disabled", state.sourceVersion);
+    return deny("tenant_disabled", state.sourceVersion);
   }
 
   const principal = await ctx.db
@@ -173,18 +229,18 @@ export async function evaluateEffectiveAccess(
     return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
   }
 
-  // H2 cross-scope fence (app-level standing): acting in a non-default scope
-  // ALSO requires an ACTIVE user principal in the default (app) scope. The
+  // H2 cross-scope fence (app-level standing): acting in a non-root scope
+  // ALSO requires an ACTIVE user principal in the root app scope. The
   // control plane enforces this on every app-user mutation
   // (loadActivePrincipalByAuthUser); without the same fence here, a user
   // blocked/suspended/removed at the app level would keep full org-scope
   // access at runtime until each org membership was also revoked. Fail
   // closed: a missing or non-user app-scope principal denies too.
-  if (scope.accessScopeId !== defaultScope.accessScopeId) {
+  if (scope.accessScopeId !== rootScope.accessScopeId) {
     const appPrincipal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
-        q.eq("accessScopeId", defaultScope.accessScopeId).eq("herculesAuthUserId", token.subject),
+        q.eq("accessScopeId", rootScope.accessScopeId).eq("herculesAuthUserId", token.subject),
       )
       .unique();
     if (!appPrincipal || appPrincipal.type !== "user") {
@@ -199,12 +255,12 @@ export async function evaluateEffectiveAccess(
     }
   }
 
-  // The permission catalog is deployment-wide; rows are pinned to the default
-  // scope id (schema note on `permissions`), so this default-scope read returns
+  // The permission catalog is deployment-wide; rows are pinned to the root
+  // scope id (schema note on `permissions`), so this root-scope read returns
   // the whole catalog.
   const catalogPermissions = await ctx.db
     .query("permissions")
-    .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
+    .withIndex("by_scope", (q) => q.eq("accessScopeId", rootScope.accessScopeId))
     .collect();
   // permissionId -> (resourceType, action) lookup for translating role and
   // direct-permission bindings (which reference a permissionId) into canonical
@@ -216,18 +272,28 @@ export async function evaluateEffectiveAccess(
     ]),
   );
 
+  const trace: EffectiveAccessTrace | undefined = args.includeTrace
+    ? {
+        groupMemberships: [],
+        appliedGrants: [],
+        expiredIgnoredGrants: [],
+      }
+    : undefined;
   const principalIds = await collectPrincipalIds(ctx, {
     principalId: principal.principalId,
     scopeId: scope.accessScopeId,
+    trace,
   });
 
   const grantContributions = await collectGrantContributions(ctx, {
     principalIds,
+    rootPrincipalId: principal.principalId,
     scopeId: scope.accessScopeId,
     resourceType: args.resourceType,
     resourceId: args.resourceId,
     ancestors,
     permissionById,
+    trace,
   });
 
   // §0b: resolve the principal's wildcard mode from its effective roles.
@@ -289,6 +355,7 @@ export async function evaluateEffectiveAccess(
     })),
     wildcard,
     entries,
+    ...(trace ? { trace } : {}),
   };
 }
 
@@ -378,7 +445,11 @@ export function enumeratePermissions(
 // without checking the group principal is an active, in-scope group.
 export async function collectPrincipalIds(
   ctx: GenericQueryCtx<DataModel>,
-  args: { principalId: string; scopeId: string },
+  args: {
+    principalId: string;
+    scopeId: string;
+    trace?: EffectiveAccessTrace;
+  },
 ) {
   const principalIds = new Set([args.principalId]);
   const memberships = await ctx.db
@@ -405,6 +476,17 @@ export async function collectPrincipalIds(
     ) {
       principalIds.add(membership.groupPrincipalId);
     }
+    args.trace?.groupMemberships.push({
+      groupId: membership.groupPrincipalId,
+      ...(groupPrincipal?.type === "group" && groupPrincipal.name !== undefined
+        ? { groupName: groupPrincipal.name }
+        : {}),
+      ...(groupPrincipal?.type === "group" ? { status: groupPrincipal.status } : {}),
+      active:
+        groupPrincipal?.type === "group" &&
+        groupPrincipal.accessScopeId === args.scopeId &&
+        groupPrincipal.status === "active",
+    });
   }
   return [...principalIds];
 }
@@ -422,6 +504,7 @@ type ResourceRoleGrant = {
   resourceType: string;
   resourceId?: string;
   inherited: boolean;
+  subject: AccessGrantSubject;
 };
 
 type BindingTarget = {
@@ -434,11 +517,13 @@ async function collectGrantContributions(
   ctx: GenericQueryCtx<DataModel>,
   args: {
     principalIds: string[];
+    rootPrincipalId: string;
     scopeId: string;
     resourceType?: string;
     resourceId?: string;
     ancestors: AuthorizationAncestor[];
     permissionById: PermissionLookup;
+    trace?: EffectiveAccessTrace;
   },
 ) {
   // sync.ts schedules an exact-identity binding deletion at expiresAt so this
@@ -471,6 +556,10 @@ async function collectGrantContributions(
   ]);
   for (const target of targets) {
     for (const principalId of principalIds) {
+      const subject: AccessGrantSubject =
+        principalId === args.rootPrincipalId
+          ? { type: "user", id: principalId }
+          : { type: "group", id: principalId };
       const [roleBindings, permissionBindings] = await Promise.all([
         ctx.db
           .query("role_bindings")
@@ -493,8 +582,8 @@ async function collectGrantContributions(
           )
           .collect(),
       ]);
-      collectRoleBindings(roleBindings, target);
-      collectDirectPermissionBindings(permissionBindings, target);
+      collectRoleBindings(roleBindings, target, subject);
+      collectDirectPermissionBindings(permissionBindings, target, subject);
     }
   }
 
@@ -534,7 +623,7 @@ async function collectGrantContributions(
             .eq("resourceId", target.resourceId),
         )
         .collect();
-      collectDirectPermissionBindings(bindings, target);
+      collectDirectPermissionBindings(bindings, target, { type: "role", id: roleId });
     }
   }
 
@@ -559,17 +648,24 @@ async function collectGrantContributions(
       expiresAt?: number;
     }>,
     target: BindingTarget,
+    subject: AccessGrantSubject,
   ) {
     for (const binding of bindings) {
       if (seenRoleBindings.has(binding.bindingId)) continue;
       seenRoleBindings.add(binding.bindingId);
-      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      const grantTrace = roleGrantTrace(binding, target, subject);
+      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) {
+        args.trace?.expiredIgnoredGrants.push(grantTrace);
+        continue;
+      }
       if (target.inherited && binding.appliesTo !== "self_and_descendants") continue;
       if (binding.resourceType === undefined) {
         scopeRoleIds.add(binding.roleId);
+        args.trace?.appliedGrants.push(grantTrace);
         continue;
       }
       if (!binding.resourceType) continue;
+      args.trace?.appliedGrants.push(grantTrace);
       resourceRoleGrants.push({
         bindingId: binding.bindingId,
         roleId: binding.roleId,
@@ -577,6 +673,7 @@ async function collectGrantContributions(
         resourceType: binding.resourceType,
         resourceId: binding.resourceId,
         inherited: target.inherited,
+        subject,
       });
     }
   }
@@ -597,11 +694,16 @@ async function collectGrantContributions(
       expiresAt?: number;
     }>,
     target: BindingTarget,
+    subject: AccessGrantSubject,
   ) {
     for (const binding of bindings) {
       if (seenPermissionBindings.has(binding.bindingId)) continue;
       seenPermissionBindings.add(binding.bindingId);
-      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) continue;
+      const grantTrace = permissionGrantTrace(binding, target, subject);
+      if (typeof binding.expiresAt === "number" && binding.expiresAt <= now) {
+        args.trace?.expiredIgnoredGrants.push(grantTrace);
+        continue;
+      }
       if (target.inherited && binding.appliesTo !== "self_and_descendants") continue;
       const permission = args.permissionById.get(binding.permissionId);
       if (!permission) continue;
@@ -617,6 +719,7 @@ async function collectGrantContributions(
       ) {
         continue;
       }
+      args.trace?.appliedGrants.push(grantTrace);
       // A concrete resourceId stays instance-level. A scope binding
       // (resourceType undefined) or a type-wide binding (resourceType set,
       // resourceId undefined) is type-level.
@@ -628,9 +731,76 @@ async function collectGrantContributions(
         objectType: isInstanceLevel ? "resource" : "scope",
         objectId: isInstanceLevel ? args.resourceId : undefined,
         permissionId: binding.permissionId,
+        source: {
+          kind: "permission_grant",
+          grantId: binding.bindingId,
+          subject,
+          inherited: target.inherited,
+        },
       });
     }
   }
+
+  function roleGrantTrace(
+    binding: {
+      bindingId: string;
+      roleId: string;
+      resourceType?: string;
+      resourceId?: string;
+      appliesTo: "self" | "self_and_descendants";
+      expiresAt?: number;
+    },
+    target: BindingTarget,
+    subject: AccessGrantSubject,
+  ): AccessGrantTrace {
+    return {
+      grantId: binding.bindingId,
+      grantType: "role",
+      subject,
+      roleId: binding.roleId,
+      effect: "allow",
+      target: grantTarget(binding.resourceType, binding.resourceId),
+      appliesTo: binding.appliesTo,
+      expiresAt: binding.expiresAt ?? null,
+      inherited: target.inherited,
+    };
+  }
+
+  function permissionGrantTrace(
+    binding: {
+      bindingId: string;
+      permissionId: string;
+      effect: "allow" | "deny";
+      resourceType?: string;
+      resourceId?: string;
+      appliesTo: "self" | "self_and_descendants";
+      expiresAt?: number;
+    },
+    target: BindingTarget,
+    subject: AccessGrantSubject,
+  ): AccessGrantTrace {
+    return {
+      grantId: binding.bindingId,
+      grantType: "permission",
+      subject,
+      permissionId: binding.permissionId,
+      effect: binding.effect,
+      target: grantTarget(binding.resourceType, binding.resourceId),
+      appliesTo: binding.appliesTo,
+      expiresAt: binding.expiresAt ?? null,
+      inherited: target.inherited,
+    };
+  }
+}
+
+function grantTarget(resourceType: string | undefined, resourceId: string | undefined) {
+  return resourceType === undefined
+    ? ({ type: "tenant" } as const)
+    : ({
+        type: "resource",
+        resourceType,
+        ...(resourceId === undefined ? {} : { resourceId }),
+      } as const);
 }
 
 function dedupeBindingTargets(targets: BindingTarget[]): BindingTarget[] {
@@ -718,6 +888,7 @@ async function collectRolePermissionEntries(
         action: permission.action,
         objectType: "scope",
         permissionId,
+        source: { kind: "role_permission", roleId },
       });
     }
 
@@ -733,6 +904,7 @@ async function collectRolePermissionEntries(
         action: permission.action,
         objectType: "scope",
         permissionId,
+        source: { kind: "role_permission", roleId },
       });
     }
   }
@@ -825,6 +997,13 @@ async function collectResourceRoleEntries(
             : grant.resourceId
           : undefined,
         permissionId,
+        source: {
+          kind: "resource_role",
+          grantId: grant.bindingId,
+          roleId: grant.roleId,
+          subject: grant.subject,
+          inherited: grant.inherited,
+        },
       });
     }
     for (const permissionId of contribution.deny) {
@@ -847,6 +1026,13 @@ async function collectResourceRoleEntries(
             : grant.resourceId
           : undefined,
         permissionId,
+        source: {
+          kind: "resource_role",
+          grantId: grant.bindingId,
+          roleId: grant.roleId,
+          subject: grant.subject,
+          inherited: grant.inherited,
+        },
       });
     }
   }
@@ -859,7 +1045,7 @@ async function collectResourceRoleEntries(
 // canonical RolePermissionContribution {allow, deny} model (query.ts). rawAllow
 // records every allow row seen (base + override) regardless of later deny, so
 // the narrowed-Admin downgrade can key on the PRESENCE of an allow row.
-type RoleContribution = {
+export type RoleContribution = {
   allow: Set<string>;
   deny: Set<string>;
   rawAllow: Set<string>;
@@ -872,7 +1058,7 @@ type RoleContribution = {
  * override, same layering order as before). Returns null when the role row is
  * missing.
  */
-async function resolveRoleNetPermissionIds(
+export async function resolveRoleNetPermissionIds(
   ctx: GenericQueryCtx<DataModel>,
   args: { roleId: string; targetScopeId: string },
 ): Promise<RoleContribution | null> {
@@ -973,7 +1159,7 @@ function applyRolePermissionRows(
  * un-narrowed and downgrades to none when narrowed (any allow row present in
  * base UNION overrides); everything else is none.
  */
-async function resolveEffectiveWildcard(
+export async function resolveEffectiveWildcard(
   ctx: GenericQueryCtx<DataModel>,
   args: {
     role: { roleId: string; baseWildcard: "none" | "immutable" | "default" };
