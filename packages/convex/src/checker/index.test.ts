@@ -8,7 +8,7 @@ const realManagedIamFixture = `
   import {
     createIam,
     tenantFromArg,
-    tenantFromDefaultResource,
+    tenantFromRootResource,
     tenantFromParentResource,
     tenantFromResource,
   } from "@usehercules/convex";
@@ -40,7 +40,7 @@ const realManagedIamFixture = `
 
   export {
     tenantFromArg,
-    tenantFromDefaultResource,
+    tenantFromRootResource,
     tenantFromParentResource,
     tenantFromResource,
   };
@@ -330,7 +330,7 @@ describe("checkIamSource", () => {
         export const evaluate = authenticatedAction({
           args: {},
           handler: async () => {
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: null,
             });
           },
@@ -365,7 +365,7 @@ describe("checkIamSource", () => {
             } else {
               throw new Error("Authentication required");
             }
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -380,7 +380,7 @@ describe("checkIamSource", () => {
             } else {
               // Continue with the verified token identifier.
             }
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -396,7 +396,7 @@ describe("checkIamSource", () => {
             } else {
               throw new Error("Authentication required");
             }
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: tokenIdentifier,
             });
           },
@@ -428,7 +428,7 @@ describe("checkIamSource", () => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
             await hercules.iam.tenants.users.update(args.userId, {
@@ -455,7 +455,7 @@ describe("checkIamSource", () => {
               },
             );
             await evaluateAccess.apply(hercules.iam.tenants, [
-              "default",
+              "root",
               { actor_token_identifier: identity.tokenIdentifier },
             ]);
           },
@@ -487,14 +487,14 @@ describe("checkIamSource", () => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
-            await hercules.iam.tenants.evaluateAccess("default", {});
+            await hercules.iam.tenants.evaluateAccess("root", {});
             await hercules.iam.tenants.users.update(args.userId, {
               tenant_id: args.tenantId,
               actor_token_identifier: args.actorTokenIdentifier,
             });
             await hercules.iam.tenants.resources.grants.create(args.resourceId, args.request);
             await hercules.iam.tenants.evaluateAccess(
-              "default",
+              "root",
               { actor_token_identifier: identity.tokenIdentifier },
               { actor_token_identifier: identity.tokenIdentifier },
             );
@@ -504,7 +504,7 @@ describe("checkIamSource", () => {
               { tenant_id: args.tenantId, roles: [] },
             );
             await evaluateAccess.apply(hercules.iam.tenants, [
-              "default",
+              "root",
               { actor_token_identifier: args.actorTokenIdentifier },
             ]);
           },
@@ -636,7 +636,7 @@ describe("checkIamSource", () => {
             let identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
             identity = await ctx.auth.getUserIdentity();
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -649,7 +649,7 @@ describe("checkIamSource", () => {
             let tokenIdentifier = identity.tokenIdentifier;
             if (!tokenIdentifier) throw new Error("Authentication required");
             tokenIdentifier = identity.tokenIdentifier;
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: tokenIdentifier,
             });
           },
@@ -661,7 +661,7 @@ describe("checkIamSource", () => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
             identity.tokenIdentifier = args.actorTokenIdentifier;
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -675,7 +675,7 @@ describe("checkIamSource", () => {
             for (const _value of args.values) {
               identity = await ctx.auth.getUserIdentity();
             }
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
           },
@@ -1341,7 +1341,7 @@ describe("checkIamSource", () => {
     ).toHaveLength(6);
   });
 
-  test("reports the default tenant sentinel passed to Convex IAM helpers", () => {
+  test("reports the root tenant sentinel passed to Convex IAM helpers", () => {
     const root = createFixture({
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
@@ -1356,39 +1356,39 @@ describe("checkIamSource", () => {
           listTenantUsers,
         } from "./iam.js";
 
-        const DEFAULT_TENANT_ID = "default";
+        const ROOT_TENANT_ID = "root";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
           args: {},
           handler: async (ctx) => {
             await hasPermission(ctx, {
-              tenantId: "default",
+              tenantId: "root",
               permission: "app.documents:read",
             });
             await getPermissions(ctx, {
-              tenantId: DEFAULT_TENANT_ID,
+              tenantId: ROOT_TENANT_ID,
             });
             await checkPermissions(ctx, [{
-              tenantId: "default",
+              tenantId: "root",
               permission: "app.documents:read",
             }]);
             await listTenantUsers(ctx, {
-              tenantId: DEFAULT_TENANT_ID,
+              tenantId: ROOT_TENANT_ID,
             });
             await listTenantMemberPickerUsers(ctx, {
-              tenantId: "default",
+              tenantId: "root",
               permission: "app.documents:read",
             });
             await listResourceSharingRecipients(ctx, {
-              tenantId: DEFAULT_TENANT_ID,
+              tenantId: ROOT_TENANT_ID,
               permission: "app.documents:manage_members",
               resourceType: "app.documents",
               resourceId: "document_123",
               recipientType: "user",
             });
             await getTargetTenantSyncStatus(ctx, {
-              tenantId: "default",
+              tenantId: "root",
               sourceVersion: 1,
             });
           },
@@ -1398,7 +1398,7 @@ describe("checkIamSource", () => {
 
     const result = checkIamSource({ cwd: root });
     const findings = result.findings.filter(
-      (finding) => finding.code === "default_tenant_literal_in_convex_helper",
+      (finding) => finding.code === "root_tenant_literal_in_convex_helper",
     );
 
     expect(findings).toHaveLength(7);
@@ -1406,11 +1406,11 @@ describe("checkIamSource", () => {
       expect.arrayContaining([expect.objectContaining({ filePath: "convex/access.ts" })]),
     );
     expect(formatIamCheckResult(result)).toContain(
-      'Use "default" only with generated SDK or REST APIs.',
+      'Use "root" only with generated SDK or REST APIs.',
     );
   });
 
-  test("allows the default tenant sentinel in generated SDK calls", () => {
+  test("allows the root tenant sentinel in generated SDK calls", () => {
     const root = createFixture({
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
@@ -1425,7 +1425,7 @@ describe("checkIamSource", () => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
-            await hercules.iam.tenants.evaluateAccess("default", {
+            await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
             await getEffectivePermissions(ctx);
@@ -2392,7 +2392,7 @@ describe("checkIamSource", () => {
         }),
       ]),
     );
-    expect(formatIamCheckResult(result)).toContain("tenantFromDefaultResource");
+    expect(formatIamCheckResult(result)).toContain("tenantFromRootResource");
   });
 
   test("reports row capability checks without a concrete resource", () => {
@@ -2405,12 +2405,12 @@ describe("checkIamSource", () => {
         import {
           checkPermissions,
           iamQuery,
-          tenantFromDefaultResource,
+          tenantFromRootResource,
         } from "./iam";
 
         export const getCapabilities = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromDefaultResource("tasks", "taskId"),
+          tenant: tenantFromRootResource("tasks", "taskId"),
           args: { taskId: v.id("tasks") },
           handler: async (ctx, args) => {
             const task = await ctx.db.get(args.taskId);
@@ -2447,12 +2447,12 @@ describe("checkIamSource", () => {
         import {
           checkPermissions,
           iamQuery,
-          tenantFromDefaultResource,
+          tenantFromRootResource,
         } from "./iam";
 
         export const getCapabilities = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromDefaultResource("tasks", "taskId"),
+          tenant: tenantFromRootResource("tasks", "taskId"),
           args: { taskId: v.id("tasks") },
           handler: async (ctx, args) => {
             const task = await ctx.db.get(args.taskId);

@@ -397,7 +397,7 @@ type TenantAccessStatus =
         | "identity_invalid"
         | "unexpected_issuer"
         | "mirror_not_ready"
-        | "default_tenant_missing"
+        | "root_tenant_missing"
         | "principal_missing";
       stateVersion?: number;
     };

@@ -205,7 +205,7 @@ export type IamTenantAccessStatusResult =
         | "identity_invalid"
         | "unexpected_issuer"
         | "mirror_not_ready"
-        | "default_tenant_missing"
+        | "root_tenant_missing"
         | "principal_missing";
       stateVersion?: number;
     };
@@ -968,15 +968,13 @@ export function createIam<DataModel extends GenericDataModel>(
   };
 }
 
-// Single-tenant apps that don't pass a tenant arg resolve to the app's
-// default tenant. The component query looks up the persisted default scope
-// row from the mirror, so this helper just returns a sentinel string and
-// authorize resolves it. The sentinel means "use the default tenant"
-// inside the authorize implementation (component reads the unique row with
-// kind="default").
-export const DEFAULT_TENANT_SENTINEL = "__hercules_default_tenant__";
+// Single-tenant apps that don't pass a tenant arg resolve to the app's root
+// tenant. The component query looks up the persisted root scope row from the
+// mirror, so this helper just returns a sentinel string and authorize resolves
+// it. The private projection protocol identifies that row with kind="default".
+export const ROOT_TENANT_SENTINEL = "__hercules_root_tenant__";
 
-export const defaultTenant: ExtractTenant<unknown, unknown> = () => DEFAULT_TENANT_SENTINEL;
+export const rootTenant: ExtractTenant<unknown, unknown> = () => ROOT_TENANT_SENTINEL;
 
 // The resourceType `tenantFromResource` emits. An extractor only sees the table
 // row, not the permission catalog, so it cannot know the canonical resource
@@ -985,7 +983,7 @@ export const defaultTenant: ExtractTenant<unknown, unknown> = () => DEFAULT_TENA
 // authorize query substitutes the requested permission's canonical catalog
 // resourceType (resolved by catalog lookup). Resource grants are pinned to that
 // same canonical type on the control plane, so the two match by construction.
-// Mirrored in component/checks.ts (like DEFAULT_TENANT_SENTINEL above).
+// Mirrored in component/checks.ts (like ROOT_TENANT_SENTINEL above).
 export const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
 
 /**
@@ -1083,7 +1081,7 @@ export function tenantFromResource<T extends string, K extends string>(
 }
 
 /**
- * Resolves a specific resource in the default app tenant without requiring a
+ * Resolves a specific resource in the root app tenant without requiring a
  * tenant id column on the row. Use this for single-tenant apps that need
  * resource grants, denies, or per-resource UI checks.
  *
@@ -1091,7 +1089,7 @@ export function tenantFromResource<T extends string, K extends string>(
  * bound to the same resource. Pass `authorizeAgainst` for trusted parent
  * resources exactly as with {@link tenantFromResource}.
  */
-export function tenantFromDefaultResource<T extends string, K extends string>(
+export function tenantFromRootResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
@@ -1111,22 +1109,22 @@ export function tenantFromDefaultResource<T extends string, K extends string>(
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromDefaultResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+        message: `tenantFromRootResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `tenantFromDefaultResource("${tableName}", "${argKey}"): resource not found`,
+        message: `tenantFromRootResource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const ancestors = normalizeAncestors(
       options.authorizeAgainst?.(row as Record<string, unknown>),
-      `tenantFromDefaultResource("${tableName}", "${argKey}")`,
+      `tenantFromRootResource("${tableName}", "${argKey}")`,
     );
     return {
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: String(id),
       ...(ancestors ? { ancestors } : {}),
@@ -1194,11 +1192,11 @@ export function tenantFromParentResource<T extends string, K extends string>(
 }
 
 /**
- * Resolves child creation against a parent resource in the default app tenant.
+ * Resolves child creation against a parent resource in the root app tenant.
  * The parent row is loaded from `args[argKey]`; no tenant id field is required
  * on the parent or child tables.
  */
-export function tenantFromDefaultParentResource<T extends string, K extends string>(
+export function tenantFromRootParentResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
@@ -1218,14 +1216,14 @@ export function tenantFromDefaultParentResource<T extends string, K extends stri
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromDefaultParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+        message: `tenantFromRootParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `tenantFromDefaultParentResource("${tableName}", "${argKey}"): resource not found`,
+        message: `tenantFromRootParentResource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const ancestors = normalizeAncestors(
@@ -1233,10 +1231,10 @@ export function tenantFromDefaultParentResource<T extends string, K extends stri
         { type: options.parentResourceType, id: String(id) },
         ...(options.authorizeAgainst?.(row as Record<string, unknown>) ?? []),
       ],
-      `tenantFromDefaultParentResource("${tableName}", "${argKey}")`,
+      `tenantFromRootParentResource("${tableName}", "${argKey}")`,
     );
     return {
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       ancestors: ancestors!,
     };
@@ -1285,7 +1283,7 @@ function makeIamBuilder<TBuilder>(builder: TBuilder, component: IamComponent): T
       throw new Error("iam* builders require tenant to be a function.");
     }
     const { permission, tenant, ...convexDefinition } = iamDefinition;
-    const tenantExtractor = (tenant ?? defaultTenant) as ExtractTenant<AuthorizationCtx, unknown>;
+    const tenantExtractor = (tenant ?? rootTenant) as ExtractTenant<AuthorizationCtx, unknown>;
     return (builder as BuilderCaller)(
       wrapDefinition(convexDefinition, component, "permission", {
         permission,
@@ -1369,14 +1367,14 @@ async function getCurrentHerculesAuthUserId(ctx: IamContext): Promise<string | u
 function normalizePermissionCheckArgs(args: PermissionCheckArgs) {
   if (typeof args === "string") {
     return {
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       permission: args,
       resource: undefined,
       ancestors: undefined,
     };
   }
   return {
-    tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+    tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
     permission: args.permission,
     resource: args.resource,
     ancestors: normalizeAncestors(args.ancestors),
@@ -1386,14 +1384,14 @@ function normalizePermissionCheckArgs(args: PermissionCheckArgs) {
 function normalizeAnyPermissionCheckArgs(args: AnyPermissionCheckArgs) {
   if (Array.isArray(args)) {
     return {
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       permissions: args,
       resource: undefined,
       ancestors: undefined,
     };
   }
   return {
-    tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+    tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
     permissions: args.permissions,
     resource: args.resource,
     ancestors: args.ancestors,
@@ -1402,7 +1400,7 @@ function normalizeAnyPermissionCheckArgs(args: AnyPermissionCheckArgs) {
 
 function normalizeEffectivePermissionsArgs(args: EffectivePermissionsArgs | undefined) {
   return {
-    tenantId: args?.tenantId ?? DEFAULT_TENANT_SENTINEL,
+    tenantId: args?.tenantId ?? ROOT_TENANT_SENTINEL,
     resource: args?.resource,
     ancestors: normalizeAncestors(args?.ancestors),
   };
@@ -1508,7 +1506,7 @@ function makeFilterAuthorizedResources(component: IamComponent) {
   ): Promise<T[]> => {
     const tokenIdentifier = await getTokenIdentifier(ctx);
     if (!tokenIdentifier) return [];
-    const tenantId = args.tenantId ?? DEFAULT_TENANT_SENTINEL;
+    const tenantId = args.tenantId ?? ROOT_TENANT_SENTINEL;
 
     const checks = args.resources.map((item) => {
       const ref = args.resource(item);
@@ -1611,7 +1609,7 @@ function makeListMyRoles(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.listMyRoles, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
     });
   };
 }
@@ -1626,7 +1624,7 @@ function makeGetTenant(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.getTenant, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
     });
     return toPublicTenantDetail(result as InternalOrPublicTenantDetail | null);
   };
@@ -1642,7 +1640,7 @@ function makeListTenantUsers(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listTenantUsers, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       cursor: args.cursor,
       limit: args.limit,
     });
@@ -1663,7 +1661,7 @@ function makeListTenantGroups(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listTenantGroups, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       cursor: args.cursor,
       limit: args.limit,
     });
@@ -1684,7 +1682,7 @@ function makeListTenantUserDirectory(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listTenantUserDirectory, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       cursor: args.cursor,
       limit: args.limit,
     });
@@ -1712,7 +1710,7 @@ function makeListTenantMemberPickerUsers(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listTenantMemberPickerUsers, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       permission: args.permission,
       ...resourceArgs(args.resource),
       ...ancestorArgs(normalizeAncestors(args.ancestors, "listTenantMemberPickerUsers")),
@@ -1757,7 +1755,7 @@ function makeListResourceSharingRecipients(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listResourceSharingRecipients, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       permission: args.permission,
       resourceType: args.resourceType,
       resourceId: args.resourceId,
@@ -1786,7 +1784,7 @@ function makeGetTenantUserDirectoryEntry(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.getTenantUserDirectoryEntry, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       userId: args.userId,
     });
   };
@@ -1802,7 +1800,7 @@ function makeListGroupMembers(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listGroupMembers, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       groupId: args.groupId,
       cursor: args.cursor,
       limit: args.limit,
@@ -1824,7 +1822,7 @@ function makeListUserGroups(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listUserGroups, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       userId: args.userId,
       cursor: args.cursor,
       limit: args.limit,
@@ -1846,7 +1844,7 @@ function makeListTenantRoles(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.listTenantRoles, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
     });
   };
 }
@@ -1861,7 +1859,7 @@ function makeGetTenantRole(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.getTenantRole, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       roleId: args.roleId,
     });
   };
@@ -1877,7 +1875,7 @@ function makeListTenantPermissions(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.listTenantPermissions, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
     });
   };
 }
@@ -1897,7 +1895,7 @@ function makeGetResourcePermissionOverrides(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.getResourcePermissionOverrides, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       subject: args.subject,
       resourceType: args.resourceType,
       target: args.target,
@@ -1920,7 +1918,7 @@ function makeExplainAccess(component: IamComponent) {
 
     return await ctx.runQuery(component.queries.explainAccess, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       userId: args.userId,
       permission: args.permission,
       target: args.target,
@@ -1944,7 +1942,7 @@ function makeListDirectSubjectsForResource(component: IamComponent) {
 
     const result = await ctx.runQuery(component.queries.listDirectSubjectsForResource, {
       tokenIdentifier,
-      tenantId: args.tenantId ?? DEFAULT_TENANT_SENTINEL,
+      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
       resourceType: args.resourceType,
       resourceId: args.resourceId,
       cursor: args.cursor,
@@ -1983,7 +1981,7 @@ async function ensureAuthorized(
   let ancestors: Array<{ resourceType: string; resourceId: string }> | undefined;
   if (mode === "permission") {
     try {
-      const extracted = await (iam?.tenant ?? defaultTenant)(ctx, callerArgs);
+      const extracted = await (iam?.tenant ?? rootTenant)(ctx, callerArgs);
       if (typeof extracted === "string") {
         tenantId = extracted;
       } else {

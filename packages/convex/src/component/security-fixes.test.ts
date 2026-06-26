@@ -30,7 +30,7 @@ const listMyRoles = makeFunctionReference<
 >("queries:listMyRoles");
 
 const GOLDEN_ISSUER = "hercules-platform:cd_demo";
-const DEFAULT_TENANT_SENTINEL = "__hercules_default_tenant__";
+const ROOT_TENANT_SENTINEL = "__hercules_root_tenant__";
 
 type ConvexTest = TestConvex<typeof schema>;
 
@@ -398,8 +398,8 @@ describe("E4 - cross-scope escalation is not written or honored", () => {
   });
 });
 
-describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
-  test("listMyRoles(__hercules_default_tenant__) returns the caller's default-scope roles", async () => {
+describe("E5 - listMyRoles resolves the root-tenant sentinel", () => {
+  test("listMyRoles(__hercules_root_tenant__) returns the caller's root-tenant roles", async () => {
     const t = convexTest(schema, modules);
     await ingestGolden(t);
 
@@ -408,7 +408,7 @@ describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
     // (the default-scope admin) gets the Admin role back.
     const roles = await t.query(listMyRoles, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
     });
     expect(roles).toEqual([
       {
@@ -420,13 +420,13 @@ describe("E5 - listMyRoles resolves the default-scope sentinel", () => {
     ]);
   });
 
-  test("the explicit default-scope id resolves identically (control)", async () => {
+  test("the explicit root scope id resolves identically (control)", async () => {
     const t = convexTest(schema, modules);
     await ingestGolden(t);
 
     const viaSentinel = await t.query(listMyRoles, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
     });
     const viaExplicit = await t.query(listMyRoles, {
       tokenIdentifier: `${GOLDEN_ISSUER}|u_alice`,

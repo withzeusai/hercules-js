@@ -1,7 +1,7 @@
 # @usehercules/convex
 
 Convex integration for Hercules-managed IAM. The public model uses one term:
-**tenant**. The default app tenant and additional product tenants use the same
+**tenant**. The root app tenant and additional product tenants use the same
 APIs.
 
 Use this package for authorization builders, mirrored reads, webhook routes, and
@@ -60,10 +60,10 @@ export const {
 } = createIam({ query, mutation, action, components });
 
 export {
-  defaultTenant,
+  rootTenant,
   tenantFromArg,
-  tenantFromDefaultParentResource,
-  tenantFromDefaultResource,
+  tenantFromRootParentResource,
+  tenantFromRootResource,
   tenantFromParentResource,
   tenantFromResource,
 } from "@usehercules/convex";
@@ -110,12 +110,12 @@ permissions.
 ## Authorization
 
 `iamQuery`, `iamMutation`, and `iamAction` require a `permission`. Their
-optional `tenant` extractor defaults to the app's default tenant.
+optional `tenant` extractor uses the app's root tenant when omitted.
 
-For the default tenant, omit `tenantId` from Convex IAM permission and mirror
-helpers where it is optional. Never pass `tenantId: "default"` to a Convex IAM
+For the root tenant, omit `tenantId` from Convex IAM permission and mirror
+helpers where it is optional. Never pass `tenantId: "root"` to a Convex IAM
 helper. If a helper requires a specific target tenant, pass its persisted
-canonical ID. The public `"default"` sentinel is only for generated SDK/REST
+canonical ID. The public `"root"` sentinel is only for generated SDK/REST
 management methods that require a tenant identifier.
 
 ```ts
@@ -123,11 +123,11 @@ await requirePermission(ctx, { permission: "app.tasks:read" });
 const permissions = await getEffectivePermissions(ctx);
 ```
 
-| Operation    | Default tenant                         | Explicit tenant                 |
-| ------------ | -------------------------------------- | ------------------------------- |
-| Create/list  | omit `tenant`                          | `tenantFromArg("tenantId")`     |
-| Existing row | `tenantFromDefaultResource(...)`       | `tenantFromResource(...)`       |
-| Child create | `tenantFromDefaultParentResource(...)` | `tenantFromParentResource(...)` |
+| Operation    | Root tenant                         | Explicit tenant                 |
+| ------------ | ----------------------------------- | ------------------------------- |
+| Create/list  | omit `tenant`                       | `tenantFromArg("tenantId")`     |
+| Existing row | `tenantFromRootResource(...)`       | `tenantFromResource(...)`       |
+| Child create | `tenantFromRootParentResource(...)` | `tenantFromParentResource(...)` |
 
 For an existing row, derive the tenant from the loaded row. Do not accept both a
 row id and a browser-supplied tenant id.
@@ -226,7 +226,7 @@ User and group reads are separate. Tenant APIs use `user`; group APIs use
 `member`.
 
 `getTenantAccessStatus` returns the signed-in user's access status in the
-default app tenant, or a typed fallback when that status is unavailable.
+root app tenant, or a typed fallback when that status is unavailable.
 `listMyTenants` returns `{ tenants, nextCursor? }`; each tenant summary uses
 `accessStatus` for the signed-in user's principal and `lifecycleStatus` for the
 tenant. It includes an archived tenant only for its retained active direct
@@ -235,8 +235,8 @@ tenant lifecycle reads for complete archive-management views.
 `listMyActiveTenants` returns only active memberships in active tenants and
 narrows both statuses to `"active"`. Pass `isRoot: true` or
 `isRoot: false` to filter without assuming array order.
-Custom tenant results require active standing in the default app tenant. When
-default standing is inactive, `listMyTenants` may still expose the default
+Custom tenant results require active standing in the root app tenant. When
+root standing is inactive, `listMyTenants` may still expose the root
 tenant's own `accessStatus` for boundary UI but omits custom tenants, and
 `listMyActiveTenants` returns an empty page.
 `listTenantUsers` returns `{ users, nextCursor? }`. `listTenantGroups` returns
@@ -287,7 +287,7 @@ await getTargetTenantSyncStatus(ctx, { tenantId, sourceVersion });
 The SDK keeps `changed`, `version`, and `projection_ids` under
 `convex_source_data`; use `version`, not the former top-level `source_version`.
 A `syncing` result means the local mirror has not reached the write yet.
-`ready` means the target tenant, target principal, and default app standing are
+`ready` means the target tenant, target principal, and root app standing are
 active after the barrier. `denied` is a completed access denial after the
 barrier. `failed` means the identity, issuer, mirror, or target tenant is
 invalid after the promised version. Do not treat missing target mirror data
@@ -527,7 +527,7 @@ to the trusted creator of a provisioning row.
 - The browser passes only `resourceId`.
 - Trusted app data supplies `tenantId` and creator user id.
 - Resource type, role, and descendant behavior are fixed in code.
-- The creator must have active default app access and active target tenant
+- The creator must have active root app access and active target tenant
   access; the target tenant lifecycle must also be active.
 - An active row is never bootstrapped again.
 

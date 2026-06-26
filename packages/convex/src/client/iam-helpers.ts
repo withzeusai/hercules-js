@@ -142,12 +142,12 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
         throwIamDenied();
       }
 
-      const hasActiveDefaultTenant = await callerHasActiveDefaultTenant(
+      const hasActiveRootTenant = await callerHasActiveRootTenant(
         ctx,
         options.getTenantAccessStatus,
         tokenIdentifier,
       );
-      if (!hasActiveDefaultTenant) {
+      if (!hasActiveRootTenant) {
         throwIamDenied();
       }
 
@@ -237,7 +237,7 @@ function isValidTargetForCaller(
   );
 }
 
-async function callerHasActiveDefaultTenant<DataModel extends GenericDataModel>(
+async function callerHasActiveRootTenant<DataModel extends GenericDataModel>(
   ctx: Pick<GenericActionCtx<DataModel>, "runQuery">,
   getTenantAccessStatus: GetTenantAccessStatusReference,
   tokenIdentifier: string,

@@ -12,7 +12,7 @@ import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 
-const DEFAULT_SCOPE_SENTINEL = "__hercules_default_tenant__";
+const ROOT_SCOPE_SENTINEL = "__hercules_root_tenant__";
 const MAX_AUTHORIZATION_ANCESTORS = 10;
 
 export type AuthorizationAncestor = {
@@ -183,19 +183,19 @@ export async function evaluateEffectiveAccess(
     return deny("invalid_request", state.sourceVersion);
   }
 
-  const defaultScope = await ctx.db
+  const rootScope = await ctx.db
     .query("scopes")
     .withIndex("by_kind", (q) => q.eq("kind", "default"))
     .unique();
-  if (!defaultScope) {
-    return deny("default_tenant_missing", state.sourceVersion);
+  if (!rootScope) {
+    return deny("root_tenant_missing", state.sourceVersion);
   }
 
   const effectiveScopeId =
-    args.scopeId === DEFAULT_SCOPE_SENTINEL ? defaultScope.accessScopeId : args.scopeId;
+    args.scopeId === ROOT_SCOPE_SENTINEL ? rootScope.accessScopeId : args.scopeId;
   const scope =
-    effectiveScopeId === defaultScope.accessScopeId
-      ? defaultScope
+    effectiveScopeId === rootScope.accessScopeId
+      ? rootScope
       : await ctx.db
           .query("scopes")
           .withIndex("by_scope_id", (q) => q.eq("accessScopeId", effectiveScopeId))
@@ -229,18 +229,18 @@ export async function evaluateEffectiveAccess(
     return deny(`principal_${principal.status}`, state.sourceVersion, principal.principalId);
   }
 
-  // H2 cross-scope fence (app-level standing): acting in a non-default scope
-  // ALSO requires an ACTIVE user principal in the default (app) scope. The
+  // H2 cross-scope fence (app-level standing): acting in a non-root scope
+  // ALSO requires an ACTIVE user principal in the root app scope. The
   // control plane enforces this on every app-user mutation
   // (loadActivePrincipalByAuthUser); without the same fence here, a user
   // blocked/suspended/removed at the app level would keep full org-scope
   // access at runtime until each org membership was also revoked. Fail
   // closed: a missing or non-user app-scope principal denies too.
-  if (scope.accessScopeId !== defaultScope.accessScopeId) {
+  if (scope.accessScopeId !== rootScope.accessScopeId) {
     const appPrincipal = await ctx.db
       .query("principals")
       .withIndex("by_scope_auth_user", (q) =>
-        q.eq("accessScopeId", defaultScope.accessScopeId).eq("herculesAuthUserId", token.subject),
+        q.eq("accessScopeId", rootScope.accessScopeId).eq("herculesAuthUserId", token.subject),
       )
       .unique();
     if (!appPrincipal || appPrincipal.type !== "user") {
@@ -255,12 +255,12 @@ export async function evaluateEffectiveAccess(
     }
   }
 
-  // The permission catalog is deployment-wide; rows are pinned to the default
-  // scope id (schema note on `permissions`), so this default-scope read returns
+  // The permission catalog is deployment-wide; rows are pinned to the root
+  // scope id (schema note on `permissions`), so this root-scope read returns
   // the whole catalog.
   const catalogPermissions = await ctx.db
     .query("permissions")
-    .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
+    .withIndex("by_scope", (q) => q.eq("accessScopeId", rootScope.accessScopeId))
     .collect();
   // permissionId -> (resourceType, action) lookup for translating role and
   // direct-permission bindings (which reference a permissionId) into canonical

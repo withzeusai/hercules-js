@@ -285,7 +285,7 @@ describe("resource creator bootstrap", () => {
   });
 
   test.each(["blocked", "suspended", "pending_approval", "removed"] as const)(
-    "denies an active target tenant when default tenant access is %s",
+    "denies an active target tenant when root tenant access is %s",
     async (status) => {
       const { client, create } = makeClient();
       const action = makeAction(client);
@@ -312,7 +312,7 @@ describe("resource creator bootstrap", () => {
     },
   );
 
-  test("denies when default tenant access is unavailable", async () => {
+  test("denies when root tenant access is unavailable", async () => {
     const { client, create } = makeClient();
     const action = makeAction(client);
     const ctx = makeCtx({

@@ -27,7 +27,7 @@ import {
 import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
-const DEFAULT_TENANT_SENTINEL = "__hercules_default_tenant__";
+const ROOT_TENANT_SENTINEL = "__hercules_root_tenant__";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 // Public within the component boundary (parent-facing API; see checks.ts).
@@ -371,7 +371,7 @@ export const getTenantAccessStatus = query({
     if (!scope || scope.status !== "active") {
       return {
         kind: "fallback" as const,
-        reason: "default_tenant_missing" as const,
+        reason: "root_tenant_missing" as const,
         stateVersion: state.sourceVersion,
       };
     }
@@ -414,9 +414,9 @@ export const listMyTenants = query({
     const token = parseTokenIdentifier(args.tokenIdentifier);
     if (!token || token.issuer !== state.expectedIssuer) return { tenants: [] };
 
-    const defaultStanding = await resolveDefaultUserPrincipal(ctx, token.subject);
-    const hasActiveDefaultStanding =
-      defaultStanding?.scope.status === "active" && defaultStanding.principal.status === "active";
+    const rootStanding = await resolveRootUserPrincipal(ctx, token.subject);
+    const hasActiveRootStanding =
+      rootStanding?.scope.status === "active" && rootStanding.principal.status === "active";
 
     const limit = pageLimit("listMyTenants", args.limit);
     const page = await paginator(ctx.db, schema)
@@ -432,11 +432,11 @@ export const listMyTenants = query({
             .withIndex("by_scope_id", (q) => q.eq("accessScopeId", principal.accessScopeId))
             .unique();
           if (!scope) return null;
-          const isDefaultPrincipal =
-            defaultStanding !== null &&
-            principal.accessScopeId === defaultStanding.scope.accessScopeId &&
-            principal.principalId === defaultStanding.principal.principalId;
-          if (!isDefaultPrincipal && !hasActiveDefaultStanding) return null;
+          const isRootPrincipal =
+            rootStanding !== null &&
+            principal.accessScopeId === rootStanding.scope.accessScopeId &&
+            principal.principalId === rootStanding.principal.principalId;
+          if (!isRootPrincipal && !hasActiveRootStanding) return null;
           if (
             scope.status === "disabled" &&
             (principal.status !== "active" ||
@@ -491,11 +491,8 @@ export const listMyActiveTenants = query({
     const token = parseTokenIdentifier(args.tokenIdentifier);
     if (!token || token.issuer !== state.expectedIssuer) return { tenants: [] };
 
-    const defaultStanding = await resolveDefaultUserPrincipal(ctx, token.subject);
-    if (
-      defaultStanding?.scope.status !== "active" ||
-      defaultStanding.principal.status !== "active"
-    ) {
+    const rootStanding = await resolveRootUserPrincipal(ctx, token.subject);
+    if (rootStanding?.scope.status !== "active" || rootStanding.principal.status !== "active") {
       return { tenants: [] };
     }
 
@@ -1090,11 +1087,11 @@ export const listTenantRoles = query({
     const scope = await resolveScopeRow(ctx, args.tenantId);
     if (!scope) return [];
 
-    const defaultScope = await ctx.db
+    const rootScope = await ctx.db
       .query("scopes")
       .withIndex("by_kind", (q) => q.eq("kind", "default"))
       .unique();
-    const defaultScopeId = defaultScope?.accessScopeId;
+    const rootScopeId = rootScope?.accessScopeId;
 
     // Tenant-owned roles for this persisted scope row.
     const scopeRoles = await ctx.db
@@ -1103,7 +1100,7 @@ export const listTenantRoles = query({
       .collect();
     // Deployment-wide reusable catalog roles (source system|iam) carry NO
     // accessScopeId in v4. They are app-wide and assignable inside any tenant.
-    const isDefaultScope = defaultScopeId !== undefined && defaultScopeId === scope.accessScopeId;
+    const isRootScope = rootScopeId !== undefined && rootScopeId === scope.accessScopeId;
     const catalogRoles = await ctx.db
       .query("roles")
       .withIndex("by_scope", (q) => q.eq("accessScopeId", undefined))
@@ -1120,8 +1117,8 @@ export const listTenantRoles = query({
         roleName: role.name,
         roleKind: roleKindFromSource(role.source),
         // A reusable catalog role (no accessScopeId) is "shared" when surfaced
-        // inside a non-default tenant; a tenant-owned role is never shared.
-        shared: role.accessScopeId === undefined && !isDefaultScope,
+        // inside a non-root tenant; a tenant-owned role is never shared.
+        shared: role.accessScopeId === undefined && !isRootScope,
       });
     }
 
@@ -1153,15 +1150,15 @@ export const getTenantRole = query({
       return null;
     }
 
-    const defaultScope = await ctx.db
+    const rootScope = await ctx.db
       .query("scopes")
       .withIndex("by_kind", (q) => q.eq("kind", "default"))
       .unique();
-    if (!defaultScope) return null;
+    if (!rootScope) return null;
     const [catalogPermissions, baseRows, overrideRows, contribution, wildcard] = await Promise.all([
       ctx.db
         .query("permissions")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
+        .withIndex("by_scope", (q) => q.eq("accessScopeId", rootScope.accessScopeId))
         .collect(),
       ctx.db
         .query("role_permissions")
@@ -1220,8 +1217,7 @@ export const getTenantRole = query({
     return {
       ...roleSummary(role),
       description: role.description,
-      shared:
-        role.accessScopeId === undefined && scope.accessScopeId !== defaultScope.accessScopeId,
+      shared: role.accessScopeId === undefined && scope.accessScopeId !== rootScope.accessScopeId,
       basePermissions: mapRows(baseRows),
       tenantOverrides: mapRows(overrideRows),
       effectivePermissions,
@@ -1233,16 +1229,16 @@ export const listTenantPermissions = query({
   args: { tokenIdentifier: v.optional(v.string()), tenantId: v.string() },
   handler: async (ctx, args): Promise<TenantPermissionSummary[]> => {
     if (!(await callerHasTenantPermission(ctx, args, "system.access.permissions:read"))) return [];
-    // The permission catalog is app-wide and stored with the default scope row.
-    const defaultScope = await ctx.db
+    // The permission catalog is app-wide and stored with the root scope row.
+    const rootScope = await ctx.db
       .query("scopes")
       .withIndex("by_kind", (q) => q.eq("kind", "default"))
       .unique();
-    if (!defaultScope) return [];
+    if (!rootScope) return [];
 
     const permissions = await ctx.db
       .query("permissions")
-      .withIndex("by_scope", (q) => q.eq("accessScopeId", defaultScope.accessScopeId))
+      .withIndex("by_scope", (q) => q.eq("accessScopeId", rootScope.accessScopeId))
       .collect();
 
     return permissions
@@ -1921,7 +1917,7 @@ async function callerHasTenantPermission(
 }
 
 async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, tenantId: string) {
-  if (tenantId === DEFAULT_TENANT_SENTINEL) {
+  if (tenantId === ROOT_TENANT_SENTINEL) {
     return await ctx.db
       .query("scopes")
       .withIndex("by_kind", (q) => q.eq("kind", "default"))
@@ -1933,7 +1929,7 @@ async function resolveScopeRow(ctx: GenericQueryCtx<DataModel>, tenantId: string
     .unique();
 }
 
-async function resolveDefaultUserPrincipal(ctx: GenericQueryCtx<DataModel>, authUserId: string) {
+async function resolveRootUserPrincipal(ctx: GenericQueryCtx<DataModel>, authUserId: string) {
   const scopes = await ctx.db
     .query("scopes")
     .withIndex("by_kind", (q) => q.eq("kind", "default"))

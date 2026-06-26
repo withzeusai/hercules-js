@@ -354,7 +354,7 @@ async function seedTenantAccessMirror(
 
 describe("getTenantAccessStatus", () => {
   test.each(["active", "blocked", "suspended", "pending_approval", "removed"] as const)(
-    "returns the default-scope principal's %s status from the mirror",
+    "returns the root-tenant principal's %s status from the mirror",
     async (status) => {
       const t = convexTest(schema, modules);
       await seedTenantAccessMirror(t, {
@@ -380,7 +380,7 @@ describe("getTenantAccessStatus", () => {
     },
   );
 
-  test("falls back when the default tenant has no user principal", async () => {
+  test("falls back when the root tenant has no user principal", async () => {
     const t = convexTest(schema, modules);
     await seedTenantAccessMirror(t, { sourceVersion: 3 });
 
@@ -1021,7 +1021,7 @@ describe("listMyTenants", () => {
     );
   });
 
-  test("hides custom tenants when default standing is suspended but still pages default status", async () => {
+  test("hides custom tenants when root standing is suspended but still pages root status", async () => {
     const t = convexTest(schema, modules);
     await seedActiveTenantRows(t, [
       {
@@ -1305,7 +1305,7 @@ describe("listMyActiveTenants", () => {
     expect(second).toEqual({ tenants: [] });
   });
 
-  test("returns no active tenants when default standing is suspended", async () => {
+  test("returns no active tenants when root standing is suspended", async () => {
     const t = convexTest(schema, modules);
     await seedActiveTenantRows(t, [
       {

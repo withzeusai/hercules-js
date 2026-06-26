@@ -2,12 +2,12 @@ import { ConvexError } from "convex/values";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import type { ComponentApi } from "../_generated/component";
 import {
-  DEFAULT_TENANT_SENTINEL,
+  ROOT_TENANT_SENTINEL,
   PERMISSION_RESOURCE_TYPE_SENTINEL,
   createIam,
   tenantFromArg,
-  tenantFromDefaultParentResource,
-  tenantFromDefaultResource,
+  tenantFromRootParentResource,
+  tenantFromRootResource,
   tenantFromParentResource,
   tenantFromResource,
   type IamComponent,
@@ -137,7 +137,7 @@ describe("createIam", () => {
     await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBeUndefined();
   });
 
-  test("defaults IAM builders to the default tenant", async () => {
+  test("defaults IAM builders to the root tenant", async () => {
     const builders = createIam({
       query: identityBuilder,
       mutation: identityBuilder,
@@ -167,7 +167,7 @@ describe("createIam", () => {
     await expect(handler.handler(ctx, {})).resolves.toBe("ok");
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       permission: "tasks:create",
       resourceType: undefined,
       resourceId: undefined,
@@ -971,7 +971,7 @@ describe("createIam", () => {
     await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
     expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
       tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       permission: "tasks.create",
       resourceType: undefined,
       resourceId: undefined,
@@ -1398,9 +1398,9 @@ describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
   });
 });
 
-describe("default-tenant resource extractors", () => {
-  test("tenantFromDefaultResource loads a row without a stored tenant id", async () => {
-    const extract = tenantFromDefaultResource("documents", "documentId");
+describe("root-tenant resource extractors", () => {
+  test("tenantFromRootResource loads a row without a stored tenant id", async () => {
+    const extract = tenantFromRootResource("documents", "documentId");
     const ctx = {
       db: {
         get: vi.fn().mockResolvedValue({ _id: "document_1", title: "Draft" }),
@@ -1408,14 +1408,14 @@ describe("default-tenant resource extractors", () => {
     };
 
     await expect(extract(ctx as never, { documentId: "document_1" })).resolves.toEqual({
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "document_1",
     });
   });
 
-  test("tenantFromDefaultResource includes trusted ancestors from the loaded row", async () => {
-    const extract = tenantFromDefaultResource("tasks", "taskId", {
+  test("tenantFromRootResource includes trusted ancestors from the loaded row", async () => {
+    const extract = tenantFromRootResource("tasks", "taskId", {
       authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
     });
     const ctx = {
@@ -1425,15 +1425,15 @@ describe("default-tenant resource extractors", () => {
     };
 
     await expect(extract(ctx as never, { taskId: "task_1" })).resolves.toEqual({
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       resourceId: "task_1",
       ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
     });
   });
 
-  test("tenantFromDefaultParentResource authorizes creation against a loaded parent", async () => {
-    const extract = tenantFromDefaultParentResource("projects", "projectId", {
+  test("tenantFromRootParentResource authorizes creation against a loaded parent", async () => {
+    const extract = tenantFromRootParentResource("projects", "projectId", {
       parentResourceType: "app.projects",
     });
     const ctx = {
@@ -1443,7 +1443,7 @@ describe("default-tenant resource extractors", () => {
     };
 
     await expect(extract(ctx as never, { projectId: "project_1" })).resolves.toEqual({
-      tenantId: DEFAULT_TENANT_SENTINEL,
+      tenantId: ROOT_TENANT_SENTINEL,
       resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
       ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
     });

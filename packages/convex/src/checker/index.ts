@@ -5,9 +5,9 @@ import * as ts from "typescript";
 type RawConvexBuilder = "query" | "mutation" | "action";
 type TenantResourceHelperName =
   | "tenantFromResource"
-  | "tenantFromDefaultResource"
+  | "tenantFromRootResource"
   | "tenantFromParentResource"
-  | "tenantFromDefaultParentResource";
+  | "tenantFromRootParentResource";
 
 type RawBuilderCandidate = {
   builder: RawConvexBuilder;
@@ -23,7 +23,7 @@ export type IamCheckFinding = {
     | "raw_exported_convex_builder"
     | "placeholder_tenant_id"
     | "hardcoded_tenant_id"
-    | "default_tenant_literal_in_convex_helper"
+    | "root_tenant_literal_in_convex_helper"
     | "local_tenant_membership_table"
     | "optional_tenant_id"
     | "tenant_scoped_global_slug_lookup"
@@ -84,9 +84,9 @@ const resourceCreatorBootstrapHelperName = "createResourceCreatorBootstrapAction
 const generatedServerModuleSpecifier = "convex:_generated/server";
 const tenantResourceHelperNames = new Set<TenantResourceHelperName>([
   "tenantFromResource",
-  "tenantFromDefaultResource",
+  "tenantFromRootResource",
   "tenantFromParentResource",
-  "tenantFromDefaultParentResource",
+  "tenantFromRootParentResource",
 ]);
 const iamAuthorizationRequestFunctionNames = new Set([
   "hasPermission",
@@ -94,7 +94,7 @@ const iamAuthorizationRequestFunctionNames = new Set([
   "requireAnyPermission",
   "getEffectivePermissions",
 ]);
-const iamDefaultTenantObjectFunctionNames = new Set([
+const iamRootTenantObjectFunctionNames = new Set([
   "filterAuthorizedResources",
   "getTargetTenantSyncStatus",
   "listMyRoles",
@@ -525,7 +525,7 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
           code: "existing_row_missing_resource_tenant",
           message: "Existing-row IAM operations must authorize against the loaded resource.",
           suggestion:
-            'Use tenantFromDefaultResource("tableName", "rowIdArg") for the default tenant or tenantFromResource("tableName", "rowIdArg") for any other tenant.',
+            'Use tenantFromRootResource("tableName", "rowIdArg") for the root tenant or tenantFromResource("tableName", "rowIdArg") for any other tenant.',
         }),
       );
     }
@@ -716,7 +716,7 @@ function checkHardcodedTenantIds(cwd: string, filePath: string): IamCheckFinding
       /\b(?:[A-Z][A-Z0-9_]*_)?(?:(?:ACCESS_)?SCOPE|TENANT)_ID\b\s*=\s*["']01[A-Z0-9]{24}["']|\b(?:scopeId|tenantId)\s*:\s*["']01[A-Z0-9]{24}["']/,
     message: "Do not hardcode IAM tenant ids.",
     suggestion:
-      "Use the default tenant helper, or store tenant ids returned by hercules.iam.tenants.create on app rows and load them from the row.",
+      "Use the root tenant helper, or store tenant ids returned by hercules.iam.tenants.create on app rows and load them from the row.",
   });
 
   return findings;
@@ -836,7 +836,7 @@ type StaticValue =
         | "iamCheckPermissions"
         | "iamAuthorizationRequestFunction"
         | "iamResourceSharingRecipientsFunction"
-        | "iamDefaultTenantObjectFunction"
+        | "iamRootTenantObjectFunction"
         | "createIamFactory"
         | "iamBuilders"
         | "resourceCreatorBootstrapFactory"
@@ -972,8 +972,8 @@ function checkSdkIamCalls(
     );
   };
 
-  const addInvalidDefaultTenantLiteralFinding = (info: CheckerSourceFile, node: ts.Node) => {
-    const key = `${info.filePath}:default-tenant-literal:${node.getStart(info.sourceFile)}`;
+  const addInvalidRootTenantLiteralFinding = (info: CheckerSourceFile, node: ts.Node) => {
+    const key = `${info.filePath}:root-tenant-literal:${node.getStart(info.sourceFile)}`;
     if (findingKeys.has(key)) return;
     findingKeys.add(key);
     findings.push(
@@ -981,10 +981,10 @@ function checkSdkIamCalls(
         cwd,
         sourceFile: info.sourceFile,
         node,
-        code: "default_tenant_literal_in_convex_helper",
-        message: 'The public "default" tenant sentinel is not valid in Convex IAM helper calls.',
+        code: "root_tenant_literal_in_convex_helper",
+        message: 'The public "root" tenant sentinel is not valid in Convex IAM helper calls.',
         suggestion:
-          'Omit tenantId when it is optional, or pass the persisted canonical tenant ID. Use "default" only with generated SDK or REST APIs.',
+          'Omit tenantId when it is optional, or pass the persisted canonical tenant ID. Use "root" only with generated SDK or REST APIs.',
       }),
     );
   };
@@ -1299,8 +1299,8 @@ function checkSdkIamCalls(
         if (propertyName === "listTenantMemberPickerUsers") {
           return [{ kind: "known", value: "iamAuthorizationRequestFunction" }];
         }
-        if (iamDefaultTenantObjectFunctionNames.has(propertyName)) {
-          return [{ kind: "known", value: "iamDefaultTenantObjectFunction" }];
+        if (iamRootTenantObjectFunctionNames.has(propertyName)) {
+          return [{ kind: "known", value: "iamRootTenantObjectFunction" }];
         }
         if (publicBuilderNames.has(propertyName)) {
           return [{ kind: "known", value: propertyName as ConvexFunctionBuilder }];
@@ -1864,7 +1864,7 @@ function checkSdkIamCalls(
       if (isSdkIamCallTarget(info, target, scope)) {
         validateSdkIamCall(info, node, scope, state);
       }
-      validateDefaultTenantHelperCall(info, node, scope);
+      validateRootTenantHelperCall(info, node, scope);
       if (state.trackPublicArgs) {
         const iamAuthorizationCallKind = iamAuthorizationCallTargetKind(info, target, scope);
         if (iamAuthorizationCallKind === "checkPermissions") {
@@ -2676,12 +2676,12 @@ function checkSdkIamCalls(
     }
   }
 
-  function validateDefaultTenantHelperCall(
+  function validateRootTenantHelperCall(
     info: CheckerSourceFile,
     call: ts.CallExpression,
     scope: LexicalScope | null,
   ): void {
-    const argumentKind = defaultTenantHelperArgumentKind(
+    const argumentKind = rootTenantHelperArgumentKind(
       info,
       unwrapExpression(call.expression),
       scope,
@@ -2690,7 +2690,7 @@ function checkSdkIamCalls(
     if (!argumentKind || !request) return;
 
     if (argumentKind === "object") {
-      validateDefaultTenantRequest(info, request, scope);
+      validateRootTenantRequest(info, request, scope);
       return;
     }
 
@@ -2698,12 +2698,12 @@ function checkSdkIamCalls(
       if (value.kind !== "node" || !ts.isArrayLiteralExpression(value.node)) continue;
       for (const element of value.node.elements) {
         if (ts.isOmittedExpression(element) || ts.isSpreadElement(element)) continue;
-        validateDefaultTenantRequest(value.info, element, value.declarationScope);
+        validateRootTenantRequest(value.info, element, value.declarationScope);
       }
     }
   }
 
-  function validateDefaultTenantRequest(
+  function validateRootTenantRequest(
     info: CheckerSourceFile,
     expression: ts.Expression,
     scope: LexicalScope | null,
@@ -2719,14 +2719,14 @@ function checkSdkIamCalls(
       );
       if (
         tenantId.kind === "found" &&
-        isDefaultTenantLiteral(tenantId.info, tenantId.expression, tenantId.scope, new Set())
+        isRootTenantLiteral(tenantId.info, tenantId.expression, tenantId.scope, new Set())
       ) {
-        addInvalidDefaultTenantLiteralFinding(tenantId.info, tenantId.expression);
+        addInvalidRootTenantLiteralFinding(tenantId.info, tenantId.expression);
       }
     }
   }
 
-  function isDefaultTenantLiteral(
+  function isRootTenantLiteral(
     info: CheckerSourceFile,
     expression: ts.Expression,
     scope: LexicalScope | null,
@@ -2734,17 +2734,17 @@ function checkSdkIamCalls(
   ): boolean {
     const value = unwrapExpression(expression);
     if (ts.isStringLiteralLike(value)) {
-      return value.text === "default";
+      return value.text === "root";
     }
     if (!ts.isIdentifier(value)) return false;
 
     const binding = findAnyBinding(info, scope, value.text);
     if (!binding || binding.value.kind !== "expression") return false;
     if (binding.value.propertyPath.length > 0) return false;
-    const bindingKey = `${info.filePath}:default-tenant-binding:${binding.id}`;
+    const bindingKey = `${info.filePath}:root-tenant-binding:${binding.id}`;
     if (resolving.has(bindingKey)) return false;
     const expressionInfo = binding.value.expressionInfo ?? info;
-    return isDefaultTenantLiteral(
+    return isRootTenantLiteral(
       expressionInfo,
       binding.value.expression,
       binding.value.scope,
@@ -2752,7 +2752,7 @@ function checkSdkIamCalls(
     );
   }
 
-  function defaultTenantHelperArgumentKind(
+  function rootTenantHelperArgumentKind(
     info: CheckerSourceFile,
     target: ts.Expression,
     scope: LexicalScope | null,
@@ -2765,7 +2765,7 @@ function checkSdkIamCalls(
       } else if (
         value.value === "iamAuthorizationRequestFunction" ||
         value.value === "iamResourceSharingRecipientsFunction" ||
-        value.value === "iamDefaultTenantObjectFunction"
+        value.value === "iamRootTenantObjectFunction"
       ) {
         kinds.add("object");
       }
@@ -2956,7 +2956,7 @@ function checkSdkIamCalls(
       if (value.kind !== "node" || !ts.isObjectLiteralExpression(value.node)) continue;
       if (
         (helperName === "tenantFromParentResource" ||
-          helperName === "tenantFromDefaultParentResource") &&
+          helperName === "tenantFromRootParentResource") &&
         deterministicObjectProperty(
           value.info,
           value.node,
