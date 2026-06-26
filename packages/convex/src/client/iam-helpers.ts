@@ -171,7 +171,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
       const grantBody = {
         tenant_id: target.tenantId,
         resource_type: options.resourceType,
-        user_token_identifier: null,
+        actor_token_identifier: null,
         subject: { type: "user", user_id: userId },
         role: options.managerRole,
         applies_to: options.appliesTo,
@@ -301,9 +301,9 @@ function normalizeResourceGrantWriteResult(
 
   return {
     tenantId: result.tenant_id,
-    changed: result.changed,
-    sourceVersion: result.source_version,
-    projectionIds: result.projection_ids,
+    changed: result.convex_source_data.changed,
+    sourceVersion: result.convex_source_data.version,
+    projectionIds: result.convex_source_data.projection_ids,
     grant: {
       grantId: result.grant.grant_id,
       type: result.grant.type,

@@ -925,9 +925,9 @@ function checkSdkIamCalls(
     findingKeys.add(key);
     const message =
       state.mode === "service"
-        ? "Internal Convex actions that call Hercules SDK IAM methods must pass literal user_token_identifier: null."
+        ? "Internal Convex actions that call Hercules SDK IAM methods must pass literal actor_token_identifier: null."
         : state.mode === "user"
-          ? "Authenticated Convex actions that call Hercules SDK IAM methods must pass user_token_identifier from ctx.auth.getUserIdentity().tokenIdentifier after a fail-closed presence check."
+          ? "Authenticated Convex actions that call Hercules SDK IAM methods must pass actor_token_identifier from ctx.auth.getUserIdentity().tokenIdentifier after a fail-closed presence check."
           : "Public or unauthenticated Convex flows must not call Hercules SDK IAM methods.";
     findings.push(
       createPatternFindingAtNode({
@@ -937,7 +937,7 @@ function checkSdkIamCalls(
         code: "unsafe_sdk_iam_call",
         message,
         suggestion:
-          "Use authenticatedAction or iamAction with user_token_identifier from the action identity, or keep service IAM SDK calls in internalAction with user_token_identifier: null.",
+          "Use authenticatedAction or iamAction with actor_token_identifier from the action identity, or keep service IAM SDK calls in internalAction with actor_token_identifier: null.",
       }),
     );
   };
@@ -2221,7 +2221,7 @@ function checkSdkIamCalls(
     }
 
     if (
-      isVerifiedUserTokenIdentifier(
+      isVerifiedActorTokenIdentifier(
         payload.property.info,
         payload.property.expression,
         payload.property.scope,
@@ -2284,7 +2284,7 @@ function checkSdkIamCalls(
       const property = deterministicObjectProperty(
         objectValue.info,
         objectLiteral,
-        "user_token_identifier",
+        "actor_token_identifier",
         objectValue.declarationScope,
         new Set(),
       );
@@ -3020,7 +3020,7 @@ function checkSdkIamCalls(
     return null;
   }
 
-  function isVerifiedUserTokenIdentifier(
+  function isVerifiedActorTokenIdentifier(
     info: CheckerSourceFile,
     expression: ts.Expression,
     scope: LexicalScope | null,

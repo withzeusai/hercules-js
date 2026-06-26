@@ -278,9 +278,9 @@ describe("checkIamSource", () => {
           handler: async (ctx) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
-            await hercules.iam.tenants.invitations.createTenant("tenant_1", {
-              email: "member@example.com",
-              user_token_identifier: identity.tokenIdentifier,
+            await hercules.iam.tenants.createInvitation("tenant_1", {
+              recipient: { type: "email", value: "member@example.com" },
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -292,12 +292,12 @@ describe("checkIamSource", () => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity) throw new Error("Authentication required");
             if (!identity.tokenIdentifier) throw new Error("Authentication required");
-            await hercules.iam.tenants.resources.grants.create("project_1", {
+            await hercules.iam.tenants.resources.createInvitation("project_1", {
               tenant_id: "tenant_1",
               resource_type: "app.projects",
-              role: { key: "member" },
-              subject: { type: "user", user_id: "user_1" },
-              user_token_identifier: identity.tokenIdentifier,
+              grant: { type: "role", role: { key: "member" } },
+              recipient: { type: "email", value: "member@example.com" },
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -331,7 +331,7 @@ describe("checkIamSource", () => {
           args: {},
           handler: async () => {
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: null,
+              actor_token_identifier: null,
             });
           },
         });
@@ -366,7 +366,7 @@ describe("checkIamSource", () => {
               throw new Error("Authentication required");
             }
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -381,7 +381,7 @@ describe("checkIamSource", () => {
               // Continue with the verified token identifier.
             }
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -397,7 +397,7 @@ describe("checkIamSource", () => {
               throw new Error("Authentication required");
             }
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: tokenIdentifier,
+              actor_token_identifier: tokenIdentifier,
             });
           },
         });
@@ -429,21 +429,21 @@ describe("checkIamSource", () => {
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
             await hercules.iam.tenants.users.update(args.userId, {
               tenant_id: args.tenantId,
               roles: [],
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
             await hercules.iam.tenants.resources.grants.create(args.resourceId, {
               tenant_id: args.tenantId,
               resource_type: "app.projects",
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
             await hercules.iam.tenants.auditEvents.list(args.tenantId, {
               limit: 25,
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
             await updateUser.call(
               hercules.iam.tenants.users,
@@ -451,12 +451,12 @@ describe("checkIamSource", () => {
               {
                 tenant_id: args.tenantId,
                 roles: [],
-                user_token_identifier: identity.tokenIdentifier,
+                actor_token_identifier: identity.tokenIdentifier,
               },
             );
             await evaluateAccess.apply(hercules.iam.tenants, [
               "default",
-              { user_token_identifier: identity.tokenIdentifier },
+              { actor_token_identifier: identity.tokenIdentifier },
             ]);
           },
         });
@@ -490,13 +490,13 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.evaluateAccess("default", {});
             await hercules.iam.tenants.users.update(args.userId, {
               tenant_id: args.tenantId,
-              user_token_identifier: args.userTokenIdentifier,
+              actor_token_identifier: args.actorTokenIdentifier,
             });
             await hercules.iam.tenants.resources.grants.create(args.resourceId, args.request);
             await hercules.iam.tenants.evaluateAccess(
               "default",
-              { user_token_identifier: identity.tokenIdentifier },
-              { user_token_identifier: identity.tokenIdentifier },
+              { actor_token_identifier: identity.tokenIdentifier },
+              { actor_token_identifier: identity.tokenIdentifier },
             );
             await updateUser.call(
               hercules.iam.tenants.users,
@@ -505,7 +505,7 @@ describe("checkIamSource", () => {
             );
             await evaluateAccess.apply(hercules.iam.tenants, [
               "default",
-              { user_token_identifier: args.userTokenIdentifier },
+              { actor_token_identifier: args.actorTokenIdentifier },
             ]);
           },
         });
@@ -536,7 +536,7 @@ describe("checkIamSource", () => {
           handler: async (_ctx, args) => hercules.iam.tenants.users.create("tenant_1", {
             roles: [],
             user_id: "user_1",
-            user_token_identifier: args.userTokenIdentifier,
+            actor_token_identifier: args.actorTokenIdentifier,
           }),
         });
 
@@ -545,7 +545,7 @@ describe("checkIamSource", () => {
           handler: async () => hercules.iam.tenants.users.create("tenant_1", {
             roles: [],
             user_id: "user_1",
-            user_token_identifier: constantToken,
+            actor_token_identifier: constantToken,
           }),
         });
 
@@ -557,7 +557,7 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.users.create("tenant_1", {
               roles: [],
               user_id: "user_1",
-              userTokenIdentifier: identity.tokenIdentifier,
+              actorTokenIdentifier: identity.tokenIdentifier,
             });
           },
         });
@@ -569,7 +569,7 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.users.create("tenant_1", {
               roles: [],
               user_id: "user_1",
-              user_token_identifier: identity?.tokenIdentifier,
+              actor_token_identifier: identity?.tokenIdentifier,
             });
           },
         });
@@ -582,7 +582,7 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.users.create("tenant_1", {
               roles: [],
               user_id: "user_1",
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -604,7 +604,7 @@ describe("checkIamSource", () => {
               ...args,
               roles: [],
               user_id: "user_1",
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -616,7 +616,7 @@ describe("checkIamSource", () => {
     expect(
       result.findings.filter((finding) => finding.code === "unsafe_sdk_iam_call"),
     ).toHaveLength(7);
-    expect(formatIamCheckResult(result)).toContain("user_token_identifier");
+    expect(formatIamCheckResult(result)).toContain("actor_token_identifier");
   });
 
   test("invalidates checked identity and token facts after reassignment or mutation", () => {
@@ -637,7 +637,7 @@ describe("checkIamSource", () => {
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
             identity = await ctx.auth.getUserIdentity();
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -650,7 +650,7 @@ describe("checkIamSource", () => {
             if (!tokenIdentifier) throw new Error("Authentication required");
             tokenIdentifier = identity.tokenIdentifier;
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: tokenIdentifier,
+              actor_token_identifier: tokenIdentifier,
             });
           },
         });
@@ -660,9 +660,9 @@ describe("checkIamSource", () => {
           handler: async (ctx, args) => {
             const identity = await ctx.auth.getUserIdentity();
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
-            identity.tokenIdentifier = args.userTokenIdentifier;
+            identity.tokenIdentifier = args.actorTokenIdentifier;
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -676,7 +676,7 @@ describe("checkIamSource", () => {
               identity = await ctx.auth.getUserIdentity();
             }
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -714,7 +714,7 @@ describe("checkIamSource", () => {
           if (!identity) throw new Error("Authentication required");
           const { tokenIdentifier } = identity;
           if (!tokenIdentifier) throw new Error("Authentication required");
-          const authority = { user_token_identifier: tokenIdentifier };
+          const authority = { actor_token_identifier: tokenIdentifier };
           return await users.create("tenant_1", {
             ...authority,
             roles: [],
@@ -753,7 +753,7 @@ describe("checkIamSource", () => {
           if (!identity?.tokenIdentifier) throw new Error("Authentication required");
           return await hercules.iam.tenants.users.update(args.userId, {
             tenant_id: args.tenantId,
-            user_token_identifier: args.userTokenIdentifier,
+            actor_token_identifier: args.actorTokenIdentifier,
           });
         }
       `,
@@ -793,7 +793,7 @@ describe("checkIamSource", () => {
           return await hercules.iam.tenants.users.create("tenant_1", {
             roles: [],
             user_id: "user_1",
-            user_token_identifier: token,
+            actor_token_identifier: token,
           });
         }
       `,
@@ -820,7 +820,7 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.users.create("tenant_1", {
               roles: [],
               user_id: "user_1",
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
           },
         });
@@ -849,7 +849,7 @@ describe("checkIamSource", () => {
           args: {},
           handler: async () =>
             hercules.iam.tenants.archive("tenant_1", {
-              user_token_identifier: null,
+              actor_token_identifier: null,
             }),
         });
       `,
@@ -882,7 +882,7 @@ describe("checkIamSource", () => {
           handler: async () =>
             hercules.iam.tenants.users.update("user_1", {
               tenant_id: "tenant_1",
-              user_token_identifier: serviceActor,
+              actor_token_identifier: serviceActor,
             }),
         });
       `,
@@ -909,17 +909,17 @@ describe("checkIamSource", () => {
 
         export const publicInvite = publicAction({
           args: {},
-          handler: async () => hercules.iam.tenants.invitations.createTenant("tenant_1", {
-            email: "member@example.com",
-            user_token_identifier: null,
+          handler: async () => hercules.iam.tenants.createInvitation("tenant_1", {
+            recipient: { type: "email", value: "member@example.com" },
+            actor_token_identifier: null,
           }),
         });
 
         export const rawInvite = action({
           args: {},
-          handler: async () => hercules.iam.tenants.invitations.createTenant("tenant_1", {
-            email: "member@example.com",
-            user_token_identifier: null,
+          handler: async () => hercules.iam.tenants.createInvitation("tenant_1", {
+            recipient: { type: "email", value: "member@example.com" },
+            actor_token_identifier: null,
           }),
         });
       `,
@@ -952,21 +952,21 @@ describe("checkIamSource", () => {
         export const aliased = raw({
           args: {},
           handler: async () => hercules.iam.tenants.archive("tenant_1", {
-            user_token_identifier: null,
+            actor_token_identifier: null,
           }),
         });
 
         export const namespaced = server.action({
           args: {},
           handler: async () => hercules.iam.tenants.archive("tenant_1", {
-            user_token_identifier: null,
+            actor_token_identifier: null,
           }),
         });
 
         export const reexported = reexportedAction({
           args: {},
           handler: async () => hercules.iam.tenants.archive("tenant_1", {
-            user_token_identifier: null,
+            actor_token_identifier: null,
           }),
         });
       `,
@@ -998,7 +998,7 @@ describe("checkIamSource", () => {
           handler: async () => hercules.iam.tenants.users.update("user_1", {
             tenant_id: "tenant_1",
             roles: [],
-            user_token_identifier: null,
+            actor_token_identifier: null,
           }),
         });
       `,
@@ -1075,7 +1075,7 @@ describe("checkIamSource", () => {
           listMyTenants: components.hercules.queries.listMyTenants,
           getBootstrapTarget: (() => {
             hercules.iam.tenants.archive("tenant_1", {
-              user_token_identifier: null,
+              actor_token_identifier: null,
             });
             return internal.projects.getCreatorBootstrapTarget;
           })(),
@@ -1426,7 +1426,7 @@ describe("checkIamSource", () => {
             if (!identity?.tokenIdentifier) throw new Error("Authentication required");
 
             await hercules.iam.tenants.evaluateAccess("default", {
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
             });
             await getEffectivePermissions(ctx);
           },
@@ -2557,7 +2557,7 @@ describe("checkIamSource", () => {
               resource_type: "app.projects",
               subject: { type: "user", user_id: args.userId },
               applies_to: "self_and_descendants",
-              user_token_identifier: identity.tokenIdentifier,
+              actor_token_identifier: identity.tokenIdentifier,
               overrides: [{
                 permission_key: "app.projects:manage_members",
                 effect: "allow",

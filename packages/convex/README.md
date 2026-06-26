@@ -275,14 +275,23 @@ const tenant = tenants.find(({ isRoot }) => isRoot);
 if (!tenant) throw new Error("Root IAM tenant not found");
 ```
 
-After a control-plane write that returns `sourceVersion`, keep that value and
-call `getTargetTenantSyncStatus(ctx, { tenantId, sourceVersion })` before
-treating target-tenant mirror reads as complete. A `syncing` result means the
-local mirror has not reached the write yet. `ready` means the target tenant,
-target principal, and default app standing are active after the barrier.
-`denied` is a completed access denial after the barrier. `failed` means the
-identity, issuer, mirror, or target tenant is invalid after the promised
-version. Do not treat missing target mirror data before the barrier as denial.
+After a generated SDK control-plane write, read
+`response.convex_source_data.version` and pass it to the Convex helper as
+`sourceVersion`:
+
+```ts
+const sourceVersion = response.convex_source_data.version;
+await getTargetTenantSyncStatus(ctx, { tenantId, sourceVersion });
+```
+
+The SDK keeps `changed`, `version`, and `projection_ids` under
+`convex_source_data`; use `version`, not the former top-level `source_version`.
+A `syncing` result means the local mirror has not reached the write yet.
+`ready` means the target tenant, target principal, and default app standing are
+active after the barrier. `denied` is a completed access denial after the
+barrier. `failed` means the identity, issuer, mirror, or target tenant is
+invalid after the promised version. Do not treat missing target mirror data
+before the barrier as denial.
 
 `listTenantRoles` is the complete mirrored role catalog. Back tenant assignment
 pickers with `hercules.iam.tenants.grantableRoles` and exact resource pickers
@@ -320,7 +329,7 @@ export const updateTenantUser = authenticatedAction({
         role: { id: roleId },
         expires_at: expiresAt,
       })),
-      user_token_identifier: identity.tokenIdentifier,
+      actor_token_identifier: identity.tokenIdentifier,
     });
   },
 });
@@ -330,16 +339,16 @@ For `authenticatedAction` and `iamAction` handlers:
 
 1. Get `identity = await ctx.auth.getUserIdentity()`.
 2. Require `identity?.tokenIdentifier`.
-3. Pass `user_token_identifier: identity.tokenIdentifier` in the SDK request.
+3. Pass `actor_token_identifier: identity.tokenIdentifier` in the SDK request.
 
-Never accept `user_token_identifier` from action args. Browser code uses
+Never accept `actor_token_identifier` from action args. Browser code uses
 `useAction` and passes business args only. The browser never supplies ID tokens
 or token identifiers.
 
 SDK request and query fields use snake_case. Keep Convex action args app-facing,
 then map them to SDK fields such as `tenant_id`, `resource_type`,
 `access_mode`, `default_role`, `applies_to`, `expires_at`, and
-`user_token_identifier`.
+`actor_token_identifier`.
 
 Pass the deepest path identifier as the positional argument. Put ancestor path
 fields in the request object. For example,
@@ -347,8 +356,8 @@ fields in the request object. For example,
 positionally. It does not take `tenantId` and `userId` as two positional
 arguments.
 
-Trusted `internalAction` service workflows call the same SDK methods and pass
-`user_token_identifier: null`:
+Trusted `internalAction` service workflows use
+`actor_token_identifier: null` on methods that permit service authority:
 
 ```ts
 import { Hercules } from "@usehercules/sdk";
@@ -361,17 +370,19 @@ export const unarchiveTenantForBilling = internalAction({
   args: { tenantId: v.string() },
   handler: async (_, args) =>
     hercules.iam.tenants.unarchive(args.tenantId, {
-      user_token_identifier: null,
+      actor_token_identifier: null,
     }),
 });
 ```
 
-## Round-3 IAM Operations
+## Public IAM SDK
 
 Use these generated SDK operations as the source of truth:
 
 - Tenants: `hercules.iam.tenants.create`, `hercules.iam.tenants.update`,
+  `hercules.iam.tenants.list`, `hercules.iam.tenants.get`,
   `hercules.iam.tenants.archive`, `hercules.iam.tenants.unarchive`,
+  `hercules.iam.tenants.createInvitation`,
   `hercules.iam.tenants.evaluateAccess`, and
   `hercules.iam.tenants.grantableRoles`
 - Users: `hercules.iam.tenants.users.create`,
@@ -398,35 +409,52 @@ Use these generated SDK operations as the source of truth:
 - Role permission overrides:
   `hercules.iam.tenants.roles.permissionOverrides.get` and
   `hercules.iam.tenants.roles.permissionOverrides.update`
-- Admission rules: `hercules.iam.tenants.admissionRules.list`,
-  `hercules.iam.tenants.admissionRules.create`,
-  `hercules.iam.tenants.admissionRules.update`,
-  `hercules.iam.tenants.admissionRules.archive`, and
-  `hercules.iam.tenants.admissionRules.unarchive`
+- Access rules: `hercules.iam.tenants.accessRules.list`,
+  `hercules.iam.tenants.accessRules.create`,
+  `hercules.iam.tenants.accessRules.update`,
+  `hercules.iam.tenants.accessRules.archive`, and
+  `hercules.iam.tenants.accessRules.unarchive`
 - Audit events: `hercules.iam.tenants.auditEvents.list`
 - Tenant invitations: `hercules.iam.tenants.invitations.list`,
-  `hercules.iam.tenants.invitations.createTenant`,
-  `hercules.iam.tenants.invitations.createResource`, and
   `hercules.iam.tenants.invitations.revoke`
 - Invitation acceptance: `hercules.iam.invitations.accept`
 - Resource access: `hercules.iam.tenants.resources.accessGrantingRoles`,
+  `hercules.iam.tenants.resources.createInvitation`,
   `hercules.iam.tenants.resources.grants.create`,
   `hercules.iam.tenants.resources.grants.update`, and
   `hercules.iam.tenants.resources.permissionOverrides.update`
 
 Role references are exactly `{ id }` or `{ key }`. Include `roles` in
 the generated user create/update and group update request objects for complete
-direct tenant role sets. Use `suspend` and `unsuspend` for user or group status.
+direct tenant role sets. Set the user update `action` to `approve`, `suspend`,
+or `unsuspend` for tenant user lifecycle changes.
 
 `hercules.iam.tenants.update` accepts request fields `name`, `access_mode`, and
 `default_role`. Access modes are `open`, `allowlisted_only`, `invite_only`, and
 `approval_required`.
 
-`hercules.iam.tenants.invitations.list` accepts `cursor`, `limit`, `email`, and
-one optional typed `target`. Use `{ type: "tenant" }`,
-`{ type: "resource" }`, or
+Archival uses `archive` and `unarchive`. `hercules.iam.tenants.list` returns
+active tenants by default; pass `status: "archived"` or `status: "all"` when
+managing archived tenants. Tenant list and get records expose
+`lifecycle_status` and `is_root`. `hercules.iam.tenants.accessRules.list`
+returns active rules by default; pass `archived: true` for archived rules.
+
+Generated list operations use `starting_after`, not `cursor`, and return
+`{ data, has_more }`. When `has_more` is true, pass the final record's ID as
+`starting_after` for the next page. This applies to tenant, access rule,
+invitation, and audit event lists.
+
+Create tenant invitations with
+`hercules.iam.tenants.createInvitation(tenantId, body)`. Create resource
+invitations with
+`hercules.iam.tenants.resources.createInvitation(resourceId, params)`, passing
+`tenant_id` and `resource_type` in `params`.
+`hercules.iam.tenants.invitations.list` accepts `starting_after`, `limit`, an
+optional exact `recipient` such as `{ type: "email", value: email }`, and one
+optional typed `target`. Use `{ type: "tenant" }`, `{ type: "resource" }`, or
 `{ type: "resource", resource_type, resource_id }`; omit `target` to list all
-invitations. Use the returned `accept_url` for invite UI.
+invitations. Use the `accept_url` returned by the create operation for invite
+UI.
 
 App-owned audit action args may use `startTime`, `endTime`, and `status`. Map
 them to SDK query fields `start_time`, `end_time`, and `status` before calling
@@ -451,7 +479,7 @@ await hercules.iam.tenants.resources.grants.create(String(documentId), {
   subject: { type: "user", user_id: userId },
   role: { key: "reviewer" },
   applies_to: "self",
-  user_token_identifier: identity.tokenIdentifier,
+  actor_token_identifier: identity.tokenIdentifier,
 });
 ```
 
@@ -481,7 +509,7 @@ export const createTenant = authenticatedAction({
       name: args.name,
       access_mode: args.accessMode,
       default_role: args.defaultRole,
-      user_token_identifier: identity.tokenIdentifier,
+      actor_token_identifier: identity.tokenIdentifier,
     });
   },
 });

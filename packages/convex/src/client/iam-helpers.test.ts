@@ -31,9 +31,11 @@ const activateResource = "internal.projects.activateResource" as unknown as Func
 
 const rawGrant: GrantCreateResponse = {
   tenant_id: "tenant_1",
-  changed: true,
-  source_version: 4,
-  projection_ids: ["projection_1"],
+  convex_source_data: {
+    changed: true,
+    version: 4,
+    projection_ids: ["projection_1"],
+  },
   grant: {
     grant_id: "grant_1",
     type: "resource_role",
@@ -177,7 +179,7 @@ describe("resource creator bootstrap", () => {
     expect(create).toHaveBeenCalledWith("project_1", {
       tenant_id: "tenant_1",
       resource_type: "app.projects",
-      user_token_identifier: null,
+      actor_token_identifier: null,
       subject: { type: "user", user_id: "user_1" },
       role: { key: "project_manager" },
       applies_to: "self_and_descendants",
@@ -359,7 +361,10 @@ describe("resource creator bootstrap", () => {
   test("retries activation after an idempotent grant create reports unchanged", async () => {
     const idempotentRawGrant = {
       ...rawGrant,
-      changed: false,
+      convex_source_data: {
+        ...rawGrant.convex_source_data,
+        changed: false,
+      },
     };
     const idempotentNormalizedGrant = {
       ...normalizedGrant,
@@ -396,7 +401,7 @@ describe("resource creator bootstrap", () => {
     expect(create).toHaveBeenNthCalledWith(1, "project_1", {
       tenant_id: "tenant_1",
       resource_type: "app.projects",
-      user_token_identifier: null,
+      actor_token_identifier: null,
       subject: { type: "user", user_id: "user_1" },
       role: { key: "project_manager" },
       applies_to: "self_and_descendants",
@@ -404,7 +409,7 @@ describe("resource creator bootstrap", () => {
     expect(create).toHaveBeenNthCalledWith(2, "project_1", {
       tenant_id: "tenant_1",
       resource_type: "app.projects",
-      user_token_identifier: null,
+      actor_token_identifier: null,
       subject: { type: "user", user_id: "user_1" },
       role: { key: "project_manager" },
       applies_to: "self_and_descendants",
