@@ -6,7 +6,7 @@ import {
   type ProjectionFixtureSnapshot,
   withProjectionFixtures,
 } from "../../test/projection-fixtures";
-import { tenantFromResource } from "../client";
+import { resource } from "../client";
 import schema from "./schema";
 
 // Compact semantic fixtures are materialized into the current projection wire
@@ -1044,13 +1044,13 @@ describe("authorize — resource grant fail-closed", () => {
 // B1: the resource-type convention, end to end through the REAL client
 // extractor. The app stores rows in a `projects` table while the catalog names
 // the resource type `app.project` (the canonical `namespace.resourceType:action`
-// grammar the control plane enforces). tenantFromResource defers its resource
+// grammar the control plane enforces). resource defers its resource
 // type to the checked permission, so a canonical app.* catalog must resolve
-// through a tenantFromResource-guarded check; emitting the table name instead
+// through a resource-guarded check; emitting the table name instead
 // would hit the catalog-mismatch fence and deny EVERYONE with invalid_request.
-describe("tenantFromResource canonical resource type", () => {
+describe("resource canonical resource type", () => {
   async function extractProject(projectId: string) {
-    const extract = tenantFromResource("projects", "projectId");
+    const extract = resource("projects", "projectId");
     return (await extract({ db: { get: async () => ({ tenantId: "scope_default" }) } } as never, {
       projectId,
     })) as { tenantId: string; resourceType: string; resourceId: string };
@@ -1378,7 +1378,7 @@ function wildcardSnapshot(): Snapshot {
   };
 }
 
-// Canonical app.* catalog for the tenantFromResource convention tests: the
+// Canonical app.* catalog for the resource convention tests: the
 // `app.project:archive` permission lives on resource type `app.project` while
 // the app's rows live in a `projects` table. alice is entitled through a scope
 // role, bob is an unentitled member, and carol holds a direct resource grant on

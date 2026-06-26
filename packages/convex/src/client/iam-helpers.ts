@@ -38,13 +38,13 @@ export type IamResourceGrantWriteResult = {
 export type ResourceCreatorBootstrapTarget = {
   tenantId: string;
   resourceId: string;
-  creatorHerculesAuthUserId: string;
+  creatorUserId: string;
   state: "provisioning" | "active";
 };
 
 export type ResourceCreatorBootstrapActivationArgs = {
   resourceId: string;
-  creatorHerculesAuthUserId: string;
+  creatorUserId: string;
   grant: IamResourceGrantWriteResult;
 };
 
@@ -182,7 +182,7 @@ export function createResourceCreatorBootstrapAction<DataModel extends GenericDa
 
       await ctx.runMutation(options.activateResource, {
         resourceId: target.resourceId,
-        creatorHerculesAuthUserId: userId,
+        creatorUserId: userId,
         grant,
       });
 
@@ -231,7 +231,7 @@ function isValidTargetForCaller(
   return (
     target !== null &&
     target.resourceId === resourceId &&
-    target.creatorHerculesAuthUserId === userId &&
+    target.creatorUserId === userId &&
     target.tenantId.length > 0 &&
     (target.state === "provisioning" || target.state === "active")
   );

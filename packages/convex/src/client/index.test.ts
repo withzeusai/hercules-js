@@ -5,11 +5,11 @@ import {
   ROOT_TENANT_SENTINEL,
   PERMISSION_RESOURCE_TYPE_SENTINEL,
   createIam,
-  tenantFromArg,
-  tenantFromRootParentResource,
-  tenantFromRootResource,
-  tenantFromParentResource,
-  tenantFromResource,
+  tenantArg,
+  rootParentResource,
+  rootResource,
+  parentResource,
+  resource,
   type IamComponent,
 } from "./index";
 
@@ -95,7 +95,7 @@ describe("createIam", () => {
     expect(() =>
       builders.iamMutation({
         args: {},
-        tenant: tenantFromArg("tenantId"),
+        authorizeAgainst: tenantArg("tenantId"),
         handler: async () => null,
       } as never),
     ).toThrow("iam* builders require a non-empty permission.");
@@ -118,7 +118,7 @@ describe("createIam", () => {
       runQuery: vi.fn(),
     };
 
-    await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBe("auth_user_1");
+    await expect(builders.getCurrentUserId(ctx as never)).resolves.toBe("auth_user_1");
     expect(ctx.runQuery).not.toHaveBeenCalled();
   });
 
@@ -134,7 +134,7 @@ describe("createIam", () => {
       runQuery: vi.fn(),
     };
 
-    await expect(builders.getCurrentHerculesAuthUserId(ctx as never)).resolves.toBeUndefined();
+    await expect(builders.getCurrentUserId(ctx as never)).resolves.toBeUndefined();
   });
 
   test("defaults IAM builders to the root tenant", async () => {
@@ -218,7 +218,7 @@ describe("createIam", () => {
     });
     const handler = builders.iamMutation({
       permission: "appointments:create",
-      tenant: tenantFromArg("tenantId"),
+      authorizeAgainst: tenantArg("tenantId"),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as { handler: Function };
@@ -1193,7 +1193,7 @@ describe("createIam", () => {
     });
     const handler = builders.iamMutation({
       permission: "appointments:create",
-      tenant: tenantFromArg("tenantId"),
+      authorizeAgainst: tenantArg("tenantId"),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as { handler: Function };
@@ -1211,8 +1211,8 @@ describe("createIam", () => {
     expect(ctx.runQuery).not.toHaveBeenCalled();
   });
 
-  test("tenantFromResource reads the tenant field from the loaded row", async () => {
-    const extract = tenantFromResource("loans", "loanId");
+  test("resource reads the tenant field from the loaded row", async () => {
+    const extract = resource("loans", "loanId");
     const ctx = {
       db: { get: vi.fn().mockResolvedValue({ tenantId: "tenant_xyz" }) },
     };
@@ -1228,8 +1228,8 @@ describe("createIam", () => {
     expect(ctx.db.get).toHaveBeenCalledWith("loan_1");
   });
 
-  test("tenantFromResource accepts a custom tenantField", async () => {
-    const extract = tenantFromResource("loans", "loanId", {
+  test("resource accepts a custom tenantField", async () => {
+    const extract = resource("loans", "loanId", {
       tenantField: "accessScopeId",
     });
     const ctx = {
@@ -1242,16 +1242,16 @@ describe("createIam", () => {
     });
   });
 
-  test("tenantFromResource throws when the row is missing the tenant field", async () => {
-    const extract = tenantFromResource("loans", "loanId");
+  test("resource throws when the row is missing the tenant field", async () => {
+    const extract = resource("loans", "loanId");
     const ctx = { db: { get: vi.fn().mockResolvedValue({}) } };
     await expect(extract(ctx as never, { loanId: "loan_1" })).rejects.toBeInstanceOf(ConvexError);
   });
 });
 
-describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
+describe("resource hierarchy (ancestors)", () => {
   function makeTaskMutation(
-    authorizeAgainst?: (row: Record<string, unknown>) => Array<{ type: string; id: string }>,
+    ancestors?: (row: Record<string, unknown>) => Array<{ type: string; id: string }>,
   ) {
     const builders = createIam({
       query: identityBuilder,
@@ -1261,7 +1261,7 @@ describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
     });
     return builders.iamMutation({
       permission: "app.task:edit",
-      tenant: tenantFromResource("tasks", "taskId", { authorizeAgainst }),
+      authorizeAgainst: resource("tasks", "taskId", { ancestors }),
       args: {},
       handler: async () => "ok",
     } as never) as unknown as {
@@ -1344,7 +1344,7 @@ describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
     expect(runQuery).toHaveBeenCalledTimes(1);
   });
 
-  test("default path without authorizeAgainst makes exactly one authorize call", async () => {
+  test("default path without ancestors makes exactly one authorize call", async () => {
     const handler = makeTaskMutation();
     const runQuery = vi.fn().mockResolvedValue({
       allowed: true,
@@ -1373,10 +1373,10 @@ describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
     expect(runQuery).not.toHaveBeenCalled();
   });
 
-  test("tenantFromParentResource authorizes child creation against its loaded parent", async () => {
-    const extract = tenantFromParentResource("projects", "projectId", {
+  test("parentResource authorizes child creation against its loaded parent", async () => {
+    const extract = parentResource("projects", "projectId", {
       parentResourceType: "app.projects",
-      authorizeAgainst: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
+      ancestors: (project) => [{ type: "app.workspaces", id: String(project.workspaceId) }],
     });
     const ctx = {
       db: {
@@ -1399,8 +1399,8 @@ describe("tenantFromResource hierarchy (authorizeAgainst)", () => {
 });
 
 describe("root-tenant resource extractors", () => {
-  test("tenantFromRootResource loads a row without a stored tenant id", async () => {
-    const extract = tenantFromRootResource("documents", "documentId");
+  test("rootResource loads a row without a stored tenant id", async () => {
+    const extract = rootResource("documents", "documentId");
     const ctx = {
       db: {
         get: vi.fn().mockResolvedValue({ _id: "document_1", title: "Draft" }),
@@ -1414,9 +1414,9 @@ describe("root-tenant resource extractors", () => {
     });
   });
 
-  test("tenantFromRootResource includes trusted ancestors from the loaded row", async () => {
-    const extract = tenantFromRootResource("tasks", "taskId", {
-      authorizeAgainst: (task) => [{ type: "app.projects", id: String(task.projectId) }],
+  test("rootResource includes trusted ancestors from the loaded row", async () => {
+    const extract = rootResource("tasks", "taskId", {
+      ancestors: (task) => [{ type: "app.projects", id: String(task.projectId) }],
     });
     const ctx = {
       db: {
@@ -1432,8 +1432,8 @@ describe("root-tenant resource extractors", () => {
     });
   });
 
-  test("tenantFromRootParentResource authorizes creation against a loaded parent", async () => {
-    const extract = tenantFromRootParentResource("projects", "projectId", {
+  test("rootParentResource authorizes creation against a loaded parent", async () => {
+    const extract = rootParentResource("projects", "projectId", {
       parentResourceType: "app.projects",
     });
     const ctx = {

@@ -631,7 +631,7 @@ export type CreateIamOptions<DataModel extends GenericDataModel> = {
 
 // A tenant extractor can return either a bare tenant id or a
 // richer object that also names a specific resource for DL16 resource
-// grant support. tenantFromResource returns the richer shape so the
+// grant support. resource returns the richer shape so the
 // authorize call can walk resource-object grants.
 export type ExtractedTenant =
   | string
@@ -662,7 +662,7 @@ export type IamQueryBuilder<DataModel extends GenericDataModel> = {
       DefaultArgsForOptionalValidator<ArgsValidator>,
   >(query: {
     permission: string;
-    tenant?: ExtractTenant<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
+    authorizeAgainst?: ExtractTenant<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericQueryCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -678,7 +678,7 @@ export type IamMutationBuilder<DataModel extends GenericDataModel> = {
       DefaultArgsForOptionalValidator<ArgsValidator>,
   >(mutation: {
     permission: string;
-    tenant?: ExtractTenant<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
+    authorizeAgainst?: ExtractTenant<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericMutationCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -694,7 +694,7 @@ export type IamActionBuilder<DataModel extends GenericDataModel> = {
       DefaultArgsForOptionalValidator<ArgsValidator>,
   >(action: {
     permission: string;
-    tenant?: ExtractTenant<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
+    authorizeAgainst?: ExtractTenant<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
     args?: ArgsValidator;
     returns?: ReturnsValidator;
     handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -727,7 +727,7 @@ export type IamBuilders<DataModel extends GenericDataModel> = {
    * verified Convex identity. Use this to link app-owned profile or domain
    * rows to the signed-in user instead of parsing `tokenIdentifier`.
    */
-  getCurrentHerculesAuthUserId: (ctx: IamContext<DataModel>) => Promise<string | undefined>;
+  getCurrentUserId: (ctx: IamContext<DataModel>) => Promise<string | undefined>;
   getTenantAccessStatus: (ctx: IamContext<DataModel>) => Promise<IamTenantAccessStatusResult>;
   // Filter a page of the APP's own resource rows down to the ones the caller is
   // allowed to access, by running the same per-resource permission check as a
@@ -905,12 +905,12 @@ type BuilderCaller = (definition: unknown) => unknown;
  * - `authenticatedQuery`/`...Mutation`/`...Action`: require sign-in only.
  * - `iamQuery`/`iamMutation`/`iamAction`: enforce a permission in a
  *   tenant. Pass `{ permission, tenant }`; resolve `tenant` with
- *   `tenantFromArg` or `tenantFromResource`.
+ *   `tenantArg` or `resource`.
  * - `hasPermission`/`requirePermission`/`requireAnyPermission`/
  *   `getEffectivePermissions`: in-handler checks. `getEffectivePermissions`
  *   and `hasPermission` accept an optional `{ resource }` ref for per-resource
  *   (e.g. per-project) checks.
- * - `getCurrentHerculesAuthUserId`: the verified OIDC subject for linking
+ * - `getCurrentUserId`: the verified OIDC subject for linking
  *   app-owned domain rows. Do not parse `tokenIdentifier`.
  * - `listMyTenants`/`listMyRoles`: the caller's own tenants and roles.
  * - `listTenantUsers`/`listTenantGroups`/`listTenantRoles`/
@@ -943,7 +943,7 @@ export function createIam<DataModel extends GenericDataModel>(
     requireAnyPermission: makeRequireAnyPermission(component),
     getEffectivePermissions: makeGetEffectivePermissions(component),
     checkPermissions: makeCheckPermissions(component),
-    getCurrentHerculesAuthUserId,
+    getCurrentUserId,
     getTenantAccessStatus: makeGetTenantAccessStatus(component),
     filterAuthorizedResources: makeFilterAuthorizedResources(component),
     listMyTenants: makeListMyTenants(component),
@@ -976,7 +976,7 @@ export const ROOT_TENANT_SENTINEL = "__hercules_root_tenant__";
 
 export const rootTenant: ExtractTenant<unknown, unknown> = () => ROOT_TENANT_SENTINEL;
 
-// The resourceType `tenantFromResource` emits. An extractor only sees the table
+// The resourceType `resource` emits. An extractor only sees the table
 // row, not the permission catalog, so it cannot know the canonical resource
 // type the checked permission uses (e.g. `app.project` for
 // `app.project:archive`). It emits this sentinel instead, and the component's
@@ -992,15 +992,15 @@ export const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource
  * tenant. Throws if the arg is missing or empty.
  *
  * For operations that receive a tenant-owned row id, use
- * `tenantFromResource` so the tenant is read from the row.
+ * `resource` so the tenant is read from the row.
  */
-export function tenantFromArg<K extends string>(argKey: K) {
+export function tenantArg<K extends string>(argKey: K) {
   return (_ctx: unknown, args: Record<string, unknown>): string => {
     const value = args?.[argKey];
     if (typeof value !== "string" || value.length === 0) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromArg("${argKey}"): expected non-empty string on args.${argKey}`,
+        message: `tenantArg("${argKey}"): expected non-empty string on args.${argKey}`,
       });
     }
     return value;
@@ -1023,17 +1023,17 @@ type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
  * `app.project:archive`), which is also the type resource grants are pinned
  * to, so grants on the row always match the guarded permission.
  *
- * Hierarchy: pass `options.authorizeAgainst` to declare ordered parent
+ * Hierarchy: pass `options.ancestors` to declare ordered parent
  * resources. The target and ancestors are evaluated atomically with the same
  * requested permission, so any applicable deny wins. The app owns these
  * relationships; the chain is bounded to ten ancestors.
  */
-export function tenantFromResource<T extends string, K extends string>(
+export function resource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
     tenantField?: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
+    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   } = {},
 ) {
   const tenantField = options.tenantField ?? "tenantId";
@@ -1050,26 +1050,26 @@ export function tenantFromResource<T extends string, K extends string>(
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+        message: `resource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `tenantFromResource("${tableName}", "${argKey}"): resource not found`,
+        message: `resource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const tenantId = (row as Record<string, unknown>)[tenantField];
     if (typeof tenantId !== "string" || tenantId.length === 0) {
       throw new ConvexError({
         code: "INVALID_RESOURCE_TENANT",
-        message: `tenantFromResource("${tableName}", "${argKey}"): resource is missing "${tenantField}"`,
+        message: `resource("${tableName}", "${argKey}"): resource is missing "${tenantField}"`,
       });
     }
     const ancestors = normalizeAncestors(
-      options.authorizeAgainst?.(row as Record<string, unknown>),
-      `tenantFromResource("${tableName}", "${argKey}")`,
+      options.ancestors?.(row as Record<string, unknown>),
+      `resource("${tableName}", "${argKey}")`,
     );
     return {
       tenantId,
@@ -1086,14 +1086,14 @@ export function tenantFromResource<T extends string, K extends string>(
  * resource grants, denies, or per-resource UI checks.
  *
  * The row is loaded from `args[argKey]`, so authorization and mutation stay
- * bound to the same resource. Pass `authorizeAgainst` for trusted parent
- * resources exactly as with {@link tenantFromResource}.
+ * bound to the same resource. Pass `ancestors` for trusted parent
+ * resources exactly as with {@link resource}.
  */
-export function tenantFromRootResource<T extends string, K extends string>(
+export function rootResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
-    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
+    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   } = {},
 ) {
   return async (
@@ -1109,19 +1109,19 @@ export function tenantFromRootResource<T extends string, K extends string>(
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromRootResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+        message: `rootResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `tenantFromRootResource("${tableName}", "${argKey}"): resource not found`,
+        message: `rootResource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const ancestors = normalizeAncestors(
-      options.authorizeAgainst?.(row as Record<string, unknown>),
-      `tenantFromRootResource("${tableName}", "${argKey}")`,
+      options.ancestors?.(row as Record<string, unknown>),
+      `rootResource("${tableName}", "${argKey}")`,
     );
     return {
       tenantId: ROOT_TENANT_SENTINEL,
@@ -1137,13 +1137,13 @@ export function tenantFromRootResource<T extends string, K extends string>(
  * requested child permission stays unchanged; the parent is supplied as an
  * explicit ancestor and only descendant-enabled bindings apply through it.
  */
-export function tenantFromParentResource<T extends string, K extends string>(
+export function parentResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
     tenantField?: string;
     parentResourceType: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
+    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   },
 ) {
   const tenantField = options.tenantField ?? "tenantId";
@@ -1159,29 +1159,29 @@ export function tenantFromParentResource<T extends string, K extends string>(
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+        message: `parentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `tenantFromParentResource("${tableName}", "${argKey}"): resource not found`,
+        message: `parentResource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const tenantId = (row as Record<string, unknown>)[tenantField];
     if (typeof tenantId !== "string" || tenantId.length === 0) {
       throw new ConvexError({
         code: "INVALID_RESOURCE_TENANT",
-        message: `tenantFromParentResource("${tableName}", "${argKey}"): resource is missing "${tenantField}"`,
+        message: `parentResource("${tableName}", "${argKey}"): resource is missing "${tenantField}"`,
       });
     }
     const ancestors = normalizeAncestors(
       [
         { type: options.parentResourceType, id: String(id) },
-        ...(options.authorizeAgainst?.(row as Record<string, unknown>) ?? []),
+        ...(options.ancestors?.(row as Record<string, unknown>) ?? []),
       ],
-      `tenantFromParentResource("${tableName}", "${argKey}")`,
+      `parentResource("${tableName}", "${argKey}")`,
     );
     return {
       tenantId,
@@ -1196,12 +1196,12 @@ export function tenantFromParentResource<T extends string, K extends string>(
  * The parent row is loaded from `args[argKey]`; no tenant id field is required
  * on the parent or child tables.
  */
-export function tenantFromRootParentResource<T extends string, K extends string>(
+export function rootParentResource<T extends string, K extends string>(
   tableName: T,
   argKey: K,
   options: {
     parentResourceType: string;
-    authorizeAgainst?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
+    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
   },
 ) {
   return async (
@@ -1216,22 +1216,22 @@ export function tenantFromRootParentResource<T extends string, K extends string>
     if (id == null) {
       throw new ConvexError({
         code: "INVALID_TENANT_ARG",
-        message: `tenantFromRootParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
+        message: `rootParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
       });
     }
     const row = await ctx.db.get(id);
     if (!row || typeof row !== "object") {
       throw new ConvexError({
         code: "RESOURCE_NOT_FOUND",
-        message: `tenantFromRootParentResource("${tableName}", "${argKey}"): resource not found`,
+        message: `rootParentResource("${tableName}", "${argKey}"): resource not found`,
       });
     }
     const ancestors = normalizeAncestors(
       [
         { type: options.parentResourceType, id: String(id) },
-        ...(options.authorizeAgainst?.(row as Record<string, unknown>) ?? []),
+        ...(options.ancestors?.(row as Record<string, unknown>) ?? []),
       ],
-      `tenantFromRootParentResource("${tableName}", "${argKey}")`,
+      `rootParentResource("${tableName}", "${argKey}")`,
     );
     return {
       tenantId: ROOT_TENANT_SENTINEL,
@@ -1274,20 +1274,20 @@ function makeIamBuilder<TBuilder>(builder: TBuilder, component: IamComponent): T
 
     const iamDefinition = definition as ConvexDefinitionObject<AuthorizationCtx> & {
       permission?: unknown;
-      tenant?: unknown;
+      authorizeAgainst?: unknown;
     };
     if (typeof iamDefinition.permission !== "string" || iamDefinition.permission.length === 0) {
       throw new Error("iam* builders require a non-empty permission.");
     }
-    if (iamDefinition.tenant !== undefined && typeof iamDefinition.tenant !== "function") {
-      throw new Error("iam* builders require tenant to be a function.");
+    if (iamDefinition.authorizeAgainst !== undefined && typeof iamDefinition.authorizeAgainst !== "function") {
+      throw new Error("iam* builders require authorizeAgainst to be a function.");
     }
-    const { permission, tenant, ...convexDefinition } = iamDefinition;
-    const tenantExtractor = (tenant ?? rootTenant) as ExtractTenant<AuthorizationCtx, unknown>;
+    const { permission, authorizeAgainst, ...convexDefinition } = iamDefinition;
+    const authorizeExtractor = (authorizeAgainst ?? rootTenant) as ExtractTenant<AuthorizationCtx, unknown>;
     return (builder as BuilderCaller)(
       wrapDefinition(convexDefinition, component, "permission", {
         permission,
-        tenant: tenantExtractor,
+        authorizeAgainst: authorizeExtractor,
       }),
     );
   }) as TBuilder;
@@ -1295,7 +1295,7 @@ function makeIamBuilder<TBuilder>(builder: TBuilder, component: IamComponent): T
 
 type IamConfig = {
   permission?: string;
-  tenant?: ExtractTenant<AuthorizationCtx, unknown>;
+  authorizeAgainst?: ExtractTenant<AuthorizationCtx, unknown>;
 };
 
 function wrapDefinition(
@@ -1360,7 +1360,7 @@ async function getTokenIdentifier(ctx: IamContext): Promise<string | undefined> 
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
 }
 
-async function getCurrentHerculesAuthUserId(ctx: IamContext): Promise<string | undefined> {
+async function getCurrentUserId(ctx: IamContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
@@ -1981,7 +1981,7 @@ async function ensureAuthorized(
   let ancestors: Array<{ resourceType: string; resourceId: string }> | undefined;
   if (mode === "permission") {
     try {
-      const extracted = await (iam?.tenant ?? rootTenant)(ctx, callerArgs);
+      const extracted = await (iam?.authorizeAgainst ?? rootTenant)(ctx, callerArgs);
       if (typeof extracted === "string") {
         tenantId = extracted;
       } else {

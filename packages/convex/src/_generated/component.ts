@@ -16,7 +16,7 @@ type AuthorizationArgs = {
   tenantId?: string;
   permission?: string;
   // DL16 resource grant support. Optional; when present, authorize also
-  // walks grants whose object is the specific resource. tenantFromResource
+  // walks grants whose object is the specific resource. resource
   // returns these via ensureAuthorized in the SDK client.
   resourceType?: string;
   resourceId?: string;

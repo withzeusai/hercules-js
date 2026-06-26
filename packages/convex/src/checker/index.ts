@@ -4,10 +4,10 @@ import * as ts from "typescript";
 
 type RawConvexBuilder = "query" | "mutation" | "action";
 type TenantResourceHelperName =
-  | "tenantFromResource"
-  | "tenantFromRootResource"
-  | "tenantFromParentResource"
-  | "tenantFromRootParentResource";
+  | "resource"
+  | "rootResource"
+  | "parentResource"
+  | "rootParentResource";
 
 type RawBuilderCandidate = {
   builder: RawConvexBuilder;
@@ -83,10 +83,10 @@ const iamHelpersPackageName = `${iamPackageName}/iam-helpers`;
 const resourceCreatorBootstrapHelperName = "createResourceCreatorBootstrapAction";
 const generatedServerModuleSpecifier = "convex:_generated/server";
 const tenantResourceHelperNames = new Set<TenantResourceHelperName>([
-  "tenantFromResource",
-  "tenantFromRootResource",
-  "tenantFromParentResource",
-  "tenantFromRootParentResource",
+  "resource",
+  "rootResource",
+  "parentResource",
+  "rootParentResource",
 ]);
 const iamAuthorizationRequestFunctionNames = new Set([
   "hasPermission",
@@ -457,7 +457,7 @@ function checkIamTenantPatterns(
     "iamAction",
   ])) {
     if (
-      /\btenantFromArg\s*\(\s*["']tenantId["']\s*\)/.test(definition.text) &&
+      /\btenantArg\s*\(\s*["']tenantId["']\s*\)/.test(definition.text) &&
       /\bctx\.db\.(?:patch|replace|delete)\s*\(\s*args\.[A-Za-z_$][\w$]*/.test(definition.text)
     ) {
       findings.push(
@@ -469,7 +469,7 @@ function checkIamTenantPatterns(
           message:
             "Mutations of a tenant-owned row id must authorize against the stored row tenant, not a caller supplied tenant id.",
           suggestion:
-            'Use tenantFromResource("tableName", "rowIdArg") for update, publish, moderation, and delete operations.',
+            'Add authorizeAgainst: resource("tableName", "rowIdArg") so the tenant is read from the loaded row, not a caller-supplied id.',
         }),
       );
     }
@@ -516,7 +516,7 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
     if (!findDirectArgsRowAccess(definition.definition)) continue;
 
     const config = unwrapExpression(definition.definition);
-    if (ts.isObjectLiteralExpression(config) && !hasObjectProperty(config, "tenant")) {
+    if (ts.isObjectLiteralExpression(config) && !hasObjectProperty(config, "authorizeAgainst")) {
       findings.push(
         createPatternFindingAtNode({
           cwd,
@@ -525,7 +525,7 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
           code: "existing_row_missing_resource_tenant",
           message: "Existing-row IAM operations must authorize against the loaded resource.",
           suggestion:
-            'Use tenantFromRootResource("tableName", "rowIdArg") for the root tenant or tenantFromResource("tableName", "rowIdArg") for any other tenant.',
+            'Add authorizeAgainst: rootResource("tableName", "rowIdArg") (root tenant) or authorizeAgainst: resource("tableName", "rowIdArg") (multi-tenant) to bind the check to the loaded row.',
         }),
       );
     }
@@ -2152,7 +2152,7 @@ function checkSdkIamCalls(
         continue;
       }
       const initializer = unwrapExpression(property.initializer);
-      if (state.trackPublicArgs && propertyName === "tenant") {
+      if (state.trackPublicArgs && propertyName === "authorizeAgainst") {
         validateAuthorizationProvider(info, initializer, scope, state);
       }
       visitCallableReference(info, initializer, scope, state, {
@@ -2955,8 +2955,8 @@ function checkSdkIamCalls(
     for (const value of resolveStaticValues(info, options, scope)) {
       if (value.kind !== "node" || !ts.isObjectLiteralExpression(value.node)) continue;
       if (
-        (helperName === "tenantFromParentResource" ||
-          helperName === "tenantFromRootParentResource") &&
+        (helperName === "parentResource" ||
+          helperName === "rootParentResource") &&
         deterministicObjectProperty(
           value.info,
           value.node,
@@ -2989,18 +2989,18 @@ function checkSdkIamCalls(
           );
         }
       }
-      const authorizeAgainst = deterministicObjectProperty(
+      const ancestors = deterministicObjectProperty(
         value.info,
         value.node,
-        "authorizeAgainst",
+        "ancestors",
         value.declarationScope,
         new Set(),
       );
-      if (authorizeAgainst.kind === "found") {
+      if (ancestors.kind === "found") {
         validateAuthorizeAgainstProvider(
-          authorizeAgainst.info,
-          authorizeAgainst.expression,
-          authorizeAgainst.scope,
+          ancestors.info,
+          ancestors.expression,
+          ancestors.scope,
           state,
         );
       }

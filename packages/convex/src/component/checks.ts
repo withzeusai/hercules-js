@@ -29,7 +29,7 @@ type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
 // Mirrors client/index.ts PERMISSION_RESOURCE_TYPE_SENTINEL: the SDK's
-// tenantFromResource extractor cannot know the canonical catalog resource type
+// resource extractor cannot know the canonical catalog resource type
 // of the checked permission, so it sends this sentinel and the gate below
 // substitutes the resolved permission's resourceType.
 const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
@@ -175,7 +175,7 @@ export async function evaluatePermissionDecisionDetailed(
   // feeds the canonical type into the resource-grant walk.
   const resolvedPermission = await findCatalogPermissionByKey(ctx, args.permission);
 
-  // tenantFromResource defers its resource type to the checked permission (it
+  // resource defers its resource type to the checked permission (it
   // only sees the table row, not the catalog), so substitute the canonical
   // catalog resourceType for the sentinel. Explicit resource refs keep their
   // caller-provided type and the mismatch fence below.

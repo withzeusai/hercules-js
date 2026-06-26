@@ -7,10 +7,10 @@ import { checkIamSource, formatIamCheckResult } from "./index";
 const realManagedIamFixture = `
   import {
     createIam,
-    tenantFromArg,
-    tenantFromRootResource,
-    tenantFromParentResource,
-    tenantFromResource,
+    tenantArg,
+    rootResource,
+    parentResource,
+    resource,
   } from "@usehercules/convex";
   import { components } from "./_generated/api";
   import { action, mutation, query } from "./_generated/server";
@@ -39,10 +39,10 @@ const realManagedIamFixture = `
   } = iam;
 
   export {
-    tenantFromArg,
-    tenantFromRootResource,
-    tenantFromParentResource,
-    tenantFromResource,
+    tenantArg,
+    rootResource,
+    parentResource,
+    resource,
   };
 `;
 
@@ -1096,11 +1096,11 @@ describe("checkIamSource", () => {
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
         import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantFromArg } from "./iam";
+        import { checkPermissions, iamQuery, tenantArg } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceType: v.string(),
@@ -1151,11 +1151,11 @@ describe("checkIamSource", () => {
       "convex/access.ts": `
         import { v } from "convex/values";
         import { checkPermissions } from "unrelated-authz-package";
-        import { iamQuery, tenantFromArg } from "./iam";
+        import { iamQuery, tenantArg } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceType: v.string(),
@@ -1181,13 +1181,13 @@ describe("checkIamSource", () => {
   test("does not report unrelated canonical checkPermissions exports", () => {
     const root = createFixture({
       "convex/iam.ts": `
-        import { createIam, tenantFromArg } from "@usehercules/convex";
+        import { createIam, tenantArg } from "@usehercules/convex";
         import { components } from "./_generated/api";
         import { action, mutation, query } from "./_generated/server";
 
         const iam = createIam({ query, mutation, action, components });
         export const { iamQuery } = iam;
-        export { tenantFromArg };
+        export { tenantArg };
 
         export async function checkPermissions() {
           return [];
@@ -1195,11 +1195,11 @@ describe("checkIamSource", () => {
       `,
       "convex/access.ts": `
         import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantFromArg } from "./iam";
+        import { checkPermissions, iamQuery, tenantArg } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceType: v.string(),
@@ -1233,13 +1233,13 @@ describe("checkIamSource", () => {
         import { v } from "convex/values";
         import * as iam from "./iam";
         import { canCheck, managedIam } from "./permissions";
-        import { iamQuery, tenantFromArg } from "./iam";
+        import { iamQuery, tenantArg } from "./iam";
 
         const alias = canCheck;
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceType: v.string(),
@@ -1287,12 +1287,12 @@ describe("checkIamSource", () => {
           listResourceSharingRecipients,
           requireAnyPermission,
           requirePermission,
-          tenantFromArg,
+          tenantArg,
         } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceType: v.string(),
@@ -1452,12 +1452,12 @@ describe("checkIamSource", () => {
           listTenantMemberPickerUsers,
           requireAnyPermission,
           requirePermission,
-          tenantFromArg,
+          tenantArg,
         } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             permission: v.string(),
@@ -1519,12 +1519,12 @@ describe("checkIamSource", () => {
           listTenantMemberPickerUsers,
           requireAnyPermission,
           requirePermission,
-          tenantFromArg,
+          tenantArg,
         } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceId: v.string(),
@@ -1585,7 +1585,7 @@ describe("checkIamSource", () => {
           listTenantMemberPickerUsers,
           requireAnyPermission,
           requirePermission,
-          tenantFromArg,
+          tenantArg,
         } from "./iam";
 
         function permissionFor(kind) {
@@ -1598,7 +1598,7 @@ describe("checkIamSource", () => {
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             kind: v.string(),
@@ -1648,13 +1648,13 @@ describe("checkIamSource", () => {
   test("does not report unrelated permission evaluator names", () => {
     const root = createFixture({
       "convex/iam.ts": `
-        import { createIam, tenantFromArg } from "@usehercules/convex";
+        import { createIam, tenantArg } from "@usehercules/convex";
         import { components } from "./_generated/api";
         import { action, mutation, query } from "./_generated/server";
 
         const iam = createIam({ query, mutation, action, components });
         export const { iamQuery } = iam;
-        export { tenantFromArg };
+        export { tenantArg };
 
         export async function hasPermission() {
           return true;
@@ -1670,12 +1670,12 @@ describe("checkIamSource", () => {
           hasPermission,
           iamQuery,
           listResourceSharingRecipients,
-          tenantFromArg,
+          tenantArg,
         } from "./iam";
 
         export const explain = iamQuery({
           permission: "app.documents:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             resourceType: v.string(),
@@ -1715,7 +1715,7 @@ describe("checkIamSource", () => {
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
         import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantFromArg } from "./iam";
+        import { checkPermissions, iamQuery, tenantArg } from "./iam";
 
         async function check(ctx, request) {
           return await checkPermissions(ctx, [request]);
@@ -1723,7 +1723,7 @@ describe("checkIamSource", () => {
 
         export const explain = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             taskId: v.id("tasks"),
@@ -1763,7 +1763,7 @@ describe("checkIamSource", () => {
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
         import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantFromArg } from "./iam";
+        import { checkPermissions, iamQuery, tenantArg } from "./iam";
 
         async function check(ctx, request) {
           return await checkPermissions(ctx, [request]);
@@ -1771,7 +1771,7 @@ describe("checkIamSource", () => {
 
         export const explain = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             taskId: v.id("tasks"),
@@ -1806,18 +1806,18 @@ describe("checkIamSource", () => {
     ).toHaveLength(2);
   });
 
-  test("reports authorizeAgainst output copied from public args", () => {
+  test("reports ancestors output copied from public args", () => {
     const root = createFixture({
       "convex/iam.ts": realManagedIamFixture,
       "convex/tasks.ts": `
         import { v } from "convex/values";
-        import { iamMutation, tenantFromResource } from "./iam";
+        import { iamMutation, resource } from "./iam";
 
         export const update = iamMutation({
           permission: "app.tasks:update",
-          tenant: async (ctx, args) =>
-            tenantFromResource("tasks", "taskId", {
-              authorizeAgainst: () => args.ancestors,
+          authorizeAgainst: async (ctx, args) =>
+            resource("tasks", "taskId", {
+              ancestors: () => args.ancestors,
             })(ctx, args),
           args: {
             taskId: v.id("tasks"),
@@ -1848,13 +1848,13 @@ describe("checkIamSource", () => {
       "convex/iam.ts": realManagedIamFixture,
       "convex/tasks.ts": `
         import { v } from "convex/values";
-        import { iamMutation, tenantFromParentResource } from "./iam";
+        import { iamMutation, parentResource } from "./iam";
 
         export const createAllowed = iamMutation({
           permission: "app.tasks:create",
-          tenant: tenantFromParentResource("projects", "projectId", {
+          authorizeAgainst: parentResource("projects", "projectId", {
             parentResourceType: "app.projects",
-            authorizeAgainst: (project) => [
+            ancestors: (project) => [
               { type: "app.workspaces", id: String(project.workspaceId) },
             ],
           }),
@@ -1864,8 +1864,8 @@ describe("checkIamSource", () => {
 
         export const createUnsafeType = iamMutation({
           permission: "app.tasks:create",
-          tenant: async (ctx, args) =>
-            tenantFromParentResource("projects", "projectId", {
+          authorizeAgainst: async (ctx, args) =>
+            parentResource("projects", "projectId", {
               parentResourceType: args.parentResourceType,
             })(ctx, args),
           args: {
@@ -1878,10 +1878,10 @@ describe("checkIamSource", () => {
 
         export const createUnsafeAncestors = iamMutation({
           permission: "app.tasks:create",
-          tenant: async (ctx, args) =>
-            tenantFromParentResource("projects", "projectId", {
+          authorizeAgainst: async (ctx, args) =>
+            parentResource("projects", "projectId", {
               parentResourceType: "app.projects",
-              authorizeAgainst: () => args.ancestors,
+              ancestors: () => args.ancestors,
             })(ctx, args),
           args: {
             projectId: v.id("projects"),
@@ -1910,16 +1910,16 @@ describe("checkIamSource", () => {
         import { v } from "convex/values";
         import { iamMutation } from "./iam";
 
-        function tenantFromParentResource() {
+        function parentResource() {
           return () => "tenant";
         }
 
         export const createTask = iamMutation({
           permission: "app.tasks:create",
-          tenant: async (ctx, args) =>
-            tenantFromParentResource("projects", "projectId", {
+          authorizeAgainst: async (ctx, args) =>
+            parentResource("projects", "projectId", {
               parentResourceType: args.parentResourceType,
-              authorizeAgainst: () => args.ancestors,
+              ancestors: () => args.ancestors,
             })(ctx, args),
           args: {
             projectId: v.id("projects"),
@@ -1951,8 +1951,8 @@ describe("checkIamSource", () => {
           checkPermissions,
           iamMutation,
           iamQuery,
-          tenantFromArg,
-          tenantFromResource,
+          tenantArg,
+          resource,
         } from "./iam";
 
         function resourceTypeForKind(kind) {
@@ -1965,8 +1965,8 @@ describe("checkIamSource", () => {
 
         export const update = iamMutation({
           permission: "app.tasks:update",
-          tenant: tenantFromResource("tasks", "taskId", {
-            authorizeAgainst: (task) => [
+          authorizeAgainst: resource("tasks", "taskId", {
+            ancestors: (task) => [
               { type: "app.projects", id: String(task.projectId) },
             ],
           }),
@@ -1976,7 +1976,7 @@ describe("checkIamSource", () => {
 
         export const capabilities = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: {
             tenantId: v.string(),
             taskId: v.id("tasks"),
@@ -2271,11 +2271,11 @@ describe("checkIamSource", () => {
       `,
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { iamQuery, tenantFromArg } from "./iam";
+        import { iamQuery, tenantArg } from "./iam";
 
         export const getBySlug = iamQuery({
           permission: "posts.read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string(), slug: v.string() },
           handler: async (ctx, args) => {
             const post = await ctx.db
@@ -2309,11 +2309,11 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { iamMutation, tenantFromArg } from "./iam";
+        import { iamMutation, tenantArg } from "./iam";
 
         export const update = iamMutation({
           permission: "posts.update",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string(), postId: v.id("posts"), title: v.string() },
           handler: async (ctx, args) => {
             await ctx.db.patch(args.postId, { title: args.title });
@@ -2333,18 +2333,18 @@ describe("checkIamSource", () => {
         }),
       ]),
     );
-    expect(formatIamCheckResult(result)).toContain("tenantFromResource");
+    expect(formatIamCheckResult(result)).toContain("resource");
   });
 
-  test("allows tenantFromArg when a public row id is only used as a lookup key", () => {
+  test("allows tenantArg when a public row id is only used as a lookup key", () => {
     const root = createFixture({
       "convex/posts.ts": `
         import { v } from "convex/values";
-        import { iamQuery, tenantFromArg } from "./iam";
+        import { iamQuery, tenantArg } from "./iam";
 
         export const resolveTitle = iamQuery({
           permission: "posts.read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string(), postId: v.id("posts") },
           handler: async (ctx, args) => {
             const post = await ctx.db.get(args.postId);
@@ -2392,7 +2392,7 @@ describe("checkIamSource", () => {
         }),
       ]),
     );
-    expect(formatIamCheckResult(result)).toContain("tenantFromRootResource");
+    expect(formatIamCheckResult(result)).toContain("rootResource");
   });
 
   test("reports row capability checks without a concrete resource", () => {
@@ -2405,12 +2405,12 @@ describe("checkIamSource", () => {
         import {
           checkPermissions,
           iamQuery,
-          tenantFromRootResource,
+          rootResource,
         } from "./iam";
 
         export const getCapabilities = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromRootResource("tasks", "taskId"),
+          authorizeAgainst: rootResource("tasks", "taskId"),
           args: { taskId: v.id("tasks") },
           handler: async (ctx, args) => {
             const task = await ctx.db.get(args.taskId);
@@ -2447,12 +2447,12 @@ describe("checkIamSource", () => {
         import {
           checkPermissions,
           iamQuery,
-          tenantFromRootResource,
+          rootResource,
         } from "./iam";
 
         export const getCapabilities = iamQuery({
           permission: "app.tasks:read",
-          tenant: tenantFromRootResource("tasks", "taskId"),
+          authorizeAgainst: rootResource("tasks", "taskId"),
           args: { taskId: v.id("tasks") },
           handler: async (ctx, args) => {
             const task = await ctx.db.get(args.taskId);
@@ -2598,18 +2598,18 @@ describe("checkIamSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { iamQuery, iamMutation, tenantFromArg } from "./iam";
+        import { iamQuery, iamMutation, tenantArg } from "./iam";
 
         export const list = iamQuery({
           permission: "projects:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string() },
           handler: async (ctx) => ctx.db.query("projects").collect(),
         });
 
         export const rename = iamMutation({
           permission: "app.projects:update",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string(), name: v.string() },
           handler: async () => null,
         });
@@ -2676,27 +2676,27 @@ describe("checkIamSource", () => {
       }`,
       "convex/projects.ts": `
         import { v } from "convex/values";
-        import { iamQuery, tenantFromArg } from "./iam";
+        import { iamQuery, tenantArg } from "./iam";
 
         const AUDIT_PERMISSION = "app.audit:read";
 
         export const list = iamQuery({
           permission: "app.projects:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string() },
           handler: async (ctx) => ctx.db.query("projects").collect(),
         });
 
         export const members = iamQuery({
           permission: "system.access.users:read",
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string() },
           handler: async () => [],
         });
 
         export const audit = iamQuery({
           permission: AUDIT_PERMISSION,
-          tenant: tenantFromArg("tenantId"),
+          authorizeAgainst: tenantArg("tenantId"),
           args: { tenantId: v.string() },
           handler: async () => [],
         });
@@ -2711,11 +2711,11 @@ describe("checkIamSource", () => {
   test("skips the catalog permission check when hercules/iam.jsonc is missing or invalid", () => {
     const builderSource = `
       import { v } from "convex/values";
-      import { iamQuery, tenantFromArg } from "./iam";
+      import { iamQuery, tenantArg } from "./iam";
 
       export const list = iamQuery({
         permission: "projects:read",
-        tenant: tenantFromArg("tenantId"),
+        authorizeAgainst: tenantArg("tenantId"),
         args: { tenantId: v.string() },
         handler: async (ctx) => ctx.db.query("projects").collect(),
       });

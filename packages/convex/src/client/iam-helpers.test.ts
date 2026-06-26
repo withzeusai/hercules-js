@@ -103,7 +103,7 @@ function makeCtx(options: {
       : {
           tenantId: "tenant_1",
           resourceId: "project_1",
-          creatorHerculesAuthUserId: "user_1",
+          creatorUserId: "user_1",
           state: "provisioning",
         };
   const tenantAccessStatus = options.tenantAccessStatus ?? {
@@ -186,7 +186,7 @@ describe("resource creator bootstrap", () => {
     });
     expect(ctx.runMutation).toHaveBeenCalledWith(activateResource, {
       resourceId: "project_1",
-      creatorHerculesAuthUserId: "user_1",
+      creatorUserId: "user_1",
       grant: normalizedGrant,
     });
   });
@@ -198,7 +198,7 @@ describe("resource creator bootstrap", () => {
       target: {
         tenantId: "tenant_1",
         resourceId: "project_1",
-        creatorHerculesAuthUserId: "user_1",
+        creatorUserId: "user_1",
         state: "active",
       },
       tenantPages: [
@@ -222,7 +222,7 @@ describe("resource creator bootstrap", () => {
       target: {
         tenantId: "tenant_1",
         resourceId: "project_1",
-        creatorHerculesAuthUserId: "user_2",
+        creatorUserId: "user_2",
         state: "provisioning",
       },
       tenantPages: [
@@ -244,7 +244,7 @@ describe("resource creator bootstrap", () => {
       {
         tenantId: "tenant_1",
         resourceId: "project_2",
-        creatorHerculesAuthUserId: "user_1",
+        creatorUserId: "user_1",
         state: "provisioning",
       },
     ],
@@ -417,12 +417,12 @@ describe("resource creator bootstrap", () => {
     expect(ctx.runMutation).toHaveBeenCalledTimes(2);
     expect(ctx.runMutation).toHaveBeenNthCalledWith(1, activateResource, {
       resourceId: "project_1",
-      creatorHerculesAuthUserId: "user_1",
+      creatorUserId: "user_1",
       grant: normalizedGrant,
     });
     expect(ctx.runMutation).toHaveBeenNthCalledWith(2, activateResource, {
       resourceId: "project_1",
-      creatorHerculesAuthUserId: "user_1",
+      creatorUserId: "user_1",
       grant: idempotentNormalizedGrant,
     });
   });
