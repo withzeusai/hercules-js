@@ -20,6 +20,8 @@ export default defineConfig((options) => [
     sourcemap: false,
     minify: true,
     ignoreWatch: [".turbo"],
-    noExternal: ["ulid", "web-vitals", "bowser"],
+    deps: {
+      alwaysBundle: ["ulid", "web-vitals", "bowser"],
+    },
   },
 ]);
