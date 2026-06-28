@@ -1,6 +1,6 @@
 # @usehercules/vite
 
-A dummy Vite plugin for the Hercules application. This plugin is designed for **Vite 6** and provides a basic structure for future development.
+A Vite plugin for the Hercules application. This plugin supports **Vite 7 and Vite 8**.
 
 ## Installation
 
@@ -43,7 +43,7 @@ Currently, this is a dummy plugin that:
 
 - ✅ Provides debug logging capabilities
 - ✅ Adds a custom development server endpoint at `/hercules-status`
-- ✅ Includes all necessary Vite 6 plugin hooks
+- ✅ Includes all necessary Vite plugin hooks
 - ✅ Has proper TypeScript support
 - ⏳ Ready for future functionality implementation
 
@@ -67,9 +67,9 @@ Returns:
 
 ## Compatibility
 
-- **Vite**: 6.x
+- **Vite**: 7.x / 8.x
 - **Node.js**: 20.19+ / 22.12+
-- **TypeScript**: 5.x
+- **TypeScript**: 5.x / 6.x
 
 ## Development
 
