@@ -1,5 +1,5 @@
 import * as client from "openid-client";
-import { parseCookies, serializeCookie } from "./cookie-utils";
+import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
 import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
 
 export type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
@@ -16,10 +16,13 @@ const CLIENT_ID_ENV = "HERCULES_AUTH_CLIENT_ID";
 /** OAuth client secret. Optional — omit for a public (PKCE-only) client. */
 const CLIENT_SECRET_ENV = "HERCULES_AUTH_CLIENT_SECRET";
 
-/** Cookie carrying the PKCE `code_verifier`, written when the sign-in flow began. */
-const PKCE_VERIFIER_COOKIE = "hercules_pkce_verifier";
-/** Cookie carrying the OAuth `state`, written when the sign-in flow began. */
-const STATE_COOKIE = "hercules_oauth_state";
+/**
+ * Prefix for per-flow PKCE cookies. Each pending sign-in stores its
+ * `code_verifier` under `${PKCE_COOKIE_PREFIX}${state}`, so concurrent flows
+ * (a double-click, a retry, a second tab) keep independent cookies instead of
+ * overwriting one shared name and invalidating each other.
+ */
+const PKCE_COOKIE_PREFIX = "hercules_pkce_";
 /** Cookie holding the authenticated session token. */
 const AUTH_COOKIE = "hercules_session";
 
@@ -29,11 +32,19 @@ const DEFAULT_REDIRECT = "/";
 const DEFAULT_CALLBACK_PATH = "/api/auth/callback";
 /** OAuth scopes requested when none are configured. */
 const DEFAULT_SCOPE = "openid profile email";
-/** Lifetime (seconds) of the one-time sign-in cookies. */
+/** Lifetime (seconds) of a pending sign-in's PKCE cookie. */
 const SIGN_IN_COOKIE_MAX_AGE = 600;
+/**
+ * Cap on simultaneously pending sign-in flows. Beyond this we expire surplus
+ * verifier cookies on the next sign-in so the request `Cookie` header cannot
+ * grow without bound from abandoned attempts.
+ */
+const MAX_PENDING_SIGN_INS = 10;
 
-/** One-time sign-in cookies, cleared once the callback resolves either way. */
-const SIGN_IN_COOKIES = [PKCE_VERIFIER_COOKIE, STATE_COOKIE];
+/** Cookie name holding the PKCE verifier for the flow identified by `state`. */
+function pkceCookieName(state: string): string {
+  return PKCE_COOKIE_PREFIX + state;
+}
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -68,17 +79,18 @@ function getConfig(): Promise<client.Configuration> {
   return configPromise;
 }
 
-function deleteSignInCookies(headers: Headers): void {
-  for (const name of SIGN_IN_COOKIES) {
-    headers.append("Set-Cookie", serializeCookie(name, "", { path: "/", maxAge: 0 }));
-  }
+/** Append a `Set-Cookie` that immediately expires the named cookie. */
+function deleteCookie(headers: Headers, name: string): void {
+  headers.append("Set-Cookie", serializeCookie(name, "", { path: "/", maxAge: 0 }));
 }
 
 /**
  * Resolve a callback failure into a Response, honoring the caller's error
  * handling preferences (see {@link HandleCallbackOptions}). `onError` wins over
  * `errorRedirectUrl`, which in turn wins over the default JSON error response.
- * All paths clear the one-time sign-in cookies.
+ *
+ * When `clearCookieName` is given (the failed flow's verifier cookie) it is
+ * expired; other pending sign-in flows are left untouched.
  */
 async function handleError(
   request: Request,
@@ -86,6 +98,7 @@ async function handleError(
   message: string,
   error: unknown,
   options?: HandleCallbackOptions,
+  clearCookieName?: string,
 ): Promise<Response> {
   // Always log before the response is shaped by caller preferences — otherwise
   // the failure is invisible whenever it's surfaced as a redirect or a generic
@@ -105,7 +118,7 @@ async function handleError(
     try {
       const location = new URL(options.errorRedirectUrl, new URL(request.url).origin).toString();
       const headers = new Headers({ Location: location });
-      deleteSignInCookies(headers);
+      if (clearCookieName) deleteCookie(headers, clearCookieName);
       return new Response(null, { status: 302, headers });
     } catch {
       // Malformed config value — warn and fall back to the JSON error response.
@@ -114,7 +127,7 @@ async function handleError(
   }
 
   const headers = new Headers({ "Content-Type": "application/json" });
-  deleteSignInCookies(headers);
+  if (clearCookieName) deleteCookie(headers, clearCookieName);
   return new Response(JSON.stringify({ error: message }), { status, headers });
 }
 
@@ -171,17 +184,30 @@ async function handleSignInInternal(
 
   const headers = new Headers({ Location: authorizationUrl.toString() });
 
-  // Stash the PKCE verifier and state for the callback. SameSite=Lax so they
-  // survive the top-level redirect back from the provider.
-  const cookieOptions = {
-    httpOnly: true,
-    secure: url.protocol === "https:",
-    sameSite: "Lax" as const,
-    path: "/",
-    maxAge: SIGN_IN_COOKIE_MAX_AGE,
-  };
-  headers.append("Set-Cookie", serializeCookie(PKCE_VERIFIER_COOKIE, codeVerifier, cookieOptions));
-  headers.append("Set-Cookie", serializeCookie(STATE_COOKIE, state, cookieOptions));
+  // Stash this flow's PKCE verifier under a state-keyed cookie so concurrent
+  // sign-ins keep separate verifiers instead of clobbering a shared name.
+  // SameSite=Lax so it survives the top-level redirect back from the provider.
+  headers.append(
+    "Set-Cookie",
+    serializeCookie(pkceCookieName(state), codeVerifier, {
+      httpOnly: true,
+      secure: url.protocol === "https:",
+      sameSite: "Lax",
+      path: "/",
+      maxAge: SIGN_IN_COOKIE_MAX_AGE,
+    }),
+  );
+
+  // Bound the number of pending verifier cookies. Abandoned flows would
+  // otherwise linger until they expire and could overflow the cookie header; we
+  // can't tell their age, so once over the cap we expire the surplus and keep
+  // this fresh flow plus a handful of genuinely concurrent ones.
+  const pending = parseCookieNames(request.headers.get("cookie") ?? "").filter((name) =>
+    name.startsWith(PKCE_COOKIE_PREFIX),
+  );
+  for (const name of pending.slice(MAX_PENDING_SIGN_INS - 1)) {
+    deleteCookie(headers, name);
+  }
 
   return new Response(null, { status: 302, headers });
 }
@@ -214,29 +240,31 @@ async function handleCallbackInternal(
     return handleError(request, 400, "Missing code parameter", undefined, options);
   }
 
-  const cookies = parseCookies(request.headers.get("cookie") ?? "");
+  // The provider echoes back the `state` from the authorization request; use it
+  // to locate the matching pending flow's PKCE verifier. Only a sign-in we
+  // started in this browser could have set that state-keyed cookie, so its
+  // presence both proves the callback belongs to that request (CSRF defense)
+  // and tells concurrent flows apart. Pass `state` as `expectedState` so the
+  // grant also rejects a response whose `state` is missing or mismatched.
+  const state = url.searchParams.get("state");
+  if (!state) {
+    return handleError(request, 400, "Missing state parameter", undefined, options);
+  }
 
-  const pkceCodeVerifier = cookies[PKCE_VERIFIER_COOKIE];
+  const verifierCookieName = pkceCookieName(state);
+  const pkceCodeVerifier = parseCookies(request.headers.get("cookie") ?? "")[verifierCookieName];
   if (!pkceCodeVerifier) {
-    return handleError(request, 400, "Missing PKCE verifier", undefined, options);
+    return handleError(request, 400, "Unknown or expired sign-in state", undefined, options);
   }
 
-  // Sign-in always sends `state` and stores the matching cookie, so the callback
-  // must always prove it belongs to that request. Require the stored value and
-  // pass it as `expectedState` unconditionally — `authorizationCodeGrant` then
-  // rejects a response whose `state` is missing or mismatched (CSRF defense).
-  const expectedState = cookies[STATE_COOKIE];
-  if (!expectedState) {
-    return handleError(request, 400, "Missing state cookie", undefined, options);
-  }
-  const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState };
+  const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState: state };
 
   let tokens: Awaited<ReturnType<typeof client.authorizationCodeGrant>>;
   try {
     const config = await getConfig();
     tokens = await client.authorizationCodeGrant(config, url, checks);
   } catch (error) {
-    return handleError(request, 500, "Token exchange failed", error, options);
+    return handleError(request, 500, "Token exchange failed", error, options, verifierCookieName);
   }
 
   // `access_token` is always present in a successful token response, so the
@@ -248,7 +276,7 @@ async function handleCallbackInternal(
     expiresIn: tokens.expires_in,
     scope: tokens.scope,
     claims: tokens.claims(),
-    state: url.searchParams.get("state") ?? undefined,
+    state,
   };
 
   await options?.onSuccess?.(data);
@@ -268,8 +296,8 @@ async function handleCallbackInternal(
     }),
   );
 
-  // Clear the one-time sign-in cookies now that the flow is complete.
-  deleteSignInCookies(headers);
+  // Clear only this flow's verifier; other concurrent sign-ins keep theirs.
+  deleteCookie(headers, verifierCookieName);
 
   return new Response(null, { status: 302, headers });
 }
