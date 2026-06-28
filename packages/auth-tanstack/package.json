@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/auth-tanstack",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "TanStack authentication utilities for Hercules applications",
   "type": "module",
   "sideEffects": false,
