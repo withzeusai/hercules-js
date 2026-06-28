@@ -1,5 +1,5 @@
 ---
-"@usehercules/convex": major
+"@usehercules/convex": patch
 ---
 
 Replace the public managed IAM API with one tenant-based model across
