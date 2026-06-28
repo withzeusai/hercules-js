@@ -120,7 +120,7 @@ async function handleError(
  *
  * @public
  */
-export async function handleSignInRoute(options?: HandleSignInOptions) {
+export function handleSignInRoute(options?: HandleSignInOptions) {
   return async ({ request }: { request: Request }): Promise<Response> => {
     return handleSignInInternal(request, options);
   };
@@ -184,7 +184,7 @@ async function handleSignInInternal(
  *
  * @public
  */
-export async function handleCallbackRoute(options?: HandleCallbackOptions) {
+export function handleCallbackRoute(options?: HandleCallbackOptions) {
   return async ({ request }: { request: Request }): Promise<Response> => {
     return handleCallbackInternal(request, options);
   };
@@ -208,17 +208,15 @@ async function handleCallbackInternal(
     return handleError(request, 400, "Missing PKCE verifier", undefined, options);
   }
 
-  // The authorization request carried a `state`, so the response must too; match
-  // it against the value we stored to defend against CSRF. Only enforce when the
-  // provider actually returned a `state`.
-  const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier };
-  if (url.searchParams.has("state")) {
-    const expectedState = cookies[STATE_COOKIE];
-    if (!expectedState) {
-      return handleError(request, 400, "Missing state cookie", undefined, options);
-    }
-    checks.expectedState = expectedState;
+  // Sign-in always sends `state` and stores the matching cookie, so the callback
+  // must always prove it belongs to that request. Require the stored value and
+  // pass it as `expectedState` unconditionally — `authorizationCodeGrant` then
+  // rejects a response whose `state` is missing or mismatched (CSRF defense).
+  const expectedState = cookies[STATE_COOKIE];
+  if (!expectedState) {
+    return handleError(request, 400, "Missing state cookie", undefined, options);
   }
+  const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState };
 
   let tokens: Awaited<ReturnType<typeof client.authorizationCodeGrant>>;
   try {
