@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/convex",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Convex IAM utilities for Hercules applications",
   "type": "module",
   "sideEffects": false,

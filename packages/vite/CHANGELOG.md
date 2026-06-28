@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 1.1.0
+
+### Minor Changes
+
+- [#80](https://github.com/withzeusai/hercules-js/pull/80) [`6acfa12`](https://github.com/withzeusai/hercules-js/commit/6acfa1291399848ca544b2f69a7922cebdbca23e) Thanks [@grant0417](https://github.com/grant0417)! - Add support for Vite 8. The `vite` peer dependency range is now `^7.0.0 || ^8.0.0`.
+
 ## 1.0.42
 
 ### Patch Changes
