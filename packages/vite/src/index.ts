@@ -106,7 +106,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   // Main Hercules plugin
   plugins.push({
     name: "vite-plugin-hercules",
-    // Plugin hooks for Vite 6
+    // Plugin hooks (Vite 7 / 8)
     configResolved(config) {
       // Check if we're in serve (dev) mode vs build mode
       isDev = config.command === "serve";
