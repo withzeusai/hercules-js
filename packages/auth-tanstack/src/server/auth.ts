@@ -1,0 +1,164 @@
+import { redirect } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { deleteCookie, getCookies, getRequest, setCookie } from "@tanstack/react-start/server";
+import * as client from "openid-client";
+
+import type { NoUserInfo, UserInfo } from "../types";
+import { userInfoFromSession } from "./claims";
+import {
+  DEFAULT_CALLBACK_PATH,
+  DEFAULT_REDIRECT,
+  DEFAULT_SCOPE,
+  MAX_PENDING_SIGN_INS,
+  PKCE_COOKIE_PREFIX,
+  SIGN_IN_COOKIE_MAX_AGE,
+  encodePkceState,
+  getConfig,
+  pkceCookieName,
+} from "./config";
+import { resolveLogoutLocation } from "./refresh";
+import { clearSessionCookies } from "./session";
+import { readSession } from "./session-store";
+
+/**
+ * Options controlling how an authorization URL is built — the fields a generic
+ * OIDC provider can act on.
+ */
+export interface GetAuthURLOptions {
+  /** Hint the provider's screen (`screen_hint`); provider-dependent. */
+  screenHint?: "sign-in" | "sign-up";
+  /** Where to send the user after the callback completes. */
+  returnPathname?: string;
+  /** Override the default callback `redirect_uri`. */
+  redirectUri?: string;
+  /** Space-delimited scopes; defaults to `openid profile email`. */
+  scope?: string;
+}
+
+/** Options accepted by {@link getSignInUrl}/{@link getSignUpUrl}. */
+type SignInUrlOptions = Omit<GetAuthURLOptions, "screenHint">;
+
+// --- authorization URL generation ------------------------------------------
+
+/**
+ * Start an Authorization Code + PKCE flow: mint a verifier/state, stash them in
+ * a short-lived state-keyed cookie (alongside any `returnPathname`), and return
+ * the provider's authorization URL.
+ *
+ * **Side effect:** sets a `${PKCE_COOKIE_PREFIX}<state>` cookie. Call this on a
+ * user action or from a redirect route — not prefetched in a loader to render a
+ * link — or abandoned flows pile up verifier cookies (we bound, but don't
+ * eliminate, the pile-up).
+ */
+async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promise<string> {
+  const url = new URL(getRequest().url);
+
+  const codeVerifier = client.randomPKCECodeVerifier();
+  const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
+  const state = client.randomState();
+
+  const redirectUri = new URL(options.redirectUri ?? DEFAULT_CALLBACK_PATH, url.origin).toString();
+
+  const config = await getConfig();
+  const parameters: Record<string, string> = {
+    redirect_uri: redirectUri,
+    scope: options.scope ?? DEFAULT_SCOPE,
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+  };
+  if (options.screenHint) parameters.screen_hint = options.screenHint;
+  const authorizationUrl = client.buildAuthorizationUrl(config, parameters);
+
+  // SameSite=Lax so the cookie survives the top-level redirect back from the
+  // provider.
+  setCookie(pkceCookieName(state), encodePkceState({ verifier: codeVerifier, returnPathname: options.returnPathname }), {
+    httpOnly: true,
+    secure: url.protocol === "https:",
+    sameSite: "lax",
+    path: "/",
+    maxAge: SIGN_IN_COOKIE_MAX_AGE,
+  });
+
+  // Bound the number of pending verifier cookies. `getCookies()` reflects the
+  // incoming request (the cookie just set is not included), so keep the newest
+  // MAX-1 of the prior flows plus this fresh one.
+  const pending = Object.keys(getCookies()).filter((name) => name.startsWith(PKCE_COOKIE_PREFIX));
+  for (const name of pending.slice(MAX_PENDING_SIGN_INS - 1)) {
+    deleteCookie(name, { path: "/" });
+  }
+
+  return authorizationUrl.toString();
+}
+
+// --- server functions ------------------------------------------------------
+
+/**
+ * Retrieve the current user's session, mapping OIDC claims to {@link UserInfo}.
+ * Returns `{ user: null }` when there is no valid session. Safe to call in route
+ * loaders (it RPCs to the server during client-side navigation).
+ */
+export const getAuth = createServerFn({ method: "GET" }).handler(
+  async (): Promise<UserInfo | NoUserInfo> => {
+    const session = await readSession();
+    if (!session) return { user: null };
+
+    return userInfoFromSession(session);
+  },
+);
+
+/**
+ * Sign the current user out: clear the session cookie and redirect to the
+ * provider's `end_session_endpoint` (with `id_token_hint`) when one is
+ * advertised, otherwise straight to `returnTo`.
+ */
+export const signOut = createServerFn({ method: "POST" })
+  .validator((options?: { returnTo?: string }) => options)
+  .handler(async ({ data }) => {
+    const idTokenHint = (await readSession())?.idToken;
+
+    const origin = new URL(getRequest().url).origin;
+    const postLogoutRedirectUri = new URL(data?.returnTo ?? DEFAULT_REDIRECT, origin).toString();
+    const location = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
+
+    const clearHeaders = clearSessionCookies(Object.keys(getCookies())).map(
+      (header) => ["Set-Cookie", header] as [string, string],
+    );
+
+    throw redirect({
+      href: location,
+      reloadDocument: true,
+      ...(clearHeaders.length > 0 ? { headers: clearHeaders } : {}),
+    });
+  });
+
+/**
+ * Build a custom authorization URL with full control over screen hint, return
+ * path, redirect URI, and scope. Sets a PKCE verifier cookie — see
+ * {@link generateAuthorizationUrl}.
+ */
+export const getAuthorizationUrl = createServerFn({ method: "GET" })
+  .validator((options?: GetAuthURLOptions) => options)
+  .handler(async ({ data }): Promise<string> => generateAuthorizationUrl(data ?? {}));
+
+/**
+ * Get a sign-in URL. Accepts a `returnPathname` string shorthand or an options
+ * object. Sets a PKCE verifier cookie — call on a user action or redirect route.
+ */
+export const getSignInUrl = createServerFn({ method: "GET" })
+  .validator((data?: string | SignInUrlOptions) => data)
+  .handler(async ({ data }): Promise<string> => {
+    const options = typeof data === "string" ? { returnPathname: data } : (data ?? {});
+    return generateAuthorizationUrl({ ...options, screenHint: "sign-in" });
+  });
+
+/**
+ * Get a sign-up URL. Accepts a `returnPathname` string shorthand or an options
+ * object. Sets a PKCE verifier cookie — call on a user action or redirect route.
+ */
+export const getSignUpUrl = createServerFn({ method: "GET" })
+  .validator((data?: string | SignInUrlOptions) => data)
+  .handler(async ({ data }): Promise<string> => {
+    const options = typeof data === "string" ? { returnPathname: data } : (data ?? {});
+    return generateAuthorizationUrl({ ...options, screenHint: "sign-up" });
+  });
