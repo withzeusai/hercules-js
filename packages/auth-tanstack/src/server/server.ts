@@ -87,6 +87,15 @@ async function handleError(
   error: unknown,
   options?: HandleCallbackOptions,
 ): Promise<Response> {
+  // Always log before the response is shaped by caller preferences — otherwise
+  // the failure is invisible whenever it's surfaced as a redirect or a generic
+  // message. Include the underlying error when there is one.
+  if (error !== undefined) {
+    console.error(`[auth-tanstack] ${message} (HTTP ${status}):`, error);
+  } else {
+    console.error(`[auth-tanstack] ${message} (HTTP ${status})`);
+  }
+
   // `onError` is intentionally not wrapped — errors it throws propagate.
   if (options?.onError) {
     return options.onError({ error, request });
@@ -149,7 +158,11 @@ async function handleSignInInternal(
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
     });
-  } catch {
+  } catch (error) {
+    // Almost always OIDC discovery failing in getConfig() (bad issuer URL,
+    // missing env var, or the provider being unreachable). Log it so the cause
+    // is visible rather than swallowed behind the generic client message.
+    console.error("[auth-tanstack] Failed to start sign-in:", error);
     return new Response(JSON.stringify({ error: "Failed to start sign-in" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
