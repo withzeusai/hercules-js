@@ -63,7 +63,7 @@
   },
   "dependencies": {
     "@usehercules/sdk": "^1.15.7",
-    "convex-helpers": "0.1.119",
+    "convex-helpers": "0.1.120",
     "standardwebhooks": "^1.0.0",
     "tslib": "^2.8.1",
     "typescript": "^6.0.3",
@@ -75,10 +75,10 @@
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^24.13.2",
-    "convex": "^1.41.0",
+    "convex": "^1.42.0",
     "convex-test": "^0.0.53",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   },
   "main": "./dist/client/index.js",
   "module": "./dist/client/index.js",
