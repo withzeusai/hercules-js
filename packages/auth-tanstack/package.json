@@ -1,0 +1,44 @@
+{
+  "name": "@usehercules/auth-tanstack",
+  "version": "0.0.0",
+  "description": "TanStack authentication utilities for Hercules applications",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/auth-tanstack"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsdown.config.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "tsdown": "^0.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.16",
+    "@tanstack/react-start": "^1.168.26",
+    "oauth4webapi": "^3.8.6",
+    "openid-client": "^6.8.4"
+  }
+}
