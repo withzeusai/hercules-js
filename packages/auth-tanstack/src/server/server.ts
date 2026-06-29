@@ -1,84 +1,34 @@
 import * as client from "openid-client";
-import { parseCookies, serializeCookie } from "./cookie-utils";
+import {
+  DEFAULT_CALLBACK_PATH,
+  DEFAULT_REDIRECT,
+  DEFAULT_SCOPE,
+  MAX_PENDING_SIGN_INS,
+  PKCE_COOKIE_PREFIX,
+  SIGN_IN_COOKIE_MAX_AGE,
+  decodePkceState,
+  encodePkceState,
+  getConfig,
+  pkceCookieName,
+} from "./config";
+import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
+import { type SessionData, sealSession, serializeSessionCookies } from "./session";
 import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
 
 export type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
 
-/**
- * OIDC issuer URL used for discovery (`{issuer}/.well-known/openid-configuration`).
- * For Amazon Cognito this is the user-pool issuer
- * (`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`), NOT the hosted-UI
- * domain — the hosted domain does not serve the discovery document.
- */
-const ISSUER_URL_ENV = "HERCULES_AUTH_ISSUER_URL";
-/** OAuth client (app client) identifier. */
-const CLIENT_ID_ENV = "HERCULES_AUTH_CLIENT_ID";
-/** OAuth client secret. Optional — omit for a public (PKCE-only) client. */
-const CLIENT_SECRET_ENV = "HERCULES_AUTH_CLIENT_SECRET";
-
-/** Cookie carrying the PKCE `code_verifier`, written when the sign-in flow began. */
-const PKCE_VERIFIER_COOKIE = "hercules_pkce_verifier";
-/** Cookie carrying the OAuth `state`, written when the sign-in flow began. */
-const STATE_COOKIE = "hercules_oauth_state";
-/** Cookie holding the authenticated session token. */
-const AUTH_COOKIE = "hercules_session";
-
-/** Where to send the user once the callback completes. */
-const DEFAULT_REDIRECT = "/";
-/** Callback route the provider returns to, unless overridden. */
-const DEFAULT_CALLBACK_PATH = "/api/auth/callback";
-/** OAuth scopes requested when none are configured. */
-const DEFAULT_SCOPE = "openid profile email";
-/** Lifetime (seconds) of the one-time sign-in cookies. */
-const SIGN_IN_COOKIE_MAX_AGE = 600;
-
-/** One-time sign-in cookies, cleared once the callback resolves either way. */
-const SIGN_IN_COOKIES = [PKCE_VERIFIER_COOKIE, STATE_COOKIE];
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`[auth-tanstack] Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
-// Discovery is a network round-trip and the resolved metadata is static for the
-// lifetime of the process, so resolve the Configuration once and reuse it.
-let configPromise: Promise<client.Configuration> | undefined;
-function getConfig(): Promise<client.Configuration> {
-  if (!configPromise) {
-    const issuerUrl = new URL(requireEnv(ISSUER_URL_ENV));
-    const clientId = requireEnv(CLIENT_ID_ENV);
-    const clientSecret = process.env[CLIENT_SECRET_ENV];
-
-    // A public client authenticates with PKCE alone (no secret); a confidential
-    // client authenticates the token request with its secret.
-    const discovered = clientSecret
-      ? client.discovery(issuerUrl, clientId, clientSecret)
-      : client.discovery(issuerUrl, clientId, undefined, client.None());
-
-    configPromise = discovered.catch((error) => {
-      // Don't cache a failed discovery — let the next request retry instead of
-      // permanently poisoning every sign-in and callback.
-      configPromise = undefined;
-      throw error;
-    });
-  }
-  return configPromise;
-}
-
-function deleteSignInCookies(headers: Headers): void {
-  for (const name of SIGN_IN_COOKIES) {
-    headers.append("Set-Cookie", serializeCookie(name, "", { path: "/", maxAge: 0 }));
-  }
+/** Append a `Set-Cookie` that immediately expires the named cookie. */
+function deleteCookie(headers: Headers, name: string): void {
+  headers.append("Set-Cookie", serializeCookie(name, "", { path: "/", maxAge: 0 }));
 }
 
 /**
  * Resolve a callback failure into a Response, honoring the caller's error
  * handling preferences (see {@link HandleCallbackOptions}). `onError` wins over
  * `errorRedirectUrl`, which in turn wins over the default JSON error response.
- * All paths clear the one-time sign-in cookies.
+ *
+ * When `clearCookieName` is given (the failed flow's verifier cookie) it is
+ * expired; other pending sign-in flows are left untouched.
  */
 async function handleError(
   request: Request,
@@ -86,6 +36,7 @@ async function handleError(
   message: string,
   error: unknown,
   options?: HandleCallbackOptions,
+  clearCookieName?: string,
 ): Promise<Response> {
   // Always log before the response is shaped by caller preferences — otherwise
   // the failure is invisible whenever it's surfaced as a redirect or a generic
@@ -105,7 +56,7 @@ async function handleError(
     try {
       const location = new URL(options.errorRedirectUrl, new URL(request.url).origin).toString();
       const headers = new Headers({ Location: location });
-      deleteSignInCookies(headers);
+      if (clearCookieName) deleteCookie(headers, clearCookieName);
       return new Response(null, { status: 302, headers });
     } catch {
       // Malformed config value — warn and fall back to the JSON error response.
@@ -114,7 +65,7 @@ async function handleError(
   }
 
   const headers = new Headers({ "Content-Type": "application/json" });
-  deleteSignInCookies(headers);
+  if (clearCookieName) deleteCookie(headers, clearCookieName);
   return new Response(JSON.stringify({ error: message }), { status, headers });
 }
 
@@ -171,17 +122,34 @@ async function handleSignInInternal(
 
   const headers = new Headers({ Location: authorizationUrl.toString() });
 
-  // Stash the PKCE verifier and state for the callback. SameSite=Lax so they
-  // survive the top-level redirect back from the provider.
-  const cookieOptions = {
-    httpOnly: true,
-    secure: url.protocol === "https:",
-    sameSite: "Lax" as const,
-    path: "/",
-    maxAge: SIGN_IN_COOKIE_MAX_AGE,
-  };
-  headers.append("Set-Cookie", serializeCookie(PKCE_VERIFIER_COOKIE, codeVerifier, cookieOptions));
-  headers.append("Set-Cookie", serializeCookie(STATE_COOKIE, state, cookieOptions));
+  // Stash this flow's PKCE verifier (and return path) under a state-keyed cookie
+  // so concurrent sign-ins keep separate verifiers instead of clobbering a
+  // shared name. SameSite=Lax so it survives the top-level redirect back.
+  headers.append(
+    "Set-Cookie",
+    serializeCookie(
+      pkceCookieName(state),
+      encodePkceState({ verifier: codeVerifier, returnPathname: options?.returnPathname }),
+      {
+        httpOnly: true,
+        secure: url.protocol === "https:",
+        sameSite: "Lax",
+        path: "/",
+        maxAge: SIGN_IN_COOKIE_MAX_AGE,
+      },
+    ),
+  );
+
+  // Bound the number of pending verifier cookies. Abandoned flows would
+  // otherwise linger until they expire and could overflow the cookie header; we
+  // can't tell their age, so once over the cap we expire the surplus and keep
+  // this fresh flow plus a handful of genuinely concurrent ones.
+  const pending = parseCookieNames(request.headers.get("cookie") ?? "").filter((name) =>
+    name.startsWith(PKCE_COOKIE_PREFIX),
+  );
+  for (const name of pending.slice(MAX_PENDING_SIGN_INS - 1)) {
+    deleteCookie(headers, name);
+  }
 
   return new Response(null, { status: 302, headers });
 }
@@ -191,9 +159,9 @@ async function handleSignInInternal(
  *
  * The handler completes the authorization-code grant using the PKCE
  * `code_verifier` and `state` stashed in cookies during sign-in, invokes
- * {@link HandleCallbackOptions.onSuccess} with the token response, stores the
- * resulting session token in an HttpOnly cookie, clears the one-time sign-in
- * cookies, and redirects the user to {@link HandleCallbackOptions.returnPathname}.
+ * {@link HandleCallbackOptions.onSuccess} with the token response, seals the
+ * resulting tokens into an HttpOnly session cookie, clears the one-time sign-in
+ * cookies, and redirects the user to the resolved return path.
  *
  * @public
  */
@@ -214,62 +182,94 @@ async function handleCallbackInternal(
     return handleError(request, 400, "Missing code parameter", undefined, options);
   }
 
-  const cookies = parseCookies(request.headers.get("cookie") ?? "");
-
-  const pkceCodeVerifier = cookies[PKCE_VERIFIER_COOKIE];
-  if (!pkceCodeVerifier) {
-    return handleError(request, 400, "Missing PKCE verifier", undefined, options);
+  // The provider echoes back the `state` from the authorization request; use it
+  // to locate the matching pending flow's PKCE verifier. Only a sign-in we
+  // started in this browser could have set that state-keyed cookie, so its
+  // presence both proves the callback belongs to that request (CSRF defense)
+  // and tells concurrent flows apart. Pass `state` as `expectedState` so the
+  // grant also rejects a response whose `state` is missing or mismatched.
+  const state = url.searchParams.get("state");
+  if (!state) {
+    return handleError(request, 400, "Missing state parameter", undefined, options);
   }
 
-  // Sign-in always sends `state` and stores the matching cookie, so the callback
-  // must always prove it belongs to that request. Require the stored value and
-  // pass it as `expectedState` unconditionally — `authorizationCodeGrant` then
-  // rejects a response whose `state` is missing or mismatched (CSRF defense).
-  const expectedState = cookies[STATE_COOKIE];
-  if (!expectedState) {
-    return handleError(request, 400, "Missing state cookie", undefined, options);
+  const verifierCookieName = pkceCookieName(state);
+  const verifierCookie = parseCookies(request.headers.get("cookie") ?? "")[verifierCookieName];
+  if (!verifierCookie) {
+    return handleError(request, 400, "Unknown or expired sign-in state", undefined, options);
   }
-  const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState };
+
+  const { verifier: pkceCodeVerifier, returnPathname } = decodePkceState(verifierCookie);
+  const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState: state };
 
   let tokens: Awaited<ReturnType<typeof client.authorizationCodeGrant>>;
   try {
     const config = await getConfig();
     tokens = await client.authorizationCodeGrant(config, url, checks);
   } catch (error) {
-    return handleError(request, 500, "Token exchange failed", error, options);
+    return handleError(request, 500, "Token exchange failed", error, options, verifierCookieName);
   }
 
-  // `access_token` is always present in a successful token response, so the
-  // session token below is guaranteed to be a string.
+  const claims = tokens.claims();
+
+  // `access_token` is always present in a successful token response.
   const data: HandleAuthSuccessData = {
     accessToken: tokens.access_token,
     idToken: tokens.id_token,
     refreshToken: tokens.refresh_token,
     expiresIn: tokens.expires_in,
     scope: tokens.scope,
-    claims: tokens.claims(),
-    state: url.searchParams.get("state") ?? undefined,
+    claims,
+    state,
   };
 
   await options?.onSuccess?.(data);
 
-  const secure = url.protocol === "https:";
-  const headers = new Headers({ Location: options?.returnPathname ?? DEFAULT_REDIRECT });
+  // Persist the tokens as a sealed session so getAuth()/signOut() can recover
+  // identity and (later) refresh. Derive an absolute expiry for getAuth()'s
+  // belt-and-suspenders staleness check.
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const expiresAt =
+    typeof tokens.expires_in === "number"
+      ? nowSeconds + tokens.expires_in
+      : typeof claims?.exp === "number"
+        ? claims.exp
+        : undefined;
 
-  // Persist the session token (prefer the ID token) for subsequent requests.
-  headers.append(
-    "Set-Cookie",
-    serializeCookie(AUTH_COOKIE, data.idToken ?? data.accessToken, {
+  const session: SessionData = {
+    accessToken: tokens.access_token,
+    idToken: tokens.id_token,
+    refreshToken: tokens.refresh_token,
+    expiresAt,
+  };
+
+  let sealed: string;
+  try {
+    sealed = await sealSession(session);
+  } catch (error) {
+    return handleError(request, 500, "Failed to persist session", error, options, verifierCookieName);
+  }
+
+  const secure = url.protocol === "https:";
+  const headers = new Headers({ Location: options?.returnPathname ?? returnPathname ?? DEFAULT_REDIRECT });
+
+  const existingNames = parseCookieNames(request.headers.get("cookie") ?? "");
+  for (const header of serializeSessionCookies(
+    sealed,
+    {
       httpOnly: true,
       secure,
       sameSite: "Lax",
       path: "/",
-      maxAge: data.expiresIn,
-    }),
-  );
+      maxAge: tokens.expires_in,
+    },
+    existingNames,
+  )) {
+    headers.append("Set-Cookie", header);
+  }
 
-  // Clear the one-time sign-in cookies now that the flow is complete.
-  deleteSignInCookies(headers);
+  // Clear only this flow's verifier; other concurrent sign-ins keep theirs.
+  deleteCookie(headers, verifierCookieName);
 
   return new Response(null, { status: 302, headers });
 }

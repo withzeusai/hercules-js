@@ -16,6 +16,12 @@ export interface HandleSignInOptions {
    * token to be returned. Defaults to `openid profile email`.
    */
   scope?: string;
+  /**
+   * Where to send the user after the callback completes. Stashed with the PKCE
+   * verifier and honored by {@link HandleCallbackOptions} unless that handler's
+   * own `returnPathname` overrides it.
+   */
+  returnPathname?: string;
 }
 
 export interface HandleCallbackOptions {

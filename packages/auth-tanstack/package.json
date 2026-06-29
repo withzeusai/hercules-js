@@ -6,6 +6,7 @@
   "sideEffects": false,
   "exports": {
     ".": "./dist/index.mjs",
+    "./client": "./dist/client/index.mjs",
     "./package.json": "./package.json"
   },
   "author": "Hercules Team",
@@ -31,9 +32,14 @@
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "react": "^19.2.7",
     "tsdown": "^0.22.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.16",
