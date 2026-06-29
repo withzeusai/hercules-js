@@ -20,7 +20,7 @@ type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  roleKind: string;
+  isSystemRole: boolean;
 };
 type TenantSummary = {
   tenantId: string;
@@ -30,10 +30,6 @@ type TenantSummary = {
   accessStatus: string;
   lifecycleStatus: string;
   roles: RoleSummary[];
-};
-type ActiveTenantSummary = TenantSummary & {
-  accessStatus: "active";
-  lifecycleStatus: "active";
 };
 type PermissionSummary = {
   permissionId: string;
@@ -103,27 +99,6 @@ type TargetTenantSyncStatus =
       currentSourceVersion?: number;
       targetSourceVersion: number;
     };
-type TenantMemberPickerUser = {
-  userId: string;
-  name: string;
-  email: string;
-  image?: string;
-};
-type TenantMemberPickerPage = { users: TenantMemberPickerUser[]; cursor?: string };
-type SharingRecipient =
-  | {
-      type: "user";
-      userId: string;
-      name: string;
-      email: string;
-      image?: string;
-    }
-  | {
-      type: "group";
-      groupId: string;
-      name?: string;
-    };
-type SharingRecipientsPage = { recipients: SharingRecipient[]; cursor?: string };
 type TenantRoleDetail = RoleSummary & {
   description: string | null;
   shared: boolean;
@@ -205,21 +180,11 @@ type TenantAccessStatus =
     };
 
 const applySync = makeFunctionReference<"mutation">("sync:applySync");
-const getEffectivePermissions = makeFunctionReference<
-  "query",
-  Record<string, unknown>,
-  { allowed: boolean; wildcard: string; permissions: string[] }
->("queries:getEffectivePermissions");
 const listMyTenants = makeFunctionReference<
   "query",
   Record<string, unknown>,
   { tenants: TenantSummary[]; cursor?: string }
 >("queries:listMyTenants");
-const listMyActiveTenants = makeFunctionReference<
-  "query",
-  Record<string, unknown>,
-  { tenants: ActiveTenantSummary[]; cursor?: string }
->("queries:listMyActiveTenants");
 const getTargetTenantSyncStatus = makeFunctionReference<
   "query",
   Record<string, unknown>,
@@ -271,16 +236,6 @@ const listTenantPermissions = makeFunctionReference<
   Record<string, unknown>,
   PermissionSummary[]
 >("queries:listTenantPermissions");
-const listTenantMemberPickerUsers = makeFunctionReference<
-  "query",
-  Record<string, unknown>,
-  TenantMemberPickerPage
->("queries:listTenantMemberPickerUsers");
-const listResourceSharingRecipients = makeFunctionReference<
-  "query",
-  Record<string, unknown>,
-  SharingRecipientsPage
->("queries:listResourceSharingRecipients");
 const listDirectSubjectsForResource = makeFunctionReference<
   "query",
   Record<string, unknown>,
@@ -853,7 +808,7 @@ describe("listMyTenants", () => {
         roleId: "role_acme_admin",
         roleKey: "admin",
         roleName: "Admin",
-        roleKind: "system",
+        isSystemRole: true,
       },
     ]);
   });
@@ -883,7 +838,7 @@ describe("listMyTenants", () => {
         roleId: "role_engineer",
         roleKey: "engineer",
         roleName: "Engineer",
-        roleKind: "custom",
+        isSystemRole: false,
       },
     ]);
     expect(roles).toEqual(acme?.roles);
@@ -1157,8 +1112,8 @@ async function seedActiveTenantRows(
   });
 }
 
-describe("listMyActiveTenants", () => {
-  test("returns only active memberships in active tenants with optional default filtering", async () => {
+describe("listMyTenants", () => {
+  test("with status active returns only active memberships in active tenants with optional default filtering", async () => {
     const t = convexTest(schema, modules);
     await seedActiveTenantRows(t, [
       {
@@ -1208,8 +1163,9 @@ describe("listMyActiveTenants", () => {
       },
     ]);
 
-    const page = await t.query(listMyActiveTenants, {
+    const page = await t.query(listMyTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
+      status: "active",
       isRoot: false,
       limit: 2,
     });
@@ -1289,15 +1245,17 @@ describe("listMyActiveTenants", () => {
       }
     });
 
-    const first = await t.query(listMyActiveTenants, {
+    const first = await t.query(listMyTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
+      status: "active",
       limit: 1,
       isRoot: false,
     });
     expect(first).toEqual({ tenants: [], cursor: expect.any(String) });
 
-    const second = await t.query(listMyActiveTenants, {
+    const second = await t.query(listMyTenants, {
       tokenIdentifier: `${ISSUER}|user_alice`,
+      status: "active",
       limit: 1,
       isRoot: false,
       cursor: first.cursor,
@@ -1329,8 +1287,9 @@ describe("listMyActiveTenants", () => {
     ]);
 
     await expect(
-      t.query(listMyActiveTenants, {
+      t.query(listMyTenants, {
         tokenIdentifier: `${ISSUER}|user_alice`,
+        status: "active",
       }),
     ).resolves.toEqual({ tenants: [] });
   });
@@ -1515,170 +1474,6 @@ describe("getTargetTenantSyncStatus", () => {
       reasonCode,
       currentSourceVersion: 2,
       targetSourceVersion: 2,
-    });
-  });
-});
-
-describe("getEffectivePermissions", () => {
-  test("applies explicit role denies across all assigned roles", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, permissionCatalogSnapshot());
-    await t.mutation(applySync, permissionOrgSnapshot());
-
-    const result = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-    });
-
-    expect(result).toMatchObject({
-      allowed: true,
-      reasonCode: "allowed",
-      sourceVersion: 2,
-      principalId: "p_alice_acme",
-      tenantId: "scope_acme",
-      effectiveRoleIds: ["role_manager", "role_accountant", "role_field_agent"],
-      permissions: ["borrowers.create"],
-    });
-  });
-
-  test("only includes resource grants for the requested resource", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, resourceCatalogSnapshot());
-    await t.mutation(applySync, resourceOrgSnapshot());
-
-    const withoutResource = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-    });
-    expect(withoutResource.permissions).toEqual(["system.access.grants:read"]);
-
-    const withResource = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_123",
-    });
-    expect(withResource.permissions).toEqual(["reports.read", "system.access.grants:read"]);
-
-    const otherResource = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_456",
-    });
-    expect(otherResource.permissions).toEqual(["system.access.grants:read"]);
-  });
-
-  test("applies a role-wide resource allow with a specific deny exception", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, resourceRoleCatalogSnapshot());
-    await t.mutation(applySync, resourceRoleOrgSnapshot());
-
-    const ordinaryReport = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_123",
-    });
-    expect(ordinaryReport.permissions).toEqual(["reports.read"]);
-
-    const blockedReport = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_private",
-    });
-    expect(blockedReport.permissions).toEqual([]);
-  });
-
-  test("does not authorize a resource rule for a missing role", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, resourceCatalogSnapshot());
-    await t.mutation(applySync, resourceRoleOrgSnapshot());
-
-    const result = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-      resourceType: "reports",
-      resourceId: "report_123",
-    });
-    expect(result.permissions).toEqual([]);
-  });
-
-  test("expands manage/* grants to concrete verbs without advertising superset keys", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, manageCatalogSnapshot());
-    await t.mutation(applySync, manageOrgSnapshot());
-
-    const result = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-    });
-
-    // L-3: superset-action catalog keys (`:manage`, `:*`) are control-plane
-    // management gates; authorize() rejects a request that resolves to one with
-    // `invalid_request`, so getEffectivePermissions must not advertise them.
-    // The grants still expand onto the concrete-verb catalog keys they cover.
-    expect(result.wildcard).toBe("none");
-    expect(result.permissions).toEqual(["system.access.roles:read", "system.reports:export"]);
-  });
-
-  // Runtime-plane group conferral: a member inherits the permissions of a role
-  // bound to an ACTIVE group it belongs to (evaluateEffectiveAccess via the
-  // E3-fenced collectPrincipalIds).
-  test("a member inherits a permission through an active group", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, groupPermissionCatalogSnapshot());
-    await t.mutation(applySync, groupPermissionOrgSnapshot("active"));
-
-    const result = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-    });
-
-    expect(result).toMatchObject({
-      allowed: true,
-      effectiveRoleIds: ["role_engineer"],
-      permissions: ["deploys.run"],
-    });
-  });
-
-  // E3 (runtime-plane blocked-group fence): a member inherits NOTHING when the
-  // group principal is blocked. Without the fence the member would still gain the
-  // group's permission.
-  test("a blocked group confers no permission at runtime", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, groupPermissionCatalogSnapshot());
-    await t.mutation(applySync, groupPermissionOrgSnapshot("blocked"));
-
-    const result = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-    });
-
-    expect(result).toMatchObject({
-      allowed: true,
-      effectiveRoleIds: [],
-      permissions: [],
-    });
-  });
-
-  // Same E3 fence for the MANUAL eviction state: a removed group must confer
-  // nothing, exactly like a blocked one.
-  test("a removed group confers no permission at runtime", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, groupPermissionCatalogSnapshot());
-    await t.mutation(applySync, groupPermissionOrgSnapshot("removed"));
-
-    const result = await t.query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_acme",
-    });
-
-    expect(result).toMatchObject({
-      allowed: true,
-      effectiveRoleIds: [],
-      permissions: [],
     });
   });
 });
@@ -2311,232 +2106,6 @@ function resourceRoleOrgSnapshot(): Snapshot {
   };
 }
 
-// A resource share grant as the producer projects it — IDENTICAL in shape
-// whether it originated from an accepted resource invitation or an immediate
-// resource grant (both resolve to one principal-subject, resource-object,
-// direct_permission grant). The component only sees the projected row, so
-// getEffectivePermissions must enumerate the same permission set for both.
-type ResourceShareGrant = {
-  grantId: string;
-  effect: "allow" | "deny";
-  objectId: string;
-  objectResourceType?: string;
-};
-
-// The permission catalog is app-wide and always lives in the DEFAULT scope
-// (effective.ts fetches catalogPermissions there). Seed the permission, the
-// principal, the Viewer role membership, and the resource grants all in the
-// default scope so getEffectivePermissions can enumerate over the catalog.
-function resourceShareEnumSnapshot(grants: ResourceShareGrant[]): Snapshot {
-  return {
-    type: "access.projection.snapshot",
-    eventId: "evt_resource_share_enum",
-    sourceVersion: 1,
-    expectedIssuer: ISSUER,
-    scope: {
-      accessScopeId: "scope_default",
-      name: "Default",
-      kind: "default",
-      status: "active",
-      accessMode: "open",
-      defaultRoleId: "role_viewer",
-      updatedAt: 1,
-    },
-    state: {
-      ...emptyState(),
-      principals: [
-        {
-          principalId: "p_alice",
-          type: "user",
-          herculesAuthUserId: "user_alice",
-          status: "active",
-          joinedAt: 100,
-          updatedAt: 100,
-        },
-      ],
-      roles: [
-        {
-          roleId: "role_viewer",
-          accessScopeId: "scope_default",
-          key: "viewer",
-          kind: "system",
-          name: "Viewer",
-          wildcard: "none",
-          updatedAt: 1,
-        },
-      ],
-      permissions: [
-        {
-          permissionId: "perm_reports_read",
-          accessScopeId: "scope_default",
-          key: "reports.read",
-          resourceType: "reports",
-          action: "read",
-          tenantAssignable: true,
-          updatedAt: 1,
-        },
-      ],
-      grants: [
-        {
-          grantId: "grant_alice_viewer",
-          subjectPrincipalId: "p_alice",
-          relationKind: "role",
-          roleId: "role_viewer",
-          effect: "allow",
-          objectType: "scope",
-          objectId: "scope_default",
-          updatedAt: 1,
-        },
-        ...grants.map((grant) => ({
-          grantId: grant.grantId,
-          subjectPrincipalId: "p_alice",
-          relationKind: "direct_permission" as const,
-          permissionId: "perm_reports_read",
-          effect: grant.effect,
-          objectType: "resource" as const,
-          objectId: grant.objectId,
-          objectResourceType: grant.objectResourceType,
-          updatedAt: 1,
-        })),
-      ],
-    },
-  };
-}
-
-function effectiveReportPermissions(
-  t: ReturnType<typeof convexTest>,
-  resourceId: string,
-): Promise<string[]> {
-  return t
-    .query(getEffectivePermissions, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_default",
-      resourceType: "reports",
-      resourceId,
-    })
-    .then((result) => result.permissions);
-}
-
-// getEffectivePermissions must enumerate IDENTICALLY for a permission reached
-// via an accepted resource invitation vs an equivalent immediate resource
-// grant: same projected row, same enumerated set.
-describe("getEffectivePermissions — resource invitation / immediate grant parity", () => {
-  test("ordinary resource share allow enumerates identically for both origins", async () => {
-    const immediate = convexTest(schema, modules);
-    await immediate.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        {
-          grantId: "grant_immediate",
-          effect: "allow",
-          objectId: "report_1",
-          objectResourceType: "reports",
-        },
-      ]),
-    );
-    const invitation = convexTest(schema, modules);
-    await invitation.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        {
-          grantId: "grant_invitation",
-          effect: "allow",
-          objectId: "report_1",
-          objectResourceType: "reports",
-        },
-      ]),
-    );
-
-    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
-    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
-    expect(fromImmediate).toEqual(["reports.read"]);
-    expect(fromInvitation).toEqual(fromImmediate);
-  });
-
-  test("an inherited deny overrides the resource share identically for both origins", async () => {
-    // A scope-wide all-instances ("*") deny overrides the instance allow.
-    const immediate = convexTest(schema, modules);
-    await immediate.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        {
-          grantId: "grant_immediate",
-          effect: "allow",
-          objectId: "report_1",
-          objectResourceType: "reports",
-        },
-        {
-          grantId: "grant_inherited_deny",
-          effect: "deny",
-          objectId: "*",
-          objectResourceType: "reports",
-        },
-      ]),
-    );
-    const invitation = convexTest(schema, modules);
-    await invitation.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        {
-          grantId: "grant_invitation",
-          effect: "allow",
-          objectId: "report_1",
-          objectResourceType: "reports",
-        },
-        {
-          grantId: "grant_inherited_deny",
-          effect: "deny",
-          objectId: "*",
-          objectResourceType: "reports",
-        },
-      ]),
-    );
-
-    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
-    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
-    expect(fromImmediate).toEqual([]);
-    expect(fromInvitation).toEqual(fromImmediate);
-  });
-
-  test("a malformed-resourceType grant enumerates nothing for both origins", async () => {
-    const immediate = convexTest(schema, modules);
-    await immediate.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        { grantId: "grant_immediate", effect: "allow", objectId: "report_1" },
-      ]),
-    );
-    const invitation = convexTest(schema, modules);
-    await invitation.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        { grantId: "grant_invitation", effect: "allow", objectId: "report_1" },
-      ]),
-    );
-
-    const fromImmediate = await effectiveReportPermissions(immediate, "report_1");
-    const fromInvitation = await effectiveReportPermissions(invitation, "report_1");
-    expect(fromImmediate).toEqual([]);
-    expect(fromInvitation).toEqual(fromImmediate);
-
-    // Positive control: same shape with a well-formed resourceType enumerates
-    // the permission, so the empty sets above are attributable to the malformed
-    // type alone.
-    const wellFormed = convexTest(schema, modules);
-    await wellFormed.mutation(
-      applySync,
-      resourceShareEnumSnapshot([
-        {
-          grantId: "grant_well_formed",
-          effect: "allow",
-          objectId: "report_1",
-          objectResourceType: "reports",
-        },
-      ]),
-    );
-    expect(await effectiveReportPermissions(wellFormed, "report_1")).toEqual(["reports.read"]);
-  });
-});
 
 describe("tenant admin reads", () => {
   // Default tenant with the system read permissions in the catalog, an Owner
@@ -2719,7 +2288,7 @@ describe("tenant admin reads", () => {
         roleId: "role_owner",
         roleKey: "owner",
         roleName: "Owner",
-        roleKind: "system",
+        isSystemRole: true,
         expiresAt: null,
       },
     ]);
@@ -2802,7 +2371,7 @@ describe("tenant admin reads", () => {
       roleId: "role_member",
       roleKey: "member",
       roleName: "Member",
-      roleKind: "system",
+      isSystemRole: true,
       description: "Default tenant member access.",
       shared: false,
       basePermissions: [
@@ -2875,8 +2444,8 @@ describe("tenant admin reads", () => {
       tenantId: "scope_default",
     });
 
-    expect(roles.find((role) => role.roleId === "role_owner")?.roleKind).toBe("system");
-    expect(roles.find((role) => role.roleId === "role_editor")?.roleKind).toBe("custom");
+    expect(roles.find((role) => role.roleId === "role_owner")?.isSystemRole).toBe(true);
+    expect(roles.find((role) => role.roleId === "role_editor")?.isSystemRole).toBe(false);
   });
 
   test("explainAccess uses the authorize evaluator and reports decisive sources", async () => {
@@ -3272,214 +2841,6 @@ function pickerSnapshot(): Snapshot {
   };
 }
 
-describe("least-privilege picker reads", () => {
-  test("lists active tenant users behind the supplied app permission with narrow fields", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    const first = await t.query(listTenantMemberPickerUsers, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_default",
-      permission: "app.tasks:assign",
-      limit: 1,
-    });
-    expect(first.users).toEqual([
-      {
-        userId: "user_alice",
-        name: "Alice",
-        email: "alice@example.com",
-      },
-    ]);
-    expect(first.cursor).toEqual(expect.any(String));
-
-    const second = await t.query(listTenantMemberPickerUsers, {
-      tokenIdentifier: `${ISSUER}|user_alice`,
-      tenantId: "scope_default",
-      permission: "app.tasks:assign",
-      cursor: first.cursor,
-      limit: 100,
-    });
-    expect(second).toEqual({
-      users: [
-        {
-          userId: "user_bob",
-          name: "Bob",
-          email: "bob@example.com",
-          image: "https://example.com/bob.png",
-        },
-      ],
-    });
-    expect(Object.keys(second.users[0]!).sort()).toEqual(["email", "image", "name", "userId"]);
-  });
-
-  test("returns an empty member picker page when the supplied permission gate denies", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    await expect(
-      t.query(listTenantMemberPickerUsers, {
-        tokenIdentifier: `${ISSUER}|user_bob`,
-        tenantId: "scope_default",
-        permission: "app.tasks:assign",
-      }),
-    ).resolves.toEqual({ users: [] });
-  });
-
-  test("gates member picker users with exact resource authorization", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    await expect(
-      t.query(listTenantMemberPickerUsers, {
-        tokenIdentifier: `${ISSUER}|user_bob`,
-        tenantId: "scope_default",
-        permission: "app.tasks:assign",
-        resourceType: "app.tasks",
-        resourceId: "task_2",
-      }),
-    ).resolves.toEqual({ users: [] });
-
-    const allowed = await t.query(listTenantMemberPickerUsers, {
-      tokenIdentifier: `${ISSUER}|user_bob`,
-      tenantId: "scope_default",
-      permission: "app.tasks:assign",
-      resourceType: "app.tasks",
-      resourceId: "task_1",
-    });
-    expect(allowed.users.map((user) => user.userId).sort()).toEqual(["user_alice", "user_bob"]);
-  });
-
-  test("gates member picker users with trusted inherited ancestor authorization", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    await expect(
-      t.query(listTenantMemberPickerUsers, {
-        tokenIdentifier: `${ISSUER}|user_bob`,
-        tenantId: "scope_default",
-        permission: "app.tasks:assign",
-        resourceType: "app.tasks",
-        resourceId: "task_2",
-      }),
-    ).resolves.toEqual({ users: [] });
-
-    const allowed = await t.query(listTenantMemberPickerUsers, {
-      tokenIdentifier: `${ISSUER}|user_bob`,
-      tenantId: "scope_default",
-      permission: "app.tasks:assign",
-      resourceType: "app.tasks",
-      resourceId: "task_2",
-      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
-    });
-    expect(allowed.users.map((user) => user.userId).sort()).toEqual(["user_alice", "user_bob"]);
-  });
-
-  test("lists sharing recipients by recipient type behind exact resource manage_members", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    await expect(
-      t.query(listResourceSharingRecipients, {
-        tokenIdentifier: `${ISSUER}|user_alice`,
-        tenantId: "scope_default",
-        permission: "app.docs:manage_members",
-        resourceType: "app.docs",
-        resourceId: "doc_1",
-        recipientType: "user",
-      }),
-    ).resolves.toEqual({
-      recipients: [
-        {
-          type: "user",
-          userId: "user_alice",
-          name: "Alice",
-          email: "alice@example.com",
-        },
-        {
-          type: "user",
-          userId: "user_bob",
-          name: "Bob",
-          email: "bob@example.com",
-          image: "https://example.com/bob.png",
-        },
-      ],
-    });
-
-    await expect(
-      t.query(listResourceSharingRecipients, {
-        tokenIdentifier: `${ISSUER}|user_alice`,
-        tenantId: "scope_default",
-        permission: "app.docs:manage_members",
-        resourceType: "app.docs",
-        resourceId: "doc_1",
-        recipientType: "group",
-      }),
-    ).resolves.toEqual({
-      recipients: [
-        {
-          type: "group",
-          groupId: "p_team",
-          name: "Team",
-        },
-      ],
-    });
-  });
-
-  test("fails closed when the supplied exact resource permission is not manage_members", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    await expect(
-      t.query(listResourceSharingRecipients, {
-        tokenIdentifier: `${ISSUER}|user_alice`,
-        tenantId: "scope_default",
-        permission: "app.docs:read",
-        resourceType: "app.docs",
-        resourceId: "doc_1",
-        recipientType: "user",
-      }),
-    ).resolves.toEqual({ recipients: [] });
-  });
-
-  test("requires exact resource or trusted ancestor authorization for sharing recipients", async () => {
-    const t = convexTest(schema, modules);
-    await t.mutation(applySync, pickerSnapshot());
-
-    await expect(
-      t.query(listResourceSharingRecipients, {
-        tokenIdentifier: `${ISSUER}|user_alice`,
-        tenantId: "scope_default",
-        permission: "app.docs:manage_members",
-        resourceType: "app.docs",
-        resourceId: "doc_2",
-        recipientType: "user",
-      }),
-    ).resolves.toEqual({ recipients: [] });
-
-    await expect(
-      t.query(listResourceSharingRecipients, {
-        tokenIdentifier: `${ISSUER}|user_alice`,
-        tenantId: "scope_default",
-        permission: "app.docs:manage_members",
-        resourceType: "app.docs",
-        resourceId: "doc_2",
-        ancestors: [{ resourceType: "app.folders", resourceId: "folder_1" }],
-        recipientType: "user",
-        limit: 1,
-      }),
-    ).resolves.toEqual({
-      recipients: [
-        {
-          type: "user",
-          userId: "user_alice",
-          name: "Alice",
-          email: "alice@example.com",
-        },
-      ],
-      cursor: expect.any(String),
-    });
-  });
-});
 
 describe("listDirectSubjectsForResource", () => {
   test("lists direct grantees on the resource for an authorized caller", async () => {
@@ -3808,7 +3169,7 @@ describe("group principal names", () => {
         roleId: "role_member",
         roleKey: "member",
         roleName: "Member",
-        roleKind: "system",
+        isSystemRole: true,
         expiresAt: null,
       },
     ]);

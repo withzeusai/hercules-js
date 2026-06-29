@@ -24,17 +24,11 @@ const component = {
   queries: {
     getTenantAccessStatus: "getTenantAccessStatus",
     listMyTenants: "listMyTenants",
-    listMyActiveTenants: "listMyActiveTenants",
     getTargetTenantSyncStatus: "getTargetTenantSyncStatus",
     listMyRoles: "listMyRoles",
-    getEffectivePermissions: "getEffectivePermissions",
     getTenant: "getTenant",
     listTenantUsers: "listTenantUsers",
     listTenantGroups: "listTenantGroups",
-    listTenantUserDirectory: "listTenantUserDirectory",
-    listTenantMemberPickerUsers: "listTenantMemberPickerUsers",
-    listResourceSharingRecipients: "listResourceSharingRecipients",
-    getTenantUserDirectoryEntry: "getTenantUserDirectoryEntry",
     listGroupMembers: "listGroupMembers",
     listUserGroups: "listUserGroups",
     listTenantRoles: "listTenantRoles",
@@ -261,7 +255,7 @@ describe("createIam", () => {
           tokenIdentifier: "https://auth.example.com|user_1",
         }),
       },
-      runQuery: vi.fn(async (ref: string) => {
+      runQuery: vi.fn(async (ref: string, args?: { status?: string }) => {
         if (ref === "authorize") {
           return {
             allowed: true,
@@ -269,18 +263,6 @@ describe("createIam", () => {
             sourceVersion: 1,
             principalId: "principal_1",
             effectiveRoleIds: ["role_member"],
-          };
-        }
-        if (ref === "getEffectivePermissions") {
-          return {
-            allowed: true,
-            reasonCode: "allowed",
-            sourceVersion: 1,
-            tenantId: "tenant_abc",
-            principalId: "principal_1",
-            effectiveRoleIds: ["role_member"],
-            wildcard: "none",
-            permissions: ["tasks.read"],
           };
         }
         if (ref === "getTenantAccessStatus") {
@@ -292,6 +274,22 @@ describe("createIam", () => {
           };
         }
         if (ref === "listMyTenants") {
+          if (args?.status === "active") {
+            return {
+              tenants: [
+                {
+                  tenantId: "tenant_abc",
+                  tenantName: "Acme",
+                  isRoot: false,
+                  roles: [],
+                  joinedAt: 1,
+                  accessStatus: "active",
+                  lifecycleStatus: "active",
+                },
+              ],
+              cursor: "active_tenant_cursor_2",
+            };
+          }
           return {
             tenants: [
               {
@@ -303,7 +301,7 @@ describe("createIam", () => {
                     roleId: "role_member",
                     roleKey: "member",
                     roleName: "Member",
-                    roleKind: "system",
+                    isSystemRole: true,
                   },
                 ],
                 joinedAt: 1,
@@ -312,22 +310,6 @@ describe("createIam", () => {
               },
             ],
             cursor: "tenant_cursor_2",
-          };
-        }
-        if (ref === "listMyActiveTenants") {
-          return {
-            tenants: [
-              {
-                tenantId: "tenant_abc",
-                tenantName: "Acme",
-                isRoot: false,
-                roles: [],
-                joinedAt: 1,
-                accessStatus: "active",
-                lifecycleStatus: "active",
-              },
-            ],
-            cursor: "active_tenant_cursor_2",
           };
         }
         if (ref === "getTargetTenantSyncStatus") {
@@ -356,68 +338,9 @@ describe("createIam", () => {
               roleId: "role_member",
               roleKey: "member",
               roleName: "Member",
-              roleKind: "system",
+              isSystemRole: true,
             },
           ];
-        }
-        if (ref === "listTenantUserDirectory") {
-          return {
-            users: [
-              {
-                userId: "user_1",
-                name: "Alice",
-                email: "alice@example.com",
-                roles: [
-                  {
-                    roleId: "role_member",
-                    roleKey: "member",
-                    roleName: "Member",
-                    roleKind: "system",
-                  },
-                ],
-              },
-            ],
-            cursor: "cursor_2",
-          };
-        }
-        if (ref === "listTenantMemberPickerUsers") {
-          return {
-            users: [
-              {
-                userId: "user_1",
-                name: "Alice",
-                email: "alice@example.com",
-              },
-            ],
-            cursor: "member_picker_cursor_2",
-          };
-        }
-        if (ref === "listResourceSharingRecipients") {
-          return {
-            recipients: [
-              {
-                type: "group",
-                groupId: "group_1",
-                name: "Reviewers",
-              },
-            ],
-            cursor: "recipient_cursor_2",
-          };
-        }
-        if (ref === "getTenantUserDirectoryEntry") {
-          return {
-            userId: "user_1",
-            name: "Alice",
-            email: "alice@example.com",
-            roles: [
-              {
-                roleId: "role_member",
-                roleKey: "member",
-                roleName: "Member",
-                roleKind: "system",
-              },
-            ],
-          };
         }
         if (ref === "listTenantUsers") {
           return {
@@ -513,19 +436,6 @@ describe("createIam", () => {
       }),
     };
 
-    await expect(
-      builders.hasPermission(ctx as never, {
-        tenantId: "tenant_abc",
-        permission: "tasks.read",
-        resource: { type: "tasks", id: "task_1" },
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      builders.getEffectivePermissions(ctx as never, {
-        tenantId: "tenant_abc",
-        resource: { type: "app.projects" },
-      }),
-    ).resolves.toEqual(["tasks.read"]);
     await expect(builders.getTenantAccessStatus(ctx as never)).resolves.toEqual({
       kind: "principal",
       principalId: "principal_1",
@@ -545,7 +455,7 @@ describe("createIam", () => {
               roleId: "role_member",
               roleKey: "member",
               roleName: "Member",
-              roleKind: "system",
+              isSystemRole: true,
             },
           ],
           joinedAt: 1,
@@ -556,7 +466,8 @@ describe("createIam", () => {
       nextCursor: "tenant_cursor_2",
     });
     await expect(
-      builders.listMyActiveTenants(ctx as never, {
+      builders.listMyTenants(ctx as never, {
+        status: "active",
         cursor: "active_tenant_cursor_1",
         limit: 25,
         isRoot: false,
@@ -601,91 +512,9 @@ describe("createIam", () => {
         roleId: "role_member",
         roleKey: "member",
         roleName: "Member",
-        roleKind: "system",
+        isSystemRole: true,
       },
     ]);
-    await expect(
-      builders.listTenantUserDirectory(ctx as never, {
-        tenantId: "tenant_abc",
-        cursor: "cursor_1",
-        limit: 25,
-      }),
-    ).resolves.toEqual({
-      users: [
-        {
-          userId: "user_1",
-          name: "Alice",
-          email: "alice@example.com",
-          roles: [
-            {
-              roleId: "role_member",
-              roleKey: "member",
-              roleName: "Member",
-              roleKind: "system",
-            },
-          ],
-        },
-      ],
-      nextCursor: "cursor_2",
-    });
-    await expect(
-      builders.listTenantMemberPickerUsers(ctx as never, {
-        tenantId: "tenant_abc",
-        permission: "app.tasks:assign",
-        resource: { type: "app.tasks", id: "task_1" },
-        ancestors: [{ type: "app.projects", id: "project_1" }],
-        cursor: "member_picker_cursor_1",
-        limit: 25,
-      }),
-    ).resolves.toEqual({
-      users: [
-        {
-          userId: "user_1",
-          name: "Alice",
-          email: "alice@example.com",
-        },
-      ],
-      nextCursor: "member_picker_cursor_2",
-    });
-    await expect(
-      builders.listResourceSharingRecipients(ctx as never, {
-        tenantId: "tenant_abc",
-        permission: "app.docs:manage_members",
-        resourceType: "app.docs",
-        resourceId: "doc_1",
-        ancestors: [{ type: "app.folders", id: "folder_1" }],
-        recipientType: "group",
-        cursor: "recipient_cursor_1",
-        limit: 25,
-      }),
-    ).resolves.toEqual({
-      recipients: [
-        {
-          type: "group",
-          groupId: "group_1",
-          name: "Reviewers",
-        },
-      ],
-      nextCursor: "recipient_cursor_2",
-    });
-    await expect(
-      builders.getTenantUserDirectoryEntry(ctx as never, {
-        tenantId: "tenant_abc",
-        userId: "user_1",
-      }),
-    ).resolves.toEqual({
-      userId: "user_1",
-      name: "Alice",
-      email: "alice@example.com",
-      roles: [
-        {
-          roleId: "role_member",
-          roleKey: "member",
-          roleName: "Member",
-          roleKind: "system",
-        },
-      ],
-    });
     await expect(
       builders.listTenantUsers(ctx as never, {
         tenantId: "tenant_abc",
@@ -789,35 +618,6 @@ describe("createIam", () => {
       ],
       nextCursor: "subjects_cursor_2",
     });
-    await expect(
-      builders.checkPermissions(ctx as never, [
-        {
-          tenantId: "tenant_abc",
-          permission: "tasks.read",
-          resource: { type: "tasks", id: "task_1" },
-        },
-      ]),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        allowed: true,
-        reasonCode: "allowed",
-      }),
-    ]);
-
-    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_abc",
-      permission: "tasks.read",
-      resourceType: "tasks",
-      resourceId: "task_1",
-    });
-    expect(ctx.runQuery).toHaveBeenCalledWith("getEffectivePermissions", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_abc",
-      resourceType: "app.projects",
-      resourceId: undefined,
-      ancestors: undefined,
-    });
     expect(ctx.runQuery).toHaveBeenCalledWith("getTenantAccessStatus", {
       tokenIdentifier: "https://auth.example.com|user_1",
     });
@@ -826,10 +626,11 @@ describe("createIam", () => {
       cursor: "tenant_cursor_1",
       limit: 25,
     });
-    expect(ctx.runQuery).toHaveBeenCalledWith("listMyActiveTenants", {
+    expect(ctx.runQuery).toHaveBeenCalledWith("listMyTenants", {
       tokenIdentifier: "https://auth.example.com|user_1",
       cursor: "active_tenant_cursor_1",
       limit: 25,
+      status: "active",
       isRoot: false,
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("getTargetTenantSyncStatus", {
@@ -840,38 +641,6 @@ describe("createIam", () => {
     expect(ctx.runQuery).toHaveBeenCalledWith("getTenant", {
       tokenIdentifier: "https://auth.example.com|user_1",
       tenantId: "tenant_abc",
-    });
-    expect(ctx.runQuery).toHaveBeenCalledWith("listTenantUserDirectory", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_abc",
-      cursor: "cursor_1",
-      limit: 25,
-    });
-    expect(ctx.runQuery).toHaveBeenCalledWith("listTenantMemberPickerUsers", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_abc",
-      permission: "app.tasks:assign",
-      resourceType: "app.tasks",
-      resourceId: "task_1",
-      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
-      cursor: "member_picker_cursor_1",
-      limit: 25,
-    });
-    expect(ctx.runQuery).toHaveBeenCalledWith("listResourceSharingRecipients", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_abc",
-      permission: "app.docs:manage_members",
-      resourceType: "app.docs",
-      resourceId: "doc_1",
-      ancestors: [{ resourceType: "app.folders", resourceId: "folder_1" }],
-      recipientType: "group",
-      cursor: "recipient_cursor_1",
-      limit: 25,
-    });
-    expect(ctx.runQuery).toHaveBeenCalledWith("getTenantUserDirectoryEntry", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_abc",
-      userId: "user_1",
     });
     expect(ctx.runQuery).toHaveBeenCalledWith("listTenantUsers", {
       tokenIdentifier: "https://auth.example.com|user_1",
@@ -892,89 +661,6 @@ describe("createIam", () => {
       resourceId: "task_1",
       cursor: "subjects_cursor_1",
       limit: 25,
-    });
-    expect(ctx.runQuery).toHaveBeenCalledWith("authorizeMany", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      checks: [
-        {
-          tenantId: "tenant_abc",
-          permission: "tasks.read",
-          resourceType: "tasks",
-          resourceId: "task_1",
-          ancestors: undefined,
-        },
-      ],
-    });
-  });
-
-  test("hasPermission forwards a bounded explicit ancestor chain atomically", async () => {
-    const builders = createIam({
-      query: identityBuilder,
-      mutation: identityBuilder,
-      action: identityBuilder,
-      component: component as never,
-    });
-    const ctx = {
-      auth: {
-        getUserIdentity: vi.fn().mockResolvedValue({
-          tokenIdentifier: "https://auth.example.com|user_1",
-        }),
-      },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        effectiveRoleIds: [],
-      }),
-    };
-
-    await expect(
-      builders.hasPermission(ctx, {
-        tenantId: "tenant_1",
-        permission: "app.tasks:update",
-        resource: { type: "app.tasks", id: "task_1" },
-        ancestors: [{ type: "app.projects", id: "project_1" }],
-      }),
-    ).resolves.toBe(true);
-
-    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: "tenant_1",
-      permission: "app.tasks:update",
-      resourceType: "app.tasks",
-      resourceId: "task_1",
-      ancestors: [{ resourceType: "app.projects", resourceId: "project_1" }],
-    });
-  });
-
-  test("hasPermission accepts a permission key and defaults to the app scope", async () => {
-    const builders = createIam({
-      query: identityBuilder,
-      mutation: identityBuilder,
-      action: identityBuilder,
-      component: component as never,
-    });
-    const ctx = {
-      auth: {
-        getUserIdentity: vi.fn().mockResolvedValue({
-          tokenIdentifier: "https://auth.example.com|user_1",
-        }),
-      },
-      runQuery: vi.fn().mockResolvedValue({
-        allowed: true,
-        reasonCode: "allowed",
-        sourceVersion: 1,
-        principalId: "principal_1",
-        effectiveRoleIds: ["role_member"],
-      }),
-    };
-
-    await expect(builders.hasPermission(ctx, "tasks.create")).resolves.toBe(true);
-    expect(ctx.runQuery).toHaveBeenCalledWith("authorize", {
-      tokenIdentifier: "https://auth.example.com|user_1",
-      tenantId: ROOT_TENANT_SENTINEL,
-      permission: "tasks.create",
-      resourceType: undefined,
-      resourceId: undefined,
     });
   });
 

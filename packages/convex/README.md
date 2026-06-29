@@ -87,25 +87,15 @@ export const {
   iamQuery,
   iamMutation,
   iamAction,
-  hasPermission,
-  requirePermission,
-  requireAnyPermission,
-  checkPermissions,
   filterAuthorizedResources,
   getCurrentUserId,
   getTenantAccessStatus,
-  getEffectivePermissions,
   listMyTenants,
-  listMyActiveTenants,
   getTargetTenantSyncStatus,
   listMyRoles,
   getTenant,
   listTenantUsers,
   listTenantGroups,
-  listTenantUserDirectory,
-  listTenantMemberPickerUsers,
-  listResourceSharingRecipients,
-  getTenantUserDirectoryEntry,
   listGroupMembers,
   listUserGroups,
   listTenantRoles,
@@ -343,60 +333,9 @@ authorizeAgainst: resource("tasks", "taskId", {
 
 ---
 
-## API Reference: in-handler permission helpers
+## API Reference: IAM mirror helpers
 
-Each takes an `IamContext` (any query/mutation/action ctx with `auth` and
-`runQuery`). Helpers return a falsy/empty value when no identity is present
-rather than throwing, except `requirePermission`/`requireAnyPermission`.
-
-Shared argument shapes:
-
-```ts
-type PermissionCheckArgs =
-  | string // permission key, root tenant
-  | { tenantId?: string; permission: string; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[] };
-
-type AnyPermissionCheckArgs =
-  | string[] // permission keys, root tenant
-  | { tenantId?: string; permissions: string[]; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[] };
-
-type EffectivePermissionsArgs = { tenantId?: string; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[] };
-type IamResourceRef = { type: string; id?: string };
-type IamAuthorizationAncestor = { type: string; id: string };
-```
-
-### `hasPermission(ctx, args)`
-
-- `args: PermissionCheckArgs` - permission to check, optionally resource-scoped.
-- Returns `Promise<boolean>`. `false` when unauthenticated.
-
-### `requirePermission(ctx, args)`
-
-- `args: PermissionCheckArgs`.
-- Returns `Promise<void>`. Throws `ConvexError { code: "ACCESS_DENIED" }` when denied.
-
-### `requireAnyPermission(ctx, args)`
-
-Passes if the caller holds at least one of the listed permissions.
-
-- `args: AnyPermissionCheckArgs`.
-- Returns `Promise<void>`. Throws `ConvexError { code: "ACCESS_DENIED" }` when none match.
-
-### `getEffectivePermissions(ctx, args?)`
-
-- `args?: EffectivePermissionsArgs` - tenant and optional resource scope.
-- Returns `Promise<string[]>` - the caller's effective permission keys. `[]` when
-  unauthenticated. Under the wildcard model this is a projection over the
-  catalog; treat a non-`"none"` wildcard mode as future-inclusive.
-
-### `checkPermissions(ctx, checks)`
-
-Batched authorization via `authorizeMany`.
-
-- `checks: Array<Exclude<PermissionCheckArgs, string>>` - at most 50; throws
-  `INVALID_PERMISSION_CHECKS` otherwise.
-- Returns `Promise<AuthorizationDecision[]>`, index-aligned with `checks`. When
-  unauthenticated returns one `{ allowed: false, reasonCode: "missing_identity", effectiveRoleIds: [] }` per check.
+Use `iamQuery`, `iamMutation`, and `iamAction` for protected Convex functions. These helpers are for mirror reads, sync state, filtering lists, and current-user identity.
 
 ### `getCurrentUserId(ctx)`
 
@@ -481,7 +420,8 @@ See in-handler helpers above. Returns `IamTenantAccessStatusResult`.
 The caller's tenant memberships, including an archived tenant only for a retained
 active direct built-in Owner.
 
-- `args?: { cursor?: string; limit?: number }`.
+- `args?: { cursor?: string; limit?: number; status?: "active" | "all"; isRoot?: boolean }`.
+  Use `status: "active"` for active memberships in active tenants.
 - Returns `TenantSummariesPage` = `{ tenants: TenantSummary[]; nextCursor? }`.
 
 Select the root tenant by `isRoot`, not array order:
@@ -491,16 +431,6 @@ const { tenants } = await listMyTenants(ctx, { limit: 100 });
 const tenant = tenants.find(({ isRoot }) => isRoot);
 if (!tenant) throw new Error("Root IAM tenant not found");
 ```
-
-### `listMyActiveTenants(ctx, args?)`
-
-Only active memberships in active tenants; narrows both statuses to `"active"`.
-Requires active standing in the root app tenant; returns an empty page when root
-standing is inactive.
-
-- `args?: { cursor?: string; limit?: number; isRoot?: boolean }` - pass `isRoot`
-  to filter to or away from the root tenant without assuming order.
-- Returns `ActiveTenantSummariesPage` = `{ tenants: ActiveTenantSummary[]; nextCursor? }`.
 
 ### `getTargetTenantSyncStatus(ctx, args)`
 
@@ -537,7 +467,7 @@ The caller's roles in a tenant. Display only; do not infer authorization.
 
 Gated on `system.access.users:read`.
 
-- `args?: { tenantId?: string; cursor?: string; limit?: number }`.
+- `args?: { tenantId?: string; status?: IamPrincipalStatus | "all"; query?: string; cursor?: string; limit?: number }`.
 - Returns `TenantUsersPage` = `{ users: TenantUser[]; nextCursor? }`. Effective
   `roles` may include roles inherited through groups; `directRoleGrants` carries
   the full role grant shape with nullable expiry.
@@ -546,42 +476,9 @@ Gated on `system.access.users:read`.
 
 Gated on `system.access.users:read`.
 
-- `args?: { tenantId?: string; cursor?: string; limit?: number }`.
+- `args?: { tenantId?: string; status?: IamPrincipalStatus | "all"; query?: string; cursor?: string; limit?: number }`.
 - Returns `TenantGroupsPage` = `{ groups: TenantGroup[]; nextCursor? }`. Each
   group includes the current direct `memberCount`.
-
-### `listTenantUserDirectory(ctx, args?)`
-
-Directory view for member screens.
-
-- `args?: { tenantId?: string; cursor?: string; limit?: number }`.
-- Returns `TenantUserDirectoryPage` = `{ users: TenantUserDirectoryEntry[]; nextCursor? }`.
-
-### `listTenantMemberPickerUsers(ctx, args)`
-
-Least-privilege picker (e.g. task assignment). The trusted server call site
-supplies the concrete app permission for the operation. Returns only active
-users with picker-safe fields.
-
-- `args: { tenantId?: string; permission: string; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[]; cursor?: string; limit?: number }`.
-  Pass `resource`/`ancestors` for resource-scoped operations; omit for
-  tenant-level.
-- Returns `TenantMemberPickerUsersPage` = `{ users: TenantMemberPickerUser[]; nextCursor? }`.
-
-### `listResourceSharingRecipients(ctx, args)`
-
-Exact-resource sharing picker. Supply the concrete resource permission whose
-action is exactly `manage_members`, the exact resource, and one recipient type.
-Returns an empty page when unauthenticated, unauthorized, or the permission
-resolves to any other resource type or action.
-
-- `args: { tenantId?: string; permission: string; resourceType: string; resourceId: string; ancestors?: IamAuthorizationAncestor[]; recipientType: "user" | "group"; cursor?: string; limit?: number }`.
-- Returns `SharingRecipientsPage` = `{ recipients: SharingRecipient[]; nextCursor? }`.
-
-### `getTenantUserDirectoryEntry(ctx, args)`
-
-- `args: { tenantId?: string; userId: string }`.
-- Returns `TenantUserDirectoryEntry | null`.
 
 ### `listGroupMembers(ctx, args)`
 
@@ -648,7 +545,7 @@ type RoleSummary = {
   roleId: string;     // canonical role id
   roleKey: string;    // catalog key, display/reference only
   roleName: string;   // display name
-  roleKind: "system" | "custom";
+  isSystemRole: boolean;
 };
 ```
 
@@ -713,25 +610,6 @@ type IamTenantAccessStatusResult =
         | "mirror_not_ready" | "root_tenant_missing" | "principal_missing";
       stateVersion?: number };
 ```
-
-### `EffectivePermissionsResult`
-
-Returned by the component query; `getEffectivePermissions` returns just
-`.permissions`.
-
-```ts
-type EffectivePermissionsResult = {
-  allowed: boolean;
-  reasonCode: string;
-  sourceVersion?: number;
-  tenantId?: string;
-  principalId?: string;
-  effectiveRoleIds: string[];
-  wildcard: "none" | "immutable" | "default"; // non-"none" is future-inclusive over the catalog
-  permissions: string[];
-};
-```
-
 ### `TenantUser` / `TenantGroup`
 
 ```ts
@@ -754,17 +632,6 @@ type TenantGroup = {
   directRoleGrants: TenantDirectRoleGrant[];
 };
 ```
-
-### Directory and picker shapes
-
-```ts
-type TenantUserDirectoryEntry = { userId: string; name: string; email: string; image?: string; roles: RoleSummary[] };
-type TenantMemberPickerUser = { userId: string; name: string; email: string; image?: string };
-type SharingRecipient =
-  | { type: "user"; userId: string; name: string; email: string; image?: string }
-  | { type: "group"; groupId: string; name?: string };
-```
-
 ### Role and permission catalog shapes
 
 ```ts
@@ -854,22 +721,6 @@ type ExplainAccessResult = {
   };
 };
 ```
-
-### `AuthorizationDecision`
-
-Returned by `checkPermissions`.
-
-```ts
-type AuthorizationDecision = {
-  allowed: boolean;
-  reasonCode: string;
-  explicitDeny?: boolean;
-  sourceVersion?: number;
-  principalId?: string;
-  effectiveRoleIds: string[];
-};
-```
-
 ### Page shapes
 
 Every paginated read returns `{ <items>: T[]; nextCursor?: string }`:

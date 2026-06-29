@@ -26,7 +26,7 @@ const authorize = makeFunctionReference<
 const listMyRoles = makeFunctionReference<
   "query",
   Record<string, unknown>,
-  Array<{ roleId: string; roleKey: string; roleName: string; roleKind: string }>
+  Array<{ roleId: string; roleKey: string; roleName: string; isSystemRole: boolean }>
 >("queries:listMyRoles");
 
 const GOLDEN_ISSUER = "hercules-platform:cd_demo";
@@ -415,7 +415,7 @@ describe("E5 - listMyRoles resolves the root-tenant sentinel", () => {
         roleId: "role_admin",
         roleKey: "admin",
         roleName: "Admin",
-        roleKind: "system",
+        isSystemRole: true,
       },
     ]);
   });

@@ -227,7 +227,7 @@ export async function evaluatePermissionDecisionDetailed(
   // Requests carry concrete verbs only. A catalog permission whose action is
   // manage/* would map a request onto a superset token, which the algebra
   // does not special-case on the request side. Reject rather than evaluate.
-  // enumeratePermissions filters the same keys out of getEffectivePermissions
+  // enumeratePermissions filters the same keys out of effective-permission enumeration
   // (shared isSupersetAction), so the runtime never advertises a key this
   // gate would then deny.
   if (

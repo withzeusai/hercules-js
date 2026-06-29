@@ -37,8 +37,11 @@ type AuthorizationDecision = {
   effectiveRoleIds: string[];
 };
 
-type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
-type ListMyActiveTenantsArgs = ListMyTenantsArgs & {
+type ListMyTenantsArgs = {
+  tokenIdentifier?: string;
+  cursor?: string;
+  limit?: number;
+  status?: "active" | "all";
   isRoot?: boolean;
 };
 type GetTargetTenantSyncStatusArgs = {
@@ -48,38 +51,13 @@ type GetTargetTenantSyncStatusArgs = {
 };
 type GetTenantAccessStatusArgs = { tokenIdentifier?: string };
 type ListMyRolesArgs = { tokenIdentifier?: string; tenantId: string };
-type GetEffectivePermissionsArgs = {
-  tokenIdentifier?: string;
-  tenantId: string;
-  resourceType?: string;
-  resourceId?: string;
-  ancestors?: AuthorizationAncestor[];
-};
 type ListTenantArgs = { tokenIdentifier?: string; tenantId: string };
+type IamPrincipalStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 type ListTenantPageArgs = ListTenantArgs & {
   cursor?: string;
   limit?: number;
-};
-type ListTenantUserDirectoryArgs = ListTenantArgs & {
-  cursor?: string;
-  limit?: number;
-};
-type ListTenantMemberPickerUsersArgs = ListTenantArgs & {
-  permission: string;
-  resourceType?: string;
-  resourceId?: string;
-  ancestors?: AuthorizationAncestor[];
-  cursor?: string;
-  limit?: number;
-};
-type ListResourceSharingRecipientsArgs = ListTenantArgs & {
-  permission: string;
-  resourceType: string;
-  resourceId: string;
-  ancestors?: AuthorizationAncestor[];
-  recipientType: "user" | "group";
-  cursor?: string;
-  limit?: number;
+  status?: IamPrincipalStatus | "all";
+  query?: string;
 };
 type ListDirectSubjectsArgs = {
   tokenIdentifier?: string;
@@ -94,7 +72,7 @@ type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  roleKind: "system" | "custom";
+  isSystemRole: boolean;
 };
 
 type TenantDirectRoleGrant = RoleSummary & {
@@ -122,50 +100,6 @@ type TenantGroup = {
   name?: string;
   roles: RoleSummary[];
   directRoleGrants: TenantDirectRoleGrant[];
-};
-
-type TenantUserDirectoryEntry = {
-  userId: string;
-  name: string;
-  email: string;
-  image?: string;
-  roles: RoleSummary[];
-};
-
-type TenantUserDirectoryPage = {
-  users: TenantUserDirectoryEntry[];
-  cursor?: string;
-};
-
-type TenantMemberPickerUser = {
-  userId: string;
-  name: string;
-  email: string;
-  image?: string;
-};
-
-type TenantMemberPickerUsersPage = {
-  users: TenantMemberPickerUser[];
-  cursor?: string;
-};
-
-type SharingRecipient =
-  | {
-      type: "user";
-      userId: string;
-      name: string;
-      email: string;
-      image?: string;
-    }
-  | {
-      type: "group";
-      groupId: string;
-      name?: string;
-    };
-
-type SharingRecipientsPage = {
-  recipients: SharingRecipient[];
-  cursor?: string;
 };
 
 type TenantRoleSummary = RoleSummary & { shared: boolean };
@@ -219,11 +153,6 @@ type TenantSummary = {
   joinedAt: number;
   accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
   lifecycleStatus: "active" | "archived";
-};
-
-type ActiveTenantSummary = Omit<TenantSummary, "accessStatus" | "lifecycleStatus"> & {
-  accessStatus: "active";
-  lifecycleStatus: "active";
 };
 
 type TargetTenantSyncStatus =
@@ -402,21 +331,6 @@ type TenantAccessStatus =
       stateVersion?: number;
     };
 
-type EffectivePermissionsResult = {
-  allowed: boolean;
-  reasonCode: string;
-  sourceVersion?: number;
-  tenantId?: string;
-  principalId?: string;
-  effectiveRoleIds: string[];
-  // §0b: the principal's resolved wildcard mode. Under the wildcard model
-  // `permissions` is a projection over the unbounded catalog (Owner = whole
-  // catalog, Admin = catalog minus Owner-only levers), so callers should treat
-  // a non-"none" mode as future-inclusive rather than exhaustive.
-  wildcard: "none" | "immutable" | "default";
-  permissions: string[];
-};
-
 /**
  * A utility for referencing the Hercules IAM component's exposed API.
  *
@@ -451,13 +365,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       { tenants: TenantSummary[]; cursor?: string },
       Name
     >;
-    listMyActiveTenants: FunctionReference<
-      "query",
-      "public",
-      ListMyActiveTenantsArgs,
-      { tenants: ActiveTenantSummary[]; cursor?: string },
-      Name
-    >;
     getTargetTenantSyncStatus: FunctionReference<
       "query",
       "public",
@@ -466,42 +373,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       Name
     >;
     listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[], Name>;
-    getEffectivePermissions: FunctionReference<
-      "query",
-      "public",
-      GetEffectivePermissionsArgs,
-      EffectivePermissionsResult,
-      Name
-    >;
     getTenant: FunctionReference<"query", "public", ListTenantArgs, TenantDetail | null, Name>;
-    listTenantUserDirectory: FunctionReference<
-      "query",
-      "public",
-      ListTenantUserDirectoryArgs,
-      TenantUserDirectoryPage,
-      Name
-    >;
-    listTenantMemberPickerUsers: FunctionReference<
-      "query",
-      "public",
-      ListTenantMemberPickerUsersArgs,
-      TenantMemberPickerUsersPage,
-      Name
-    >;
-    listResourceSharingRecipients: FunctionReference<
-      "query",
-      "public",
-      ListResourceSharingRecipientsArgs,
-      SharingRecipientsPage,
-      Name
-    >;
-    getTenantUserDirectoryEntry: FunctionReference<
-      "query",
-      "public",
-      ListTenantArgs & { userId: string },
-      TenantUserDirectoryEntry | null,
-      Name
-    >;
     listTenantUsers: FunctionReference<
       "query",
       "public",

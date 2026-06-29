@@ -57,7 +57,7 @@ type CatalogPermission = {
 };
 
 // A canonical entry that also carries the catalog permissionId it was derived
-// from (when it maps to one). The id lets getEffectivePermissions report a
+// from (when it maps to one). The id lets effective-permission enumeration report a
 // permission by set-membership — matching the canonical platform query
 // (selectEffectivePermissionsByPrincipalIds) — rather than re-evaluating each
 // catalog permission with its own action. Superset-action (`manage`/`*`)
@@ -128,13 +128,13 @@ export type EffectiveAccessEvaluation = {
   principalId?: string;
   effectiveRoleIds: string[];
   // The full catalog and the assembled entries are returned as raw materials so
-  // getEffectivePermissions can enumerate the principal's permissions lazily.
+  // effective-permission enumeration can enumerate the principal's permissions lazily.
   // The hot authorize() path never enumerates — it resolves the single
   // requested permission and evaluates it directly — so the O(catalog) sweep is
   // not paid on every can() check.
   catalogPermissions: CatalogPermission[];
   // §0b: the principal's resolved wildcard mode (Owner short-circuits, Admin
-  // allow-all-minus-levers). Surfaced so getEffectivePermissions can report a
+  // allow-all-minus-levers). Surfaced so effective-permission enumeration can report a
   // future-inclusive set rather than under-reporting wildcard roles.
   wildcard: WildcardMode;
   // Canonical entries assembled from every layer (role contributions, direct
@@ -386,7 +386,7 @@ export function isSupersetAction(action: string): boolean {
  * Superset-action catalog keys (`:manage`, `:*`) are control-plane management
  * gates, not runtime-checkable permissions: the authorize gate rejects them
  * with `invalid_request` ({@link isSupersetAction}), so they are excluded here
- * for every wildcard mode — getEffectivePermissions must never advertise a key
+ * for every wildcard mode — effective-permission enumeration must never advertise a key
  * the runtime will then deny. The capability such a grant confers is still
  * fully reported: a `manage`/`*` allow entry expands onto the concrete-verb
  * catalog keys it covers via actionMatches.

@@ -27,15 +27,8 @@ const realManagedIamFixture = `
     iamQuery,
     iamMutation,
     iamAction,
-    checkPermissions,
-    hasPermission,
-    requirePermission,
-    requireAnyPermission,
-    getEffectivePermissions,
     getTargetTenantSyncStatus,
     listTenantUsers,
-    listTenantMemberPickerUsers,
-    listResourceSharingRecipients,
   } = iam;
 
   export {
@@ -1091,268 +1084,13 @@ describe("checkIamSource", () => {
     ).toHaveLength(1);
   });
 
-  test("reports authorization resource type and ancestors copied from public args", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantArg } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceType: v.string(),
-            resourceId: v.string(),
-            resource: v.object({ type: v.string(), id: v.string() }),
-            ancestors: v.array(v.object({
-              resourceType: v.string(),
-              resourceId: v.string(),
-            })),
-          },
-          handler: async (ctx, args) => {
-            const { resourceType } = args;
-            const ancestors = args.ancestors;
-            const request = {
-              permission: "app.documents:read",
-              resource: { type: resourceType, id: args.resourceId },
-              ancestors,
-            };
-            return await checkPermissions(ctx, [
-              request,
-              {
-                permission: "app.documents:read",
-                resource: args.resource,
-              },
-            ]);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-    const authorizationFindings = result.findings.filter(
-      (finding) => finding.code === "authorization_args_from_public_input",
-    );
-
-    expect(authorizationFindings).toHaveLength(3);
-    expect(authorizationFindings.map((finding) => finding.message).join("\n")).toContain(
-      "resource type",
-    );
-    expect(authorizationFindings.map((finding) => finding.message).join("\n")).toContain(
-      "ancestors",
-    );
-  });
-
-  test("does not report unrelated checkPermissions imports", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import { checkPermissions } from "unrelated-authz-package";
-        import { iamQuery, tenantArg } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceType: v.string(),
-            resourceId: v.string(),
-          },
-          handler: async (ctx, args) => {
-            return await checkPermissions(ctx, [{
-              permission: "app.documents:read",
-              resource: { type: args.resourceType, id: args.resourceId },
-            }]);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(0);
-  });
-
-  test("does not report unrelated canonical checkPermissions exports", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        import { createIam, tenantArg } from "@usehercules/convex";
-        import { components } from "./_generated/api";
-        import { action, mutation, query } from "./_generated/server";
-
-        const iam = createIam({ query, mutation, action, components });
-        export const { iamQuery } = iam;
-        export { tenantArg };
-
-        export async function checkPermissions() {
-          return [];
-        }
-      `,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantArg } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceType: v.string(),
-            resourceId: v.string(),
-          },
-          handler: async (ctx, args) => {
-            return await checkPermissions(ctx, [{
-              permission: "app.documents:read",
-              resource: { type: args.resourceType, id: args.resourceId },
-            }]);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(0);
-  });
-
-  test("reports managed checkPermissions aliases, namespaces, and reexports", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/permissions.ts": `
-        export { checkPermissions as canCheck } from "./iam";
-        export * as managedIam from "./iam";
-      `,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import * as iam from "./iam";
-        import { canCheck, managedIam } from "./permissions";
-        import { iamQuery, tenantArg } from "./iam";
-
-        const alias = canCheck;
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceType: v.string(),
-            resourceId: v.string(),
-            ancestors: v.array(v.object({
-              resourceType: v.string(),
-              resourceId: v.string(),
-            })),
-          },
-          handler: async (ctx, args) => {
-            await alias(ctx, [{
-              permission: "app.documents:read",
-              resource: { type: args.resourceType, id: args.resourceId },
-            }]);
-            await iam.checkPermissions(ctx, [{
-              permission: "app.documents:update",
-              resource: { type: "app.documents", id: args.resourceId },
-              ancestors: args.ancestors,
-            }]);
-            await managedIam.checkPermissions(ctx, [{
-              permission: "app.documents:delete",
-              resource: { type: args.resourceType, id: args.resourceId },
-            }]);
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(3);
-  });
-
-  test("reports public authorization shape in managed permission evaluators", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import {
-          getEffectivePermissions,
-          hasPermission,
-          iamQuery,
-          listResourceSharingRecipients,
-          requireAnyPermission,
-          requirePermission,
-          tenantArg,
-        } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceType: v.string(),
-            resourceId: v.string(),
-            ancestors: v.array(v.object({
-              resourceType: v.string(),
-              resourceId: v.string(),
-            })),
-          },
-          handler: async (ctx, args) => {
-            await hasPermission(ctx, {
-              tenantId: args.tenantId,
-              permission: "app.documents:read",
-              resource: { type: args.resourceType, id: args.resourceId },
-            });
-            await requirePermission(ctx, {
-              permission: "app.documents:update",
-              resource: { type: "app.documents", id: args.resourceId },
-              ancestors: args.ancestors,
-            });
-            await requireAnyPermission(ctx, {
-              permissions: ["app.documents:update", "app.documents:delete"],
-              resource: { type: args.resourceType, id: args.resourceId },
-            });
-            await getEffectivePermissions(ctx, {
-              resource: { type: "app.documents", id: args.resourceId },
-              ancestors: args.ancestors,
-            });
-            await listResourceSharingRecipients(ctx, {
-              tenantId: args.tenantId,
-              permission: "app.documents:manage_members",
-              resourceType: args.resourceType,
-              resourceId: args.resourceId,
-              ancestors: args.ancestors,
-              recipientType: "user",
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(6);
-  });
-
   test("reports the root tenant sentinel passed to Convex IAM helpers", () => {
     const root = createFixture({
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
         import {
-          checkPermissions,
-          getEffectivePermissions as getPermissions,
           getTargetTenantSyncStatus,
-          hasPermission,
           iamQuery,
-          listResourceSharingRecipients,
-          listTenantMemberPickerUsers,
           listTenantUsers,
         } from "./iam.js";
 
@@ -1362,30 +1100,8 @@ describe("checkIamSource", () => {
           permission: "app.documents:read",
           args: {},
           handler: async (ctx) => {
-            await hasPermission(ctx, {
-              tenantId: "root",
-              permission: "app.documents:read",
-            });
-            await getPermissions(ctx, {
-              tenantId: ROOT_TENANT_ID,
-            });
-            await checkPermissions(ctx, [{
-              tenantId: "root",
-              permission: "app.documents:read",
-            }]);
             await listTenantUsers(ctx, {
               tenantId: ROOT_TENANT_ID,
-            });
-            await listTenantMemberPickerUsers(ctx, {
-              tenantId: "root",
-              permission: "app.documents:read",
-            });
-            await listResourceSharingRecipients(ctx, {
-              tenantId: ROOT_TENANT_ID,
-              permission: "app.documents:manage_members",
-              resourceType: "app.documents",
-              resourceId: "document_123",
-              recipientType: "user",
             });
             await getTargetTenantSyncStatus(ctx, {
               tenantId: "root",
@@ -1401,7 +1117,7 @@ describe("checkIamSource", () => {
       (finding) => finding.code === "root_tenant_literal_in_convex_helper",
     );
 
-    expect(findings).toHaveLength(7);
+    expect(findings).toHaveLength(2);
     expect(findings).toEqual(
       expect.arrayContaining([expect.objectContaining({ filePath: "convex/access.ts" })]),
     );
@@ -1415,7 +1131,7 @@ describe("checkIamSource", () => {
       "convex/iam.ts": realManagedIamFixture,
       "convex/access.ts": `
         import { Hercules } from "@usehercules/sdk";
-        import { authenticatedAction, getEffectivePermissions } from "./iam.js";
+        import { authenticatedAction } from "./iam.js";
 
         const hercules = new Hercules({ apiKey: "test" });
 
@@ -1428,7 +1144,6 @@ describe("checkIamSource", () => {
             await hercules.iam.tenants.evaluateAccess("root", {
               actor_token_identifier: identity.tokenIdentifier,
             });
-            await getEffectivePermissions(ctx);
           },
         });
       `,
@@ -1437,373 +1152,6 @@ describe("checkIamSource", () => {
     const result = checkIamSource({ cwd: root });
 
     expect(result).toMatchObject({ ok: true, findings: [] });
-  });
-
-  test("reports public permission fields in managed permission evaluators", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import {
-          checkPermissions,
-          hasPermission,
-          iamQuery,
-          listResourceSharingRecipients,
-          listTenantMemberPickerUsers,
-          requireAnyPermission,
-          requirePermission,
-          tenantArg,
-        } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            permission: v.string(),
-            permissions: v.array(v.string()),
-            resourceId: v.string(),
-          },
-          handler: async (ctx, args) => {
-            await checkPermissions(ctx, [{
-              permission: args.permission,
-              resource: { type: "app.documents", id: args.resourceId },
-            }]);
-            await hasPermission(ctx, {
-              tenantId: args.tenantId,
-              permission: args.permission,
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await requirePermission(ctx, {
-              permission: args.permission,
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await requireAnyPermission(ctx, {
-              permissions: args.permissions,
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await listTenantMemberPickerUsers(ctx, {
-              tenantId: args.tenantId,
-              permission: args.permission,
-            });
-            await listResourceSharingRecipients(ctx, {
-              tenantId: args.tenantId,
-              permission: args.permission,
-              resourceType: "app.documents",
-              resourceId: args.resourceId,
-              recipientType: "user",
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(6);
-    expect(formatIamCheckResult(result)).toContain("permission");
-  });
-
-  test("allows public tenant and resource ids in managed permission evaluators", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import {
-          getEffectivePermissions,
-          hasPermission,
-          iamQuery,
-          listResourceSharingRecipients,
-          listTenantMemberPickerUsers,
-          requireAnyPermission,
-          requirePermission,
-          tenantArg,
-        } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceId: v.string(),
-          },
-          handler: async (ctx, args) => {
-            await hasPermission(ctx, {
-              tenantId: args.tenantId,
-              permission: "app.documents:read",
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await requirePermission(ctx, {
-              tenantId: args.tenantId,
-              permission: "app.documents:update",
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await requireAnyPermission(ctx, {
-              tenantId: args.tenantId,
-              permissions: ["app.documents:update", "app.documents:delete"],
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await getEffectivePermissions(ctx, {
-              tenantId: args.tenantId,
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await listTenantMemberPickerUsers(ctx, {
-              tenantId: args.tenantId,
-              permission: "app.documents:manage_members",
-            });
-            await listResourceSharingRecipients(ctx, {
-              tenantId: args.tenantId,
-              permission: "app.documents:manage_members",
-              resourceType: "app.documents",
-              resourceId: args.resourceId,
-              recipientType: "user",
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(0);
-  });
-
-  test("allows transformed permission values in managed evaluators", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import {
-          checkPermissions,
-          hasPermission,
-          iamQuery,
-          listResourceSharingRecipients,
-          listTenantMemberPickerUsers,
-          requireAnyPermission,
-          requirePermission,
-          tenantArg,
-        } from "./iam";
-
-        function permissionFor(kind) {
-          return kind === "edit" ? "app.documents:update" : "app.documents:read";
-        }
-
-        function permissionsFor(kind) {
-          return [permissionFor(kind)];
-        }
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            kind: v.string(),
-            resourceId: v.string(),
-          },
-          handler: async (ctx, args) => {
-            await checkPermissions(ctx, [{
-              permission: permissionFor(args.kind),
-              resource: { type: "app.documents", id: args.resourceId },
-            }]);
-            await hasPermission(ctx, {
-              tenantId: args.tenantId,
-              permission: permissionFor(args.kind),
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await requirePermission(ctx, {
-              permission: permissionFor(args.kind),
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await requireAnyPermission(ctx, {
-              permissions: permissionsFor(args.kind),
-              resource: { type: "app.documents", id: args.resourceId },
-            });
-            await listTenantMemberPickerUsers(ctx, {
-              tenantId: args.tenantId,
-              permission: permissionFor(args.kind),
-            });
-            await listResourceSharingRecipients(ctx, {
-              tenantId: args.tenantId,
-              permission: permissionFor(args.kind),
-              resourceType: "app.documents",
-              resourceId: args.resourceId,
-              recipientType: "user",
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(0);
-  });
-
-  test("does not report unrelated permission evaluator names", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        import { createIam, tenantArg } from "@usehercules/convex";
-        import { components } from "./_generated/api";
-        import { action, mutation, query } from "./_generated/server";
-
-        const iam = createIam({ query, mutation, action, components });
-        export const { iamQuery } = iam;
-        export { tenantArg };
-
-        export async function hasPermission() {
-          return true;
-        }
-
-        export async function listResourceSharingRecipients() {
-          return [];
-        }
-      `,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import {
-          hasPermission,
-          iamQuery,
-          listResourceSharingRecipients,
-          tenantArg,
-        } from "./iam";
-
-        export const explain = iamQuery({
-          permission: "app.documents:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            resourceType: v.string(),
-            resourceId: v.string(),
-            ancestors: v.array(v.object({
-              resourceType: v.string(),
-              resourceId: v.string(),
-            })),
-          },
-          handler: async (ctx, args) => {
-            await hasPermission(ctx, {
-              permission: "app.documents:read",
-              resource: { type: args.resourceType, id: args.resourceId },
-              ancestors: args.ancestors,
-            });
-            await listResourceSharingRecipients(ctx, {
-              permission: "app.documents:manage_members",
-              resourceType: args.resourceType,
-              resourceId: args.resourceId,
-              ancestors: args.ancestors,
-              recipientType: "user",
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(0);
-  });
-
-  test("revisits helpers when later calls pass public authorization args", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantArg } from "./iam";
-
-        async function check(ctx, request) {
-          return await checkPermissions(ctx, [request]);
-        }
-
-        export const explain = iamQuery({
-          permission: "app.tasks:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            taskId: v.id("tasks"),
-            resourceType: v.string(),
-            ancestors: v.array(v.object({
-              resourceType: v.string(),
-              resourceId: v.string(),
-            })),
-          },
-          handler: async (ctx, args) => {
-            const task = await ctx.db.get(args.taskId);
-            if (!task) throw new Error("Task not found");
-            await check(ctx, {
-              permission: "app.tasks:update",
-              resource: { type: "app.tasks", id: String(task._id) },
-              ancestors: [{ type: "app.projects", id: String(task.projectId) }],
-            });
-            await check(ctx, {
-              permission: "app.tasks:update",
-              resource: { type: args.resourceType, id: String(task._id) },
-              ancestors: args.ancestors,
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(2);
-  });
-
-  test("revisits helpers for distinct public authorization arguments", () => {
-    const root = createFixture({
-      "convex/iam.ts": realManagedIamFixture,
-      "convex/access.ts": `
-        import { v } from "convex/values";
-        import { checkPermissions, iamQuery, tenantArg } from "./iam";
-
-        async function check(ctx, request) {
-          return await checkPermissions(ctx, [request]);
-        }
-
-        export const explain = iamQuery({
-          permission: "app.tasks:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            taskId: v.id("tasks"),
-            resourceType: v.string(),
-            ancestors: v.array(v.object({
-              resourceType: v.string(),
-              resourceId: v.string(),
-            })),
-          },
-          handler: async (ctx, args) => {
-            const task = await ctx.db.get(args.taskId);
-            if (!task) throw new Error("Task not found");
-            await check(ctx, {
-              permission: "app.tasks:update",
-              resource: { type: args.resourceType, id: String(task._id) },
-              ancestors: [{ type: "app.projects", id: String(task.projectId) }],
-            });
-            await check(ctx, {
-              permission: "app.tasks:update",
-              resource: { type: "app.tasks", id: String(task._id) },
-              ancestors: args.ancestors,
-            });
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(
-      result.findings.filter((finding) => finding.code === "authorization_args_from_public_input"),
-    ).toHaveLength(2);
   });
 
   test("reports ancestors output copied from public args", () => {
@@ -1948,20 +1296,9 @@ describe("checkIamSource", () => {
       "convex/tasks.ts": `
         import { v } from "convex/values";
         import {
-          checkPermissions,
           iamMutation,
-          iamQuery,
-          tenantArg,
           resource,
         } from "./iam";
-
-        function resourceTypeForKind(kind) {
-          return kind === "task" ? "app.tasks" : "app.documents";
-        }
-
-        function ancestorsFromArgs(args) {
-          return args.ancestors;
-        }
 
         export const update = iamMutation({
           permission: "app.tasks:update",
@@ -1972,31 +1309,6 @@ describe("checkIamSource", () => {
           }),
           args: { taskId: v.id("tasks"), title: v.string() },
           handler: async () => null,
-        });
-
-        export const capabilities = iamQuery({
-          permission: "app.tasks:read",
-          authorizeAgainst: tenantArg("tenantId"),
-          args: {
-            tenantId: v.string(),
-            taskId: v.id("tasks"),
-            kind: v.string(),
-            ancestors: v.any(),
-          },
-          handler: async (ctx, args) => {
-            const task = await ctx.db.get(args.taskId);
-            if (!task) throw new Error("Task not found");
-            await checkPermissions(ctx, [{
-              permission: "app.tasks:update",
-              resource: { type: "app.tasks", id: String(task._id) },
-              ancestors: [{ type: "app.projects", id: String(task.projectId) }],
-            }]);
-            return await checkPermissions(ctx, [{
-              permission: "app.tasks:update",
-              resource: { type: resourceTypeForKind(args.kind), id: String(task._id) },
-              ancestors: ancestorsFromArgs(args),
-            }]);
-          },
         });
       `,
     });
@@ -2393,85 +1705,6 @@ describe("checkIamSource", () => {
       ]),
     );
     expect(formatIamCheckResult(result)).toContain("rootResource");
-  });
-
-  test("reports row capability checks without a concrete resource", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/tasks.ts": `
-        import { v } from "convex/values";
-        import {
-          checkPermissions,
-          iamQuery,
-          rootResource,
-        } from "./iam";
-
-        export const getCapabilities = iamQuery({
-          permission: "app.tasks:read",
-          authorizeAgainst: rootResource("tasks", "taskId"),
-          args: { taskId: v.id("tasks") },
-          handler: async (ctx, args) => {
-            const task = await ctx.db.get(args.taskId);
-            if (!task) throw new Error("Task not found");
-            const [decision] = await checkPermissions(ctx, [
-              { permission: "app.tasks:update" },
-            ]);
-            return { canUpdate: decision?.allowed === true };
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "resource_capability_missing_resource",
-          filePath: "convex/tasks.ts",
-        }),
-      ]),
-    );
-    expect(formatIamCheckResult(result)).toContain("concrete resource");
-  });
-
-  test("allows existing-row IAM operations with concrete resource authorization", () => {
-    const root = createFixture({
-      "convex/iam.ts": `
-        export { createIam } from "@usehercules/convex";
-      `,
-      "convex/tasks.ts": `
-        import { v } from "convex/values";
-        import {
-          checkPermissions,
-          iamQuery,
-          rootResource,
-        } from "./iam";
-
-        export const getCapabilities = iamQuery({
-          permission: "app.tasks:read",
-          authorizeAgainst: rootResource("tasks", "taskId"),
-          args: { taskId: v.id("tasks") },
-          handler: async (ctx, args) => {
-            const task = await ctx.db.get(args.taskId);
-            if (!task) throw new Error("Task not found");
-            const [decision] = await checkPermissions(ctx, [
-              {
-                permission: "app.tasks:update",
-                resource: { type: "app.tasks", id: String(task._id) },
-              },
-            ]);
-            return { canUpdate: decision?.allowed === true };
-          },
-        });
-      `,
-    });
-
-    const result = checkIamSource({ cwd: root });
-
-    expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
   test("reports authenticated reads of tenant-owned tables", () => {

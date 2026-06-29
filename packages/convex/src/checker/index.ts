@@ -88,12 +88,6 @@ const tenantResourceHelperNames = new Set<TenantResourceHelperName>([
   "parentResource",
   "rootParentResource",
 ]);
-const iamAuthorizationRequestFunctionNames = new Set([
-  "hasPermission",
-  "requirePermission",
-  "requireAnyPermission",
-  "getEffectivePermissions",
-]);
 const iamRootTenantObjectFunctionNames = new Set([
   "filterAuthorizedResources",
   "getTargetTenantSyncStatus",
@@ -101,8 +95,6 @@ const iamRootTenantObjectFunctionNames = new Set([
   "getTenant",
   "listTenantUsers",
   "listTenantGroups",
-  "listTenantUserDirectory",
-  "getTenantUserDirectoryEntry",
   "listGroupMembers",
   "listUserGroups",
   "listTenantRoles",
@@ -506,7 +498,6 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
   const sourceText = readFileSync(filePath, "utf8");
   const sourceFile = createSourceFile(filePath, sourceText);
   const findings: IamCheckFinding[] = [];
-  const checkPermissionsNames = collectImportedNames(sourceFile, "checkPermissions");
 
   for (const definition of collectManagedBuilderDefinitions(sourceFile, [
     "iamQuery",
@@ -529,40 +520,6 @@ function checkIamResourcePatterns(cwd: string, filePath: string): IamCheckFindin
         }),
       );
     }
-  }
-
-  if (checkPermissionsNames.size === 0) return findings;
-  for (const definition of collectManagedBuilderDefinitions(sourceFile, ["iamQuery"])) {
-    if (!findDirectArgsRowAccess(definition.definition)) continue;
-    visitCheckPermissionsCalls(definition.definition, (call) => {
-      const target = unwrapExpression(call.expression);
-      if (!ts.isIdentifier(target) || !checkPermissionsNames.has(target.text)) return;
-
-      const requests = call.arguments[1] && unwrapExpression(call.arguments[1]);
-      if (!requests || !ts.isArrayLiteralExpression(requests)) return;
-
-      for (const request of requests.elements) {
-        const value = unwrapExpression(request as ts.Expression);
-        if (
-          !ts.isObjectLiteralExpression(value) ||
-          value.properties.some(ts.isSpreadAssignment) ||
-          hasObjectProperty(value, "resource")
-        ) {
-          continue;
-        }
-        findings.push(
-          createPatternFindingAtNode({
-            cwd,
-            sourceFile,
-            node: value,
-            code: "resource_capability_missing_resource",
-            message: "Row capability checks must include the concrete resource.",
-            suggestion:
-              'Add resource: { type: "app.resource", id: String(row._id) } and include its trusted ancestor chain when applicable.',
-          }),
-        );
-      }
-    });
   }
 
   return findings;
@@ -646,44 +603,6 @@ function findDirectArgsRowAccess(definition: ts.Expression): ts.CallExpression |
 
   visit(definition);
   return match;
-}
-
-function visitCheckPermissionsCalls(
-  definition: ts.Expression,
-  visitCall: (call: ts.CallExpression) => void,
-): void {
-  function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
-      visitCall(node);
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(definition);
-}
-
-function collectImportedNames(sourceFile: ts.SourceFile, importedName: string): Set<string> {
-  const names = new Set<string>();
-
-  for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      statement.importClause?.isTypeOnly ||
-      !statement.importClause?.namedBindings ||
-      !ts.isNamedImports(statement.importClause.namedBindings)
-    ) {
-      continue;
-    }
-
-    for (const element of statement.importClause.namedBindings.elements) {
-      if (element.isTypeOnly) continue;
-      if ((element.propertyName ?? element.name).text === importedName) {
-        names.add(element.name.text);
-      }
-    }
-  }
-
-  return names;
 }
 
 function hasObjectProperty(object: ts.ObjectLiteralExpression, propertyName: string): boolean {
@@ -833,9 +752,6 @@ type StaticValue =
         | "herculesSdkConstructor"
         | "herculesSdkClient"
         | "herculesSdkIam"
-        | "iamCheckPermissions"
-        | "iamAuthorizationRequestFunction"
-        | "iamResourceSharingRecipientsFunction"
         | "iamRootTenantObjectFunction"
         | "createIamFactory"
         | "iamBuilders"
@@ -1287,18 +1203,6 @@ function checkSdkIamCalls(
         return [{ kind: "known", value: "herculesSdkIam" }];
       }
       if (value.value === "iamBuilders") {
-        if (propertyName === "checkPermissions") {
-          return [{ kind: "known", value: "iamCheckPermissions" }];
-        }
-        if (iamAuthorizationRequestFunctionNames.has(propertyName)) {
-          return [{ kind: "known", value: "iamAuthorizationRequestFunction" }];
-        }
-        if (propertyName === "listResourceSharingRecipients") {
-          return [{ kind: "known", value: "iamResourceSharingRecipientsFunction" }];
-        }
-        if (propertyName === "listTenantMemberPickerUsers") {
-          return [{ kind: "known", value: "iamAuthorizationRequestFunction" }];
-        }
         if (iamRootTenantObjectFunctionNames.has(propertyName)) {
           return [{ kind: "known", value: "iamRootTenantObjectFunction" }];
         }
@@ -1865,14 +1769,6 @@ function checkSdkIamCalls(
         validateSdkIamCall(info, node, scope, state);
       }
       validateRootTenantHelperCall(info, node, scope);
-      if (state.trackPublicArgs) {
-        const iamAuthorizationCallKind = iamAuthorizationCallTargetKind(info, target, scope);
-        if (iamAuthorizationCallKind === "checkPermissions") {
-          validateCheckPermissionsCall(info, node, scope, state);
-        } else if (iamAuthorizationCallKind === "authorizationObject") {
-          validateAuthorizationObjectArgumentCall(info, node, scope, state);
-        }
-      }
       visitRunActionTarget(info, node, scope, state);
       visitCallableReference(info, target, scope, state, {
         callArguments: [...node.arguments],
@@ -2647,35 +2543,6 @@ function checkSdkIamCalls(
     }
   }
 
-  function validateCheckPermissionsCall(
-    info: CheckerSourceFile,
-    call: ts.CallExpression,
-    scope: LexicalScope | null,
-    state: AuthorityState,
-  ): void {
-    const requests = call.arguments[1];
-    if (!requests) return;
-    for (const value of resolveStaticValues(info, requests, scope)) {
-      if (value.kind !== "node") continue;
-      if (ts.isArrayLiteralExpression(value.node)) {
-        for (const element of value.node.elements) {
-          if (ts.isOmittedExpression(element) || ts.isSpreadElement(element)) continue;
-          validateAuthorizationRequestExpression(
-            value.info,
-            element,
-            value.declarationScope,
-            state,
-            { validatePermission: true },
-          );
-        }
-      } else if (ts.isObjectLiteralExpression(value.node)) {
-        validateAuthorizationObject(value.info, value.node, value.declarationScope, state, {
-          validatePermission: true,
-        });
-      }
-    }
-  }
-
   function validateRootTenantHelperCall(
     info: CheckerSourceFile,
     call: ts.CallExpression,
@@ -2756,66 +2623,12 @@ function checkSdkIamCalls(
     info: CheckerSourceFile,
     target: ts.Expression,
     scope: LexicalScope | null,
-  ): "object" | "checks" | null {
-    const kinds = new Set<"object" | "checks">();
+  ): "object" | null {
+    const kinds = new Set<"object">();
     for (const value of resolveStaticValues(info, target, scope)) {
       if (value.kind !== "known") continue;
-      if (value.value === "iamCheckPermissions") {
-        kinds.add("checks");
-      } else if (
-        value.value === "iamAuthorizationRequestFunction" ||
-        value.value === "iamResourceSharingRecipientsFunction" ||
-        value.value === "iamRootTenantObjectFunction"
-      ) {
+      if (value.value === "iamRootTenantObjectFunction") {
         kinds.add("object");
-      }
-    }
-    return kinds.size === 1 ? [...kinds][0]! : null;
-  }
-
-  function validateAuthorizationRequestExpression(
-    info: CheckerSourceFile,
-    expression: ts.Expression,
-    scope: LexicalScope | null,
-    state: AuthorityState,
-    options: AuthorizationObjectValidationOptions = {},
-  ): void {
-    for (const value of resolveStaticValues(info, expression, scope)) {
-      if (value.kind === "node" && ts.isObjectLiteralExpression(value.node)) {
-        validateAuthorizationObject(value.info, value.node, value.declarationScope, state, options);
-      }
-    }
-  }
-
-  function validateAuthorizationObjectArgumentCall(
-    info: CheckerSourceFile,
-    call: ts.CallExpression,
-    scope: LexicalScope | null,
-    state: AuthorityState,
-  ): void {
-    const request = call.arguments[1];
-    if (request) {
-      validateAuthorizationRequestExpression(info, request, scope, state, {
-        validatePermission: true,
-      });
-    }
-  }
-
-  function iamAuthorizationCallTargetKind(
-    info: CheckerSourceFile,
-    target: ts.Expression,
-    scope: LexicalScope | null,
-  ): "checkPermissions" | "authorizationObject" | null {
-    const kinds = new Set<"checkPermissions" | "authorizationObject">();
-    for (const value of resolveStaticValues(info, target, scope)) {
-      if (value.kind !== "known") continue;
-      if (value.value === "iamCheckPermissions") {
-        kinds.add("checkPermissions");
-      } else if (
-        value.value === "iamAuthorizationRequestFunction" ||
-        value.value === "iamResourceSharingRecipientsFunction"
-      ) {
-        kinds.add("authorizationObject");
       }
     }
     return kinds.size === 1 ? [...kinds][0]! : null;
