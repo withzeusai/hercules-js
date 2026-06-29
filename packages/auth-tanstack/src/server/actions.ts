@@ -37,6 +37,22 @@ export const refreshAccessTokenAction = createServerFn({ method: "POST" }).handl
   },
 );
 
+/** The current ID token for the session, if authenticated. */
+export const getIdTokenAction = createServerFn({ method: "GET" }).handler(
+  async (): Promise<string | undefined> => {
+    const { getIdTokenBody } = await import("./action-bodies");
+    return getIdTokenBody();
+  },
+);
+
+/** Refresh the session and return the new ID token. */
+export const refreshIdTokenAction = createServerFn({ method: "POST" }).handler(
+  async (): Promise<string | undefined> => {
+    const { refreshIdTokenBody } = await import("./action-bodies");
+    return refreshIdTokenBody();
+  },
+);
+
 /** Refresh the session and return sanitized auth state (no access token). */
 export const refreshAuthAction = createServerFn({ method: "POST" }).handler(
   async (): Promise<ClientUserInfo | NoUserInfo> => {

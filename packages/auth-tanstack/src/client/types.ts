@@ -46,3 +46,19 @@ export interface UseAccessTokenReturn {
   /** Get a guaranteed-fresh token, refreshing if needed. */
   getAccessToken: () => Promise<string | undefined>;
 }
+
+export interface UseIdTokenReturn {
+  /**
+   * Current ID token. May be briefly stale; use {@link getIdToken} when
+   * freshness matters. Undefined when the provider issued no ID token.
+   */
+  idToken: string | undefined;
+  /** Whether a token fetch/refresh is in flight. */
+  loading: boolean;
+  /** The last token error, or null. */
+  error: Error | null;
+  /** Force a refresh, returning the new token. */
+  refresh: () => Promise<string | undefined>;
+  /** Get a guaranteed-fresh ID token, refreshing if needed. */
+  getIdToken: () => Promise<string | undefined>;
+}

@@ -1,17 +1,29 @@
 import * as client from "openid-client";
 import { fromBase64Url, toBase64Url } from "./encoding";
 
+// Each value accepts several variable names, tried in order: the canonical
+// `HERCULES_AUTH_*` name, a standard OIDC alias where one applies, then the
+// unprefixed `AUTH_*` name as a last resort.
+
 /**
  * OIDC issuer URL used for discovery (`{issuer}/.well-known/openid-configuration`).
  * For Amazon Cognito this is the user-pool issuer
  * (`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`), NOT the hosted-UI
  * domain — the hosted domain does not serve the discovery document.
  */
-export const ISSUER_URL_ENV = "HERCULES_AUTH_ISSUER_URL";
+export const ISSUER_URL_ENV_VARS = [
+  "HERCULES_AUTH_ISSUER_URL",
+  "HERCULES_OIDC_AUTHORITY",
+  "AUTH_ISSUER_URL",
+] as const;
 /** OAuth client (app client) identifier. */
-export const CLIENT_ID_ENV = "HERCULES_AUTH_CLIENT_ID";
+export const CLIENT_ID_ENV_VARS = [
+  "HERCULES_AUTH_CLIENT_ID",
+  "HERCULES_OIDC_CLIENT_ID",
+  "AUTH_CLIENT_ID",
+] as const;
 /** OAuth client secret. Optional — omit for a public (PKCE-only) client. */
-export const CLIENT_SECRET_ENV = "HERCULES_AUTH_CLIENT_SECRET";
+export const CLIENT_SECRET_ENV_VARS = ["HERCULES_AUTH_CLIENT_SECRET", "AUTH_CLIENT_SECRET"] as const;
 
 /** Where to send the user once the callback completes. */
 export const DEFAULT_REDIRECT = "/";
@@ -40,10 +52,23 @@ export function pkceCookieName(state: string): string {
   return PKCE_COOKIE_PREFIX + state;
 }
 
-export function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`[auth-tanstack] Missing required environment variable: ${name}`);
+/** First non-empty value among `names`, or undefined when none are set. */
+export function readEnv(names: readonly [string, ...string[]]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Like {@link readEnv} but throws when none of the accepted names are set,
+ * listing them all so the caller knows every variable that would satisfy it.
+ */
+export function requireEnv(names: readonly [string, ...string[]]): string {
+  const value = readEnv(names);
+  if (value === undefined) {
+    throw new Error(`[auth-tanstack] Missing required environment variable: ${names.join(" or ")}`);
   }
   return value;
 }
@@ -53,9 +78,9 @@ export function requireEnv(name: string): string {
 let configPromise: Promise<client.Configuration> | undefined;
 export function getConfig(): Promise<client.Configuration> {
   if (!configPromise) {
-    const issuerUrl = new URL(requireEnv(ISSUER_URL_ENV));
-    const clientId = requireEnv(CLIENT_ID_ENV);
-    const clientSecret = process.env[CLIENT_SECRET_ENV];
+    const issuerUrl = new URL(requireEnv(ISSUER_URL_ENV_VARS));
+    const clientId = requireEnv(CLIENT_ID_ENV_VARS);
+    const clientSecret = readEnv(CLIENT_SECRET_ENV_VARS);
 
     // A public client authenticates with PKCE alone (no secret); a confidential
     // client authenticates the token request with its secret.

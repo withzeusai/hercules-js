@@ -2,11 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the server actions the store calls. `vi.hoisted` so the spies exist
 // before the hoisted `vi.mock` factory runs.
-const { getAccessTokenAction, refreshAccessTokenAction } = vi.hoisted(() => ({
-  getAccessTokenAction: vi.fn(),
-  refreshAccessTokenAction: vi.fn(),
+const { getAccessTokenAction, refreshAccessTokenAction, getIdTokenAction, refreshIdTokenAction } = vi.hoisted(
+  () => ({
+    getAccessTokenAction: vi.fn(),
+    refreshAccessTokenAction: vi.fn(),
+    getIdTokenAction: vi.fn(),
+    refreshIdTokenAction: vi.fn(),
+  }),
+);
+vi.mock("../server/actions", () => ({
+  getAccessTokenAction,
+  refreshAccessTokenAction,
+  getIdTokenAction,
+  refreshIdTokenAction,
 }));
-vi.mock("../server/actions", () => ({ getAccessTokenAction, refreshAccessTokenAction }));
 
 import { TokenStore } from "./tokenStore";
 
@@ -24,6 +33,8 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   getAccessTokenAction.mockReset();
   refreshAccessTokenAction.mockReset();
+  getIdTokenAction.mockReset();
+  refreshIdTokenAction.mockReset();
 });
 
 afterEach(() => {
@@ -41,7 +52,7 @@ describe("TokenStore", () => {
     getAccessTokenAction.mockResolvedValue(token);
 
     const store = new TokenStore();
-    expect(await store.getAccessTokenSilently()).toBe(token);
+    expect(await store.getTokenSilently()).toBe(token);
     expect(refreshAccessTokenAction).not.toHaveBeenCalled();
     expect(store.getSnapshot().token).toBe(token);
   });
@@ -52,7 +63,7 @@ describe("TokenStore", () => {
     refreshAccessTokenAction.mockResolvedValue(refreshed);
 
     const store = new TokenStore();
-    expect(await store.getAccessTokenSilently()).toBe(refreshed);
+    expect(await store.getTokenSilently()).toBe(refreshed);
     expect(refreshAccessTokenAction).toHaveBeenCalledTimes(1);
   });
 
@@ -105,18 +116,30 @@ describe("TokenStore", () => {
     expect(refreshAccessTokenAction).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the injected fetch/refresh actions (ID-token wiring)", async () => {
+    const idToken = freshJwt();
+    getIdTokenAction.mockResolvedValue(idToken);
+
+    const store = new TokenStore(getIdTokenAction, refreshIdTokenAction);
+    expect(await store.getTokenSilently()).toBe(idToken);
+    expect(getIdTokenAction).toHaveBeenCalledTimes(1);
+    // The access-token actions must not be touched by an ID-token store.
+    expect(getAccessTokenAction).not.toHaveBeenCalled();
+    expect(refreshAccessTokenAction).not.toHaveBeenCalled();
+  });
+
   it("revalidates an opaque token instead of caching it forever", async () => {
     getAccessTokenAction.mockResolvedValue("opaque-token");
 
     const store = new TokenStore();
     // First read (no token): cheap GET returns a server-validated opaque token.
-    expect(await store.getAccessTokenSilently()).toBe("opaque-token");
+    expect(await store.getTokenSilently()).toBe("opaque-token");
     expect(getAccessTokenAction).toHaveBeenCalledTimes(1);
     expect(refreshAccessTokenAction).not.toHaveBeenCalled();
 
     // Second read: the cached opaque token must be revalidated via the server,
     // not returned blindly.
-    expect(await store.getAccessToken()).toBe("opaque-token");
+    expect(await store.getToken()).toBe("opaque-token");
     expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
     expect(refreshAccessTokenAction).not.toHaveBeenCalled();
   });

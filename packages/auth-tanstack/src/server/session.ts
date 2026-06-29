@@ -3,8 +3,12 @@ import { fromBase64Url, toBase64Url } from "./encoding";
 
 /** Base name of the (chunked) sealed session cookie. */
 export const SESSION_COOKIE = "hercules_session";
-/** Password used to derive the session-sealing key. */
-const COOKIE_PASSWORD_ENV = "HERCULES_AUTH_COOKIE_PASSWORD";
+/**
+ * Password used to derive the session-sealing key. Accepted variable names,
+ * tried in order: the canonical `HERCULES_AUTH_*` name, then the unprefixed
+ * `AUTH_*` name as a last resort.
+ */
+const COOKIE_PASSWORD_ENV_VARS = ["HERCULES_AUTH_COOKIE_PASSWORD", "AUTH_COOKIE_PASSWORD"] as const;
 /** Minimum password length. */
 const MIN_PASSWORD_LENGTH = 32;
 /**
@@ -43,13 +47,24 @@ export interface SessionData {
 let keyPromise: Promise<CryptoKey> | undefined;
 function getKey(): Promise<CryptoKey> {
   if (!keyPromise) {
-    const password = process.env[COOKIE_PASSWORD_ENV];
+    let matchedName: string | undefined;
+    let password: string | undefined;
+    for (const name of COOKIE_PASSWORD_ENV_VARS) {
+      const value = process.env[name];
+      if (value) {
+        matchedName = name;
+        password = value;
+        break;
+      }
+    }
     if (!password) {
-      throw new Error(`[auth-tanstack] Missing required environment variable: ${COOKIE_PASSWORD_ENV}`);
+      throw new Error(
+        `[auth-tanstack] Missing required environment variable: ${COOKIE_PASSWORD_ENV_VARS.join(" or ")}`,
+      );
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
       throw new Error(
-        `[auth-tanstack] ${COOKIE_PASSWORD_ENV} must be at least ${MIN_PASSWORD_LENGTH} characters`,
+        `[auth-tanstack] ${matchedName} must be at least ${MIN_PASSWORD_LENGTH} characters`,
       );
     }
     keyPromise = crypto.subtle

@@ -39,6 +39,22 @@ export async function refreshAccessTokenBody(): Promise<string | undefined> {
   return session?.accessToken;
 }
 
+/**
+ * Backs `getIdTokenAction`: the current ID token, if authenticated. Undefined
+ * when the provider issued no ID token (the `openid` scope was not granted).
+ */
+export async function getIdTokenBody(): Promise<string | undefined> {
+  const session = await readSession();
+  if (!session) return undefined;
+  return userInfoFromSession(session).user ? session.idToken : undefined;
+}
+
+/** Backs `refreshIdTokenAction`: refresh and return the new ID token. */
+export async function refreshIdTokenBody(): Promise<string | undefined> {
+  const session = await refreshSession();
+  return session?.idToken;
+}
+
 /** Backs `refreshAuthAction`: refresh and return sanitized auth state. */
 export async function refreshAuthBody(): Promise<ClientUserInfo | NoUserInfo> {
   const session = await refreshSession();

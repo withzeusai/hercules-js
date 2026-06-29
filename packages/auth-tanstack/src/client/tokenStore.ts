@@ -1,4 +1,9 @@
-import { getAccessTokenAction, refreshAccessTokenAction } from "../server/actions";
+import {
+  getAccessTokenAction,
+  getIdTokenAction,
+  refreshAccessTokenAction,
+  refreshIdTokenAction,
+} from "../server/actions";
 import { decodeJwt } from "./jwt";
 
 interface TokenState {
@@ -28,9 +33,11 @@ interface ParsedToken {
 }
 
 /**
- * Client-side store for the access token, with single-flight refresh and
- * proactive scheduled refresh ahead of expiry. Backed by the `getAccessToken`/
- * `refreshAccessToken` server actions. A module singleton shared by all hooks.
+ * Client-side store for a single bearer token (access or ID), with single-flight
+ * refresh and proactive scheduled refresh ahead of expiry. The cheap GET and the
+ * refresh are injected so one implementation backs both token kinds; the access-
+ * token actions are the defaults. Each kind is a module singleton shared by all
+ * hooks ({@link tokenStore}, {@link idTokenStore}).
  */
 export class TokenStore {
   private state: TokenState = { token: undefined, loading: false, error: null };
@@ -39,6 +46,15 @@ export class TokenStore {
   private listeners = new Set<() => void>();
   private refreshPromise: Promise<string | undefined> | null = null;
   private refreshTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * @param fetchToken  Cheap GET of the current token (no refresh round-trip).
+   * @param refreshTokenAction  Refresh the session and return the new token.
+   */
+  constructor(
+    private readonly fetchToken: () => Promise<string | undefined> = getAccessTokenAction,
+    private readonly refreshTokenAction: () => Promise<string | undefined> = refreshAccessTokenAction,
+  ) {}
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -105,7 +121,7 @@ export class TokenStore {
     }
     const delay = tokenData === undefined ? RETRY_DELAY_SECONDS * 1000 : this.getRefreshDelay(tokenData);
     this.refreshTimeout = setTimeout(() => {
-      void this.getAccessTokenSilently().catch(() => {});
+      void this.getTokenSilently().catch(() => {});
     }, delay);
   }
 
@@ -118,7 +134,7 @@ export class TokenStore {
   }
 
   /** Get a guaranteed-fresh token, refreshing when expiring. */
-  async getAccessToken(): Promise<string | undefined> {
+  async getToken(): Promise<string | undefined> {
     const tokenData = this.parseToken(this.state.token);
     if (tokenData && !tokenData.isExpiring) return this.state.token;
     // Otherwise — expiring, absent, or opaque (unparseable, so freshness can't
@@ -127,8 +143,8 @@ export class TokenStore {
     return this.refreshTokenSilently();
   }
 
-  /** Like {@link getAccessToken} but also (re)schedules the next refresh. */
-  async getAccessTokenSilently(): Promise<string | undefined> {
+  /** Like {@link getToken} but also (re)schedules the next refresh. */
+  async getTokenSilently(): Promise<string | undefined> {
     const tokenData = this.parseToken(this.state.token);
     if (tokenData && !tokenData.isExpiring) return this.state.token;
     return this.refreshTokenSilently();
@@ -159,16 +175,16 @@ export class TokenStore {
         // expiry), so a token it returns is already validated.
         const needsServerCheck = !previousToken || this.parseToken(previousToken) === null;
         if (silent && needsServerCheck) {
-          token = await getAccessTokenAction();
+          token = await this.fetchToken();
           const tokenData = this.parseToken(token);
           // Refresh only if the server has nothing, or returned a parseable
           // token that's already expiring. A server-returned opaque token is
           // session-validated, so accept it as-is.
           if (!token || (tokenData && tokenData.isExpiring)) {
-            token = (await refreshAccessTokenAction()) ?? token;
+            token = (await this.refreshTokenAction()) ?? token;
           }
         } else {
-          token = await refreshAccessTokenAction();
+          token = await this.refreshTokenAction();
         }
 
         this.setState({ token, loading: false, error: null });
@@ -204,4 +220,7 @@ export class TokenStore {
   }
 }
 
+/** Shared singleton for the access token. */
 export const tokenStore = new TokenStore();
+/** Shared singleton for the ID token. */
+export const idTokenStore = new TokenStore(getIdTokenAction, refreshIdTokenAction);
