@@ -88,4 +88,36 @@ describe("TokenStore", () => {
     expect(store.getSnapshot().error?.message).toBe("boom");
     expect(store.getSnapshot().loading).toBe(false);
   });
+
+  it("does not schedule a 0 ms proactive refresh for short-lived tokens", async () => {
+    // A token whose remaining life is within the expiry buffer would yield a
+    // 0 ms delay and spin; the delay must be floored to MIN_REFRESH_DELAY (15s).
+    refreshAccessTokenAction.mockResolvedValue(expiringJwt());
+
+    const store = new TokenStore();
+    await store.refreshToken();
+    expect(refreshAccessTokenAction).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(14_000); // < 15s floor → no proactive refresh yet
+    expect(refreshAccessTokenAction).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2_000); // now past the 15s floor
+    expect(refreshAccessTokenAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates an opaque token instead of caching it forever", async () => {
+    getAccessTokenAction.mockResolvedValue("opaque-token");
+
+    const store = new TokenStore();
+    // First read (no token): cheap GET returns a server-validated opaque token.
+    expect(await store.getAccessTokenSilently()).toBe("opaque-token");
+    expect(getAccessTokenAction).toHaveBeenCalledTimes(1);
+    expect(refreshAccessTokenAction).not.toHaveBeenCalled();
+
+    // Second read: the cached opaque token must be revalidated via the server,
+    // not returned blindly.
+    expect(await store.getAccessToken()).toBe("opaque-token");
+    expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
+    expect(refreshAccessTokenAction).not.toHaveBeenCalled();
+  });
 });

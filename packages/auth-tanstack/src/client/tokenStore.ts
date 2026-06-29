@@ -86,9 +86,16 @@ export class TokenStore {
 
   private getRefreshDelay({ timeUntilExpiry, totalTokenLifetime }: ParsedToken): number {
     const bufferSeconds = getExpiryBuffer(totalTokenLifetime);
-    if (timeUntilExpiry <= bufferSeconds) return 0;
     const idealDelay = (timeUntilExpiry - bufferSeconds) * 1000;
-    return Math.min(Math.max(idealDelay, MIN_REFRESH_DELAY_SECONDS * 1000), MAX_REFRESH_DELAY_SECONDS * 1000);
+    // Floor the proactive delay at MIN_REFRESH_DELAY. A token whose lifetime is
+    // at or below the buffer (e.g. 30s test tokens) would otherwise schedule a
+    // 0 ms refresh, which fires immediately, sees the token still expiring, and
+    // refreshes again in a tight loop. On-demand reads still refresh a genuinely
+    // expiring token immediately; this only paces the background timer.
+    return Math.min(
+      Math.max(idealDelay, MIN_REFRESH_DELAY_SECONDS * 1000),
+      MAX_REFRESH_DELAY_SECONDS * 1000,
+    );
   }
 
   private scheduleRefresh(tokenData?: ParsedToken): void {
@@ -114,8 +121,9 @@ export class TokenStore {
   async getAccessToken(): Promise<string | undefined> {
     const tokenData = this.parseToken(this.state.token);
     if (tokenData && !tokenData.isExpiring) return this.state.token;
-    // An unparseable-but-present token (opaque) can't be checked — return it.
-    if (this.state.token && !tokenData) return this.state.token;
+    // Otherwise — expiring, absent, or opaque (unparseable, so freshness can't
+    // be checked locally) — revalidate against the server rather than trusting a
+    // cached copy. The server validates against the session's stored expiry.
     return this.refreshTokenSilently();
   }
 
@@ -123,7 +131,6 @@ export class TokenStore {
   async getAccessTokenSilently(): Promise<string | undefined> {
     const tokenData = this.parseToken(this.state.token);
     if (tokenData && !tokenData.isExpiring) return this.state.token;
-    if (this.state.token && !tokenData) return this.state.token;
     return this.refreshTokenSilently();
   }
 
@@ -146,11 +153,17 @@ export class TokenStore {
       try {
         let token: string | undefined;
 
-        if (silent && !previousToken) {
-          // No token in hand yet — the session may already carry a valid access
-          // token (e.g. right after SSR), so try the cheap GET before refreshing.
+        // Try the cheap GET before a full refresh when we have no token, or an
+        // opaque one we can't validate locally. The server returns the current
+        // token only if the session is present and unexpired (per its stored
+        // expiry), so a token it returns is already validated.
+        const needsServerCheck = !previousToken || this.parseToken(previousToken) === null;
+        if (silent && needsServerCheck) {
           token = await getAccessTokenAction();
           const tokenData = this.parseToken(token);
+          // Refresh only if the server has nothing, or returned a parseable
+          // token that's already expiring. A server-returned opaque token is
+          // session-validated, so accept it as-is.
           if (!token || (tokenData && tokenData.isExpiring)) {
             token = (await refreshAccessTokenAction()) ?? token;
           }
@@ -162,6 +175,9 @@ export class TokenStore {
 
         const tokenData = this.parseToken(token);
         if (tokenData) this.scheduleRefresh(tokenData);
+        // Opaque token: no local expiry to schedule against, so revalidate on
+        // the retry cadence rather than treating it as permanently fresh.
+        else if (token) this.scheduleRefresh();
 
         return token;
       } catch (error) {

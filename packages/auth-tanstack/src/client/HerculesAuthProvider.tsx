@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { checkSessionAction, getAuthAction, getSignOutUrl, refreshAuthAction } from "../server/actions";
 import type { ClientUserInfo, Impersonator, NoUserInfo, User } from "../types";
 import type { AuthContextType, HerculesAuthProviderProps } from "./types";
@@ -31,6 +31,11 @@ export function HerculesAuthProvider({ children, onSessionExpired, initialAuth }
   const [featureFlags, setFeatureFlags] = useState(initial.featureFlags);
   const [impersonator, setImpersonator] = useState<Impersonator | undefined>(initial.impersonator);
   const [loading, setLoading] = useState(!initialAuth);
+
+  // Latest user, read by the focus/visibility listener without making it a
+  // dependency (which would tear down and reinstall the listener each change).
+  const userRef = useRef<User | null>(initial.user);
+  userRef.current = user;
 
   const apply = useCallback((auth: ClientUserInfo | NoUserInfo | undefined) => {
     const props = getProps(auth);
@@ -89,11 +94,17 @@ export function HerculesAuthProvider({ children, onSessionExpired, initialAuth }
 
     let inFlight = false;
     const check = async () => {
-      if (inFlight || document.visibilityState !== "visible") return;
+      // Only meaningful when a session currently exists. Without this gate a
+      // signed-out user (public route, post sign-out, already-expired session)
+      // would get `hasSession === false` and be reloaded on every focus.
+      if (inFlight || !userRef.current || document.visibilityState !== "visible") return;
       inFlight = true;
       try {
         const hasSession = await checkSessionAction();
         if (!hasSession) {
+          // Reflect the expiry locally so the UI updates and the gate above
+          // suppresses further checks even if we don't reload.
+          apply({ user: null });
           if (onSessionExpired) onSessionExpired();
           else window.location.reload();
         }
@@ -110,7 +121,7 @@ export function HerculesAuthProvider({ children, onSessionExpired, initialAuth }
       window.removeEventListener("visibilitychange", check);
       window.removeEventListener("focus", check);
     };
-  }, [onSessionExpired]);
+  }, [onSessionExpired, apply]);
 
   return (
     <AuthContext.Provider
@@ -146,11 +157,28 @@ export function useAuth(options: { ensureSignedIn?: boolean } = {}): AuthContext
   const { ensureSignedIn = false } = options;
   const context = useContext(AuthContext);
 
+  // Gate the ensure-signed-in fetch to a single attempt. `getAuth` toggles
+  // `loading`, which re-runs this effect; without the guard a signed-out result
+  // (`{ user: null }`) would satisfy the condition again and re-fetch forever.
+  const attemptedRef = useRef(false);
+  const user = context?.user;
+  const loading = context?.loading;
+  const getAuth = context?.getAuth;
+
   useEffect(() => {
-    if (context && ensureSignedIn && !context.user && !context.loading) {
-      void context.getAuth({ ensureSignedIn });
+    if (!ensureSignedIn || !getAuth) return;
+    if (user) {
+      // Signed in — reset so a later sign-out can trigger one fresh attempt.
+      attemptedRef.current = false;
+      return;
     }
-  }, [ensureSignedIn, context]);
+    // Signed out: fetch once (e.g. to confirm a seeded `initialAuth: { user: null }`),
+    // then stop. Callers wanting a redirect can act on the resolved `user`.
+    if (!loading && !attemptedRef.current) {
+      attemptedRef.current = true;
+      void getAuth({ ensureSignedIn });
+    }
+  }, [ensureSignedIn, user, loading, getAuth]);
 
   if (!context) {
     throw new Error("useAuth must be used within a HerculesAuthProvider");
