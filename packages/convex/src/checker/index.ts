@@ -49,10 +49,27 @@ export type CheckIamSourceOptions = {
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const ignoredDirectories = new Set(["_generated", "node_modules", "dist", "build", ".git"]);
 
-// `system.<seg>(.<seg>)*:<action>` — platform permission keys. These are seeded
-// by Hercules, never declared in the app catalog, so a syntactically valid
-// system key is always accepted.
-const systemPermissionKeyPattern = /^system(\.[a-z0-9_]+)+:[a-z0-9_]+$/;
+// The complete set of platform (`system.*`) permission keys Hercules seeds for
+// every app. They are provided by the platform and never declared in an app's
+// iam.jsonc, so the checker accepts exactly these and reports any other
+// `system.*` literal as an undeclared permission. Matching by an exact set
+// (rather than by grammar) catches typos like `system.access.tenants:raed`,
+// which would otherwise pass the build and only fail at runtime.
+//
+// This list MUST mirror backend-shared SEEDED_SYSTEM_PERMISSION_CATALOG.
+const SEEDED_SYSTEM_PERMISSIONS = new Set<string>([
+  "system.access.tenants:manage",
+  "system.access.impersonation:manage",
+  "system.access.users:read",
+  "system.access.users:manage",
+  "system.access.groups:read",
+  "system.access.groups:manage",
+  "system.access.roles:read",
+  "system.access.assignments:manage",
+  "system.access.invitations:manage",
+  "system.access.admission:manage",
+  "system.access.audit:read",
+]);
 
 export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckResult {
   const cwd = resolve(options.cwd ?? process.cwd());
@@ -168,7 +185,7 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
   const validatePermission = (literal: { value: string; node: ts.Node }): void => {
     if (catalog.permissionKeys === null) return;
     if (catalog.permissionKeys.has(literal.value)) return;
-    if (systemPermissionKeyPattern.test(literal.value)) return;
+    if (SEEDED_SYSTEM_PERMISSIONS.has(literal.value)) return;
     findings.push(
       finding(cwd, sourceFile, literal.node, {
         code: "undeclared_permission",
@@ -202,19 +219,19 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
         const permission = getStringProperty(node, "permission");
         if (permission) validatePermission(permission);
       }
-      // Resource ref / resource options: a { type: "app.x" } object that also
-      // carries externalId, parent, or a permission filter. Covers the
-      // `resource` selector, nested `parent` refs, and the resource.write /
-      // resource.get / resource.list arguments (the last two may filter by a
-      // `permission`, which is a permission reference too).
+      // Resource ref / selector: any { type: "app.x", ... } object. These are
+      // the `resource` option, nested `parent` refs, and the resource.write /
+      // resource.get / resource.list arguments — including a type-ONLY selector
+      // such as resource.list(ctx, { type: "app.x" }), which carries no
+      // externalId, parent, or permission. We validate the `type` literal
+      // unconditionally; the app.-prefix filter in validateResourceType guards
+      // against false positives. Builder definitions carry no `type`, so their
+      // `permission` (handled above) is not double-reported here.
       const type = getStringProperty(node, "type");
-      if (
-        type &&
-        (hasProperty(node, "externalId") ||
-          hasProperty(node, "parent") ||
-          hasProperty(node, "permission"))
-      ) {
+      if (type) {
         validateResourceType(type);
+        // resource.get / resource.list may filter by a permission, which is a
+        // permission reference too.
         const permission = getStringProperty(node, "permission");
         if (permission) validatePermission(permission);
       }

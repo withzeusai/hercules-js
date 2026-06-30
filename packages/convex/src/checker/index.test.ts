@@ -93,6 +93,30 @@ describe("checkIamSource", () => {
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
+  test("fails a typo'd system.* permission", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/admin.ts": `
+        import { query } from "./iam.js";
+
+        export const members = query({
+          permission: "system.access.tenants:raed",
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      { code: "undeclared_permission", filePath: "convex/admin.ts" },
+    ]);
+    expect(formatIamCheckResult(result)).toContain(
+      'Permission "system.access.tenants:raed" is not declared in hercules/iam.jsonc.',
+    );
+  });
+
   test("fails an undeclared permission on a builder", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
@@ -194,6 +218,43 @@ describe("checkIamSource", () => {
     expect(formatIamCheckResult(result)).toContain(
       'Resource type "app.documnet" is not declared in hercules/iam.jsonc.',
     );
+  });
+
+  test("fails a typo'd resource type in a type-only resource.list selector", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/documents.ts": `
+        import { query, resource } from "./iam.js";
+
+        export const list = query({
+          handler: async (ctx) => resource.list(ctx, { type: "app.documnet" }),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      { code: "undeclared_resource_type", filePath: "convex/documents.ts" },
+    ]);
+  });
+
+  test("passes a valid type-only resource.list selector", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/documents.ts": `
+        import { query, resource } from "./iam.js";
+
+        export const list = query({
+          handler: async (ctx) => resource.list(ctx, { type: "app.document" }),
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
   test("skips dynamic, non-literal permission and resource values", () => {
