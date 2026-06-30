@@ -1,27 +1,46 @@
 import {
+  actionGeneric,
   internalMutationGeneric,
   makeFunctionReference,
-  mutationGeneric,
+  type ActionBuilder,
   type DataModelFromSchemaDefinition,
   type GenericMutationCtx,
   type MutationBuilder,
 } from "convex/server";
 import { v } from "convex/values";
+import { Webhook, WebhookVerificationError } from "standardwebhooks";
 import {
   accessProjectionSyncPayloadSchema,
   type AccessProjectionEvent,
   type AccessProjectionSnapshot,
+  type AccessProjectionSyncPayload,
   type ProjectionResourceRoleAssignment,
   type ProjectionRoleAssignment,
+  type SyncResponse,
 } from "../shared/sync";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 type MutationCtx = GenericMutationCtx<DataModel>;
 const internalMutation = internalMutationGeneric as MutationBuilder<DataModel, "internal">;
-// applySync is the parent-facing entry point (the app's HTTP sync route calls
-// it via runMutation); it must be public-in-component to be exported.
-const mutation = mutationGeneric as MutationBuilder<DataModel, "public">;
+// applySync (below) is the SINGLE public, parent-facing entry point for the
+// signed sync channel. The raw mirror apply (applyProjection) is an
+// internalMutation, so nothing the parent app can reach writes the mirror
+// without a verified control-plane signature.
+const action = actionGeneric as ActionBuilder<DataModel, "public">;
+
+// The signing secret is bound to THIS component (Convex isolates component env
+// vars from the app), so verification cannot be bypassed by a caller supplying
+// their own secret.
+const SYNC_SECRET_ENV_VAR = "HERCULES_SYNC_SECRET";
+
+// Reference to the component-internal mirror apply. Only the verifying action
+// below invokes it; it is never exported in the component's public API.
+const applyProjectionReference = makeFunctionReference<
+  "mutation",
+  AccessProjectionSyncPayload,
+  SyncResponse
+>("sync:applyProjection");
 
 // Exact-identity expiry mutations: scheduled at expiresAt so the reactive query
 // is invalidated when a time-bound assignment lapses. The runtime check also
@@ -77,7 +96,59 @@ const syncPayloadArgs = {
   users: v.optional(v.array(v.any())),
 };
 
-export const applySync = mutation({
+// Verify the standardwebhooks signature, then translate the library outcome:
+// `ok` carries the parsed payload; a WebhookVerificationError is a clean
+// rejection; anything else (e.g. a crypto fault) propagates as a server error.
+function verifyWebhookPayload(secret: string, rawBody: string, headers: Record<string, string>) {
+  try {
+    return { ok: true as const, payload: new Webhook(secret).verify(rawBody, headers) };
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) {
+      return { ok: false as const };
+    }
+    throw error;
+  }
+}
+
+// applySync — the ONLY public surface that can reach the mirror. The parent
+// app's thin HTTP route forwards the raw request body and the three
+// standardwebhooks headers here; this action verifies the signature against the
+// component-bound secret BEFORE running any mutation, then delegates to the
+// internal apply. A caller that has not presented a control-plane signature
+// over the exact body cannot install roles/permissions/memberships/assignments.
+export const applySync = action({
+  args: {
+    payload: v.string(),
+    webhookId: v.string(),
+    webhookTimestamp: v.string(),
+    webhookSignature: v.string(),
+  },
+  handler: async (ctx, args): Promise<SyncResponse> => {
+    const secret = process.env[SYNC_SECRET_ENV_VAR];
+    if (!secret) {
+      // The signing secret is not bound to the component. Fail closed: never
+      // write unverified data. Surfaces as a 500 at the HTTP route.
+      throw new Error(`${SYNC_SECRET_ENV_VAR} is not configured for the Hercules IAM component.`);
+    }
+    const verified = verifyWebhookPayload(secret, args.payload, {
+      "webhook-id": args.webhookId,
+      "webhook-timestamp": args.webhookTimestamp,
+      "webhook-signature": args.webhookSignature,
+    });
+    if (!verified.ok) {
+      return { ok: false as const, status: "invalid_signature" as const };
+    }
+    const parsed = accessProjectionSyncPayloadSchema.safeParse(verified.payload);
+    if (!parsed.success) {
+      return { ok: false as const, status: "invalid_payload" as const };
+    }
+    return await ctx.runMutation(applyProjectionReference, parsed.data);
+  },
+});
+
+// applyProjection — the raw mirror apply. internalMutation, so it is NOT in the
+// component's public API and is reachable only from the verifying action above.
+export const applyProjection = internalMutation({
   args: syncPayloadArgs,
   handler: async (ctx, rawArgs) => {
     if (rawArgs.schemaVersion !== 5) {

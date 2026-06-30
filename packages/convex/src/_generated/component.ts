@@ -9,7 +9,7 @@
  */
 
 import type { FunctionReference } from "convex/server";
-import type { AccessProjectionSyncPayload, SyncResponse } from "../shared/sync";
+import type { SyncResponse } from "../shared/sync";
 
 type ResourceRef = { type: string; externalId: string };
 
@@ -300,10 +300,14 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     >;
   };
   sync: {
+    // Public entry point for the signed sync channel. An ACTION that verifies
+    // the standardwebhooks signature (against the component-bound secret) before
+    // applying the internal mirror mutation. The raw apply (`applyProjection`)
+    // is internal and intentionally absent from this public API.
     applySync: FunctionReference<
-      "mutation",
+      "action",
       "public",
-      AccessProjectionSyncPayload,
+      { payload: string; webhookId: string; webhookTimestamp: string; webhookSignature: string },
       SyncResponse,
       Name
     >;

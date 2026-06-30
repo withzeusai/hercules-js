@@ -41,14 +41,23 @@ browser args. Link app rows to `getCurrentUserId(ctx)`, not to `tokenIdentifier`
 
 ## Setup
 
-Register the component in `convex/convex.config.ts`:
+Register the component in `convex/convex.config.ts` and bind the sync signing
+secret to it. The component verifies the projection-sync webhook signature inside
+its own runtime, and Convex isolates a component's environment variables from the
+app, so the secret must be declared by the app and bound into the component. The
+actual value is still set on the deployment (dashboard / `npx convex env set`);
+declaring it only states that it is required.
 
 ```ts
 import { defineApp } from "convex/server";
+import { v } from "convex/values";
 import hercules from "@usehercules/convex/convex.config";
 
-const app = defineApp();
-app.use(hercules);
+const app = defineApp({ env: { HERCULES_SYNC_SECRET: v.string() } });
+app.use(hercules, {
+  name: "hercules",
+  env: { HERCULES_SYNC_SECRET: app.env.HERCULES_SYNC_SECRET },
+});
 export default app;
 ```
 
@@ -204,7 +213,8 @@ rarely references them directly except where a helper requires a `FunctionRefere
   `queries.getTenantGroup`, `queries.listGroupMembers`, `queries.listTenantRoles`,
   `queries.getTenantRole`
 - `resources.list`, `resources.get`, `resources.write`, `resources.remove`
-- `sync.applySync`
+- `sync.applySync` — a signature-verifying ACTION (the sole public write path to
+  the mirror). The raw apply is an internal mutation and is not exposed.
 
 ## Types
 
@@ -306,24 +316,31 @@ Classifies runtime IAM denials. Local `ConvexError ACCESS_DENIED` denials map to
 
 ### `registerIamRoutes(http, options)`
 
-Registers the projection-sync webhook the control plane posts to. Verifies the
-standard-webhooks signature, validates the v5 payload, applies it via the
-component `applySync` mutation, and maps outcomes to HTTP statuses (200
-applied/duplicate, 409 recoverable conflict, 400 payload problem, 401 bad
-signature, 500 missing secret).
+Registers the projection-sync webhook the control plane posts to. The route is a
+THIN transport: it forwards the raw request body and the standard-webhooks
+headers to the component's `sync.applySync` action. The component owns the trust
+boundary — it verifies the standard-webhooks signature against its own bound
+`HERCULES_SYNC_SECRET`, validates the v5 payload, and only then applies the
+internal mirror mutation. Outcomes map to HTTP statuses (200 applied/duplicate,
+409 recoverable conflict, 400 payload problem, 401 bad signature, 500 missing
+secret). Because verification is welded to the (internal) write inside the
+component, there is no way to write the mirror without a verified control-plane
+signature.
 
 ```ts
 import { httpRouter } from "convex/server";
 import { registerIamRoutes } from "@usehercules/convex/http";
 import { httpAction } from "./_generated/server";
+import { components } from "./_generated/api";
 
 const http = httpRouter();
-registerIamRoutes(http, { httpAction });
+registerIamRoutes(http, { httpAction, components });
 export default http;
 ```
 
-Options: `{ httpAction, components?, component?, componentName?, path?, envVarName? }`.
-Default path `/_hercules/iam/sync`; default secret env var `HERCULES_SYNC_SECRET`.
+Options: `{ httpAction, components?, component?, componentName?, path? }`.
+Default path `/_hercules/iam/sync`. The signing secret is read by the component
+from its bound `HERCULES_SYNC_SECRET` (see Setup), not by this route.
 
 ## Resource creator bootstrap
 
@@ -347,6 +364,8 @@ runtime role decisions or control-plane writes are authorized.
 - Mirror reads may briefly lag a successful write. Treat a not-yet-synced state
   as loading, not as denial.
 - `HERCULES_API_KEY` is the server-side service credential; `HERCULES_SYNC_SECRET`
-  verifies the sync webhook.
+  verifies the sync webhook. The sync secret is verified inside the component, so
+  it must be bound to the component in `convex.config.ts` (see Setup), not just
+  set on the deployment. A missing binding fails closed (every sync rejected).
 - IAM actions use Convex's default runtime. Do not add `"use node"`.
 - Do not call `.collect()` on unbounded tables; page resource lists with `cursor`.

@@ -6,7 +6,12 @@ import {
 } from "convex/server";
 import { paginator } from "convex-helpers/server/pagination";
 import { v } from "convex/values";
-import { collectMembershipRoleIds, evaluateAccess, resolveTenantRow } from "./access";
+import {
+  collectMembershipRoleIds,
+  evaluateAccess,
+  resolvePrimaryTenant,
+  resolveTenantRow,
+} from "./access";
 import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
@@ -259,6 +264,28 @@ async function gate(
   return decision.allowed ? tenant.tenantId : null;
 }
 
+// Gate a primary-tenant-admin operation (e.g. listing EVERY tenant). The
+// capability is checked against the deployment's PRIMARY tenant specifically and
+// the caller-supplied tenant id is ignored: holding the permission in some
+// non-primary tenant must never authorize a global, cross-tenant read.
+// `system.access.tenants:read` is a restricted system permission, so only a
+// primary-tenant admin can hold it there. Returns the primary tenant id when
+// allowed, `null` otherwise.
+async function gatePrimaryTenant(
+  ctx: QueryCtx,
+  args: { tokenIdentifier?: string },
+  permission: string,
+): Promise<string | null> {
+  const primary = await resolvePrimaryTenant(ctx);
+  if (!primary) return null;
+  const decision = await evaluateAccess(ctx, {
+    ...(args.tokenIdentifier === undefined ? {} : { tokenIdentifier: args.tokenIdentifier }),
+    tenantId: primary.tenantId,
+    permissionKey: permission,
+  });
+  return decision.allowed ? primary.tenantId : null;
+}
+
 // ── caller-centric reads (me.*) ───────────────────────────────────────────────
 export const getTenantAccessStatus = query({
   args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
@@ -481,10 +508,12 @@ export const listTenants = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<TenantDetailsPage> => {
-    // Listing every tenant is an admin-console read; gate against the primary
-    // tenant's tenants:read capability.
-    const tenantId = await gate(ctx, args, PERMISSION_TENANTS_READ);
-    if (!tenantId) return { tenants: [] };
+    // Listing every tenant is a primary-tenant-admin read. Gate against the
+    // PRIMARY tenant's tenants:read capability, ignoring any caller-supplied
+    // tenant id — otherwise a caller holding tenants:read in a non-primary
+    // tenant could pass that tenant id and enumerate all tenants.
+    const primaryTenantId = await gatePrimaryTenant(ctx, args, PERMISSION_TENANTS_READ);
+    if (!primaryTenantId) return { tenants: [] };
     const limit = pageLimit(args.limit);
     const page = await paginator(ctx.db, schema)
       .query("tenants")

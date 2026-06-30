@@ -61,11 +61,13 @@ export type {
   ProjectionEntityType,
 } from "./projection-protocol.js";
 
-// ── mutation response contract ───────────────────────────────────────────────
-// The `applySync` mutation returns one of these; client/http.ts maps them to
-// HTTP statuses (200 applied/duplicate, 409 recoverable state conflicts, 400
-// payload-shape problems). `unsupported_schema` is returned when a payload
-// arrives at a schemaVersion this consumer does not implement.
+// ── sync response contract ───────────────────────────────────────────────────
+// The component's `applySync` action returns one of these (after verifying the
+// signature and applying the internal mirror mutation); client/http.ts maps
+// them to HTTP statuses (200 applied/duplicate, 401 bad signature, 409
+// recoverable state conflicts, 400 payload-shape problems). `unsupported_schema`
+// is returned when a payload arrives at a schemaVersion this consumer does not
+// implement.
 export type SyncResponse =
   | { ok: true; status: "applied" | "duplicate"; acknowledgedVersion: number }
   | {
