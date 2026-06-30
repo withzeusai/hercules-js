@@ -67,7 +67,9 @@ const SEEDED_SYSTEM_PERMISSIONS = new Set<string>([
   "system.access.roles:read",
   "system.access.assignments:manage",
   "system.access.invitations:manage",
+  "system.access.invitations:read",
   "system.access.admission:manage",
+  "system.access.admission:read",
   "system.access.audit:read",
 ]);
 
