@@ -23,3 +23,4 @@ export {
   getSignInUrl,
   getSignUpUrl,
 } from "./server/auth";
+export { type HerculesAuthMiddlewareOptions, herculesAuthMiddleware } from "./server/middleware";

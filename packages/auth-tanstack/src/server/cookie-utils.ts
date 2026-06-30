@@ -41,11 +41,7 @@ export interface CookieOptions {
  * Only the attributes needed by this package are supported. `maxAge` is floored
  * to a whole number of seconds; pass `0` to expire a cookie immediately.
  */
-export function serializeCookie(
-  name: string,
-  value: string,
-  options: CookieOptions = {},
-): string {
+export function serializeCookie(name: string, value: string, options: CookieOptions = {}): string {
   const parts = [`${name}=${value}`];
   if (options.path) parts.push(`Path=${options.path}`);
   if (options.maxAge !== undefined) parts.push(`Max-Age=${Math.floor(options.maxAge)}`);

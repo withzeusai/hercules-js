@@ -12,12 +12,12 @@ Peer dependencies: `@tanstack/react-router`, `@tanstack/react-start`, and — on
 
 ## Environment variables
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `HERCULES_AUTH_ISSUER_URL` | yes | OIDC issuer used for discovery (`{issuer}/.well-known/openid-configuration`). For Amazon Cognito this is the user-pool issuer (`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`), not the hosted-UI domain. |
-| `HERCULES_AUTH_CLIENT_ID` | yes | OAuth client ID. |
-| `HERCULES_AUTH_CLIENT_SECRET` | no | OAuth client secret. Omit for a public (PKCE-only) client. |
-| `HERCULES_AUTH_COOKIE_PASSWORD` | yes | Secret used to seal the session cookie (AES-256-GCM). Must be at least 32 characters. |
+| Variable                        | Required | Description                                                                                                                                                                                                          |
+| ------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HERCULES_AUTH_ISSUER_URL`      | yes      | OIDC issuer used for discovery (`{issuer}/.well-known/openid-configuration`). For Amazon Cognito this is the user-pool issuer (`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`), not the hosted-UI domain. |
+| `HERCULES_AUTH_CLIENT_ID`       | yes      | OAuth client ID.                                                                                                                                                                                                     |
+| `HERCULES_AUTH_CLIENT_SECRET`   | no       | OAuth client secret. Omit for a public (PKCE-only) client.                                                                                                                                                           |
+| `HERCULES_AUTH_COOKIE_PASSWORD` | yes      | Secret used to seal the session cookie (AES-256-GCM). Must be at least 32 characters.                                                                                                                                |
 
 Generate a cookie password:
 

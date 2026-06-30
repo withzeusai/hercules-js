@@ -58,6 +58,8 @@ export function decodeJwt<T = Record<string, unknown>>(token: string): { payload
   try {
     return { payload: JSON.parse(decodeBase64Url(parts[1])) as TokenClaims<T> };
   } catch (error) {
-    throw new Error(`Failed to decode JWT: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to decode JWT: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }

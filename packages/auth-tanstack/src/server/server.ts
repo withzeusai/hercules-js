@@ -1,6 +1,5 @@
 import * as client from "openid-client";
 import {
-  DEFAULT_CALLBACK_PATH,
   DEFAULT_REDIRECT,
   DEFAULT_SCOPE,
   MAX_PENDING_SIGN_INS,
@@ -12,14 +11,29 @@ import {
   pkceCookieName,
 } from "./config";
 import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
+import { cookieSecurity, resolveOrigin, resolveRedirectUri } from "./request-url";
 import { type SessionData, sealSession, serializeSessionCookies } from "./session";
 import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
 
 export type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
 
-/** Append a `Set-Cookie` that immediately expires the named cookie. */
+/**
+ * Append `Set-Cookie` header(s) that immediately expire the named cookie.
+ *
+ * Delete matching is on (name, path, domain), but the delete cookie must also
+ * be accepted in the response's context. Emit both a Lax and a None; Secure
+ * variant so the cookie clears whether it was originally set for a top-level
+ * redirect (Lax) or an embedded/cross-site flow (None; Secure).
+ */
 function deleteCookie(headers: Headers, name: string): void {
-  headers.append("Set-Cookie", serializeCookie(name, "", { path: "/", maxAge: 0 }));
+  headers.append(
+    "Set-Cookie",
+    serializeCookie(name, "", { path: "/", maxAge: 0, sameSite: "Lax" }),
+  );
+  headers.append(
+    "Set-Cookie",
+    serializeCookie(name, "", { path: "/", maxAge: 0, sameSite: "None", secure: true }),
+  );
 }
 
 /**
@@ -54,13 +68,15 @@ async function handleError(
 
   if (options?.errorRedirectUrl) {
     try {
-      const location = new URL(options.errorRedirectUrl, new URL(request.url).origin).toString();
+      const location = new URL(options.errorRedirectUrl, resolveOrigin(request)).toString();
       const headers = new Headers({ Location: location });
       if (clearCookieName) deleteCookie(headers, clearCookieName);
       return new Response(null, { status: 302, headers });
     } catch {
       // Malformed config value — warn and fall back to the JSON error response.
-      console.warn(`[auth-tanstack] Ignoring malformed errorRedirectUrl: ${options.errorRedirectUrl}`);
+      console.warn(
+        `[auth-tanstack] Ignoring malformed errorRedirectUrl: ${options.errorRedirectUrl}`,
+      );
     }
   }
 
@@ -90,14 +106,12 @@ async function handleSignInInternal(
   request: Request,
   options?: HandleSignInOptions,
 ): Promise<Response> {
-  const url = new URL(request.url);
-
   // These must be unique per authorization request and tied to the user-agent.
   const codeVerifier = client.randomPKCECodeVerifier();
   const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
   const state = client.randomState();
 
-  const redirectUri = new URL(options?.redirectUri ?? DEFAULT_CALLBACK_PATH, url.origin).toString();
+  const redirectUri = resolveRedirectUri(request, options?.redirectUri);
 
   let authorizationUrl: URL;
   try {
@@ -124,7 +138,10 @@ async function handleSignInInternal(
 
   // Stash this flow's PKCE verifier (and return path) under a state-keyed cookie
   // so concurrent sign-ins keep separate verifiers instead of clobbering a
-  // shared name. SameSite=Lax so it survives the top-level redirect back.
+  // shared name. Over HTTPS default to SameSite=None; Secure so it also works
+  // when the app is embedded cross-site; over plain HTTP (local dev) fall back
+  // to Lax. Overridable via herculesAuthMiddleware({ cookieSameSite }).
+  const { secure, sameSite } = cookieSecurity(request);
   headers.append(
     "Set-Cookie",
     serializeCookie(
@@ -132,8 +149,8 @@ async function handleSignInInternal(
       encodePkceState({ verifier: codeVerifier, returnPathname: options?.returnPathname }),
       {
         httpOnly: true,
-        secure: url.protocol === "https:",
-        sameSite: "Lax",
+        secure,
+        sameSite,
         path: "/",
         maxAge: SIGN_IN_COOKIE_MAX_AGE,
       },
@@ -247,11 +264,24 @@ async function handleCallbackInternal(
   try {
     sealed = await sealSession(session);
   } catch (error) {
-    return handleError(request, 500, "Failed to persist session", error, options, verifierCookieName);
+    return handleError(
+      request,
+      500,
+      "Failed to persist session",
+      error,
+      options,
+      verifierCookieName,
+    );
   }
 
-  const secure = url.protocol === "https:";
-  const headers = new Headers({ Location: options?.returnPathname ?? returnPathname ?? DEFAULT_REDIRECT });
+  // Over HTTPS default to SameSite=None; Secure so the session cookie is also
+  // sent when the app is embedded cross-site (e.g. read via a server-function
+  // fetch from an iframe); fall back to Lax over plain HTTP (local dev).
+  // Overridable via herculesAuthMiddleware({ cookieSameSite }).
+  const { secure, sameSite } = cookieSecurity(request);
+  const headers = new Headers({
+    Location: options?.returnPathname ?? returnPathname ?? DEFAULT_REDIRECT,
+  });
 
   const existingNames = parseCookieNames(request.headers.get("cookie") ?? "");
   for (const header of serializeSessionCookies(
@@ -259,7 +289,7 @@ async function handleCallbackInternal(
     {
       httpOnly: true,
       secure,
-      sameSite: "Lax",
+      sameSite,
       path: "/",
       maxAge: tokens.expires_in,
     },

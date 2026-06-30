@@ -10,7 +10,10 @@ describe("pkceCookieName", () => {
 describe("PKCE state envelope", () => {
   it("round-trips a verifier and return path", () => {
     const encoded = encodePkceState({ verifier: "v123", returnPathname: "/dashboard?tab=1" });
-    expect(decodePkceState(encoded)).toEqual({ verifier: "v123", returnPathname: "/dashboard?tab=1" });
+    expect(decodePkceState(encoded)).toEqual({
+      verifier: "v123",
+      returnPathname: "/dashboard?tab=1",
+    });
   });
 
   it("round-trips a verifier with no return path", () => {

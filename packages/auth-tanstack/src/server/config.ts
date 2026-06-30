@@ -23,12 +23,15 @@ export const CLIENT_ID_ENV_VARS = [
   "AUTH_CLIENT_ID",
 ] as const;
 /** OAuth client secret. Optional — omit for a public (PKCE-only) client. */
-export const CLIENT_SECRET_ENV_VARS = ["HERCULES_AUTH_CLIENT_SECRET", "AUTH_CLIENT_SECRET"] as const;
+export const CLIENT_SECRET_ENV_VARS = [
+  "HERCULES_AUTH_CLIENT_SECRET",
+  "AUTH_CLIENT_SECRET",
+] as const;
 
 /** Where to send the user once the callback completes. */
 export const DEFAULT_REDIRECT = "/";
 /** Callback route the provider returns to, unless overridden. */
-export const DEFAULT_CALLBACK_PATH = "/api/auth/callback";
+export const DEFAULT_CALLBACK_PATH = "/auth/callback";
 /** OAuth scopes requested when none are configured. */
 export const DEFAULT_SCOPE = "openid profile email";
 /** Lifetime (seconds) of a pending sign-in's PKCE cookie. */

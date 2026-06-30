@@ -92,7 +92,9 @@ export async function sealSession(data: SessionData): Promise<string> {
   const key = await getKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = textEncoder.encode(JSON.stringify(data));
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext),
+  );
   return `v1.${toBase64Url(iv)}.${toBase64Url(ciphertext)}`;
 }
 
@@ -109,7 +111,11 @@ export async function unsealSession(value: string): Promise<SessionData | null> 
       fromBase64Url(ctPart),
     );
     const parsed = JSON.parse(textDecoder.decode(plaintext)) as unknown;
-    if (parsed && typeof parsed === "object" && typeof (parsed as SessionData).accessToken === "string") {
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as SessionData).accessToken === "string"
+    ) {
       return parsed as SessionData;
     }
     return null;
@@ -165,9 +171,18 @@ export function serializeSessionCookies(
   existingNames: readonly string[] = [],
 ): string[] {
   const chunks = chunkValue(value);
-  const headers = chunks.map((chunk, index) => serializeCookie(sessionChunkName(index), chunk, options));
+  const headers = chunks.map((chunk, index) =>
+    serializeCookie(sessionChunkName(index), chunk, options),
+  );
 
-  const clearOptions: CookieOptions = { path: options.path ?? "/", maxAge: 0 };
+  // Expire stale chunks with the same SameSite/Secure as the fresh write so the
+  // deletion is accepted in the same (possibly cross-site) context.
+  const clearOptions: CookieOptions = {
+    path: options.path ?? "/",
+    maxAge: 0,
+    ...(options.sameSite ? { sameSite: options.sameSite } : {}),
+    ...(options.secure ? { secure: options.secure } : {}),
+  };
   for (const name of staleSessionCookieNames(existingNames, chunks.length)) {
     headers.push(serializeCookie(name, "", clearOptions));
   }
@@ -189,9 +204,23 @@ export function deserializeSessionCookies(cookies: Record<string, string>): stri
   return cookies[SESSION_COOKIE] ?? null;
 }
 
-/** Build `Set-Cookie` strings that expire every session cookie (all chunks). */
-export function clearSessionCookies(existingNames: readonly string[]): string[] {
-  const clearOptions: CookieOptions = { path: "/", maxAge: 0 };
+/**
+ * Build `Set-Cookie` strings that expire every session cookie (all chunks).
+ *
+ * Pass the `secure`/`sameSite` the session was set with so the deletion is
+ * honored in the same context — a `SameSite=None; Secure` cookie set for an
+ * embedded (cross-site) app is only cleared by a matching delete cookie.
+ */
+export function clearSessionCookies(
+  existingNames: readonly string[],
+  options: Pick<CookieOptions, "secure" | "sameSite"> = {},
+): string[] {
+  const clearOptions: CookieOptions = {
+    path: "/",
+    maxAge: 0,
+    ...(options.sameSite ? { sameSite: options.sameSite } : {}),
+    ...(options.secure ? { secure: options.secure } : {}),
+  };
   return existingNames
     .filter((name) => name === SESSION_COOKIE || name.startsWith(`${SESSION_COOKIE}.`))
     .map((name) => serializeCookie(name, "", clearOptions));

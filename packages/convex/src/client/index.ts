@@ -1279,11 +1279,17 @@ function makeIamBuilder<TBuilder>(builder: TBuilder, component: IamComponent): T
     if (typeof iamDefinition.permission !== "string" || iamDefinition.permission.length === 0) {
       throw new Error("iam* builders require a non-empty permission.");
     }
-    if (iamDefinition.authorizeAgainst !== undefined && typeof iamDefinition.authorizeAgainst !== "function") {
+    if (
+      iamDefinition.authorizeAgainst !== undefined &&
+      typeof iamDefinition.authorizeAgainst !== "function"
+    ) {
       throw new Error("iam* builders require authorizeAgainst to be a function.");
     }
     const { permission, authorizeAgainst, ...convexDefinition } = iamDefinition;
-    const authorizeExtractor = (authorizeAgainst ?? rootTenant) as ExtractTenant<AuthorizationCtx, unknown>;
+    const authorizeExtractor = (authorizeAgainst ?? rootTenant) as ExtractTenant<
+      AuthorizationCtx,
+      unknown
+    >;
     return (builder as BuilderCaller)(
       wrapDefinition(convexDefinition, component, "permission", {
         permission,

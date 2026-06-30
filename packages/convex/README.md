@@ -22,13 +22,13 @@ import { registerIamRoutes } from "@usehercules/convex/http";
 import herculesComponent from "@usehercules/convex/convex.config"; // defineComponent("hercules")
 ```
 
-| Export path                      | Provides                                                    |
-| -------------------------------- | ----------------------------------------------------------- |
-| `@usehercules/convex`            | `createIam`, authorization extractors, `classifyIamError`, types   |
-| `@usehercules/convex/iam-helpers`| `createResourceCreatorBootstrapAction`                      |
-| `@usehercules/convex/http`       | `registerIamRoutes`                                         |
-| `@usehercules/convex/convex.config` | the `hercules` Convex component definition               |
-| `hercules-convex-iam-check` (bin)| static source checker (`hercules-convex-iam-check convex`)  |
+| Export path                         | Provides                                                         |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| `@usehercules/convex`               | `createIam`, authorization extractors, `classifyIamError`, types |
+| `@usehercules/convex/iam-helpers`   | `createResourceCreatorBootstrapAction`                           |
+| `@usehercules/convex/http`          | `registerIamRoutes`                                              |
+| `@usehercules/convex/convex.config` | the `hercules` Convex component definition                       |
+| `hercules-convex-iam-check` (bin)   | static source checker (`hercules-convex-iam-check convex`)       |
 
 ---
 
@@ -142,7 +142,7 @@ Parameters (`CreateIamOptions<DataModel>`):
 | `mutation`      | `MutationBuilder<…, "public">`      | yes | The generated `mutation` builder.                   |
 | `action`        | `ActionBuilder<…, "public">`        | yes | The generated `action` builder.                     |
 | `components`    | `Record<string, unknown>`           | no  | The generated `components`; resolves the component. |
-| `component`     | `IamComponent`                      | no  | Explicit component, bypasses `components` lookup.    |
+| `component`     | `IamComponent`                      | no  | Explicit component, bypasses `components` lookup.   |
 | `componentName` | `string`                            | no  | Component name to look up (default `"hercules"`).   |
 
 Returns `IamBuilders<DataModel>`: the function builders, in-handler helpers, and
@@ -197,11 +197,11 @@ helper. If a helper requires a specific target tenant, pass its persisted
 canonical ID. The public `"root"` sentinel is only for generated SDK/REST
 management methods that require a tenant identifier.
 
-| Operation    | Root tenant                         | Explicit tenant                 |
-| ------------ | ----------------------------------- | ------------------------------- |
-| Create/list  | omit `authorizeAgainst`                       | `tenantArg("tenantId")`     |
-| Existing row | `rootResource(...)`       | `resource(...)`       |
-| Child create | `rootParentResource(...)` | `parentResource(...)` |
+| Operation    | Root tenant               | Explicit tenant         |
+| ------------ | ------------------------- | ----------------------- |
+| Create/list  | omit `authorizeAgainst`   | `tenantArg("tenantId")` |
+| Existing row | `rootResource(...)`       | `resource(...)`         |
+| Child create | `rootParentResource(...)` | `parentResource(...)`   |
 
 For an existing row, derive the tenant from the loaded row. Do not accept both a
 row id and a browser-supplied tenant id. The target and ancestors are evaluated
@@ -254,13 +254,13 @@ Require a signed-in user only (no permission). The wrapper throws
 Enforce a permission in a tenant before running the handler. Definition object
 adds two fields to the standard Convex definition:
 
-| Field        | Type                              | Req | Meaning                                                      |
-| ------------ | --------------------------------- | --- | ------------------------------------------------------------ |
-| `permission` | `string`                          | yes | Concrete catalog permission key (e.g. `app.projects:read`).  |
-| `authorizeAgainst`     | `ExtractTenant<Ctx, Args>`        | no  | Resolves the tenant/resource. Defaults to `rootTenant`.      |
-| `args`       | validator                         | no  | Standard Convex args validator.                              |
-| `returns`    | validator                         | no  | Standard Convex returns validator.                           |
-| `handler`    | `(ctx, ...args) => ReturnValue`   | yes | Runs only after authorization passes.                        |
+| Field              | Type                            | Req | Meaning                                                     |
+| ------------------ | ------------------------------- | --- | ----------------------------------------------------------- |
+| `permission`       | `string`                        | yes | Concrete catalog permission key (e.g. `app.projects:read`). |
+| `authorizeAgainst` | `ExtractTenant<Ctx, Args>`      | no  | Resolves the tenant/resource. Defaults to `rootTenant`.     |
+| `args`             | validator                       | no  | Standard Convex args validator.                             |
+| `returns`          | validator                       | no  | Standard Convex returns validator.                          |
+| `handler`          | `(ctx, ...args) => ReturnValue` | yes | Runs only after authorization passes.                       |
 
 On denial throws `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }`.
 On missing identity throws the same with `reasonCode: "missing_identity"`.
@@ -354,13 +354,27 @@ Shared argument shapes:
 ```ts
 type PermissionCheckArgs =
   | string // permission key, root tenant
-  | { tenantId?: string; permission: string; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[] };
+  | {
+      tenantId?: string;
+      permission: string;
+      resource?: IamResourceRef;
+      ancestors?: IamAuthorizationAncestor[];
+    };
 
 type AnyPermissionCheckArgs =
   | string[] // permission keys, root tenant
-  | { tenantId?: string; permissions: string[]; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[] };
+  | {
+      tenantId?: string;
+      permissions: string[];
+      resource?: IamResourceRef;
+      ancestors?: IamAuthorizationAncestor[];
+    };
 
-type EffectivePermissionsArgs = { tenantId?: string; resource?: IamResourceRef; ancestors?: IamAuthorizationAncestor[] };
+type EffectivePermissionsArgs = {
+  tenantId?: string;
+  resource?: IamResourceRef;
+  ancestors?: IamAuthorizationAncestor[];
+};
 type IamResourceRef = { type: string; id?: string };
 type IamAuthorizationAncestor = { type: string; id: string };
 ```
@@ -421,13 +435,13 @@ running the same per-resource check as a real `iamQuery` (batched via
 
 Parameters:
 
-| Field        | Type                                  | Req | Meaning                                            |
-| ------------ | ------------------------------------- | --- | -------------------------------------------------- |
-| `resources`  | `T[]`                                 | yes | A single bounded page of app rows, not a table.    |
-| `permission` | `string`                              | yes | Permission checked per row.                        |
-| `tenantId`   | `string`                              | no  | Defaults to the root tenant.                       |
-| `resource`   | `(item: T) => IamResourceRef`         | yes | Maps a row to its resource ref.                    |
-| `ancestors`  | `(item: T) => IamAuthorizationAncestor[]` | no | Maps a row to trusted ancestors.               |
+| Field        | Type                                      | Req | Meaning                                         |
+| ------------ | ----------------------------------------- | --- | ----------------------------------------------- |
+| `resources`  | `T[]`                                     | yes | A single bounded page of app rows, not a table. |
+| `permission` | `string`                                  | yes | Permission checked per row.                     |
+| `tenantId`   | `string`                                  | no  | Defaults to the root tenant.                    |
+| `resource`   | `(item: T) => IamResourceRef`             | yes | Maps a row to its resource ref.                 |
+| `ancestors`  | `(item: T) => IamAuthorizationAncestor[]` | no  | Maps a row to trusted ancestors.                |
 
 - Returns `Promise<T[]>` - the input rows the caller is allowed to access (order
   preserved). `[]` when unauthenticated.
@@ -645,9 +659,9 @@ Exported from `@usehercules/convex`. These are the contract; one line per field.
 
 ```ts
 type RoleSummary = {
-  roleId: string;     // canonical role id
-  roleKey: string;    // catalog key, display/reference only
-  roleName: string;   // display name
+  roleId: string; // canonical role id
+  roleKey: string; // catalog key, display/reference only
+  roleName: string; // display name
   roleKind: "system" | "custom";
 };
 ```
@@ -656,7 +670,7 @@ type RoleSummary = {
 
 ```ts
 type TenantDirectRoleGrant = RoleSummary & {
-  grantId: string;         // grant id, for SDK update/delete
+  grantId: string; // grant id, for SDK update/delete
   type: "role";
   expiresAt: number | null; // epoch ms, or null when non-expiring
 };
@@ -668,9 +682,9 @@ type TenantDirectRoleGrant = RoleSummary & {
 type TenantSummary = {
   tenantId: string;
   tenantName: string;
-  isRoot: boolean;             // true for the root app tenant; select by this
-  roles: RoleSummary[];        // the caller's effective roles in this tenant
-  joinedAt: number;            // epoch ms
+  isRoot: boolean; // true for the root app tenant; select by this
+  roles: RoleSummary[]; // the caller's effective roles in this tenant
+  joinedAt: number; // epoch ms
   accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed"; // the caller's principal
   lifecycleStatus: "active" | "archived"; // the tenant itself
 };
@@ -682,9 +696,27 @@ type TenantSummary = {
 ```ts
 type TargetTenantSyncStatus =
   | { state: "syncing"; currentSourceVersion?: number; targetSourceVersion: number }
-  | { state: "ready"; currentSourceVersion: number; targetSourceVersion: number; tenantId: string; principalId: string }
-  | { state: "denied"; reasonCode: string; currentSourceVersion: number; targetSourceVersion: number; tenantId?: string; principalId?: string }
-  | { state: "failed"; reasonCode: string; currentSourceVersion?: number; targetSourceVersion: number };
+  | {
+      state: "ready";
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId: string;
+      principalId: string;
+    }
+  | {
+      state: "denied";
+      reasonCode: string;
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId?: string;
+      principalId?: string;
+    }
+  | {
+      state: "failed";
+      reasonCode: string;
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    };
 ```
 
 ### `TenantDetail`
@@ -696,8 +728,8 @@ type TenantDetail = {
   isRoot: boolean;
   lifecycleStatus: "active" | "archived";
   accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
-  defaultRoleId: string;  // role new members receive
-  updatedAt: number;      // epoch ms
+  defaultRoleId: string; // role new members receive
+  updatedAt: number; // epoch ms
 };
 ```
 
@@ -708,10 +740,17 @@ type IamPrincipalStatus = "active" | "blocked" | "suspended" | "pending_approval
 
 type IamTenantAccessStatusResult =
   | { kind: "principal"; principalId: string; status: IamPrincipalStatus; stateVersion: number }
-  | { kind: "fallback"; reason:
-        | "identity_missing" | "identity_invalid" | "unexpected_issuer"
-        | "mirror_not_ready" | "root_tenant_missing" | "principal_missing";
-      stateVersion?: number };
+  | {
+      kind: "fallback";
+      reason:
+        | "identity_missing"
+        | "identity_invalid"
+        | "unexpected_issuer"
+        | "mirror_not_ready"
+        | "root_tenant_missing"
+        | "principal_missing";
+      stateVersion?: number;
+    };
 ```
 
 ### `EffectivePermissionsResult`
@@ -736,19 +775,21 @@ type EffectivePermissionsResult = {
 
 ```ts
 type TenantUser = {
-  userId: string;     // Hercules Auth user id (= SDK user_id)
+  userId: string; // Hercules Auth user id (= SDK user_id)
   status: IamPrincipalStatus;
   joinedAt: number;
-  name?: string; email?: string; image?: string;
-  roles: RoleSummary[];                       // effective, may include via-group
-  directRoleGrants: TenantDirectRoleGrant[];  // direct grants only
+  name?: string;
+  email?: string;
+  image?: string;
+  roles: RoleSummary[]; // effective, may include via-group
+  directRoleGrants: TenantDirectRoleGrant[]; // direct grants only
 };
 
 type TenantGroup = {
   groupId: string;
   status: IamPrincipalStatus;
   joinedAt: number;
-  memberCount: number;                        // current direct members
+  memberCount: number; // current direct members
   name?: string;
   roles: RoleSummary[];
   directRoleGrants: TenantDirectRoleGrant[];
@@ -758,7 +799,13 @@ type TenantGroup = {
 ### Directory and picker shapes
 
 ```ts
-type TenantUserDirectoryEntry = { userId: string; name: string; email: string; image?: string; roles: RoleSummary[] };
+type TenantUserDirectoryEntry = {
+  userId: string;
+  name: string;
+  email: string;
+  image?: string;
+  roles: RoleSummary[];
+};
 type TenantMemberPickerUser = { userId: string; name: string; email: string; image?: string };
 type SharingRecipient =
   | { type: "user"; userId: string; name: string; email: string; image?: string }
@@ -772,19 +819,19 @@ type TenantRoleSummary = RoleSummary & { shared: boolean }; // shared across ten
 
 type TenantPermissionSummary = {
   permissionId: string;
-  key: string;                                   // e.g. app.documents:read
+  key: string; // e.g. app.documents:read
   resourceType: string;
   action: string;
   classification: "delegable" | "owner_only";
-  tenantAssignable: boolean;                     // assignable by tenant admins
+  tenantAssignable: boolean; // assignable by tenant admins
 };
 
 type TenantRolePermission = TenantPermissionSummary & { effect: "allow" | "deny" };
 
 type TenantRoleDetail = TenantRoleSummary & {
   description: string | null;
-  basePermissions: TenantRolePermission[];       // from catalog role
-  tenantOverrides: TenantRolePermission[];        // tenant-level overrides
+  basePermissions: TenantRolePermission[]; // from catalog role
+  tenantOverrides: TenantRolePermission[]; // tenant-level overrides
   effectivePermissions: TenantPermissionSummary[]; // net result
 };
 ```
@@ -793,23 +840,39 @@ type TenantRoleDetail = TenantRoleSummary & {
 
 ```ts
 type DirectResourceRoleGrant = {
-  grantId: string; type: "role"; roleId: string;
-  expiresAt: number | null; appliesTo: "self" | "self_and_descendants";
+  grantId: string;
+  type: "role";
+  roleId: string;
+  expiresAt: number | null;
+  appliesTo: "self" | "self_and_descendants";
 };
 
 type DirectResourcePermissionGrant = {
-  grantId: string; type: "permission"; permissionId: string; permissionKey: string;
-  effect: "allow" | "deny"; expiresAt: number | null; appliesTo: "self" | "self_and_descendants";
+  grantId: string;
+  type: "permission";
+  permissionId: string;
+  permissionKey: string;
+  effect: "allow" | "deny";
+  expiresAt: number | null;
+  appliesTo: "self" | "self_and_descendants";
 };
 
 // Discriminated by subject `type` and grant kind.
 type DirectResourceSubject = {
-  status: IamPrincipalStatus; name?: string; email?: string; image?: string;
-} & ({ type: "user"; userId: string } | { type: "group"; groupId: string })
-  & ({ grant: DirectResourceRoleGrant; role: RoleSummary } | { grant: DirectResourcePermissionGrant });
+  status: IamPrincipalStatus;
+  name?: string;
+  email?: string;
+  image?: string;
+} & ({ type: "user"; userId: string } | { type: "group"; groupId: string }) &
+  (
+    | { grant: DirectResourceRoleGrant; role: RoleSummary }
+    | { grant: DirectResourcePermissionGrant }
+  );
 
 type ResourcePermissionOverrideSubject =
-  | { type: "user"; userId: string } | { type: "group"; groupId: string } | { type: "role"; roleId: string };
+  | { type: "user"; userId: string }
+  | { type: "group"; groupId: string }
+  | { type: "role"; roleId: string };
 type ResourcePermissionOverrideTarget = { type: "all" } | { type: "resource"; resourceId: string };
 
 type ResourcePermissionOverridesResult = {
@@ -826,7 +889,12 @@ type ResourcePermissionOverridesResult = {
 ```ts
 type ExplainAccessTarget =
   | { type: "tenant" }
-  | { type: "resource"; resourceType: string; resourceId: string; ancestors?: Array<{ resourceType: string; resourceId: string }> };
+  | {
+      type: "resource";
+      resourceType: string;
+      resourceId: string;
+      ancestors?: Array<{ resourceType: string; resourceId: string }>;
+    };
 
 type ExplainAccessResult = {
   tenantId: string;
@@ -836,20 +904,44 @@ type ExplainAccessResult = {
   allowed: boolean;
   reasonCode: string;
   explicitDeny: boolean;
-  decisiveReason: string;            // the rule that decided the outcome
+  decisiveReason: string; // the rule that decided the outcome
   sourceVersion?: number;
   principalId?: string;
   effectiveRoleIds: string[];
-  sources: {                         // full evidence trace
+  sources: {
+    // full evidence trace
     directGrants: ExplainAccessGrantSource[];
-    groupMemberships: Array<{ groupId: string; groupName?: string; status?: IamPrincipalStatus; active: boolean }>;
-    roles: Array<{ roleId: string; roleKey: string; roleName: string; description: string | null;
-                   wildcard: "none" | "immutable" | "default";
-                   permissionEffect: "allow" | "deny" | null; grantIds: string[]; viaGroupIds: string[] }>;
-    roleOverrides: Array<{ roleId: string; permissionId: string; permissionKey: string; effect: "allow" | "deny" }>;
+    groupMemberships: Array<{
+      groupId: string;
+      groupName?: string;
+      status?: IamPrincipalStatus;
+      active: boolean;
+    }>;
+    roles: Array<{
+      roleId: string;
+      roleKey: string;
+      roleName: string;
+      description: string | null;
+      wildcard: "none" | "immutable" | "default";
+      permissionEffect: "allow" | "deny" | null;
+      grantIds: string[];
+      viaGroupIds: string[];
+    }>;
+    roleOverrides: Array<{
+      roleId: string;
+      permissionId: string;
+      permissionKey: string;
+      effect: "allow" | "deny";
+    }>;
     resourceGrants: ExplainAccessGrantSource[];
     ancestorGrants: ExplainAccessGrantSource[];
-    explicitDenies: Array<{ resourceType: string; action: string; objectType: "tenant" | "resource"; objectId?: string; source?: ExplainAccessEntryOrigin }>;
+    explicitDenies: Array<{
+      resourceType: string;
+      action: string;
+      objectType: "tenant" | "resource";
+      objectId?: string;
+      source?: ExplainAccessEntryOrigin;
+    }>;
     expiredIgnoredGrants: ExplainAccessGrantSource[];
   };
 };
@@ -905,7 +997,10 @@ export const updateTenantUser = authenticatedAction({
     if (!identity?.tokenIdentifier) throw new Error("Authentication required");
     return await hercules.iam.tenants.users.update(args.userId, {
       tenant_id: args.tenantId,
-      roles: args.roleGrants.map(({ roleId, expiresAt }) => ({ role: { id: roleId }, expires_at: expiresAt })),
+      roles: args.roleGrants.map(({ roleId, expiresAt }) => ({
+        role: { id: roleId },
+        expires_at: expiresAt,
+      })),
       actor_token_identifier: identity.tokenIdentifier,
     });
   },
@@ -1025,27 +1120,27 @@ Import from `@usehercules/convex/iam-helpers`.
 
 Parameters (`CreateResourceCreatorBootstrapActionOptions<DataModel>`):
 
-| Field                  | Type                                          | Req | Meaning                                                                 |
-| ---------------------- | --------------------------------------------- | --- | ---------------------------------------------------------------------- |
-| `authenticatedAction`  | `ActionBuilder<DataModel, "public">`          | yes | Your wrapped authenticated action builder.                             |
-| `resourceType`         | `string`                                      | yes | Canonical resource type for the grant (e.g. `app.projects`).           |
-| `managerRole`          | `IamRoleReference` (`{ id }` or `{ key }`)    | yes | Role granted to the creator.                                           |
-| `appliesTo`            | `"self" \| "self_and_descendants"`            | yes | Whether the grant covers descendants.                                  |
-| `getTenantAccessStatus`| `FunctionReference<"query","public",…>`       | yes | Component query `components.hercules.queries.getTenantAccessStatus`.    |
-| `listMyTenants`        | `FunctionReference<"query","public",…>`       | yes | Component query `components.hercules.queries.listMyTenants`.            |
-| `getBootstrapTarget`   | `FunctionReference<"query","internal",{ resourceId },ResourceCreatorBootstrapTarget \| null>` | yes | App internal query resolving the target row. |
-| `activateResource`     | `FunctionReference<"mutation","internal",ResourceCreatorBootstrapActivationArgs,null>` | yes | App internal mutation marking the row active. |
-| `apiKey`               | `string`                                      | no  | Overrides the env-var API key.                                         |
-| `apiKeyEnvVar`         | `string`                                      | no  | Env var to read the key from (default `HERCULES_API_KEY`).             |
-| `apiVersion`           | `string`                                      | no  | SDK API version (default `2025-12-09`).                                |
-| `client`              | `ResourceCreatorBootstrapClient`               | no  | Inject a preconstructed SDK client (testing).                          |
+| Field                   | Type                                                                                          | Req | Meaning                                                              |
+| ----------------------- | --------------------------------------------------------------------------------------------- | --- | -------------------------------------------------------------------- |
+| `authenticatedAction`   | `ActionBuilder<DataModel, "public">`                                                          | yes | Your wrapped authenticated action builder.                           |
+| `resourceType`          | `string`                                                                                      | yes | Canonical resource type for the grant (e.g. `app.projects`).         |
+| `managerRole`           | `IamRoleReference` (`{ id }` or `{ key }`)                                                    | yes | Role granted to the creator.                                         |
+| `appliesTo`             | `"self" \| "self_and_descendants"`                                                            | yes | Whether the grant covers descendants.                                |
+| `getTenantAccessStatus` | `FunctionReference<"query","public",…>`                                                       | yes | Component query `components.hercules.queries.getTenantAccessStatus`. |
+| `listMyTenants`         | `FunctionReference<"query","public",…>`                                                       | yes | Component query `components.hercules.queries.listMyTenants`.         |
+| `getBootstrapTarget`    | `FunctionReference<"query","internal",{ resourceId },ResourceCreatorBootstrapTarget \| null>` | yes | App internal query resolving the target row.                         |
+| `activateResource`      | `FunctionReference<"mutation","internal",ResourceCreatorBootstrapActivationArgs,null>`        | yes | App internal mutation marking the row active.                        |
+| `apiKey`                | `string`                                                                                      | no  | Overrides the env-var API key.                                       |
+| `apiKeyEnvVar`          | `string`                                                                                      | no  | Env var to read the key from (default `HERCULES_API_KEY`).           |
+| `apiVersion`            | `string`                                                                                      | no  | SDK API version (default `2025-12-09`).                              |
+| `client`                | `ResourceCreatorBootstrapClient`                                                              | no  | Inject a preconstructed SDK client (testing).                        |
 
 Returns a registered `authenticatedAction` with `args: { resourceId: v.string() }`
 whose handler returns `ResourceCreatorBootstrapResult`:
 
 ```ts
 type ResourceCreatorBootstrapResult =
-  | { resourceId: string; state: "active"; bootstrapped: false }            // already active
+  | { resourceId: string; state: "active"; bootstrapped: false } // already active
   | { resourceId: string; state: "active"; bootstrapped: true; grant: IamResourceGrantWriteResult };
 ```
 
@@ -1057,7 +1152,7 @@ field is `creatorUserId`):
 type ResourceCreatorBootstrapTarget = {
   tenantId: string;
   resourceId: string;
-  creatorUserId: string;                       // = the creator's Hercules Auth user id
+  creatorUserId: string; // = the creator's Hercules Auth user id
   state: "provisioning" | "active";
 };
 
@@ -1070,11 +1165,16 @@ type ResourceCreatorBootstrapActivationArgs = {
 
 type IamResourceGrantWriteResult = {
   tenantId: string;
-  changed: boolean;          // from convex_source_data.changed
-  sourceVersion: number;     // from convex_source_data.version
-  projectionIds: string[];   // from convex_source_data.projection_ids
-  grant: { grantId: string; type: "resource_role"; roleId: string;
-           expiresAt: string | null; appliesTo: "self" | "self_and_descendants" };
+  changed: boolean; // from convex_source_data.changed
+  sourceVersion: number; // from convex_source_data.version
+  projectionIds: string[]; // from convex_source_data.projection_ids
+  grant: {
+    grantId: string;
+    type: "resource_role";
+    roleId: string;
+    expiresAt: string | null;
+    appliesTo: "self" | "self_and_descendants";
+  };
 };
 ```
 
@@ -1118,12 +1218,36 @@ type IamErrorClassification =
   | { kind: "admission"; reasonCode: string; status: IamAdmissionStatus; sourceVersion?: number }
   | { kind: "permission"; reasonCode: "permission_denied"; sourceVersion?: number }
   | { kind: "temporary"; reasonCode: "mirror_not_ready"; sourceVersion?: number }
-  | { kind: "access"; code: "access_denied" | "user_authority_required" | "service_authority_required" | "owner_authority_required"; status?: number; details?: Record<string, unknown> }
-  | { kind: "synchronization"; code: "source_version_conflict"; status?: number; details?: Record<string, unknown> }
-  | { kind: "operation"; code:
-        "invalid_request" | "resource_not_found" | "state_conflict" | "invalid_resource_role"
-        | "invalid_resource_permission" | "invalid_lifecycle_transition" | "last_owner_required" | "grant_conflict";
-      status?: number; details?: Record<string, unknown> };
+  | {
+      kind: "access";
+      code:
+        | "access_denied"
+        | "user_authority_required"
+        | "service_authority_required"
+        | "owner_authority_required";
+      status?: number;
+      details?: Record<string, unknown>;
+    }
+  | {
+      kind: "synchronization";
+      code: "source_version_conflict";
+      status?: number;
+      details?: Record<string, unknown>;
+    }
+  | {
+      kind: "operation";
+      code:
+        | "invalid_request"
+        | "resource_not_found"
+        | "state_conflict"
+        | "invalid_resource_role"
+        | "invalid_resource_permission"
+        | "invalid_lifecycle_transition"
+        | "last_owner_required"
+        | "grant_conflict";
+      status?: number;
+      details?: Record<string, unknown>;
+    };
 ```
 
 `admission`/`permission`/`temporary` come from local `ConvexError ACCESS_DENIED`
@@ -1157,14 +1281,14 @@ export default http;
 
 Parameters (`RegisterIamRoutesOptions`):
 
-| Field           | Type                          | Req | Meaning                                                       |
-| --------------- | ----------------------------- | --- | ------------------------------------------------------------- |
-| `httpAction`    | `HttpActionBuilder`           | yes | The generated `httpAction` builder.                           |
-| `components`    | `Record<string, unknown>`     | no  | Generated components; resolves the sync component.            |
-| `component`     | `IamSyncComponent`            | no  | Explicit component, bypasses lookup.                          |
-| `componentName` | `string`                      | no  | Component name to look up (default `"hercules"`).             |
-| `path`          | `string`                      | no  | Route path (default `/_hercules/iam/sync`).                   |
-| `envVarName`    | `string`                      | no  | Env var holding the webhook secret (default `HERCULES_SYNC_SECRET`). |
+| Field           | Type                      | Req | Meaning                                                              |
+| --------------- | ------------------------- | --- | -------------------------------------------------------------------- |
+| `httpAction`    | `HttpActionBuilder`       | yes | The generated `httpAction` builder.                                  |
+| `components`    | `Record<string, unknown>` | no  | Generated components; resolves the sync component.                   |
+| `component`     | `IamSyncComponent`        | no  | Explicit component, bypasses lookup.                                 |
+| `componentName` | `string`                  | no  | Component name to look up (default `"hercules"`).                    |
+| `path`          | `string`                  | no  | Route path (default `/_hercules/iam/sync`).                          |
+| `envVarName`    | `string`                  | no  | Env var holding the webhook secret (default `HERCULES_SYNC_SECRET`). |
 
 Returns `void`. Set `HERCULES_SYNC_SECRET` in the Convex deployment env.
 
