@@ -41,6 +41,9 @@ export type RoleSummary = {
   roleName: string;
   isSystemRole: boolean;
   isRestricted: boolean;
+  // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
+  // OWNING tenant of a tenant-scoped role.
+  tenantId: string | null;
 };
 
 export type DirectRoleAssignment = RoleSummary & {
@@ -147,6 +150,7 @@ function roleSummary(role: RoleRow): RoleSummary {
     roleName: role.name,
     isSystemRole: role.source === "system",
     isRestricted: role.isRestricted,
+    tenantId: role.tenantId,
   };
 }
 
@@ -242,6 +246,7 @@ async function tenantGroupFromRow(ctx: QueryCtx, group: GroupRow): Promise<Tenan
       roleName: assignment.roleName,
       isSystemRole: assignment.isSystemRole,
       isRestricted: assignment.isRestricted,
+      tenantId: assignment.tenantId,
     })),
     directRoleAssignments: direct,
   };
@@ -678,8 +683,17 @@ export const listTenantRoles = query({
   handler: async (ctx, args): Promise<RoleSummary[]> => {
     const tenantId = await gate(ctx, args, PERMISSION_ROLES_READ);
     if (!tenantId) return [];
-    const roles = await ctx.db.query("roles").collect();
-    return roles
+    // Roles usable in this tenant = SHARED roles (tenantId null) plus the
+    // tenant's own TENANT-SCOPED roles (tenantId == this tenant).
+    const sharedRoles = await ctx.db
+      .query("roles")
+      .withIndex("by_tenant", (q) => q.eq("tenantId", null))
+      .collect();
+    const tenantRoles = await ctx.db
+      .query("roles")
+      .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+      .collect();
+    return [...sharedRoles, ...tenantRoles]
       .map(roleSummary)
       .sort((a, b) => a.roleKey.localeCompare(b.roleKey) || a.roleId.localeCompare(b.roleId));
   },

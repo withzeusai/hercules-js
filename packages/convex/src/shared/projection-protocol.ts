@@ -69,6 +69,9 @@ export const projectionRoleSchema = z.strictObject({
   key: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullable(),
+  // Tenant scope: null = SHARED (available in every tenant); a tenant id = the
+  // OWNING tenant of a tenant-scoped role. Required (always present) at v5.
+  tenantId: z.string().min(1).nullable(),
   source: accessProjectionSourceSchema,
   isRestricted: z.boolean(),
   updatedAt: z.number().int().nonnegative(),

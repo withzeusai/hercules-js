@@ -61,13 +61,17 @@ export default defineSchema({
     key: v.string(),
     name: v.string(),
     description: v.union(v.string(), v.null()),
+    // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
+    // OWNING tenant of a tenant-scoped role (only usable in that tenant).
+    tenantId: v.union(v.string(), v.null()),
     source: sourceValidator,
     isRestricted: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
     .index("by_role_id", ["roleId"])
-    .index("by_key", ["key"]),
+    .index("by_key", ["key"])
+    .index("by_tenant", ["tenantId"]),
 
   permissions: defineTable({
     permissionId: v.string(),

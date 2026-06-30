@@ -35,6 +35,7 @@ type RoleSummary = {
   roleName: string;
   isSystemRole: boolean;
   isRestricted: boolean;
+  tenantId: string | null;
 };
 
 type DirectRoleAssignment = RoleSummary & {

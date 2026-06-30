@@ -29,6 +29,9 @@ export type RoleSummary = {
   roleName: string;
   isSystemRole: boolean;
   isRestricted: boolean;
+  // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
+  // OWNING tenant of a tenant-scoped role.
+  tenantId: string | null;
 };
 
 export type DirectRoleAssignment = RoleSummary & {
