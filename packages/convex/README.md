@@ -30,10 +30,10 @@ import herculesComponent from "@usehercules/convex/convex.config"; // defineComp
 
 ## User identity model
 
-There is ONE user identifier across IAM: the Hercules Auth user id = the OIDC
-`sub` = `identity.subject` from `ctx.auth.getUserIdentity()`. `getCurrentUserId(ctx)`
-returns it. Mirror reads expose it as `userId`. The SDK takes the same value as
-`user_id` on writes.
+There is ONE end-user identifier across IAM: the signed-in user's ID, which is
+their OIDC `sub` (`identity.subject` from `ctx.auth.getUserIdentity()`). Get it
+with `getCurrentUserId(ctx)`. Mirror reads expose it as `userId`; the SDK takes
+the same value as `user_id` on writes.
 
 `tokenIdentifier` (`issuer|sub`) is DIFFERENT. The client passes it to the
 component for issuer fencing and identity resolution; never accept it from
@@ -143,7 +143,7 @@ if (!(await iam.can(ctx, "app.documents:read", { resource: { type: "app.document
 
 ### `getCurrentUserId(ctx) => Promise<string | undefined>`
 
-The verified OIDC subject (the Hercules Auth user id). `undefined` when
+The signed-in end user's ID (their verified OIDC subject). `undefined` when
 unauthenticated.
 
 ### Caller-centric reads (`me.*`)

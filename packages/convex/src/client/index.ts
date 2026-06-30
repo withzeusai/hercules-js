@@ -389,7 +389,7 @@ export type Iam<DataModel extends GenericDataModel> = {
   query: AuthQueryBuilder<DataModel>;
   mutation: AuthMutationBuilder<DataModel>;
   action: AuthActionBuilder<DataModel>;
-  // The verified OIDC subject (Hercules Auth user id). Link app rows to this.
+  // The signed-in end user's ID (their verified OIDC subject). Link app rows to this.
   getCurrentUserId: (ctx: IamReadContext<DataModel>) => Promise<string | undefined>;
   // In-handler authorization.
   iam: {
