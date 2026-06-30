@@ -11,61 +11,22 @@
 import type { FunctionReference } from "convex/server";
 import type { AccessProjectionSyncPayload, SyncResponse } from "../shared/sync";
 
-type AuthorizationArgs = {
-  tokenIdentifier?: string;
-  tenantId?: string;
-  permission?: string;
-  // DL16 resource grant support. Optional; when present, authorize also
-  // walks grants whose object is the specific resource. resource
-  // returns these via ensureAuthorized in the SDK client.
-  resourceType?: string;
-  resourceId?: string;
-  ancestors?: AuthorizationAncestor[];
-};
+type ResourceRef = { type: string; externalId: string };
 
-type AuthorizationAncestor = {
-  resourceType: string;
-  resourceId: string;
-};
+type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 
-type AuthorizationDecision = {
+type AccessDecision = {
   allowed: boolean;
   reasonCode: string;
-  explicitDeny: boolean;
   sourceVersion?: number;
-  principalId?: string;
-  effectiveRoleIds: string[];
+  membershipId?: string;
 };
 
-type ListMyTenantsArgs = {
+type CheckArgs = {
   tokenIdentifier?: string;
-  cursor?: string;
-  limit?: number;
-  status?: "active" | "all";
-  isRoot?: boolean;
-};
-type GetTargetTenantSyncStatusArgs = {
-  tokenIdentifier?: string;
-  tenantId: string;
-  sourceVersion: number;
-};
-type GetTenantAccessStatusArgs = { tokenIdentifier?: string };
-type ListMyRolesArgs = { tokenIdentifier?: string; tenantId: string };
-type ListTenantArgs = { tokenIdentifier?: string; tenantId: string };
-type IamPrincipalStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-type ListTenantPageArgs = ListTenantArgs & {
-  cursor?: string;
-  limit?: number;
-  status?: IamPrincipalStatus | "all";
-  query?: string;
-};
-type ListDirectSubjectsArgs = {
-  tokenIdentifier?: string;
-  tenantId: string;
-  resourceType: string;
-  resourceId: string;
-  cursor?: string;
-  limit?: number;
+  tenantId?: string;
+  permission: string;
+  resource?: ResourceRef;
 };
 
 type RoleSummary = {
@@ -73,100 +34,88 @@ type RoleSummary = {
   roleKey: string;
   roleName: string;
   isSystemRole: boolean;
+  isRestricted: boolean;
 };
 
-type TenantDirectRoleGrant = RoleSummary & {
-  grantId: string;
-  type: "role";
+type DirectRoleAssignment = RoleSummary & {
+  assignmentId: string;
   expiresAt: number | null;
+};
+
+type TenantSummary = {
+  tenantId: string;
+  herculesAuthTenantId: string;
+  tenantName: string;
+  isPrimaryTenant: boolean;
+  accessStatus: MembershipStatus;
+  lifecycleStatus: "active" | "archived";
+  roles: RoleSummary[];
+};
+
+type TenantDetail = {
+  tenantId: string;
+  herculesAuthTenantId: string;
+  tenantName: string;
+  isPrimaryTenant: boolean;
+  lifecycleStatus: "active" | "archived";
+  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  defaultRoleId: string | null;
+  updatedAt: number;
 };
 
 type TenantUser = {
   userId: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  joinedAt: number;
+  status: MembershipStatus;
   name?: string;
   email?: string;
   image?: string;
   roles: RoleSummary[];
-  directRoleGrants: TenantDirectRoleGrant[];
+  directRoleAssignments: DirectRoleAssignment[];
 };
 
 type TenantGroup = {
   groupId: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  joinedAt: number;
+  name: string;
+  status: "active" | "disabled";
   memberCount: number;
-  name?: string;
   roles: RoleSummary[];
-  directRoleGrants: TenantDirectRoleGrant[];
+  directRoleAssignments: DirectRoleAssignment[];
 };
 
-type TenantRoleSummary = RoleSummary & { shared: boolean };
-
-type TenantPermissionSummary = {
-  permissionId: string;
-  key: string;
-  resourceType: string;
-  action: string;
-  classification: "delegable" | "owner_only";
-  tenantAssignable: boolean;
+type RoleDetail = RoleSummary & {
+  description: string | null;
+  permissionKeys: string[];
 };
 
-type DirectResourceRoleGrant = {
-  grantId: string;
-  type: "role";
-  roleId: string;
-  expiresAt: number | null;
-  appliesTo: "self" | "self_and_descendants";
+type ResourceNode = {
+  type: string;
+  externalId: string;
+  parent?: ResourceRef;
+  data?: unknown;
 };
 
-type DirectResourcePermissionGrant = {
-  grantId: string;
-  type: "permission";
-  permissionId: string;
-  permissionKey: string;
-  effect: "allow" | "deny";
-  expiresAt: number | null;
-  appliesTo: "self" | "self_and_descendants";
-};
-
-type DirectResourceSubjectBase = {
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  name?: string;
-  email?: string;
-  image?: string;
-};
-
-type DirectResourceSubject = DirectResourceSubjectBase &
-  ({ type: "user"; userId: string } | { type: "group"; groupId: string }) &
-  (
-    | { grant: DirectResourceRoleGrant; role: RoleSummary }
-    | { grant: DirectResourcePermissionGrant }
-  );
-
-type TenantSummary = {
-  tenantId: string;
-  tenantName: string;
-  isRoot: boolean;
-  roles: RoleSummary[];
-  joinedAt: number;
-  accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  lifecycleStatus: "active" | "archived";
-};
+type TenantAccessStatus =
+  | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
+  | {
+      kind: "fallback";
+      reason:
+        | "identity_missing"
+        | "identity_invalid"
+        | "unexpected_issuer"
+        | "mirror_not_ready"
+        | "tenant_missing"
+        | "membership_missing";
+      stateVersion?: number;
+    };
 
 type TargetTenantSyncStatus =
-  | {
-      state: "syncing";
-      currentSourceVersion?: number;
-      targetSourceVersion: number;
-    }
+  | { state: "syncing"; currentSourceVersion?: number; targetSourceVersion: number }
   | {
       state: "ready";
       currentSourceVersion: number;
       targetSourceVersion: number;
       tenantId: string;
-      principalId: string;
+      membershipId: string;
     }
   | {
       state: "denied";
@@ -174,7 +123,7 @@ type TargetTenantSyncStatus =
       currentSourceVersion: number;
       targetSourceVersion: number;
       tenantId?: string;
-      principalId?: string;
+      membershipId?: string;
     }
   | {
       state: "failed";
@@ -183,153 +132,7 @@ type TargetTenantSyncStatus =
       targetSourceVersion: number;
     };
 
-type TenantDetail = {
-  tenantId: string;
-  tenantName: string;
-  isRoot: boolean;
-  lifecycleStatus: "active" | "archived";
-  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
-  defaultRoleId: string;
-  updatedAt: number;
-};
-
-type TenantRolePermission = TenantPermissionSummary & {
-  effect: "allow" | "deny";
-};
-
-type TenantRoleDetail = TenantRoleSummary & {
-  description: string | null;
-  basePermissions: TenantRolePermission[];
-  tenantOverrides: TenantRolePermission[];
-  effectivePermissions: TenantPermissionSummary[];
-};
-
-type ResourcePermissionOverrideSubject =
-  | { type: "user"; userId: string }
-  | { type: "group"; groupId: string }
-  | { type: "role"; roleId: string };
-
-type ResourcePermissionOverrideTarget = { type: "all" } | { type: "resource"; resourceId: string };
-
-type ResourcePermissionOverridesResult = {
-  tenantId: string;
-  subject: ResourcePermissionOverrideSubject;
-  resourceType: string;
-  target: ResourcePermissionOverrideTarget;
-  grants: DirectResourcePermissionGrant[];
-};
-
-type ExplainAccessTarget =
-  | { type: "tenant" }
-  | {
-      type: "resource";
-      resourceType: string;
-      resourceId: string;
-      ancestors?: AuthorizationAncestor[];
-    };
-
-type ExplainAccessGrantSubject =
-  | { type: "user"; userId: string }
-  | { type: "group"; groupId: string }
-  | { type: "role"; roleId: string };
-
-type ExplainAccessGrantSource = {
-  grantId: string;
-  grantType: "role" | "permission";
-  subject: ExplainAccessGrantSubject;
-  roleId?: string;
-  permissionId?: string;
-  permissionKey?: string;
-  effect: "allow" | "deny";
-  target: { type: "tenant" } | { type: "resource"; resourceType: string; resourceId?: string };
-  appliesTo: "self" | "self_and_descendants";
-  expiresAt: number | null;
-  inherited: boolean;
-};
-
-type ExplainAccessEntryOrigin =
-  | { kind: "role_permission"; roleId: string }
-  | {
-      kind: "permission_grant";
-      grantId: string;
-      subject: ExplainAccessGrantSubject;
-      inherited: boolean;
-    }
-  | {
-      kind: "resource_role";
-      grantId: string;
-      roleId: string;
-      subject: ExplainAccessGrantSubject;
-      inherited: boolean;
-    };
-
-type ExplainAccessResult = {
-  tenantId: string;
-  userId: string;
-  permission: string;
-  target: ExplainAccessTarget;
-  allowed: boolean;
-  reasonCode: string;
-  explicitDeny: boolean;
-  decisiveReason: string;
-  sourceVersion?: number;
-  principalId?: string;
-  effectiveRoleIds: string[];
-  sources: {
-    directGrants: ExplainAccessGrantSource[];
-    groupMemberships: Array<{
-      groupId: string;
-      groupName?: string;
-      status?: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-      active: boolean;
-    }>;
-    roles: Array<{
-      roleId: string;
-      roleKey: string;
-      roleName: string;
-      description: string | null;
-      wildcard: "none" | "immutable" | "default";
-      permissionEffect: "allow" | "deny" | null;
-      grantIds: string[];
-      viaGroupIds: string[];
-    }>;
-    roleOverrides: Array<{
-      roleId: string;
-      permissionId: string;
-      permissionKey: string;
-      effect: "allow" | "deny";
-    }>;
-    resourceGrants: ExplainAccessGrantSource[];
-    ancestorGrants: ExplainAccessGrantSource[];
-    explicitDenies: Array<{
-      resourceType: string;
-      action: string;
-      objectType: "tenant" | "resource";
-      objectId?: string;
-      source?: ExplainAccessEntryOrigin;
-    }>;
-    expiredIgnoredGrants: ExplainAccessGrantSource[];
-  };
-};
-
-type TenantAccessStatus =
-  | {
-      kind: "principal";
-      principalId: string;
-      status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-      stateVersion: number;
-    }
-  | {
-      kind: "fallback";
-      reason:
-        | "identity_missing"
-        | "identity_invalid"
-        | "unexpected_issuer"
-        | "mirror_not_ready"
-        | "root_tenant_missing"
-        | "principal_missing";
-      stateVersion?: number;
-    };
+type Page<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
 
 /**
  * A utility for referencing the Hercules IAM component's exposed API.
@@ -338,15 +141,12 @@ type TenantAccessStatus =
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> = {
   checks: {
-    authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision, Name>;
-    authorizeMany: FunctionReference<
+    check: FunctionReference<"query", "public", CheckArgs, AccessDecision, Name>;
+    checkMany: FunctionReference<
       "query",
       "public",
-      {
-        tokenIdentifier?: string;
-        checks: Array<Omit<AuthorizationArgs, "tokenIdentifier"> & { permission: string }>;
-      },
-      AuthorizationDecision[],
+      { tokenIdentifier?: string; checks: Array<Omit<CheckArgs, "tokenIdentifier">> },
+      AccessDecision[],
       Name
     >;
   };
@@ -354,102 +154,148 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     getTenantAccessStatus: FunctionReference<
       "query",
       "public",
-      GetTenantAccessStatusArgs,
+      { tokenIdentifier?: string; tenantId?: string },
       TenantAccessStatus,
       Name
     >;
     listMyTenants: FunctionReference<
       "query",
       "public",
-      ListMyTenantsArgs,
-      { tenants: TenantSummary[]; cursor?: string },
+      { tokenIdentifier?: string; cursor?: string; limit?: number; status?: "active" | "all" },
+      Page<"tenants", TenantSummary>,
+      Name
+    >;
+    listMyRoles: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string },
+      RoleSummary[],
       Name
     >;
     getTargetTenantSyncStatus: FunctionReference<
       "query",
       "public",
-      GetTargetTenantSyncStatusArgs,
+      { tokenIdentifier?: string; tenantId?: string; sourceVersion: number },
       TargetTenantSyncStatus,
       Name
     >;
-    listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[], Name>;
-    getTenant: FunctionReference<"query", "public", ListTenantArgs, TenantDetail | null, Name>;
+    getTenant: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string },
+      TenantDetail | null,
+      Name
+    >;
+    listTenants: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string; cursor?: string; limit?: number },
+      Page<"tenants", TenantDetail>,
+      Name
+    >;
     listTenantUsers: FunctionReference<
       "query",
       "public",
-      ListTenantPageArgs,
-      { users: TenantUser[]; cursor?: string },
+      {
+        tokenIdentifier?: string;
+        tenantId?: string;
+        cursor?: string;
+        limit?: number;
+        status?: MembershipStatus | "all";
+      },
+      Page<"users", TenantUser>,
+      Name
+    >;
+    getTenantUser: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string; userId: string },
+      TenantUser | null,
       Name
     >;
     listTenantGroups: FunctionReference<
       "query",
       "public",
-      ListTenantPageArgs,
-      { groups: TenantGroup[]; cursor?: string },
+      { tokenIdentifier?: string; tenantId?: string; cursor?: string; limit?: number },
+      Page<"groups", TenantGroup>,
+      Name
+    >;
+    getTenantGroup: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string; groupId: string },
+      TenantGroup | null,
       Name
     >;
     listGroupMembers: FunctionReference<
       "query",
       "public",
-      ListTenantPageArgs & { groupId: string },
-      { users: TenantUser[]; cursor?: string },
-      Name
-    >;
-    listUserGroups: FunctionReference<
-      "query",
-      "public",
-      ListTenantPageArgs & { userId: string },
-      { groups: TenantGroup[]; cursor?: string },
+      {
+        tokenIdentifier?: string;
+        tenantId?: string;
+        groupId: string;
+        cursor?: string;
+        limit?: number;
+      },
+      Page<"users", TenantUser>,
       Name
     >;
     listTenantRoles: FunctionReference<
       "query",
       "public",
-      ListTenantArgs,
-      TenantRoleSummary[],
+      { tokenIdentifier?: string; tenantId?: string },
+      RoleSummary[],
       Name
     >;
     getTenantRole: FunctionReference<
       "query",
       "public",
-      ListTenantArgs & { roleId: string },
-      TenantRoleDetail | null,
+      { tokenIdentifier?: string; tenantId?: string; roleId: string },
+      RoleDetail | null,
       Name
     >;
-    listTenantPermissions: FunctionReference<
+  };
+  resources: {
+    list: FunctionReference<
       "query",
       "public",
-      ListTenantArgs,
-      TenantPermissionSummary[],
-      Name
-    >;
-    getResourcePermissionOverrides: FunctionReference<
-      "query",
-      "public",
-      ListTenantArgs & {
-        subject: ResourcePermissionOverrideSubject;
-        resourceType: string;
-        target: ResourcePermissionOverrideTarget;
+      {
+        tokenIdentifier?: string;
+        tenantId?: string;
+        type?: string;
+        parent?: ResourceRef;
+        permission?: string;
+        cursor?: string;
+        limit?: number;
       },
-      ResourcePermissionOverridesResult | null,
+      Page<"resources", ResourceNode>,
       Name
     >;
-    explainAccess: FunctionReference<
+    get: FunctionReference<
       "query",
       "public",
-      ListTenantArgs & {
-        userId: string;
-        permission: string;
-        target: ExplainAccessTarget;
+      {
+        tokenIdentifier?: string;
+        tenantId?: string;
+        type: string;
+        externalId: string;
+        permission?: string;
       },
-      ExplainAccessResult | null,
+      ResourceNode | null,
       Name
     >;
-    listDirectSubjectsForResource: FunctionReference<
-      "query",
+    write: FunctionReference<
+      "mutation",
       "public",
-      ListDirectSubjectsArgs,
-      { subjects: DirectResourceSubject[]; cursor?: string },
+      { tenantId?: string; type: string; externalId: string; parent?: ResourceRef; data?: unknown },
+      ResourceNode | null,
+      Name
+    >;
+    remove: FunctionReference<
+      "mutation",
+      "public",
+      { tenantId?: string; type: string; externalId: string },
+      { deleted: boolean },
       Name
     >;
   };

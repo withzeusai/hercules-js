@@ -94,16 +94,11 @@ export type IamErrorClassification =
     };
 
 const ADMISSION_STATUS_BY_REASON: Readonly<Record<string, IamAdmissionStatus>> = {
-  principal_pending_approval: "pending_approval",
-  app_principal_pending_approval: "pending_approval",
-  principal_blocked: "blocked",
-  app_principal_blocked: "blocked",
-  principal_suspended: "suspended",
-  app_principal_suspended: "suspended",
-  principal_removed: "removed",
-  app_principal_removed: "removed",
-  principal_missing: "missing",
-  app_principal_missing: "missing",
+  membership_pending_approval: "pending_approval",
+  membership_blocked: "blocked",
+  membership_suspended: "suspended",
+  membership_removed: "removed",
+  membership_missing: "missing",
 };
 
 /**

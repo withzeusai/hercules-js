@@ -1,4 +1,4 @@
-// IAM projection sync — v4 wire contract.
+// IAM projection sync — v5 wire contract.
 //
 // This module is the consumer-side entry point for the signed projection sync
 // channel. The wire shapes themselves live in `./projection-protocol` (the zod
@@ -7,86 +7,59 @@
 //   • IAM_SYNC_PATH — the webhook route the producer posts to.
 //   • SyncResponse — the mutation's response contract (mapped to HTTP statuses
 //     by client/http.ts and consumed by the producer's reconciler).
-//
-// There is NO v2 compatibility: the old per-scope `scopes[].entities` + composite
-// `changes` wire schema is gone. v4 carries a deployment-wide catalog + users at
-// the top level and per-scope runtime state, with typed discriminated change
-// identities (see projection-protocol.ts).
 
 export const IAM_SYNC_PATH = "/_hercules/iam/sync";
 
-// ── v4 wire schema + types (re-exported from the protocol mirror) ────────────
+// ── v5 wire schema + types (re-exported from the protocol mirror) ────────────
 export {
   accessProjectionSyncPayloadSchema,
   accessProjectionSnapshotSchema,
   accessProjectionEventSchema,
-  accessProjectionEffectSchema,
-  accessProjectionApplicabilitySchema,
-  accessProjectionWildcardModeSchema,
-  accessProjectionPermissionClassificationSchema,
-  accessProjectionScopeKindSchema,
-  accessProjectionScopeStatusSchema,
-  accessProjectionAccessModeSchema,
-  accessProjectionPrincipalStatusSchema,
+  accessProjectionSourceSchema,
+  accessProjectionTenantStatusSchema,
+  accessProjectionGroupStatusSchema,
+  accessProjectionAccountEntryModeSchema,
+  accessProjectionMembershipStatusSchema,
+  accessProjectionSubjectTypeSchema,
+  projectionTenantSchema,
+  projectionRoleSchema,
+  projectionPermissionSchema,
+  projectionRolePermissionSchema,
+  projectionResourceTypeSchema,
+  projectionMembershipSchema,
+  projectionGroupSchema,
+  projectionGroupMembershipSchema,
+  projectionRoleAssignmentSchema,
+  projectionResourceRoleAssignmentSchema,
   projectionUserSchema,
-  projectionCatalogRoleSchema,
-  projectionCatalogPermissionSchema,
-  projectionCatalogRolePermissionSchema,
-  projectionCatalogSchema,
-  projectionScopeMetadataSchema,
-  projectionPrincipalSchema,
-  projectionPrincipalMembershipSchema,
-  projectionScopeTenantRoleSchema,
-  projectionScopeRolePermissionOverrideSchema,
-  projectionScopeRoleBindingSchema,
-  projectionScopePermissionBindingSchema,
-  projectionScopeSchema,
-  projectionScopeDeltaSchema,
-  projectionCatalogDeltaSchema,
-  projectionUserDeltaSchema,
+  projectionChangeSchema,
 } from "./projection-protocol.js";
 
 export type {
   AccessProjectionSyncPayload,
   AccessProjectionSnapshot,
   AccessProjectionEvent,
-  AccessProjectionEffect,
-  AccessProjectionApplicability,
-  AccessProjectionWildcardMode,
-  AccessProjectionPermissionClassification,
-  AccessProjectionScopeKind,
-  AccessProjectionScopeStatus,
-  AccessProjectionAccessMode,
-  AccessProjectionPrincipalStatus,
+  AccessProjectionSource,
+  AccessProjectionTenantStatus,
+  AccessProjectionGroupStatus,
+  AccessProjectionAccountEntryMode,
+  AccessProjectionMembershipStatus,
+  AccessProjectionSubjectType,
+  ProjectionTenant,
+  ProjectionRole,
+  ProjectionPermission,
+  ProjectionRolePermission,
+  ProjectionResourceType,
+  ProjectionMembership,
+  ProjectionGroup,
+  ProjectionGroupMembership,
+  ProjectionRoleAssignment,
+  ProjectionResourceRoleAssignment,
   ProjectionUser,
-  ProjectionCatalogRole,
-  ProjectionCatalogPermission,
-  ProjectionCatalogRolePermission,
-  ProjectionCatalog,
-  ProjectionScopeMetadata,
-  ProjectionPrincipal,
-  ProjectionPrincipalMembership,
-  ProjectionScopeTenantRole,
-  ProjectionScopeRolePermissionOverride,
-  ProjectionScopeRoleBinding,
-  ProjectionScopePermissionBinding,
-  ProjectionScope,
-  ProjectionScopeDelta,
-  ProjectionCatalogDelta,
-  ProjectionUserDelta,
   ProjectionChange,
   ProjectionChangeOperation,
   ProjectionEntityType,
-  ProjectionCatalogChange,
-  ProjectionScopeChange,
 } from "./projection-protocol.js";
-
-// ── compatibility aliases for non-wire consumers ─────────────────────────────
-// `ScopeKind` is imported by client/index.ts and the generated component shape.
-// It is the same enum as the wire scope kind; alias it so those imports keep
-// resolving without depending on the protocol module's longer name.
-import type { AccessProjectionScopeKind } from "./projection-protocol.js";
-export type ScopeKind = AccessProjectionScopeKind;
 
 // ── mutation response contract ───────────────────────────────────────────────
 // The `applySync` mutation returns one of these; client/http.ts maps them to
@@ -104,12 +77,7 @@ export type SyncResponse =
     }
   | {
       ok: false;
-      status:
-        | "invalid_signature"
-        | "invalid_payload"
-        | "unsupported_schema"
-        | "issuer_mismatch"
-        | "default_scope_required";
+      status: "invalid_signature" | "invalid_payload" | "unsupported_schema" | "issuer_mismatch";
     }
   | {
       ok: false;
