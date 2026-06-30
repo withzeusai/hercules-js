@@ -14,6 +14,8 @@ import { v } from "convex/values";
 // (resource_role_assignments). There is no deny, no wildcard, no override.
 
 const sourceValidator = v.union(v.literal("system"), v.literal("iam"));
+// Roles also allow a runtime-created `custom` source.
+const roleSourceValidator = v.union(v.literal("system"), v.literal("iam"), v.literal("custom"));
 const tenantStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
 const groupStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
 const accountEntryModeValidator = v.union(
@@ -64,7 +66,7 @@ export default defineSchema({
     // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
     // OWNING tenant of a tenant-scoped role (only usable in that tenant).
     tenantId: v.union(v.string(), v.null()),
-    source: sourceValidator,
+    source: roleSourceValidator,
     isRestricted: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),

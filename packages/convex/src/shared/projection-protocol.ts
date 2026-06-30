@@ -17,6 +17,10 @@ import { z } from "zod";
 export const accessProjectionSourceSchema = z.enum(["system", "iam"]);
 export type AccessProjectionSource = z.infer<typeof accessProjectionSourceSchema>;
 
+// Roles add a runtime-created `custom` source (system/iam stay platform/catalog).
+export const accessProjectionRoleSourceSchema = z.enum(["system", "iam", "custom"]);
+export type AccessProjectionRoleSource = z.infer<typeof accessProjectionRoleSourceSchema>;
+
 export const accessProjectionTenantStatusSchema = z.enum(["active", "disabled"]);
 export type AccessProjectionTenantStatus = z.infer<typeof accessProjectionTenantStatusSchema>;
 
@@ -72,7 +76,7 @@ export const projectionRoleSchema = z.strictObject({
   // Tenant scope: null = SHARED (available in every tenant); a tenant id = the
   // OWNING tenant of a tenant-scoped role. Required (always present) at v5.
   tenantId: z.string().min(1).nullable(),
-  source: accessProjectionSourceSchema,
+  source: accessProjectionRoleSourceSchema,
   isRestricted: z.boolean(),
   updatedAt: z.number().int().nonnegative(),
 });
