@@ -29,7 +29,34 @@ Defaults you can rely on: the callback path is `/auth/callback`, the requested s
 
 ## Setup
 
-### 1. Callback route
+### 1. App middleware (recommended)
+
+Register `herculesAuthMiddleware` on your TanStack Start instance so its configuration applies to every sign-in, callback, and session cookie. It is **required behind a TLS-terminating proxy** (a load balancer, or preview/deploy infrastructure) and when your app is **embedded cross-site** (e.g. in an iframe); for plain local development it is optional.
+
+```ts
+// src/start.ts
+import { createStart } from "@tanstack/react-start";
+import { herculesAuthMiddleware } from "@usehercules/auth-tanstack";
+
+export const startInstance = createStart(() => ({
+  requestMiddleware: [
+    herculesAuthMiddleware({
+      redirectUri: "https://app.example.com/auth/callback",
+    }),
+  ],
+}));
+```
+
+**Options**
+
+| Option           | Description                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redirectUri`    | Public callback URL, e.g. `https://app.example.com/auth/callback`. Behind a TLS-terminating proxy, `request.url` only reflects the internal `http://` hop — so cookies would be written without `Secure` and `redirect_uri` built from the wrong origin. Setting this makes the SDK derive the real origin/protocol from it, and it becomes the default `redirect_uri` sent to the provider. Falls back to `request.url` when unset. |
+| `cookieSameSite` | `SameSite` attribute for the PKCE verifier and session cookies: `"lax"` or `"none"`. Defaults to protocol-derived — `none` over HTTPS (so the cookies are set/sent when the app is embedded cross-site) and `lax` over HTTP (local dev). `"none"` always implies `Secure`.                                                                                                                 |
+
+`redirectUri` is the app-wide default; an individual `handleSignInRoute({ redirectUri })` or `getSignInUrl({ redirectUri })` call can still override it per flow.
+
+### 2. Callback route
 
 Create `src/routes/auth/callback.tsx`. This must match the `redirect_uri` registered with your provider.
 
@@ -42,7 +69,7 @@ export const Route = createFileRoute("/auth/callback")({
 });
 ```
 
-### 2. Sign-in route
+### 3. Sign-in route
 
 Create `src/routes/auth/sign-in.tsx`. Visiting it starts the Authorization Code + PKCE flow and redirects to the provider.
 
@@ -55,7 +82,7 @@ export const Route = createFileRoute("/auth/sign-in")({
 });
 ```
 
-### 3. Provider (optional — only for client hooks)
+### 4. Provider (optional — only for client hooks)
 
 Wrap your app in `src/routes/__root.tsx` if you want `useAuth()` and friends. Skip this if you only read auth server-side in loaders.
 
@@ -128,9 +155,10 @@ export const Route = createFileRoute("/logout")({
 
 **`@usehercules/auth-tanstack`**
 
+- Middleware: `herculesAuthMiddleware`
 - Route handlers: `handleSignInRoute`, `handleCallbackRoute`
 - Server functions: `getAuth`, `signOut`, `getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`
-- Types: `User`, `Session`, `Impersonator`, `UserInfo`, `NoUserInfo`, `AuthResult`, `BaseTokenClaims`, `CustomClaims`, `GetAuthURLOptions`, `HandleSignInOptions`, `HandleCallbackOptions`, `HandleAuthSuccessData`
+- Types: `User`, `Session`, `Impersonator`, `UserInfo`, `NoUserInfo`, `AuthResult`, `BaseTokenClaims`, `CustomClaims`, `GetAuthURLOptions`, `HandleSignInOptions`, `HandleCallbackOptions`, `HandleAuthSuccessData`, `HerculesAuthMiddlewareOptions`
 
 **`@usehercules/auth-tanstack/client`**
 
