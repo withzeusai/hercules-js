@@ -81,13 +81,17 @@ describe("session cookie chunking", () => {
       `${SESSION_COOKIE}.1`,
       `${SESSION_COOKIE}.2`,
     ]);
-    const expired = headers.filter((h) => h.includes("Max-Age=0")).map((h) => cookieFromHeader(h)[0]);
+    const expired = headers
+      .filter((h) => h.includes("Max-Age=0"))
+      .map((h) => cookieFromHeader(h)[0]);
     expect(expired).toEqual([`${SESSION_COOKIE}.1`, `${SESSION_COOKIE}.2`]);
   });
 
   it("expires a legacy single cookie when rewriting as chunks", () => {
     const headers = serializeSessionCookies("small", { path: "/" }, [SESSION_COOKIE]);
-    expect(headers.some((h) => h.startsWith(`${SESSION_COOKIE}=;`) && h.includes("Max-Age=0"))).toBe(true);
+    expect(
+      headers.some((h) => h.startsWith(`${SESSION_COOKIE}=;`) && h.includes("Max-Age=0")),
+    ).toBe(true);
   });
 
   it("reads a legacy single cookie", () => {
@@ -99,7 +103,12 @@ describe("session cookie chunking", () => {
   });
 
   it("clears every session cookie variant", () => {
-    const cleared = clearSessionCookies([SESSION_COOKIE, `${SESSION_COOKIE}.0`, `${SESSION_COOKIE}.1`, "unrelated"]);
+    const cleared = clearSessionCookies([
+      SESSION_COOKIE,
+      `${SESSION_COOKIE}.0`,
+      `${SESSION_COOKIE}.1`,
+      "unrelated",
+    ]);
     const names = cleared.map((h) => cookieFromHeader(h)[0]);
     expect(names).toEqual([SESSION_COOKIE, `${SESSION_COOKIE}.0`, `${SESSION_COOKIE}.1`]);
     expect(cleared.every((h) => h.includes("Max-Age=0"))).toBe(true);

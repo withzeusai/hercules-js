@@ -14,8 +14,8 @@
     "changeset": "changeset",
     "changeset:version": "changeset version",
     "changeset:publish": "pnpm build && changeset publish",
-    "format": "oxfmt",
-    "format:check": "oxfmt --check"
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

@@ -2955,8 +2955,7 @@ function checkSdkIamCalls(
     for (const value of resolveStaticValues(info, options, scope)) {
       if (value.kind !== "node" || !ts.isObjectLiteralExpression(value.node)) continue;
       if (
-        (helperName === "parentResource" ||
-          helperName === "rootParentResource") &&
+        (helperName === "parentResource" || helperName === "rootParentResource") &&
         deterministicObjectProperty(
           value.info,
           value.node,

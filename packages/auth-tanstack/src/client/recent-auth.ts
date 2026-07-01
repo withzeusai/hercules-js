@@ -8,7 +8,11 @@ interface EvaluateRecentAuthParameters {
  * Evaluate whether an authentication is recent enough, from an `auth_time`
  * claim. Fails closed: a missing/non-numeric `authTime` is reported stale.
  */
-export function evaluateRecentAuth({ authTime, maxAgeSeconds, nowSeconds }: EvaluateRecentAuthParameters) {
+export function evaluateRecentAuth({
+  authTime,
+  maxAgeSeconds,
+  nowSeconds,
+}: EvaluateRecentAuthParameters) {
   if (typeof authTime !== "number" || !Number.isFinite(authTime)) {
     return { authenticatedAt: null, isStale: true } as const;
   }
