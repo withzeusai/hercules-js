@@ -277,6 +277,27 @@ describe("evaluateAccess guards", () => {
     expect(decision).toMatchObject({ allowed: false, reasonCode: "tenant_missing" });
   });
 
+  test("tenant_disabled when the tenant is archived, even with a valid grant", async () => {
+    const t = harness();
+    await t.run(async (ctx) => {
+      await addSyncState(ctx);
+      await addTenant(ctx, "T", { primary: true, status: "disabled" });
+      await addMembership(ctx, "m1", "T", "u1");
+      await addRole(ctx, "r1");
+      await addPermission(ctx, "p1", "app.doc:read");
+      await grant(ctx, "r1", "p1");
+      await addUserRoleAssignment(ctx, "ura1", "T", "m1", "r1");
+    });
+    const decision = await t.run((ctx) =>
+      evaluateAccess(ctx, {
+        tokenIdentifier: token("u1"),
+        tenantId: "T",
+        permissionKey: "app.doc:read",
+      }),
+    );
+    expect(decision).toMatchObject({ allowed: false, reasonCode: "tenant_disabled" });
+  });
+
   test("permission_missing when the permission key is unknown", async () => {
     const t = harness();
     await t.run(async (ctx) => {
