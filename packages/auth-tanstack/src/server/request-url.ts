@@ -40,15 +40,31 @@ export function resolveRedirectUri(request: Request, override?: string): string 
  * `openid-client`'s `authorizationCodeGrant` derives the token request's
  * `redirect_uri` from the URL it is handed (origin + path), and providers
  * require that to match the `redirect_uri` used in the authorization request.
- * Behind a TLS-terminating proxy `request.url` only reflects the internal hop,
- * so swap in the resolved public origin (see {@link resolveOrigin}) while
- * keeping the proxy-preserved path and the provider's query params (`code`,
- * `state`, …) that the grant reads.
+ *
+ * Prefer `sealedRedirectUri` — the exact value sent at sign-in, sealed into the
+ * PKCE cookie — so a per-request `redirectUri` override is honored verbatim.
+ * When it is absent (a cookie written before the value was sealed) or unparsable,
+ * fall back to the resolved public origin (see {@link resolveOrigin}, correct
+ * behind a TLS-terminating proxy where `request.url` is only the internal hop)
+ * plus the request's own path. Either way, keep the provider's query params
+ * (`code`, `state`, …) that the grant reads.
  */
-export function resolveCallbackUrl(request: Request): URL {
+export function resolveCallbackUrl(request: Request, sealedRedirectUri?: string): URL {
   const requestUrl = new URL(request.url);
-  const callbackUrl = new URL(resolveOrigin(request));
-  callbackUrl.pathname = requestUrl.pathname;
+
+  let callbackUrl: URL | undefined;
+  if (sealedRedirectUri) {
+    try {
+      callbackUrl = new URL(sealedRedirectUri);
+    } catch {
+      // Unparsable sealed value — fall through to origin reconstruction.
+    }
+  }
+  if (!callbackUrl) {
+    callbackUrl = new URL(resolveOrigin(request));
+    callbackUrl.pathname = requestUrl.pathname;
+  }
+
   callbackUrl.search = requestUrl.search;
   return callbackUrl;
 }

@@ -79,7 +79,11 @@ async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promis
   const { secure, sameSite } = cookieSecurity(request);
   setCookie(
     pkceCookieName(state),
-    encodePkceState({ verifier: codeVerifier, returnPathname: options.returnPathname }),
+    encodePkceState({
+      verifier: codeVerifier,
+      returnPathname: options.returnPathname,
+      redirectUri,
+    }),
     {
       httpOnly: true,
       secure,

@@ -151,7 +151,11 @@ async function handleSignInInternal(
     "Set-Cookie",
     serializeCookie(
       pkceCookieName(state),
-      encodePkceState({ verifier: codeVerifier, returnPathname: options?.returnPathname }),
+      encodePkceState({
+        verifier: codeVerifier,
+        returnPathname: options?.returnPathname,
+        redirectUri,
+      }),
       {
         httpOnly: true,
         secure,
@@ -221,7 +225,11 @@ async function handleCallbackInternal(
     return handleError(request, 400, "Unknown or expired sign-in state", undefined, options);
   }
 
-  const { verifier: pkceCodeVerifier, returnPathname } = decodePkceState(verifierCookie);
+  const {
+    verifier: pkceCodeVerifier,
+    returnPathname,
+    redirectUri: sealedRedirectUri,
+  } = decodePkceState(verifierCookie);
   const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState: state };
 
   let tokens: Awaited<ReturnType<typeof client.authorizationCodeGrant>>;
@@ -229,10 +237,11 @@ async function handleCallbackInternal(
     const config = await getConfig();
     // authorizationCodeGrant derives the token request's redirect_uri from this
     // URL (origin + path), and it must match the redirect_uri used in the
-    // authorization request or the provider rejects the exchange. Behind a
-    // TLS-terminating proxy request.url is only the internal hop, so rebuild the
-    // public callback URL — it keeps the code/state params the grant validates.
-    const callbackUrl = resolveCallbackUrl(request);
+    // authorization request or the provider rejects the exchange. Rebuild it
+    // from the redirect_uri sealed with this flow (falling back to the resolved
+    // public origin behind a TLS-terminating proxy, where request.url is only
+    // the internal hop) — it keeps the code/state params the grant validates.
+    const callbackUrl = resolveCallbackUrl(request, sealedRedirectUri);
     tokens = await client.authorizationCodeGrant(config, callbackUrl, checks);
   } catch (error) {
     return handleError(request, 500, "Token exchange failed", error, options, verifierCookieName);

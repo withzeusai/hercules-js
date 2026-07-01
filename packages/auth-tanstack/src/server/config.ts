@@ -102,12 +102,21 @@ export function getConfig(): Promise<client.Configuration> {
 }
 
 /**
- * Contents of a per-flow PKCE cookie: the `code_verifier` plus the optional
- * post-sign-in destination so the callback can honor it.
+ * Contents of a per-flow PKCE cookie: the `code_verifier`, the optional
+ * post-sign-in destination, and the `redirect_uri` this flow was started with.
  */
 export interface PkceState {
   verifier: string;
   returnPathname?: string;
+  /**
+   * The resolved `redirect_uri` sent in the authorization request. Sealed with
+   * the flow so the callback can present the exact same value at the token
+   * exchange: openid-client derives the token `redirect_uri` from the callback
+   * URL, and providers require it to match the authorization request — notably
+   * behind a TLS-terminating proxy or when a per-request `redirectUri` override
+   * was used at sign-in.
+   */
+  redirectUri?: string;
 }
 
 const pkceTextEncoder = new TextEncoder();
@@ -115,8 +124,9 @@ const pkceTextDecoder = new TextDecoder();
 
 /** Serialize a {@link PkceState} into a compact, cookie-safe string. */
 export function encodePkceState(state: PkceState): string {
-  const payload: { v: string; r?: string } = { v: state.verifier };
+  const payload: { v: string; r?: string; u?: string } = { v: state.verifier };
   if (state.returnPathname) payload.r = state.returnPathname;
+  if (state.redirectUri) payload.u = state.redirectUri;
   return toBase64Url(pkceTextEncoder.encode(JSON.stringify(payload)));
 }
 
@@ -130,11 +140,13 @@ export function decodePkceState(raw: string): PkceState {
     const decoded = JSON.parse(pkceTextDecoder.decode(fromBase64Url(raw))) as {
       v?: unknown;
       r?: unknown;
+      u?: unknown;
     };
     if (decoded && typeof decoded.v === "string") {
       return {
         verifier: decoded.v,
         returnPathname: typeof decoded.r === "string" ? decoded.r : undefined,
+        redirectUri: typeof decoded.u === "string" ? decoded.u : undefined,
       };
     }
   } catch {

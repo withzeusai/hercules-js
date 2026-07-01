@@ -91,6 +91,37 @@ describe("resolveCallbackUrl", () => {
       resolveCallbackUrl(request("http://localhost:3000/auth/callback?code=abc")).toString(),
     ).toBe("http://localhost:3000/auth/callback?code=abc");
   });
+
+  it("prefers the sealed redirect_uri, keeping the request's query", () => {
+    // Even the internal proxy hop and query are on the request; the sealed value
+    // supplies origin + path so the token exchange matches the sign-in exactly.
+    expect(
+      resolveCallbackUrl(
+        request("http://internal:8080/auth/callback?code=abc&state=xyz"),
+        "https://app.example.com/auth/callback",
+      ).toString(),
+    ).toBe("https://app.example.com/auth/callback?code=abc&state=xyz");
+  });
+
+  it("honors a per-request redirect_uri override that differs from the middleware config", () => {
+    setAuthOptions({ redirectUri: "https://app.example.com/auth/callback" });
+    expect(
+      resolveCallbackUrl(
+        request("https://other.example.com/cb?code=abc"),
+        "https://other.example.com/cb",
+      ).toString(),
+    ).toBe("https://other.example.com/cb?code=abc");
+  });
+
+  it("falls back to origin reconstruction when the sealed value is unparsable", () => {
+    setAuthOptions({ redirectUri: "https://app.example.com/auth/callback" });
+    expect(
+      resolveCallbackUrl(
+        request("http://internal:8080/auth/callback?code=abc"),
+        "not a url",
+      ).toString(),
+    ).toBe("https://app.example.com/auth/callback?code=abc");
+  });
 });
 
 describe("cookieSecurity", () => {
