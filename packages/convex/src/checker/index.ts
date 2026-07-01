@@ -18,7 +18,7 @@ import * as ts from "typescript";
 //     handler). The value may be a single key OR an { anyOf: [...] } /
 //     { allOf: [...] } set; every string literal in the set is validated.
 //   - The permission argument to access.can(ctx, "app.x:y", ...) and
-//     access.require(ctx, ...) — also single key or anyOf/allOf set.
+//     access.require(ctx, ...) - also single key or anyOf/allOf set.
 //   - Resource-type literals in resource refs: the `resource` option, the args
 //     to resource.write / resource.get / resource.list, and nested `parent`
 //     refs (any { type: "app.x", externalId | parent }).
@@ -212,7 +212,7 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
       }
       // Resource ref / selector: any { type: "app.x", ... } object. These are
       // the `resource` option, nested `parent` refs, and the resource.write /
-      // resource.get / resource.list arguments — including a type-ONLY selector
+      // resource.get / resource.list arguments - including a type-ONLY selector
       // such as resource.list(ctx, { type: "app.x" }), which carries no
       // externalId, parent, or permission. We validate the `type` literal
       // unconditionally; the app.-prefix filter in validateResourceType guards

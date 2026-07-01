@@ -1,11 +1,11 @@
-// IAM projection sync — v5 wire contract.
+// IAM projection sync - v5 wire contract.
 //
 // This module is the consumer-side entry point for the signed projection sync
 // channel. The wire shapes themselves live in `./projection-protocol` (the zod
 // mirror of the producer's source of truth); this file re-exports them and adds
 // the non-wire pieces the HTTP handler and the Convex component need:
-//   • IAM_SYNC_PATH — the webhook route the producer posts to.
-//   • SyncResponse — the mutation's response contract (mapped to HTTP statuses
+//   • IAM_SYNC_PATH - the webhook route the producer posts to.
+//   • SyncResponse - the mutation's response contract (mapped to HTTP statuses
 //     by client/http.ts and consumed by the producer's reconciler).
 
 export const IAM_SYNC_PATH = "/_hercules/iam/sync";

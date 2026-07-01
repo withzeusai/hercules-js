@@ -1,24 +1,24 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// IAM projection mirror — v5 ReBAC storage.
+// IAM projection mirror - v5 ReBAC storage.
 //
 // Thirteen tables mirror the control-plane projection (each carries the
 // `sourceVersion` it was last written at) plus two component-owned tables:
-//   • `resources` — the resource NODE graph the app writes (never projected);
+//   • `resources` - the resource NODE graph the app writes (never projected);
 //     used to walk parent edges during a resource-scoped access check.
-//   • `sync_state` — single-row version/ack state for the signed sync channel.
+//   • `sync_state` - single-row version/ack state for the signed sync channel.
 //
 // The model is allow-only: roles hold permissions (role_permissions), and
 // subjects hold roles tenant-wide ({user,group}_role_assignments) or per-resource
-// ({user,group}_resource_role_assignments) — split by subject type. There is no
+// ({user,group}_resource_role_assignments) - split by subject type. There is no
 // deny, no wildcard, no override.
 //
 // Id convention: each owning table stores its own control-plane id as `id` (the
 // value projected from the backend PK; distinct from Convex `_id`), looked up by
 // its `by_<entity>_id` index (e.g. by_tenant_id). Columns that REFERENCE another table keep the
 // qualified name (tenantId, roleId, membershipId, groupId, …). Junction tables
-// (role_permissions, group_memberships) have no own id — their identity is the
+// (role_permissions, group_memberships) have no own id - their identity is the
 // FK pair.
 
 const tenantStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
@@ -137,7 +137,7 @@ export default defineSchema({
 
   // `key` (`resourceType:action`) is the identity used by checks; the parsed
   // resourceType/action halves live in the control plane and are not mirrored.
-  // All permissions are app-defined — there are no pre-defined/system permissions.
+  // All permissions are app-defined - there are no pre-defined/system permissions.
   permissions: defineTable({
     id: v.string(),
     key: v.string(),

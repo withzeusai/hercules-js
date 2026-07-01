@@ -133,7 +133,7 @@ async function resolveResourceRow(
     .unique();
 }
 
-// resource.list — the access-scoped resource listing. When `permission` is
+// resource.list - the access-scoped resource listing. When `permission` is
 // provided, each node is filtered through the same allow-only check used by
 // access.can, so the page contains only resources the caller may access.
 export const list = query({
@@ -251,7 +251,7 @@ export const get = query({
   },
 });
 
-// resource.write — upsert a resource NODE into the component graph. The app owns
+// resource.write - upsert a resource NODE into the component graph. The app owns
 // resource lifecycle; this is a trusted write (no permission gate). The parent
 // edge is stored as the parent's deterministic node id, computed from the
 // child's declared parentResourceTypeId and the supplied parent externalId
@@ -295,7 +295,7 @@ export const write = mutation({
   },
 });
 
-// resource.delete — remove a single resource NODE. Children are left with a
+// resource.delete - remove a single resource NODE. Children are left with a
 // dangling parentId; the access check stops the ancestor walk at the missing
 // node, so no cascade is required here.
 export const remove = mutation({

@@ -330,9 +330,9 @@ export type CanOptions = { tenant?: string; resource?: ResourceRef };
 
 // A permission requirement is either a single permission key, or a set combined
 // with explicit AND/OR semantics:
-//   • `"app.x:read"`            — hold this one permission.
-//   • `{ anyOf: ["a", "b"] }`   — hold AT LEAST ONE (OR).
-//   • `{ allOf: ["a", "b"] }`   — hold EVERY ONE (AND).
+//   • `"app.x:read"`            - hold this one permission.
+//   • `{ anyOf: ["a", "b"] }`   - hold AT LEAST ONE (OR).
+//   • `{ allOf: ["a", "b"] }`   - hold EVERY ONE (AND).
 // An empty `anyOf`/`allOf` array is rejected as a misconfiguration (denied).
 export type PermissionRequirement =
   | string

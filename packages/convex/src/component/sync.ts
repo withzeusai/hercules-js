@@ -131,7 +131,7 @@ function verifyWebhookPayload(secret: string, rawBody: string, headers: Record<s
   }
 }
 
-// applySync — the ONLY public surface that can reach the mirror. The parent
+// applySync - the ONLY public surface that can reach the mirror. The parent
 // app's thin HTTP route forwards the raw request body and the three
 // standardwebhooks headers here; this action verifies the signature against the
 // component-bound secret BEFORE running any mutation, then delegates to the
@@ -167,7 +167,7 @@ export const applySync = action({
   },
 });
 
-// applyProjection — the raw mirror apply. internalMutation, so it is NOT in the
+// applyProjection - the raw mirror apply. internalMutation, so it is NOT in the
 // component's public API and is reachable only from the verifying action above.
 export const applyProjection = internalMutation({
   args: syncPayloadArgs,

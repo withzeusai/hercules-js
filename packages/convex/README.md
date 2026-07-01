@@ -64,7 +64,7 @@ export default app;
 Wire access control once in `convex/access.ts`, then re-export. This is the ONLY
 file that may import the raw Convex builders (`query` / `mutation` / `action`);
 everywhere else, define functions with `accessQuery` / `publicQuery` (etc.) so
-there is no unguarded escape hatch — the static checker enforces this.
+there is no unguarded escape hatch - the static checker enforces this.
 
 ```ts
 import { createAccess } from "@usehercules/convex";
@@ -113,12 +113,12 @@ the primary-tenant id is resolved inside the component and never exposed.
 - `publicQuery` / `publicMutation` / `publicAction`: the raw generated builders.
   No authentication. Use ONLY for truly public endpoints.
 
-`permission` is a `PermissionRequirement` — a single key, or a set with explicit
+`permission` is a `PermissionRequirement` - a single key, or a set with explicit
 AND/OR semantics:
 
-- `"app.projects:read"` — hold this one permission.
-- `{ anyOf: ["a", "b"] }` — hold AT LEAST ONE (OR).
-- `{ allOf: ["a", "b"] }` — hold EVERY ONE (AND).
+- `"app.projects:read"` - hold this one permission.
+- `{ anyOf: ["a", "b"] }` - hold AT LEAST ONE (OR).
+- `{ allOf: ["a", "b"] }` - hold EVERY ONE (AND).
 
 ```ts
 import { v } from "convex/values";
@@ -148,7 +148,7 @@ the resource from trusted server data, not raw browser input.
 ### In-handler authorization
 
 - `access.can(ctx, permission, { tenant?, resource? }?) => Promise<boolean>`
-- `access.require(ctx, permission, { tenant?, resource? }?) => Promise<void>` —
+- `access.require(ctx, permission, { tenant?, resource? }?) => Promise<void>` -
   throws `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }` on deny.
 
 `permission` accepts the same single-key or `{ anyOf }` / `{ allOf }` set as the
@@ -179,12 +179,12 @@ unauthenticated.
 
 ### Caller-centric reads (`me.*`)
 
-- `me.tenants(ctx, { cursor?, limit?, status? }?) => Promise<TenantSummariesPage>` —
+- `me.tenants(ctx, { cursor?, limit?, status? }?) => Promise<TenantSummariesPage>` -
   the caller's tenant memberships. `status: "active"` keeps only active
   memberships in active tenants.
-- `me.roles(ctx, { tenant? }?) => Promise<RoleSummary[]>` — the caller's effective
+- `me.roles(ctx, { tenant? }?) => Promise<RoleSummary[]>` - the caller's effective
   roles in a tenant (display only; do not infer authorization from it).
-- `me.accessStatus(ctx, { tenant? }?) => Promise<IamTenantAccessStatusResult>` —
+- `me.accessStatus(ctx, { tenant? }?) => Promise<IamTenantAccessStatusResult>` -
   the caller's membership status in a tenant.
 
 ### Mirror reads
@@ -213,17 +213,17 @@ pages exist); pass it back as `cursor`.
 The component stores a resource NODE graph that the app owns and writes. Nodes
 are what resource-scoped checks and the ancestor walk use.
 
-- `resource.write(ctx, { type, externalId, parent?, data?, tenant? }) => Promise<ResourceNode | null>` —
+- `resource.write(ctx, { type, externalId, parent?, data?, tenant? }) => Promise<ResourceNode | null>` -
   upserts a node. `parent` is `{ type, externalId }`. Requires a mutation/action
   context. This is a trusted write with no permission gate; gate the surrounding
   handler if needed.
-- `resource.delete(ctx, { type, externalId, tenant? }) => Promise<{ deleted: boolean }>` —
+- `resource.delete(ctx, { type, externalId, tenant? }) => Promise<{ deleted: boolean }>` -
   removes a single node. Child nodes are left for the app to manage.
-- `resource.list(ctx, { type?, parent?, permission?, tenant?, cursor?, limit? }?) => Promise<ResourceNodesPage>` —
+- `resource.list(ctx, { type?, parent?, permission?, tenant?, cursor?, limit? }?) => Promise<ResourceNodesPage>` -
   lists nodes. When `permission` is provided the page is access-scoped: only nodes
   the caller may access under that permission are returned. This replaces the old
   `filterAuthorizedResources` helper.
-- `resource.get(ctx, { type, externalId, permission?, tenant? }) => Promise<ResourceNode | null>` —
+- `resource.get(ctx, { type, externalId, permission?, tenant? }) => Promise<ResourceNode | null>` -
   reads one node; with `permission`, returns `null` when the caller is denied.
 
 ### `syncStatus(ctx, { tenant?, sourceVersion }) => Promise<TargetTenantSyncStatus>`
@@ -244,7 +244,7 @@ rarely references them directly except where a helper requires a `FunctionRefere
   `queries.getTenantGroup`, `queries.listGroupMembers`, `queries.listTenantRoles`,
   `queries.getTenantRole`
 - `resources.list`, `resources.get`, `resources.write`, `resources.remove`
-- `sync.applySync` — a signature-verifying ACTION (the sole public write path to
+- `sync.applySync` - a signature-verifying ACTION (the sole public write path to
   the mirror). The raw apply is an internal mutation and is not exposed.
 
 ## Types
@@ -372,7 +372,7 @@ Classifies runtime access denials. Local `ConvexError ACCESS_DENIED` denials map
 Registers the projection-sync webhook the control plane posts to. The route is a
 THIN transport: it forwards the raw request body and the standard-webhooks
 headers to the component's `sync.applySync` action. The component owns the trust
-boundary — it verifies the standard-webhooks signature against its own bound
+boundary - it verifies the standard-webhooks signature against its own bound
 `HERCULES_SYNC_SECRET`, validates the v5 payload, and only then applies the
 internal mirror mutation. Outcomes map to HTTP statuses (200 applied/duplicate,
 409 recoverable conflict, 400 payload problem, 401 bad signature, 500 missing

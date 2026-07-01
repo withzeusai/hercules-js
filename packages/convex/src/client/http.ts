@@ -34,7 +34,7 @@ export function registerAccessRoutes(http: HttpRouter, options: RegisterAccessRo
     handler: options.httpAction(async (ctx, request) => {
       // This route owns NO trust. The signing secret lives in the component and
       // signature verification happens there, welded to the mirror write. We
-      // only forward the raw body (verbatim — the signature is over these exact
+      // only forward the raw body (verbatim - the signature is over these exact
       // bytes) and the standardwebhooks headers into the component action.
       const rawBody = await request.text();
       let result: SyncResponse;
