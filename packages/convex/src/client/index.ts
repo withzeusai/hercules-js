@@ -17,8 +17,8 @@ import type {
 } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { PropertyValidators, Validator } from "convex/values";
-export { classifyIamError } from "./iam-errors.js";
-export type { IamAdmissionStatus, IamErrorClassification } from "./iam-errors.js";
+export { classifyAccessError } from "./access-errors.js";
+export type { AccessAdmissionStatus, AccessErrorClassification } from "./access-errors.js";
 
 // ── shared model types (match the component return shapes) ────────────────────
 export type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
@@ -27,10 +27,12 @@ export type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  isSystemRole: boolean;
-  isRestricted: boolean;
-  // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
-  // OWNING tenant of a tenant-scoped role.
+  isAppScope: boolean;
+  // Tenant scope, read together with isAppScope:
+  //   • tenantId = <id>                  → TENANT-SCOPED: usable only in that tenant.
+  //   • tenantId = null, isAppScope=false → SHARED: usable in every tenant.
+  //   • tenantId = null, isAppScope=true  → APP-SCOPED: app-wide authority,
+  //     grantable only to primary-tenant members.
   tenantId: string | null;
 };
 
@@ -41,7 +43,6 @@ export type DirectRoleAssignment = RoleSummary & {
 
 export type TenantSummary = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   accessStatus: MembershipStatus;
@@ -53,7 +54,6 @@ export type TenantSummariesPage = { tenants: TenantSummary[]; nextCursor?: strin
 
 export type TenantDetail = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   lifecycleStatus: "active" | "archived";
@@ -97,12 +97,11 @@ export type ResourceNode = {
   type: string;
   externalId: string;
   parent?: ResourceRef;
-  data?: unknown;
 };
 
 export type ResourceNodesPage = { resources: ResourceNode[]; nextCursor?: string };
 
-export type IamTenantAccessStatusResult =
+export type TenantAccessStatusResult =
   | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
   | {
       kind: "fallback";
@@ -158,7 +157,7 @@ type CheckArgs = {
 type Cursored<T> = T & { cursor?: string };
 type ComponentPage<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
 
-export type IamComponent = {
+export type AccessComponent = {
   checks: {
     check: FunctionReference<"query", "public", CheckArgs, AccessDecision>;
     checkMany: FunctionReference<
@@ -173,7 +172,7 @@ export type IamComponent = {
       "query",
       "public",
       { tokenIdentifier?: string; tenantId?: string },
-      IamTenantAccessStatusResult
+      TenantAccessStatusResult
     >;
     listMyTenants: FunctionReference<
       "query",
@@ -282,7 +281,7 @@ export type IamComponent = {
     write: FunctionReference<
       "mutation",
       "public",
-      { tenantId?: string; type: string; externalId: string; parent?: ResourceRef; data?: unknown },
+      { tenantId?: string; type: string; externalId: string; parent?: ResourceRef },
       ResourceNode | null
     >;
     remove: FunctionReference<
@@ -294,22 +293,22 @@ export type IamComponent = {
   };
 };
 
-export type CreateIamOptions<DataModel extends GenericDataModel> = {
+export type CreateAccessOptions<DataModel extends GenericDataModel> = {
   query: QueryBuilder<DataModel, "public">;
   mutation: MutationBuilder<DataModel, "public">;
   action: ActionBuilder<DataModel, "public">;
   components?: Record<string, unknown>;
-  component?: IamComponent;
+  component?: AccessComponent;
   componentName?: string;
 };
 
 // ── contexts ──────────────────────────────────────────────────────────────────
-export type IamReadContext<DataModel extends GenericDataModel = GenericDataModel> =
+export type AccessReadContext<DataModel extends GenericDataModel = GenericDataModel> =
   | Pick<GenericQueryCtx<DataModel>, "auth" | "runQuery">
   | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery">
   | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">;
 
-export type IamWriteContext<DataModel extends GenericDataModel = GenericDataModel> =
+export type AccessWriteContext<DataModel extends GenericDataModel = GenericDataModel> =
   | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery" | "runMutation">
   | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery" | "runMutation">;
 
@@ -329,9 +328,20 @@ export type ResourceSelector<Ctx, Args> =
 
 export type CanOptions = { tenant?: string; resource?: ResourceRef };
 
+// A permission requirement is either a single permission key, or a set combined
+// with explicit AND/OR semantics:
+//   • `"app.x:read"`            — hold this one permission.
+//   • `{ anyOf: ["a", "b"] }`   — hold AT LEAST ONE (OR).
+//   • `{ allOf: ["a", "b"] }`   — hold EVERY ONE (AND).
+// An empty `anyOf`/`allOf` array is rejected as a misconfiguration (denied).
+export type PermissionRequirement =
+  | string
+  | { anyOf: string[]; allOf?: never }
+  | { allOf: string[]; anyOf?: never };
+
 // ── auth-aware builders ────────────────────────────────────────────────────────
 type GuardConfig<Ctx, Args> = {
-  permission?: string;
+  permission?: PermissionRequirement;
   tenant?: TenantSelector<Ctx, Args>;
   resource?: ResourceSelector<Ctx, Args>;
 };
@@ -345,7 +355,7 @@ export type AuthQueryBuilder<DataModel extends GenericDataModel> = <
 >(query: {
   args?: ArgsValidator;
   returns?: ReturnsValidator;
-  permission?: string;
+  permission?: PermissionRequirement;
   tenant?: TenantSelector<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
   resource?: ResourceSelector<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
   handler: (ctx: GenericQueryCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -360,7 +370,7 @@ export type AuthMutationBuilder<DataModel extends GenericDataModel> = <
 >(mutation: {
   args?: ArgsValidator;
   returns?: ReturnsValidator;
-  permission?: string;
+  permission?: PermissionRequirement;
   tenant?: TenantSelector<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
   resource?: ResourceSelector<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
   handler: (ctx: GenericMutationCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
@@ -375,64 +385,66 @@ export type AuthActionBuilder<DataModel extends GenericDataModel> = <
 >(action: {
   args?: ArgsValidator;
   returns?: ReturnsValidator;
-  permission?: string;
+  permission?: PermissionRequirement;
   tenant?: TenantSelector<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
   resource?: ResourceSelector<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
   handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
 }) => RegisteredAction<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
-// ── the createIam surface ──────────────────────────────────────────────────────
-export type Iam<DataModel extends GenericDataModel> = {
+// ── the createAccess surface ──────────────────────────────────────────────────────
+export type Access<DataModel extends GenericDataModel> = {
   // Raw builders, no auth.
   publicQuery: QueryBuilder<DataModel, "public">;
   publicMutation: MutationBuilder<DataModel, "public">;
   publicAction: ActionBuilder<DataModel, "public">;
   // Auth-aware builders. Require a verified identity; add { permission, tenant?,
   // resource? } to also enforce a permission before the handler runs.
-  query: AuthQueryBuilder<DataModel>;
-  mutation: AuthMutationBuilder<DataModel>;
-  action: AuthActionBuilder<DataModel>;
+  accessQuery: AuthQueryBuilder<DataModel>;
+  accessMutation: AuthMutationBuilder<DataModel>;
+  accessAction: AuthActionBuilder<DataModel>;
   // The signed-in end user's ID (their verified OIDC subject). Link app rows to this.
-  getCurrentUserId: (ctx: IamReadContext<DataModel>) => Promise<string | undefined>;
-  // In-handler authorization.
-  iam: {
-    can: (
-      ctx: IamReadContext<DataModel>,
-      permission: string,
-      options?: CanOptions,
-    ) => Promise<boolean>;
-    require: (
-      ctx: IamReadContext<DataModel>,
-      permission: string,
-      options?: CanOptions,
-    ) => Promise<void>;
-  };
+  getCurrentUserId: (ctx: AccessReadContext<DataModel>) => Promise<string | undefined>;
+  // In-handler authorization. `permission` accepts a single key or an
+  // { anyOf } / { allOf } set (see PermissionRequirement).
+  can: (
+    ctx: AccessReadContext<DataModel>,
+    permission: PermissionRequirement,
+    options?: CanOptions,
+  ) => Promise<boolean>;
+  require: (
+    ctx: AccessReadContext<DataModel>,
+    permission: PermissionRequirement,
+    options?: CanOptions,
+  ) => Promise<void>;
   // Caller-centric reads.
   me: {
     tenants: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args?: { cursor?: string; limit?: number; status?: "active" | "all" },
     ) => Promise<TenantSummariesPage>;
-    roles: (ctx: IamReadContext<DataModel>, args?: { tenant?: string }) => Promise<RoleSummary[]>;
-    accessStatus: (
-      ctx: IamReadContext<DataModel>,
+    roles: (
+      ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string },
-    ) => Promise<IamTenantAccessStatusResult>;
+    ) => Promise<RoleSummary[]>;
+    accessStatus: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { tenant?: string },
+    ) => Promise<TenantAccessStatusResult>;
   };
   // Mirror reads (admin reads self-gate on the matching system read capability).
   tenant: {
     list: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string; cursor?: string; limit?: number },
     ) => Promise<TenantDetailsPage>;
     get: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string },
     ) => Promise<TenantDetail | null>;
   };
   user: {
     list: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args?: {
         tenant?: string;
         cursor?: string;
@@ -441,35 +453,35 @@ export type Iam<DataModel extends GenericDataModel> = {
       },
     ) => Promise<TenantUsersPage>;
     get: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args: { tenant?: string; userId: string },
     ) => Promise<TenantUser | null>;
   };
   group: {
     list: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string; cursor?: string; limit?: number },
     ) => Promise<TenantGroupsPage>;
     get: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args: { tenant?: string; groupId: string },
     ) => Promise<TenantGroup | null>;
     members: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args: { tenant?: string; groupId: string; cursor?: string; limit?: number },
     ) => Promise<TenantUsersPage>;
   };
   role: {
-    list: (ctx: IamReadContext<DataModel>, args?: { tenant?: string }) => Promise<RoleSummary[]>;
+    list: (ctx: AccessReadContext<DataModel>, args?: { tenant?: string }) => Promise<RoleSummary[]>;
     get: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args: { tenant?: string; roleId: string },
     ) => Promise<RoleDetail | null>;
   };
   // Component-owned resource nodes (the app owns lifecycle).
   resource: {
     list: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args?: {
         tenant?: string;
         type?: string;
@@ -480,52 +492,49 @@ export type Iam<DataModel extends GenericDataModel> = {
       },
     ) => Promise<ResourceNodesPage>;
     get: (
-      ctx: IamReadContext<DataModel>,
+      ctx: AccessReadContext<DataModel>,
       args: { tenant?: string; type: string; externalId: string; permission?: string },
     ) => Promise<ResourceNode | null>;
     write: (
-      ctx: IamWriteContext<DataModel>,
+      ctx: AccessWriteContext<DataModel>,
       args: {
         tenant?: string;
         type: string;
         externalId: string;
         parent?: ResourceRef;
-        data?: unknown;
       },
     ) => Promise<ResourceNode | null>;
     delete: (
-      ctx: IamWriteContext<DataModel>,
+      ctx: AccessWriteContext<DataModel>,
       args: { tenant?: string; type: string; externalId: string },
     ) => Promise<{ deleted: boolean }>;
   };
   // Whether the mirror has caught up to a specific control-plane write.
   syncStatus: (
-    ctx: IamReadContext<DataModel>,
+    ctx: AccessReadContext<DataModel>,
     args: { tenant?: string; sourceVersion: number },
   ) => Promise<TargetTenantSyncStatus>;
 };
 
 /**
- * Wires Hercules managed IAM into a Convex app. Call once in `convex/iam.ts`,
- * then re-export the returned helpers and builders.
+ * Wires Hercules managed access control into a Convex app. Call once in
+ * `convex/access.ts`, then re-export the returned helpers and builders.
  */
-export function createIam<DataModel extends GenericDataModel>(
-  options: CreateIamOptions<DataModel>,
-): Iam<DataModel> {
+export function createAccess<DataModel extends GenericDataModel>(
+  options: CreateAccessOptions<DataModel>,
+): Access<DataModel> {
   const component = resolveComponent(options);
 
   return {
     publicQuery: options.query,
     publicMutation: options.mutation,
     publicAction: options.action,
-    query: makeAuthBuilder(options.query, component) as AuthQueryBuilder<DataModel>,
-    mutation: makeAuthBuilder(options.mutation, component) as AuthMutationBuilder<DataModel>,
-    action: makeAuthBuilder(options.action, component) as AuthActionBuilder<DataModel>,
+    accessQuery: makeAuthBuilder(options.query, component) as AuthQueryBuilder<DataModel>,
+    accessMutation: makeAuthBuilder(options.mutation, component) as AuthMutationBuilder<DataModel>,
+    accessAction: makeAuthBuilder(options.action, component) as AuthActionBuilder<DataModel>,
     getCurrentUserId,
-    iam: {
-      can: (ctx, permission, opts) => can(component, ctx, permission, opts),
-      require: (ctx, permission, opts) => requirePermission(component, ctx, permission, opts),
-    },
+    can: (ctx, permission, opts) => can(component, ctx, permission, opts),
+    require: (ctx, permission, opts) => requirePermission(component, ctx, permission, opts),
     me: {
       tenants: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -682,7 +691,6 @@ export function createIam<DataModel extends GenericDataModel>(
           type: args.type,
           externalId: args.externalId,
           ...optional("parent", args.parent),
-          ...optional("data", args.data),
         }),
       delete: async (ctx, args) =>
         ctx.runMutation(component.resources.remove, {
@@ -718,8 +726,8 @@ function withNextCursor<T extends { cursor?: string }>(
 }
 
 function resolveComponent<DataModel extends GenericDataModel>(
-  options: CreateIamOptions<DataModel>,
-): IamComponent {
+  options: CreateAccessOptions<DataModel>,
+): AccessComponent {
   if (options.component) return options.component;
   const componentName = options.componentName ?? "hercules";
   const component = options.components?.[componentName];
@@ -728,21 +736,21 @@ function resolveComponent<DataModel extends GenericDataModel>(
       "Missing Hercules IAM component. Install @usehercules/convex in convex/convex.config.ts.",
     );
   }
-  return component as IamComponent;
+  return component as AccessComponent;
 }
 
-async function getTokenIdentifier(ctx: IamReadContext): Promise<string | undefined> {
+async function getTokenIdentifier(ctx: AccessReadContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
 }
 
-async function getCurrentUserId(ctx: IamReadContext): Promise<string | undefined> {
+async function getCurrentUserId(ctx: AccessReadContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
 async function can(
-  component: IamComponent,
-  ctx: IamReadContext,
-  permission: string,
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  permission: PermissionRequirement,
   options?: CanOptions,
 ): Promise<boolean> {
   const decision = await runCheck(component, ctx, permission, options);
@@ -750,9 +758,9 @@ async function can(
 }
 
 async function requirePermission(
-  component: IamComponent,
-  ctx: IamReadContext,
-  permission: string,
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  permission: PermissionRequirement,
   options?: CanOptions,
 ): Promise<void> {
   const decision = await runCheck(component, ctx, permission, options);
@@ -767,24 +775,81 @@ async function requirePermission(
 }
 
 async function runCheck(
-  component: IamComponent,
-  ctx: IamReadContext,
-  permission: string,
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  permission: PermissionRequirement,
   options?: CanOptions,
 ): Promise<AccessDecision> {
   const tokenIdentifier = await getTokenIdentifier(ctx);
   if (!tokenIdentifier) {
     return { allowed: false, reasonCode: "missing_identity" };
   }
-  return ctx.runQuery(component.checks.check, {
+  return evaluateRequirement(
+    component,
+    ctx,
     tokenIdentifier,
-    ...optional("tenantId", options?.tenant),
     permission,
-    ...optional("resource", options?.resource),
-  });
+    options?.tenant,
+    options?.resource,
+  );
 }
 
-function makeAuthBuilder<TBuilder>(builder: TBuilder, component: IamComponent): TBuilder {
+// Splits a PermissionRequirement into its mode and the keys to check. A bare
+// string is a single AND of one key.
+function requirementKeys(permission: PermissionRequirement): {
+  mode: "anyOf" | "allOf";
+  keys: string[];
+} {
+  if (typeof permission === "string") return { mode: "allOf", keys: [permission] };
+  if ("anyOf" in permission && permission.anyOf !== undefined) {
+    return { mode: "anyOf", keys: permission.anyOf };
+  }
+  return { mode: "allOf", keys: permission.allOf };
+}
+
+// Resolves a PermissionRequirement to a single decision. One key uses the
+// cheaper `check`; a set fans out to `checkMany` and combines with anyOf=OR
+// (allowed if any allow) / allOf=AND (denied at the first deny).
+async function evaluateRequirement(
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  tokenIdentifier: string,
+  permission: PermissionRequirement,
+  tenantId: string | undefined,
+  resource: ResourceRef | undefined,
+): Promise<AccessDecision> {
+  const { mode, keys } = requirementKeys(permission);
+  if (keys.length === 0) {
+    return { allowed: false, reasonCode: "empty_permission_set" };
+  }
+  if (keys.length === 1) {
+    return ctx.runQuery(component.checks.check, {
+      tokenIdentifier,
+      ...optional("tenantId", tenantId),
+      permission: keys[0] as string,
+      ...optional("resource", resource),
+    });
+  }
+  const decisions = await ctx.runQuery(component.checks.checkMany, {
+    tokenIdentifier,
+    checks: keys.map(
+      (key): Omit<CheckArgs, "tokenIdentifier"> => ({
+        ...optional("tenantId", tenantId),
+        permission: key,
+        ...optional("resource", resource),
+      }),
+    ),
+  });
+  const fallback: AccessDecision = { allowed: false, reasonCode: "access_denied" };
+  if (mode === "anyOf") {
+    // OR: the first allow wins; otherwise surface the first denial.
+    return decisions.find((decision) => decision.allowed) ?? decisions[0] ?? fallback;
+  }
+  // AND: the first denial wins; otherwise any allow decision is representative.
+  return decisions.find((decision) => !decision.allowed) ?? decisions[0] ?? fallback;
+}
+
+function makeAuthBuilder<TBuilder>(builder: TBuilder, component: AccessComponent): TBuilder {
   return ((definition: unknown) => {
     if (typeof definition !== "object" || definition === null || !("handler" in definition)) {
       throw new Error("Auth-aware builders require an object definition with a handler.");
@@ -799,7 +864,7 @@ function makeAuthBuilder<TBuilder>(builder: TBuilder, component: IamComponent): 
     };
     const { permission, tenant, resource, handler, ...convexDefinition } = def;
     const guard: GuardConfig<AnyCtx, unknown> = {
-      ...(typeof permission === "string" ? { permission } : {}),
+      ...(isPermissionRequirement(permission) ? { permission } : {}),
       ...(tenant === undefined ? {} : { tenant: tenant as TenantSelector<AnyCtx, unknown> }),
       ...(resource === undefined
         ? {}
@@ -816,7 +881,7 @@ function makeAuthBuilder<TBuilder>(builder: TBuilder, component: IamComponent): 
 }
 
 async function ensureAuthorized(
-  component: IamComponent,
+  component: AccessComponent,
   ctx: AnyCtx,
   guard: GuardConfig<AnyCtx, unknown>,
   callerArgs: unknown,
@@ -853,12 +918,14 @@ async function ensureAuthorized(
     });
   }
 
-  const decision = await ctx.runQuery(component.checks.check, {
-    tokenIdentifier: identity.tokenIdentifier,
-    ...optional("tenantId", tenant),
-    permission: guard.permission,
-    ...optional("resource", resource),
-  });
+  const decision = await evaluateRequirement(
+    component,
+    ctx,
+    identity.tokenIdentifier,
+    guard.permission,
+    tenant,
+    resource,
+  );
   if (!decision.allowed) {
     throw new ConvexError({
       code: "ACCESS_DENIED",
@@ -867,4 +934,11 @@ async function ensureAuthorized(
       ...(decision.sourceVersion === undefined ? {} : { sourceVersion: decision.sourceVersion }),
     });
   }
+}
+
+function isPermissionRequirement(value: unknown): value is PermissionRequirement {
+  if (typeof value === "string") return true;
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as { anyOf?: unknown; allOf?: unknown };
+  return Array.isArray(candidate.anyOf) || Array.isArray(candidate.allOf);
 }

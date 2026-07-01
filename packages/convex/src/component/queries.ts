@@ -6,19 +6,15 @@ import {
 } from "convex/server";
 import { paginator } from "convex-helpers/server/pagination";
 import { v } from "convex/values";
-import {
-  collectMembershipRoleIds,
-  evaluateAccess,
-  resolvePrimaryTenant,
-  resolveTenantRow,
-} from "./access";
+import { collectMembershipRoleIds, resolvePrimaryTenant, resolveTenantRow } from "./access";
 import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 type QueryCtx = GenericQueryCtx<DataModel>;
+type TenantRow = DataModel["tenants"]["document"];
 type RoleRow = DataModel["roles"]["document"];
-type MembershipRow = DataModel["memberships"]["document"];
+type MembershipRow = DataModel["tenant_memberships"]["document"];
 type GroupRow = DataModel["groups"]["document"];
 
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
@@ -29,20 +25,15 @@ function pageLimit(limit: number | undefined): number {
   return Math.min(limit, PAGE_LIMIT);
 }
 
-// Admin read permissions. Each mirrored admin read self-gates on the matching
-// system read capability; the COMPONENT does authz, the server never will.
-const PERMISSION_TENANTS_READ = "system.access.tenants:read";
-const PERMISSION_USERS_READ = "system.access.users:read";
-const PERMISSION_ROLES_READ = "system.access.roles:read";
-
 export type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  isSystemRole: boolean;
-  isRestricted: boolean;
-  // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
-  // OWNING tenant of a tenant-scoped role.
+  isAppScope: boolean;
+  // Tenant scope, read together with isAppScope:
+  //   • tenantId = <id>                  → TENANT-SCOPED: usable only in that tenant.
+  //   • tenantId = null, isAppScope=false → SHARED: usable in every tenant.
+  //   • tenantId = null, isAppScope=true  → APP-SCOPED: app-wide authority.
   tenantId: string | null;
 };
 
@@ -55,7 +46,6 @@ export type MembershipStatus = "active" | "blocked" | "suspended" | "pending_app
 
 export type TenantSummary = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   accessStatus: MembershipStatus;
@@ -67,7 +57,6 @@ export type TenantSummariesPage = { tenants: TenantSummary[]; cursor?: string };
 
 export type TenantDetail = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   lifecycleStatus: "active" | "archived";
@@ -145,11 +134,10 @@ export type TargetTenantSyncStatus =
 
 function roleSummary(role: RoleRow): RoleSummary {
   return {
-    roleId: role.roleId,
+    roleId: role.id,
     roleKey: role.key,
     roleName: role.name,
-    isSystemRole: role.source === "system",
-    isRestricted: role.isRestricted,
+    isAppScope: role.isAppScope,
     tenantId: role.tenantId,
   };
 }
@@ -161,7 +149,7 @@ function lifecycleStatus(status: "active" | "disabled"): "active" | "archived" {
 async function resolveRole(ctx: QueryCtx, roleId: string): Promise<RoleRow | null> {
   return await ctx.db
     .query("roles")
-    .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
+    .withIndex("by_role_id", (q) => q.eq("id", roleId))
     .unique();
 }
 
@@ -183,11 +171,11 @@ async function directRoleAssignments(
   const rows =
     "membershipId" in subject
       ? await ctx.db
-          .query("role_assignments")
+          .query("user_role_assignments")
           .withIndex("by_membership", (q) => q.eq("membershipId", subject.membershipId))
           .collect()
       : await ctx.db
-          .query("role_assignments")
+          .query("group_role_assignments")
           .withIndex("by_group", (q) => q.eq("groupId", subject.groupId))
           .collect();
   const now = Date.now();
@@ -199,7 +187,7 @@ async function directRoleAssignments(
     if (!role) continue;
     assignments.push({
       ...roleSummary(role),
-      assignmentId: row.roleAssignmentId,
+      assignmentId: row.id,
       expiresAt: row.expiresAt ?? null,
     });
   }
@@ -212,10 +200,10 @@ async function tenantUserFromMembership(
 ): Promise<TenantUser> {
   const user = await ctx.db
     .query("users")
-    .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", membership.herculesAuthUserId))
+    .withIndex("by_user_id", (q) => q.eq("id", membership.userId))
     .unique();
   return {
-    userId: membership.herculesAuthUserId,
+    userId: membership.userId,
     status: membership.status,
     ...(user?.name === undefined ? {} : { name: user.name }),
     ...(user?.email === undefined ? {} : { email: user.email }),
@@ -223,7 +211,7 @@ async function tenantUserFromMembership(
     roles: await membershipRoles(ctx, membership),
     directRoleAssignments: await directRoleAssignments(
       ctx,
-      { membershipId: membership.membershipId },
+      { membershipId: membership.id },
       membership.tenantId,
     ),
   };
@@ -232,11 +220,11 @@ async function tenantUserFromMembership(
 async function tenantGroupFromRow(ctx: QueryCtx, group: GroupRow): Promise<TenantGroup> {
   const members = await ctx.db
     .query("group_memberships")
-    .withIndex("by_group", (q) => q.eq("groupId", group.groupId))
+    .withIndex("by_group", (q) => q.eq("groupId", group.id))
     .collect();
-  const direct = await directRoleAssignments(ctx, { groupId: group.groupId }, group.tenantId);
+  const direct = await directRoleAssignments(ctx, { groupId: group.id }, group.tenantId);
   return {
-    groupId: group.groupId,
+    groupId: group.id,
     name: group.name,
     status: group.status,
     memberCount: members.length,
@@ -244,88 +232,65 @@ async function tenantGroupFromRow(ctx: QueryCtx, group: GroupRow): Promise<Tenan
       roleId: assignment.roleId,
       roleKey: assignment.roleKey,
       roleName: assignment.roleName,
-      isSystemRole: assignment.isSystemRole,
-      isRestricted: assignment.isRestricted,
+      isAppScope: assignment.isAppScope,
       tenantId: assignment.tenantId,
     })),
     directRoleAssignments: direct,
   };
 }
 
-// Gate an admin read on a system read capability, returning the resolved tenant
-// id when allowed and `null` otherwise.
+// Structural admin-read gate: the caller must hold an ACTIVE membership in the
+// resolved tenant. Returns the resolved tenant row when allowed, `null`
+// otherwise. There is no permission catalog for admin reads.
 async function gate(
   ctx: QueryCtx,
   args: { tokenIdentifier?: string; tenantId?: string },
-  permission: string,
-): Promise<string | null> {
+): Promise<TenantRow | null> {
+  if (!args.tokenIdentifier) return null;
+  const state = await ctx.db.query("sync_state").unique();
+  if (!state) return null;
+  const token = parseTokenIdentifier(args.tokenIdentifier);
+  if (!token || token.issuer !== state.expectedIssuer) return null;
   const tenant = await resolveTenantRow(ctx, args.tenantId);
   if (!tenant) return null;
-  const decision = await evaluateAccess(ctx, {
-    ...(args.tokenIdentifier === undefined ? {} : { tokenIdentifier: args.tokenIdentifier }),
-    tenantId: tenant.tenantId,
-    permissionKey: permission,
-  });
-  return decision.allowed ? tenant.tenantId : null;
+  const membership = await ctx.db
+    .query("tenant_memberships")
+    .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", token.subject))
+    .unique();
+  if (!membership || membership.status !== "active") return null;
+  return tenant;
 }
 
-// Gate a primary-tenant-admin operation (e.g. listing EVERY tenant). The
-// capability is checked against the deployment's PRIMARY tenant specifically and
-// the caller-supplied tenant id is ignored: holding the permission in some
-// non-primary tenant must never authorize a global, cross-tenant read.
-// `system.access.tenants:read` is a restricted system permission, so only a
-// primary-tenant admin can hold it there. Returns the primary tenant id when
-// allowed, `null` otherwise.
+// Structural gate for a primary-tenant-admin operation (e.g. listing EVERY
+// tenant). The membership is checked against the deployment's PRIMARY tenant
+// specifically and the caller-supplied tenant id is ignored: holding a
+// membership in some non-primary tenant must never authorize a global,
+// cross-tenant read. Returns the primary tenant row when allowed, `null`
+// otherwise.
 async function gatePrimaryTenant(
   ctx: QueryCtx,
   args: { tokenIdentifier?: string },
-  permission: string,
-): Promise<string | null> {
+): Promise<TenantRow | null> {
+  if (!args.tokenIdentifier) return null;
+  const state = await ctx.db.query("sync_state").unique();
+  if (!state) return null;
+  const token = parseTokenIdentifier(args.tokenIdentifier);
+  if (!token || token.issuer !== state.expectedIssuer) return null;
   const primary = await resolvePrimaryTenant(ctx);
   if (!primary) return null;
-  const decision = await evaluateAccess(ctx, {
-    ...(args.tokenIdentifier === undefined ? {} : { tokenIdentifier: args.tokenIdentifier }),
-    tenantId: primary.tenantId,
-    permissionKey: permission,
-  });
-  return decision.allowed ? primary.tenantId : null;
+  const membership = await ctx.db
+    .query("tenant_memberships")
+    .withIndex("by_tenant_user", (q) => q.eq("tenantId", primary.id).eq("userId", token.subject))
+    .unique();
+  if (!membership || membership.status !== "active") return null;
+  return primary;
 }
 
 // ── caller-centric reads (me.*) ───────────────────────────────────────────────
 export const getTenantAccessStatus = query({
   args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
   handler: async (ctx, args): Promise<TenantAccessStatus> => {
-    if (!args.tokenIdentifier) {
-      return { kind: "fallback", reason: "identity_missing" };
-    }
-    const state = await ctx.db.query("sync_state").unique();
-    if (!state) return { kind: "fallback", reason: "mirror_not_ready" };
-    const token = parseTokenIdentifier(args.tokenIdentifier);
-    if (!token) {
-      return { kind: "fallback", reason: "identity_invalid", stateVersion: state.sourceVersion };
-    }
-    if (token.issuer !== state.expectedIssuer) {
-      return { kind: "fallback", reason: "unexpected_issuer", stateVersion: state.sourceVersion };
-    }
-    const tenant = await resolveTenantRow(ctx, args.tenantId);
-    if (!tenant) {
-      return { kind: "fallback", reason: "tenant_missing", stateVersion: state.sourceVersion };
-    }
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_tenant_user", (q) =>
-        q.eq("tenantId", tenant.tenantId).eq("herculesAuthUserId", token.subject),
-      )
-      .unique();
-    if (!membership) {
-      return { kind: "fallback", reason: "membership_missing", stateVersion: state.sourceVersion };
-    }
-    return {
-      kind: "principal",
-      membershipId: membership.membershipId,
-      status: membership.status,
-      stateVersion: state.sourceVersion,
-    };
+    return getTenantAccessStatusInline(ctx, args.tokenIdentifier, args.tenantId);
   },
 });
 
@@ -345,8 +310,8 @@ export const listMyTenants = query({
 
     const limit = pageLimit(args.limit);
     const page = await paginator(ctx.db, schema)
-      .query("memberships")
-      .withIndex("by_auth_user", (q) => q.eq("herculesAuthUserId", token.subject))
+      .query("tenant_memberships")
+      .withIndex("by_user", (q) => q.eq("userId", token.subject))
       .paginate({ cursor: args.cursor ?? null, numItems: limit });
 
     const tenants = (
@@ -355,13 +320,12 @@ export const listMyTenants = query({
           if (args.status === "active" && membership.status !== "active") return null;
           const tenant = await ctx.db
             .query("tenants")
-            .withIndex("by_tenant_id", (q) => q.eq("tenantId", membership.tenantId))
+            .withIndex("by_tenant_id", (q) => q.eq("id", membership.tenantId))
             .unique();
           if (!tenant) return null;
           if (args.status === "active" && tenant.status !== "active") return null;
           return {
-            tenantId: tenant.tenantId,
-            herculesAuthTenantId: tenant.herculesAuthTenantId,
+            tenantId: tenant.id,
             tenantName: tenant.name,
             isPrimaryTenant: tenant.isPrimaryTenant,
             accessStatus: membership.status,
@@ -387,10 +351,8 @@ export const listMyRoles = query({
     const tenant = await resolveTenantRow(ctx, args.tenantId);
     if (!tenant) return [];
     const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_tenant_user", (q) =>
-        q.eq("tenantId", tenant.tenantId).eq("herculesAuthUserId", token.subject),
-      )
+      .query("tenant_memberships")
+      .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", token.subject))
       .unique();
     if (!membership) return [];
     return membershipRoles(ctx, membership);
@@ -421,7 +383,7 @@ export const getTargetTenantSyncStatus = query({
         state: "ready",
         currentSourceVersion: state.sourceVersion,
         targetSourceVersion,
-        tenantId: tenant.tenantId,
+        tenantId: tenant.id,
         membershipId: status.membershipId,
       };
     }
@@ -431,7 +393,7 @@ export const getTargetTenantSyncStatus = query({
         reasonCode: `membership_${status.status}`,
         currentSourceVersion: state.sourceVersion,
         targetSourceVersion,
-        ...(tenant ? { tenantId: tenant.tenantId } : {}),
+        ...(tenant ? { tenantId: tenant.id } : {}),
         membershipId: status.membershipId,
       };
     }
@@ -465,17 +427,15 @@ async function getTenantAccessStatusInline(
     return { kind: "fallback", reason: "tenant_missing", stateVersion: state.sourceVersion };
   }
   const membership = await ctx.db
-    .query("memberships")
-    .withIndex("by_tenant_user", (q) =>
-      q.eq("tenantId", tenant.tenantId).eq("herculesAuthUserId", token.subject),
-    )
+    .query("tenant_memberships")
+    .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", token.subject))
     .unique();
   if (!membership) {
     return { kind: "fallback", reason: "membership_missing", stateVersion: state.sourceVersion };
   }
   return {
     kind: "principal",
-    membershipId: membership.membershipId,
+    membershipId: membership.id,
     status: membership.status,
     stateVersion: state.sourceVersion,
   };
@@ -485,16 +445,10 @@ async function getTenantAccessStatusInline(
 export const getTenant = query({
   args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
   handler: async (ctx, args): Promise<TenantDetail | null> => {
-    const tenantId = await gate(ctx, args, PERMISSION_TENANTS_READ);
-    if (!tenantId) return null;
-    const tenant = await ctx.db
-      .query("tenants")
-      .withIndex("by_tenant_id", (q) => q.eq("tenantId", tenantId))
-      .unique();
+    const tenant = await gate(ctx, args);
     if (!tenant) return null;
     return {
-      tenantId: tenant.tenantId,
-      herculesAuthTenantId: tenant.herculesAuthTenantId,
+      tenantId: tenant.id,
       tenantName: tenant.name,
       isPrimaryTenant: tenant.isPrimaryTenant,
       lifecycleStatus: lifecycleStatus(tenant.status),
@@ -513,12 +467,10 @@ export const listTenants = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<TenantDetailsPage> => {
-    // Listing every tenant is a primary-tenant-admin read. Gate against the
-    // PRIMARY tenant's tenants:read capability, ignoring any caller-supplied
-    // tenant id — otherwise a caller holding tenants:read in a non-primary
-    // tenant could pass that tenant id and enumerate all tenants.
-    const primaryTenantId = await gatePrimaryTenant(ctx, args, PERMISSION_TENANTS_READ);
-    if (!primaryTenantId) return { tenants: [] };
+    // Listing every tenant is a primary-tenant-admin read. Gate on an active
+    // membership in the PRIMARY tenant, ignoring any caller-supplied tenant id.
+    const primary = await gatePrimaryTenant(ctx, args);
+    if (!primary) return { tenants: [] };
     const limit = pageLimit(args.limit);
     const page = await paginator(ctx.db, schema)
       .query("tenants")
@@ -526,8 +478,7 @@ export const listTenants = query({
       .paginate({ cursor: args.cursor ?? null, numItems: limit });
     return {
       tenants: page.page.map((tenant) => ({
-        tenantId: tenant.tenantId,
-        herculesAuthTenantId: tenant.herculesAuthTenantId,
+        tenantId: tenant.id,
         tenantName: tenant.name,
         isPrimaryTenant: tenant.isPrimaryTenant,
         lifecycleStatus: lifecycleStatus(tenant.status),
@@ -559,18 +510,19 @@ export const listTenantUsers = query({
     ),
   },
   handler: async (ctx, args): Promise<TenantUsersPage> => {
-    const tenantId = await gate(ctx, args, PERMISSION_USERS_READ);
-    if (!tenantId) return { users: [] };
+    const tenant = await gate(ctx, args);
+    if (!tenant) return { users: [] };
+    const tenantId = tenant.id;
     const limit = pageLimit(args.limit);
     const status = args.status ?? "all";
     const page =
       status === "all"
         ? await paginator(ctx.db, schema)
-            .query("memberships")
+            .query("tenant_memberships")
             .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
             .paginate({ cursor: args.cursor ?? null, numItems: limit })
         : await paginator(ctx.db, schema)
-            .query("memberships")
+            .query("tenant_memberships")
             .withIndex("by_tenant_status", (q) => q.eq("tenantId", tenantId).eq("status", status))
             .paginate({ cursor: args.cursor ?? null, numItems: limit });
     const users = await Promise.all(
@@ -587,13 +539,11 @@ export const getTenantUser = query({
     userId: v.string(),
   },
   handler: async (ctx, args): Promise<TenantUser | null> => {
-    const tenantId = await gate(ctx, args, PERMISSION_USERS_READ);
-    if (!tenantId) return null;
+    const tenant = await gate(ctx, args);
+    if (!tenant) return null;
     const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_tenant_user", (q) =>
-        q.eq("tenantId", tenantId).eq("herculesAuthUserId", args.userId),
-      )
+      .query("tenant_memberships")
+      .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", args.userId))
       .unique();
     if (!membership) return null;
     return tenantUserFromMembership(ctx, membership);
@@ -609,12 +559,12 @@ export const listTenantGroups = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<TenantGroupsPage> => {
-    const tenantId = await gate(ctx, args, PERMISSION_USERS_READ);
-    if (!tenantId) return { groups: [] };
+    const tenant = await gate(ctx, args);
+    if (!tenant) return { groups: [] };
     const limit = pageLimit(args.limit);
     const page = await paginator(ctx.db, schema)
       .query("groups")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+      .withIndex("by_tenant", (q) => q.eq("tenantId", tenant.id))
       .paginate({ cursor: args.cursor ?? null, numItems: limit });
     const groups = await Promise.all(page.page.map((group) => tenantGroupFromRow(ctx, group)));
     return { groups, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
@@ -628,13 +578,13 @@ export const getTenantGroup = query({
     groupId: v.string(),
   },
   handler: async (ctx, args): Promise<TenantGroup | null> => {
-    const tenantId = await gate(ctx, args, PERMISSION_USERS_READ);
-    if (!tenantId) return null;
+    const tenant = await gate(ctx, args);
+    if (!tenant) return null;
     const group = await ctx.db
       .query("groups")
-      .withIndex("by_group_id", (q) => q.eq("groupId", args.groupId))
+      .withIndex("by_group_id", (q) => q.eq("id", args.groupId))
       .unique();
-    if (!group || group.tenantId !== tenantId) return null;
+    if (!group || group.tenantId !== tenant.id) return null;
     return tenantGroupFromRow(ctx, group);
   },
 });
@@ -648,26 +598,24 @@ export const listGroupMembers = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<TenantUsersPage> => {
-    const tenantId = await gate(ctx, args, PERMISSION_USERS_READ);
-    if (!tenantId) return { users: [] };
+    const tenant = await gate(ctx, args);
+    if (!tenant) return { users: [] };
     const group = await ctx.db
       .query("groups")
-      .withIndex("by_group_id", (q) => q.eq("groupId", args.groupId))
+      .withIndex("by_group_id", (q) => q.eq("id", args.groupId))
       .unique();
-    if (!group || group.tenantId !== tenantId) return { users: [] };
+    if (!group || group.tenantId !== tenant.id) return { users: [] };
     const limit = pageLimit(args.limit);
     const page = await paginator(ctx.db, schema)
       .query("group_memberships")
-      .withIndex("by_group", (q) => q.eq("groupId", group.groupId))
+      .withIndex("by_group", (q) => q.eq("groupId", group.id))
       .paginate({ cursor: args.cursor ?? null, numItems: limit });
     const users = (
       await Promise.all(
         page.page.map(async (groupMembership) => {
           const membership = await ctx.db
-            .query("memberships")
-            .withIndex("by_membership_id", (q) =>
-              q.eq("membershipId", groupMembership.membershipId),
-            )
+            .query("tenant_memberships")
+            .withIndex("by_membership_id", (q) => q.eq("id", groupMembership.membershipId))
             .unique();
           return membership ? tenantUserFromMembership(ctx, membership) : null;
         }),
@@ -681,19 +629,24 @@ export const listGroupMembers = query({
 export const listTenantRoles = query({
   args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
   handler: async (ctx, args): Promise<RoleSummary[]> => {
-    const tenantId = await gate(ctx, args, PERMISSION_ROLES_READ);
-    if (!tenantId) return [];
-    // Roles usable in this tenant = SHARED roles (tenantId null) plus the
-    // tenant's own TENANT-SCOPED roles (tenantId == this tenant).
+    const tenant = await gate(ctx, args);
+    if (!tenant) return [];
+    // Roles usable in this tenant = the tenant's own TENANT-SCOPED roles plus
+    // SHARED roles (tenantId null, isAppScope false). APP-SCOPED roles (tenantId
+    // null, isAppScope true) are app-wide authority grantable only to
+    // primary-tenant members, so they surface only for the primary tenant.
     const sharedRoles = await ctx.db
       .query("roles")
       .withIndex("by_tenant", (q) => q.eq("tenantId", null))
       .collect();
     const tenantRoles = await ctx.db
       .query("roles")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+      .withIndex("by_tenant", (q) => q.eq("tenantId", tenant.id))
       .collect();
-    return [...sharedRoles, ...tenantRoles]
+    const visibleShared = tenant.isPrimaryTenant
+      ? sharedRoles
+      : sharedRoles.filter((role) => !role.isAppScope);
+    return [...visibleShared, ...tenantRoles]
       .map(roleSummary)
       .sort((a, b) => a.roleKey.localeCompare(b.roleKey) || a.roleId.localeCompare(b.roleId));
   },
@@ -706,19 +659,19 @@ export const getTenantRole = query({
     roleId: v.string(),
   },
   handler: async (ctx, args): Promise<RoleDetail | null> => {
-    const tenantId = await gate(ctx, args, PERMISSION_ROLES_READ);
-    if (!tenantId) return null;
+    const tenant = await gate(ctx, args);
+    if (!tenant) return null;
     const role = await resolveRole(ctx, args.roleId);
     if (!role) return null;
     const rolePermissions = await ctx.db
       .query("role_permissions")
-      .withIndex("by_role", (q) => q.eq("roleId", role.roleId))
+      .withIndex("by_role", (q) => q.eq("roleId", role.id))
       .collect();
     const permissionKeys: string[] = [];
     for (const rolePermission of rolePermissions) {
       const permission = await ctx.db
         .query("permissions")
-        .withIndex("by_permission_id", (q) => q.eq("permissionId", rolePermission.permissionId))
+        .withIndex("by_permission_id", (q) => q.eq("id", rolePermission.permissionId))
         .unique();
       if (permission) permissionKeys.push(permission.key);
     }

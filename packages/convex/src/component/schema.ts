@@ -3,19 +3,24 @@ import { v } from "convex/values";
 
 // IAM projection mirror — v5 ReBAC storage.
 //
-// Eleven tables mirror the control-plane projection (each carries the
+// Thirteen tables mirror the control-plane projection (each carries the
 // `sourceVersion` it was last written at) plus two component-owned tables:
 //   • `resources` — the resource NODE graph the app writes (never projected);
 //     used to walk parent edges during a resource-scoped access check.
 //   • `sync_state` — single-row version/ack state for the signed sync channel.
 //
-// The model is allow-only: roles hold permissions (role_permissions), subjects
-// hold roles tenant-wide (role_assignments) or per-resource
-// (resource_role_assignments). There is no deny, no wildcard, no override.
+// The model is allow-only: roles hold permissions (role_permissions), and
+// subjects hold roles tenant-wide ({user,group}_role_assignments) or per-resource
+// ({user,group}_resource_role_assignments) — split by subject type. There is no
+// deny, no wildcard, no override.
+//
+// Id convention: each owning table stores its own control-plane id as `id` (the
+// value projected from the backend PK; distinct from Convex `_id`), looked up by
+// its `by_<entity>_id` index (e.g. by_tenant_id). Columns that REFERENCE another table keep the
+// qualified name (tenantId, roleId, membershipId, groupId, …). Junction tables
+// (role_permissions, group_memberships) have no own id — their identity is the
+// FK pair.
 
-const sourceValidator = v.union(v.literal("system"), v.literal("iam"));
-// Roles also allow a runtime-created `custom` source.
-const roleSourceValidator = v.union(v.literal("system"), v.literal("iam"), v.literal("custom"));
 const tenantStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
 const groupStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
 const accountEntryModeValidator = v.union(
@@ -31,7 +36,6 @@ const membershipStatusValidator = v.union(
   v.literal("pending_approval"),
   v.literal("removed"),
 );
-const subjectTypeValidator = v.union(v.literal("user"), v.literal("group"));
 
 export default defineSchema({
   // Single-row version/ack state for the signed sync channel.
@@ -44,8 +48,7 @@ export default defineSchema({
   }),
 
   tenants: defineTable({
-    tenantId: v.string(),
-    herculesAuthTenantId: v.string(),
+    id: v.string(),
     name: v.string(),
     isPrimaryTenant: v.boolean(),
     status: tenantStatusValidator,
@@ -54,85 +57,49 @@ export default defineSchema({
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_tenant_id", ["tenantId"])
-    .index("by_hercules_auth_tenant_id", ["herculesAuthTenantId"])
+    .index("by_tenant_id", ["id"])
     .index("by_primary", ["isPrimaryTenant"]),
 
-  roles: defineTable({
-    roleId: v.string(),
-    key: v.string(),
+  users: defineTable({
+    id: v.string(),
     name: v.string(),
-    description: v.union(v.string(), v.null()),
-    // Tenant scope: null = SHARED (usable in every tenant); a tenant id = the
-    // OWNING tenant of a tenant-scoped role (only usable in that tenant).
-    tenantId: v.union(v.string(), v.null()),
-    source: roleSourceValidator,
-    isRestricted: v.boolean(),
+    email: v.string(),
+    emailVerified: v.boolean(),
+    image: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    phoneVerified: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_role_id", ["roleId"])
-    .index("by_key", ["key"])
-    .index("by_tenant", ["tenantId"]),
+    .index("by_user_id", ["id"])
+    .index("by_email", ["email"]),
 
-  permissions: defineTable({
-    permissionId: v.string(),
-    key: v.string(),
-    resourceType: v.string(),
-    action: v.string(),
-    source: sourceValidator,
-    isRestricted: v.boolean(),
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  })
-    .index("by_permission_id", ["permissionId"])
-    .index("by_key", ["key"]),
-
-  // Identity is (roleId, permissionId).
-  role_permissions: defineTable({
-    roleId: v.string(),
-    permissionId: v.string(),
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  })
-    .index("by_role", ["roleId"])
-    .index("by_permission", ["permissionId"])
-    .index("by_role_permission", ["roleId", "permissionId"]),
-
-  resource_types: defineTable({
-    resourceTypeId: v.string(),
-    key: v.string(),
-    name: v.string(),
-    parentResourceTypeId: v.union(v.string(), v.null()),
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  })
-    .index("by_resource_type_id", ["resourceTypeId"])
-    .index("by_key", ["key"]),
-
-  memberships: defineTable({
-    membershipId: v.string(),
+  // A user's membership in a tenant.
+  tenant_memberships: defineTable({
+    id: v.string(),
     tenantId: v.string(),
-    herculesAuthUserId: v.string(),
+    // The end user's OIDC subject (their Hercules Auth user id).
+    userId: v.string(),
     status: membershipStatusValidator,
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_membership_id", ["membershipId"])
+    .index("by_membership_id", ["id"])
     .index("by_tenant", ["tenantId"])
     .index("by_tenant_status", ["tenantId", "status"])
-    .index("by_tenant_user", ["tenantId", "herculesAuthUserId"])
-    .index("by_auth_user", ["herculesAuthUserId"]),
+    .index("by_tenant_user", ["tenantId", "userId"])
+    .index("by_user", ["userId"]),
 
   groups: defineTable({
-    groupId: v.string(),
+    id: v.string(),
     tenantId: v.string(),
+    description: v.optional(v.string()),
     name: v.string(),
     status: groupStatusValidator,
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_group_id", ["groupId"])
+    .index("by_group_id", ["id"])
     .index("by_tenant", ["tenantId"]),
 
   // Identity is (groupId, membershipId).
@@ -145,71 +112,138 @@ export default defineSchema({
   })
     .index("by_group", ["groupId"])
     .index("by_membership", ["membershipId"])
-    .index("by_group_membership", ["groupId", "membershipId"])
+    .index("by_group_membership", ["groupId", "membershipId"]),
+
+  roles: defineTable({
+    id: v.string(),
+    key: v.string(),
+    name: v.string(),
+    description: v.union(v.string(), v.null()),
+    // Role scope (read together with isAppScope):
+    //   • tenantId = <id> → TENANT-SCOPED: usable only in that tenant (a role
+    //     created at runtime inside a tenant).
+    //   • tenantId = null → not tenant-owned; isAppScope splits it:
+    //       - isAppScope = false → SHARED: usable in every tenant (catalog role).
+    //       - isAppScope = true  → APP-SCOPED: app-wide authority, grantable only
+    //                              to primary-tenant members.
+    tenantId: v.union(v.string(), v.null()),
+    isAppScope: v.boolean(),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_role_id", ["id"])
+    .index("by_key", ["key"])
     .index("by_tenant", ["tenantId"]),
 
-  role_assignments: defineTable({
-    roleAssignmentId: v.string(),
-    tenantId: v.string(),
-    subjectType: subjectTypeValidator,
-    membershipId: v.optional(v.string()),
-    groupId: v.optional(v.string()),
-    roleId: v.string(),
-    expiresAt: v.optional(v.number()),
+  // `key` (`resourceType:action`) is the identity used by checks; the parsed
+  // resourceType/action halves live in the control plane and are not mirrored.
+  // All permissions are app-defined — there are no pre-defined/system permissions.
+  permissions: defineTable({
+    id: v.string(),
+    key: v.string(),
+    // App-scoped permission (vs tenant-scoped), mirroring the role-level scope.
+    isAppScope: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_assignment_id", ["roleAssignmentId"])
-    .index("by_tenant", ["tenantId"])
-    .index("by_membership", ["membershipId"])
-    .index("by_group", ["groupId"])
-    .index("by_role", ["roleId"]),
+    .index("by_permission_id", ["id"])
+    .index("by_key", ["key"]),
 
-  resource_role_assignments: defineTable({
-    resourceRoleAssignmentId: v.string(),
-    tenantId: v.string(),
-    subjectType: subjectTypeValidator,
-    membershipId: v.optional(v.string()),
-    groupId: v.optional(v.string()),
+  // Identity is (roleId, permissionId).
+  role_permissions: defineTable({
     roleId: v.string(),
-    resourceTypeId: v.string(),
-    externalId: v.string(),
-    expiresAt: v.optional(v.number()),
+    permissionId: v.string(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_assignment_id", ["resourceRoleAssignmentId"])
-    .index("by_tenant", ["tenantId"])
-    .index("by_membership", ["membershipId"])
-    .index("by_group", ["groupId"])
     .index("by_role", ["roleId"])
-    .index("by_resource_type", ["resourceTypeId"]),
+    .index("by_role_permission", ["roleId", "permissionId"]),
 
-  users: defineTable({
-    herculesAuthUserId: v.string(),
+  resource_types: defineTable({
+    id: v.string(),
+    key: v.string(),
     name: v.string(),
-    email: v.string(),
-    emailVerified: v.boolean(),
-    image: v.optional(v.string()),
-    phone: v.optional(v.string()),
-    phoneVerified: v.boolean(),
+    parentResourceTypeId: v.union(v.string(), v.null()),
     updatedAt: v.number(),
     sourceVersion: v.number(),
-  }).index("by_auth_user_id", ["herculesAuthUserId"]),
+  })
+    .index("by_resource_type_id", ["id"])
+    .index("by_key", ["key"]),
 
   // Component-owned resource NODE graph. NOT projected: the app writes these via
-  // resource.write and deletes them via resource.delete. `resourceType` and
-  // `parentResourceType` hold catalog resource-type KEYS (the same strings the
-  // app passes). The check walks parent edges upward to resolve ancestors.
+  // resource.write and deletes them via resource.delete. `resourceTypeId` points
+  // at a resource_types row; `externalId` is the app's own id for the resource;
+  // `parentId` points at the parent resource node's `id`. The check walks parent
+  // edges upward (via parentId) to resolve ancestors.
   resources: defineTable({
+    id: v.string(),
     tenantId: v.string(),
-    resourceType: v.string(),
+    resourceTypeId: v.string(),
     externalId: v.string(),
-    parentResourceType: v.optional(v.string()),
-    parentExternalId: v.optional(v.string()),
-    data: v.optional(v.any()),
+    parentId: v.optional(v.string()),
     updatedAt: v.number(),
   })
-    .index("by_resource", ["tenantId", "resourceType", "externalId"])
-    .index("by_parent", ["tenantId", "parentResourceType", "parentExternalId"]),
+    .index("by_resource_id", ["id"])
+    .index("by_resource", ["tenantId", "resourceTypeId", "externalId"])
+    .index("by_parent", ["parentId"]),
+
+  // A tenant membership holds a role tenant-wide.
+  user_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    membershipId: v.string(),
+    roleId: v.string(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_assignment_id", ["id"])
+    .index("by_membership", ["membershipId"])
+    .index("by_role_id", ["roleId"]),
+
+  // A group holds a role tenant-wide.
+  group_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    groupId: v.string(),
+    roleId: v.string(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_assignment_id", ["id"])
+    .index("by_group", ["groupId"])
+    .index("by_role_id", ["roleId"]),
+
+  // A tenant membership holds a role on a specific resource.
+  user_resource_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    membershipId: v.string(),
+    roleId: v.string(),
+    resourceTypeId: v.string(),
+    // The target resource's app-supplied external id (NOT this row's own id).
+    externalId: v.string(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_assignment_id", ["id"])
+    .index("by_membership", ["membershipId"]),
+
+  // A group holds a role on a specific resource.
+  group_resource_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    groupId: v.string(),
+    roleId: v.string(),
+    resourceTypeId: v.string(),
+    // The target resource's app-supplied external id (NOT this row's own id).
+    externalId: v.string(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_assignment_id", ["id"])
+    .index("by_group", ["groupId"]),
 });

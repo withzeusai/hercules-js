@@ -14,19 +14,19 @@ deny, no wildcard, and no permission override.
 ## Package entry points
 
 ```ts
-import { createIam, classifyIamError } from "@usehercules/convex";
+import { createAccess, classifyAccessError } from "@usehercules/convex";
 import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
-import { registerIamRoutes } from "@usehercules/convex/http";
+import { registerAccessRoutes } from "@usehercules/convex/http";
 import herculesComponent from "@usehercules/convex/convex.config"; // defineComponent("hercules")
 ```
 
-| Export path                         | Provides                                                     |
-| ----------------------------------- | ----------------------------------------------------------- |
-| `@usehercules/convex`               | `createIam`, `classifyIamError`, public types               |
-| `@usehercules/convex/iam-helpers`   | `createResourceCreatorBootstrapAction`                      |
-| `@usehercules/convex/http`          | `registerIamRoutes`                                         |
-| `@usehercules/convex/convex.config` | the `hercules` Convex component definition                  |
-| `hercules-convex-iam-check` (bin)   | static source checker (`hercules-convex-iam-check convex`)  |
+| Export path                         | Provides                                                   |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `@usehercules/convex`               | `createAccess`, `classifyAccessError`, public types        |
+| `@usehercules/convex/iam-helpers`   | `createResourceCreatorBootstrapAction`                     |
+| `@usehercules/convex/http`          | `registerAccessRoutes`                                     |
+| `@usehercules/convex/convex.config` | the `hercules` Convex component definition                 |
+| `hercules-convex-iam-check` (bin)   | static source checker (`hercules-convex-iam-check convex`) |
 
 ## User identity model
 
@@ -61,57 +61,78 @@ app.use(hercules, {
 export default app;
 ```
 
-Wire IAM once in `convex/iam.ts`, then re-export:
+Wire access control once in `convex/access.ts`, then re-export. This is the ONLY
+file that may import the raw Convex builders (`query` / `mutation` / `action`);
+everywhere else, define functions with `accessQuery` / `publicQuery` (etc.) so
+there is no unguarded escape hatch — the static checker enforces this.
 
 ```ts
-import { createIam } from "@usehercules/convex";
+import { createAccess } from "@usehercules/convex";
 import { components } from "./_generated/api";
 import { action, mutation, query } from "./_generated/server";
 
-export const iam = createIam({ query, mutation, action, components });
+export const access = createAccess({ query, mutation, action, components });
+// Re-export the builders you define functions with:
+export const {
+  accessQuery,
+  accessMutation,
+  accessAction,
+  publicQuery,
+  publicMutation,
+  publicAction,
+} = access;
 ```
 
-### `createIam(options)` parameters (`CreateIamOptions<DataModel>`)
+### `createAccess(options)` parameters (`CreateAccessOptions<DataModel>`)
 
-| Field           | Type                                | Req | Meaning                                          |
-| --------------- | ----------------------------------- | --- | ------------------------------------------------ |
-| `query`         | `QueryBuilder<DataModel, "public">` | yes | The generated `query` builder.                   |
-| `mutation`      | `MutationBuilder<…, "public">`      | yes | The generated `mutation` builder.                |
-| `action`        | `ActionBuilder<…, "public">`        | yes | The generated `action` builder.                  |
+| Field           | Type                                | Req | Meaning                                             |
+| --------------- | ----------------------------------- | --- | --------------------------------------------------- |
+| `query`         | `QueryBuilder<DataModel, "public">` | yes | The generated `query` builder.                      |
+| `mutation`      | `MutationBuilder<…, "public">`      | yes | The generated `mutation` builder.                   |
+| `action`        | `ActionBuilder<…, "public">`        | yes | The generated `action` builder.                     |
 | `components`    | `Record<string, unknown>`           | no  | The generated `components`; resolves the component. |
-| `component`     | `IamComponent`                      | no  | Explicit component, bypasses lookup.             |
-| `componentName` | `string`                            | no  | Component name (default `"hercules"`).           |
+| `component`     | `AccessComponent`                   | no  | Explicit component, bypasses lookup.                |
+| `componentName` | `string`                            | no  | Component name (default `"hercules"`).              |
 
-Returns `Iam<DataModel>` (below). Throws if the component cannot be resolved.
+Returns `Access<DataModel>` (below). Throws if the component cannot be resolved.
 
-## The `createIam` surface
+## The `createAccess` surface
 
 `tenant` defaults to the deployment's primary tenant everywhere it is optional;
 the primary-tenant id is resolved inside the component and never exposed.
 
 ### Function builders
 
+- `accessQuery` / `accessMutation` / `accessAction`: auth-aware. They require a
+  verified identity and throw
+  `ConvexError { code: "UNAUTHENTICATED", reasonCode: "missing_identity" }` when
+  absent. Add `{ permission, tenant?, resource? }` to the definition object to
+  also enforce a permission before the handler runs; on denial they throw
+  `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }`. **Use these
+  for almost every function.**
 - `publicQuery` / `publicMutation` / `publicAction`: the raw generated builders.
-  No authentication. Use for truly public endpoints.
-- `query` / `mutation` / `action`: auth-aware. They require a verified identity
-  and throw `ConvexError { code: "UNAUTHENTICATED", reasonCode: "missing_identity" }`
-  when absent. Add `{ permission, tenant?, resource? }` to the definition object
-  to also enforce a permission before the handler runs; on denial they throw
-  `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }`.
+  No authentication. Use ONLY for truly public endpoints.
+
+`permission` is a `PermissionRequirement` — a single key, or a set with explicit
+AND/OR semantics:
+
+- `"app.projects:read"` — hold this one permission.
+- `{ anyOf: ["a", "b"] }` — hold AT LEAST ONE (OR).
+- `{ allOf: ["a", "b"] }` — hold EVERY ONE (AND).
 
 ```ts
 import { v } from "convex/values";
-import { iam } from "./iam";
+import { accessQuery, accessMutation } from "./access";
 
-export const listProjects = iam.query({
+export const listProjects = accessQuery({
   permission: "app.projects:read",
   tenant: (_ctx, args) => args.tenantId, // string | (ctx,args)=>string; omit for primary
   args: { tenantId: v.string() },
   handler: async (ctx, args) => ctx.db.query("projects").collect(),
 });
 
-export const archiveProject = iam.mutation({
-  permission: "app.projects:archive",
+export const archiveProject = accessMutation({
+  permission: { allOf: ["app.projects:archive", "app.projects:write"] },
   resource: (_ctx, args) => ({ type: "app.projects", externalId: args.projectId }),
   args: { projectId: v.string() },
   handler: async (ctx, args) => {
@@ -126,17 +147,27 @@ the resource from trusted server data, not raw browser input.
 
 ### In-handler authorization
 
-- `iam.can(ctx, permission, { tenant?, resource? }?) => Promise<boolean>`
-- `iam.require(ctx, permission, { tenant?, resource? }?) => Promise<void>` —
+- `access.can(ctx, permission, { tenant?, resource? }?) => Promise<boolean>`
+- `access.require(ctx, permission, { tenant?, resource? }?) => Promise<void>` —
   throws `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }` on deny.
 
-Here `tenant` is the resolved tenant id `string`, and `resource` is
+`permission` accepts the same single-key or `{ anyOf }` / `{ allOf }` set as the
+builder option. `tenant` is the resolved tenant id `string`, and `resource` is
 `{ type, externalId }`. A resource-scoped check authorizes if the caller holds a
 role with the permission tenant-wide, OR on the resource, OR on any ancestor of
 the resource in the component resource graph.
 
+Reach for these only when the decision depends on data resolved inside the
+handler or affects part of the response (field-level visibility, a resource you
+must load first, a per-item check in a loop). For "this whole handler needs
+permission X," use the builder's `permission` option instead.
+
 ```ts
-if (!(await iam.can(ctx, "app.documents:read", { resource: { type: "app.documents", externalId: id } }))) {
+if (
+  !(await access.can(ctx, "app.documents:read", {
+    resource: { type: "app.documents", externalId: id },
+  }))
+) {
   return null;
 }
 ```
@@ -202,7 +233,7 @@ Whether the local mirror has reached a specific control-plane write. Pass
 
 ## Component function references (app-template integration contract)
 
-`createIam` calls these component functions (`components.hercules.*`). The app
+`createAccess` calls these component functions (`components.hercules.*`). The app
 rarely references them directly except where a helper requires a `FunctionReference`
 (for example the creator-bootstrap helper):
 
@@ -281,16 +312,38 @@ type IamTenantAccessStatusResult =
   | {
       kind: "fallback";
       reason:
-        | "identity_missing" | "identity_invalid" | "unexpected_issuer"
-        | "mirror_not_ready" | "tenant_missing" | "membership_missing";
+        | "identity_missing"
+        | "identity_invalid"
+        | "unexpected_issuer"
+        | "mirror_not_ready"
+        | "tenant_missing"
+        | "membership_missing";
       stateVersion?: number;
     };
 
 type TargetTenantSyncStatus =
   | { state: "syncing"; currentSourceVersion?: number; targetSourceVersion: number }
-  | { state: "ready"; currentSourceVersion: number; targetSourceVersion: number; tenantId: string; membershipId: string }
-  | { state: "denied"; reasonCode: string; currentSourceVersion: number; targetSourceVersion: number; tenantId?: string; membershipId?: string }
-  | { state: "failed"; reasonCode: string; currentSourceVersion?: number; targetSourceVersion: number };
+  | {
+      state: "ready";
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId: string;
+      membershipId: string;
+    }
+  | {
+      state: "denied";
+      reasonCode: string;
+      currentSourceVersion: number;
+      targetSourceVersion: number;
+      tenantId?: string;
+      membershipId?: string;
+    }
+  | {
+      state: "failed";
+      reasonCode: string;
+      currentSourceVersion?: number;
+      targetSourceVersion: number;
+    };
 
 // Pages: { tenants | users | groups | resources: T[]; nextCursor?: string }.
 ```
@@ -303,9 +356,9 @@ Create app-owned Convex actions for IAM writes and REST reads. Call the generate
 
 ## Error classification
 
-### `classifyIamError(error) => IamErrorClassification | null`
+### `classifyAccessError(error) => AccessErrorClassification | null`
 
-Classifies runtime IAM denials. Local `ConvexError ACCESS_DENIED` denials map to
+Classifies runtime access denials. Local `ConvexError ACCESS_DENIED` denials map to
 `admission` (membership status reason codes such as `membership_pending_approval`,
 `membership_blocked`, `membership_suspended`, `membership_removed`,
 `membership_missing`), `permission` (`permission_denied`), or `temporary`
@@ -314,7 +367,7 @@ Classifies runtime IAM denials. Local `ConvexError ACCESS_DENIED` denials map to
 
 ## Webhook routes
 
-### `registerIamRoutes(http, options)`
+### `registerAccessRoutes(http, options)`
 
 Registers the projection-sync webhook the control plane posts to. The route is a
 THIN transport: it forwards the raw request body and the standard-webhooks
@@ -329,12 +382,12 @@ signature.
 
 ```ts
 import { httpRouter } from "convex/server";
-import { registerIamRoutes } from "@usehercules/convex/http";
+import { registerAccessRoutes } from "@usehercules/convex/http";
 import { httpAction } from "./_generated/server";
 import { components } from "./_generated/api";
 
 const http = httpRouter();
-registerIamRoutes(http, { httpAction, components });
+registerAccessRoutes(http, { httpAction, components });
 export default http;
 ```
 

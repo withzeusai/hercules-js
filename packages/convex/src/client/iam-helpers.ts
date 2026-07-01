@@ -10,7 +10,7 @@ import type {
   GenericDataModel,
 } from "convex/server";
 import { ConvexError, v } from "convex/values";
-import type { IamTenantAccessStatusResult } from "./index.js";
+import type { TenantAccessStatusResult } from "./index.js";
 
 const DEFAULT_API_VERSION = "2025-12-09";
 const DEFAULT_API_KEY_ENV_VAR = "HERCULES_API_KEY";
@@ -88,7 +88,7 @@ type GetTenantAccessStatusReference = FunctionReference<
   "query",
   "public",
   { tokenIdentifier?: string },
-  IamTenantAccessStatusResult
+  TenantAccessStatusResult
 >;
 
 type ActivateResourceReference = FunctionReference<

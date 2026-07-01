@@ -1,4 +1,4 @@
-export type IamAdmissionStatus =
+export type AccessAdmissionStatus =
   | "pending_approval"
   | "blocked"
   | "suspended"
@@ -57,11 +57,11 @@ const IAM_PROBLEM_KIND_BY_CODE: Readonly<
   source_version_conflict: "synchronization",
 };
 
-export type IamErrorClassification =
+export type AccessErrorClassification =
   | {
       kind: "admission";
       reasonCode: string;
-      status: IamAdmissionStatus;
+      status: AccessAdmissionStatus;
       sourceVersion?: number;
     }
   | {
@@ -93,7 +93,7 @@ export type IamErrorClassification =
       details?: IamProblemDetails;
     };
 
-const ADMISSION_STATUS_BY_REASON: Readonly<Record<string, IamAdmissionStatus>> = {
+const ADMISSION_STATUS_BY_REASON: Readonly<Record<string, AccessAdmissionStatus>> = {
   membership_pending_approval: "pending_approval",
   membership_blocked: "blocked",
   membership_suspended: "suspended",
@@ -105,7 +105,7 @@ const ADMISSION_STATUS_BY_REASON: Readonly<Record<string, IamAdmissionStatus>> =
  * Classifies runtime IAM denials that applications can recover from or present
  * to users. Configuration and unknown failures return `null`.
  */
-export function classifyIamError(error: unknown): IamErrorClassification | null {
+export function classifyAccessError(error: unknown): AccessErrorClassification | null {
   const problem = getIamProblem(error);
   if (problem) {
     return classifyIamProblem(problem);
@@ -157,7 +157,7 @@ type IamProblemCandidate = {
 function classifyIamProblem({
   problem,
   containerStatus,
-}: IamProblemCandidate): IamErrorClassification {
+}: IamProblemCandidate): AccessErrorClassification {
   const code = problem.code as IamProblemCode;
   const status = getStatus(problem.status) ?? containerStatus;
   const details = isPlainRecord(problem.details) ? problem.details : undefined;

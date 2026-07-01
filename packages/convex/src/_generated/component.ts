@@ -33,8 +33,7 @@ type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  isSystemRole: boolean;
-  isRestricted: boolean;
+  isAppScope: boolean;
   tenantId: string | null;
 };
 
@@ -45,7 +44,6 @@ type DirectRoleAssignment = RoleSummary & {
 
 type TenantSummary = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   accessStatus: MembershipStatus;
@@ -55,7 +53,6 @@ type TenantSummary = {
 
 type TenantDetail = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   lifecycleStatus: "active" | "archived";
@@ -92,7 +89,6 @@ type ResourceNode = {
   type: string;
   externalId: string;
   parent?: ResourceRef;
-  data?: unknown;
 };
 
 type TenantAccessStatus =
@@ -288,7 +284,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     write: FunctionReference<
       "mutation",
       "public",
-      { tenantId?: string; type: string; externalId: string; parent?: ResourceRef; data?: unknown },
+      { tenantId?: string; type: string; externalId: string; parent?: ResourceRef },
       ResourceNode | null,
       Name
     >;

@@ -9,7 +9,7 @@ import {
   type ResourceCreatorBootstrapTarget,
   type ResourceCreatorBootstrapTenantPage,
 } from "./iam-helpers";
-import type { IamTenantAccessStatusResult } from "./index.js";
+import type { TenantAccessStatusResult } from "./index.js";
 
 const authenticatedAction = ((definition: unknown) => definition) as never;
 const getBootstrapTarget = "internal.projects.getBootstrapTarget" as unknown as FunctionReference<
@@ -86,7 +86,7 @@ function makeClient() {
 function makeCtx(options: {
   identity?: { tokenIdentifier?: string; subject?: string } | null;
   target?: unknown;
-  tenantAccessStatus?: IamTenantAccessStatusResult;
+  tenantAccessStatus?: TenantAccessStatusResult;
   tenantPages?: ResourceCreatorBootstrapTenantPage[];
 }) {
   const tenantPages = [...(options.tenantPages ?? [{ tenants: [] }])];

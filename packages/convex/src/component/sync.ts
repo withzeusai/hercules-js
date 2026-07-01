@@ -14,8 +14,10 @@ import {
   type AccessProjectionEvent,
   type AccessProjectionSnapshot,
   type AccessProjectionSyncPayload,
-  type ProjectionResourceRoleAssignment,
-  type ProjectionRoleAssignment,
+  type ProjectionGroupResourceRoleAssignment,
+  type ProjectionGroupRoleAssignment,
+  type ProjectionUserResourceRoleAssignment,
+  type ProjectionUserRoleAssignment,
   type SyncResponse,
 } from "../shared/sync";
 import schema from "./schema";
@@ -34,6 +36,8 @@ const action = actionGeneric as ActionBuilder<DataModel, "public">;
 // their own secret.
 const SYNC_SECRET_ENV_VAR = "HERCULES_SYNC_SECRET";
 
+type AssignmentSubject = "user" | "group";
+
 // Reference to the component-internal mirror apply. Only the verifying action
 // below invokes it; it is never exported in the component's public API.
 const applyProjectionReference = makeFunctionReference<
@@ -44,14 +48,27 @@ const applyProjectionReference = makeFunctionReference<
 
 // Exact-identity expiry mutations: scheduled at expiresAt so the reactive query
 // is invalidated when a time-bound assignment lapses. The runtime check also
-// fails closed on the timestamp, so a delayed schedule never over-grants.
+// fails closed on the timestamp, so a delayed schedule never over-grants. The
+// `subject` selects which split table (user_* vs group_*) the id lives in.
 const expireRoleAssignmentReference = makeFunctionReference<
   "mutation",
-  { roleAssignmentId: string; expiresAt: number; updatedAt: number; sourceVersion: number }
+  {
+    id: string;
+    subject: AssignmentSubject;
+    expiresAt: number;
+    updatedAt: number;
+    sourceVersion: number;
+  }
 >("sync:expireRoleAssignment");
 const expireResourceRoleAssignmentReference = makeFunctionReference<
   "mutation",
-  { resourceRoleAssignmentId: string; expiresAt: number; updatedAt: number; sourceVersion: number }
+  {
+    id: string;
+    subject: AssignmentSubject;
+    expiresAt: number;
+    updatedAt: number;
+    sourceVersion: number;
+  }
 >("sync:expireResourceRoleAssignment");
 
 // Convex transactions have document-count limits. Reject an oversized aggregate
@@ -64,11 +81,13 @@ const MIRROR_TABLES = [
   "permissions",
   "role_permissions",
   "resource_types",
-  "memberships",
+  "tenant_memberships",
   "groups",
   "group_memberships",
-  "role_assignments",
-  "resource_role_assignments",
+  "user_role_assignments",
+  "group_role_assignments",
+  "user_resource_role_assignments",
+  "group_resource_role_assignments",
   "users",
 ] as const;
 type MirrorTable = (typeof MIRROR_TABLES)[number];
@@ -91,8 +110,10 @@ const syncPayloadArgs = {
   memberships: v.optional(v.array(v.any())),
   groups: v.optional(v.array(v.any())),
   groupMemberships: v.optional(v.array(v.any())),
-  roleAssignments: v.optional(v.array(v.any())),
-  resourceRoleAssignments: v.optional(v.array(v.any())),
+  userRoleAssignments: v.optional(v.array(v.any())),
+  groupRoleAssignments: v.optional(v.array(v.any())),
+  userResourceRoleAssignments: v.optional(v.array(v.any())),
+  groupResourceRoleAssignments: v.optional(v.array(v.any())),
   users: v.optional(v.array(v.any())),
 };
 
@@ -250,6 +271,162 @@ export const applyProjection = internalMutation({
   },
 });
 
+// ── wire-row → mirror-row mappers ─────────────────────────────────────────────
+// Owning-entity wire rows carry their control-plane PK under a qualified name
+// (tenantId/roleId/…); the mirror stores it as the self-id column `id`. These
+// mappers rename that field and stamp the sourceVersion. Reference columns keep
+// their qualified names, so they pass through unchanged.
+function mapTenant(row: AccessProjectionSnapshot["tenants"][number], sourceVersion: number) {
+  return {
+    id: row.tenantId,
+    name: row.name,
+    isPrimaryTenant: row.isPrimaryTenant,
+    status: row.status,
+    accountEntryMode: row.accountEntryMode,
+    defaultRoleId: row.defaultRoleId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapRole(row: AccessProjectionSnapshot["roles"][number], sourceVersion: number) {
+  return {
+    id: row.roleId,
+    key: row.key,
+    name: row.name,
+    description: row.description,
+    tenantId: row.tenantId,
+    isAppScope: row.isAppScope,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapPermission(
+  row: AccessProjectionSnapshot["permissions"][number],
+  sourceVersion: number,
+) {
+  return {
+    id: row.permissionId,
+    key: row.key,
+    isAppScope: row.isAppScope,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapResourceType(
+  row: AccessProjectionSnapshot["resourceTypes"][number],
+  sourceVersion: number,
+) {
+  return {
+    id: row.resourceTypeId,
+    key: row.key,
+    name: row.name,
+    parentResourceTypeId: row.parentResourceTypeId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapMembership(
+  row: AccessProjectionSnapshot["memberships"][number],
+  sourceVersion: number,
+) {
+  return {
+    id: row.membershipId,
+    tenantId: row.tenantId,
+    userId: row.userId,
+    status: row.status,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapGroup(row: AccessProjectionSnapshot["groups"][number], sourceVersion: number) {
+  return {
+    id: row.groupId,
+    tenantId: row.tenantId,
+    name: row.name,
+    status: row.status,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.description === undefined ? {} : { description: row.description }),
+  };
+}
+
+function mapUser(row: AccessProjectionSnapshot["users"][number], sourceVersion: number) {
+  return {
+    id: row.userId,
+    name: row.name,
+    email: row.email,
+    emailVerified: row.emailVerified,
+    phoneVerified: row.phoneVerified,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.image === undefined ? {} : { image: row.image }),
+    ...(row.phone === undefined ? {} : { phone: row.phone }),
+  };
+}
+
+function mapUserRoleAssignment(row: ProjectionUserRoleAssignment, sourceVersion: number) {
+  return {
+    id: row.userRoleAssignmentId,
+    tenantId: row.tenantId,
+    membershipId: row.membershipId,
+    roleId: row.roleId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+function mapGroupRoleAssignment(row: ProjectionGroupRoleAssignment, sourceVersion: number) {
+  return {
+    id: row.groupRoleAssignmentId,
+    tenantId: row.tenantId,
+    groupId: row.groupId,
+    roleId: row.roleId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+function mapUserResourceRoleAssignment(
+  row: ProjectionUserResourceRoleAssignment,
+  sourceVersion: number,
+) {
+  return {
+    id: row.userResourceRoleAssignmentId,
+    tenantId: row.tenantId,
+    membershipId: row.membershipId,
+    roleId: row.roleId,
+    resourceTypeId: row.resourceTypeId,
+    externalId: row.externalId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+function mapGroupResourceRoleAssignment(
+  row: ProjectionGroupResourceRoleAssignment,
+  sourceVersion: number,
+) {
+  return {
+    id: row.groupResourceRoleAssignmentId,
+    tenantId: row.tenantId,
+    groupId: row.groupId,
+    roleId: row.roleId,
+    resourceTypeId: row.resourceTypeId,
+    externalId: row.externalId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
 // ── snapshot install (whole-aggregate, atomic) ───────────────────────────────
 async function replaceProjection(
   ctx: MutationCtx,
@@ -261,30 +438,74 @@ async function replaceProjection(
     await clearTable(ctx, table);
   }
 
-  for (const row of snapshot.tenants) await ctx.db.insert("tenants", { ...row, sourceVersion });
-  for (const row of snapshot.roles) await ctx.db.insert("roles", { ...row, sourceVersion });
+  for (const row of snapshot.tenants) await ctx.db.insert("tenants", mapTenant(row, sourceVersion));
+  for (const row of snapshot.roles) await ctx.db.insert("roles", mapRole(row, sourceVersion));
   for (const row of snapshot.permissions)
-    await ctx.db.insert("permissions", { ...row, sourceVersion });
+    await ctx.db.insert("permissions", mapPermission(row, sourceVersion));
   for (const row of snapshot.rolePermissions)
     await ctx.db.insert("role_permissions", { ...row, sourceVersion });
   for (const row of snapshot.resourceTypes)
-    await ctx.db.insert("resource_types", { ...row, sourceVersion });
+    await ctx.db.insert("resource_types", mapResourceType(row, sourceVersion));
   for (const row of snapshot.memberships)
-    await ctx.db.insert("memberships", { ...row, sourceVersion });
-  for (const row of snapshot.groups) await ctx.db.insert("groups", { ...row, sourceVersion });
+    await ctx.db.insert("tenant_memberships", mapMembership(row, sourceVersion));
+  for (const row of snapshot.groups) await ctx.db.insert("groups", mapGroup(row, sourceVersion));
   for (const row of snapshot.groupMemberships)
     await ctx.db.insert("group_memberships", { ...row, sourceVersion });
-  for (const row of snapshot.users) await ctx.db.insert("users", { ...row, sourceVersion });
+  for (const row of snapshot.users) await ctx.db.insert("users", mapUser(row, sourceVersion));
 
-  for (const assignment of snapshot.roleAssignments) {
-    if (assignment.expiresAt !== undefined && assignment.expiresAt <= now) continue;
-    await ctx.db.insert("role_assignments", { ...assignment, sourceVersion });
-    await scheduleRoleAssignmentExpiry(ctx, assignment, sourceVersion);
+  for (const row of snapshot.userRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert("user_role_assignments", mapUserRoleAssignment(row, sourceVersion));
+    await scheduleRoleAssignmentExpiry(
+      ctx,
+      "user",
+      row.userRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
   }
-  for (const assignment of snapshot.resourceRoleAssignments) {
-    if (assignment.expiresAt !== undefined && assignment.expiresAt <= now) continue;
-    await ctx.db.insert("resource_role_assignments", { ...assignment, sourceVersion });
-    await scheduleResourceRoleAssignmentExpiry(ctx, assignment, sourceVersion);
+  for (const row of snapshot.groupRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert("group_role_assignments", mapGroupRoleAssignment(row, sourceVersion));
+    await scheduleRoleAssignmentExpiry(
+      ctx,
+      "group",
+      row.groupRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
+  }
+  for (const row of snapshot.userResourceRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert(
+      "user_resource_role_assignments",
+      mapUserResourceRoleAssignment(row, sourceVersion),
+    );
+    await scheduleResourceRoleAssignmentExpiry(
+      ctx,
+      "user",
+      row.userResourceRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
+  }
+  for (const row of snapshot.groupResourceRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert(
+      "group_resource_role_assignments",
+      mapGroupResourceRoleAssignment(row, sourceVersion),
+    );
+    await scheduleResourceRoleAssignmentExpiry(
+      ctx,
+      "group",
+      row.groupResourceRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
   }
 }
 
@@ -314,12 +535,12 @@ async function applyUpsert(
   switch (change.entityType) {
     case "tenant": {
       const row = event.tenants.find((r) => r.tenantId === change.tenantId);
-      if (row) await upsertByIndex(ctx, "tenants", "by_tenant_id", "tenantId", row, sourceVersion);
+      if (row) await upsertByIndex(ctx, "tenants", "by_tenant_id", mapTenant(row, sourceVersion));
       return;
     }
     case "role": {
       const row = event.roles.find((r) => r.roleId === change.roleId);
-      if (row) await upsertByIndex(ctx, "roles", "by_role_id", "roleId", row, sourceVersion);
+      if (row) await upsertByIndex(ctx, "roles", "by_role_id", mapRole(row, sourceVersion));
       return;
     }
     case "permission": {
@@ -329,9 +550,7 @@ async function applyUpsert(
           ctx,
           "permissions",
           "by_permission_id",
-          "permissionId",
-          row,
-          sourceVersion,
+          mapPermission(row, sourceVersion),
         );
       return;
     }
@@ -357,9 +576,7 @@ async function applyUpsert(
           ctx,
           "resource_types",
           "by_resource_type_id",
-          "resourceTypeId",
-          row,
-          sourceVersion,
+          mapResourceType(row, sourceVersion),
         );
       return;
     }
@@ -368,17 +585,15 @@ async function applyUpsert(
       if (row)
         await upsertByIndex(
           ctx,
-          "memberships",
+          "tenant_memberships",
           "by_membership_id",
-          "membershipId",
-          row,
-          sourceVersion,
+          mapMembership(row, sourceVersion),
         );
       return;
     }
     case "group": {
       const row = event.groups.find((r) => r.groupId === change.groupId);
-      if (row) await upsertByIndex(ctx, "groups", "by_group_id", "groupId", row, sourceVersion);
+      if (row) await upsertByIndex(ctx, "groups", "by_group_id", mapGroup(row, sourceVersion));
       return;
     }
     case "group_membership": {
@@ -396,29 +611,85 @@ async function applyUpsert(
       else await ctx.db.insert("group_memberships", { ...row, sourceVersion });
       return;
     }
-    case "role_assignment": {
-      const row = event.roleAssignments.find((r) => r.roleAssignmentId === change.roleAssignmentId);
-      if (row) await upsertRoleAssignment(ctx, row, sourceVersion, now);
+    case "user_role_assignment": {
+      const row = event.userRoleAssignments.find(
+        (r) => r.userRoleAssignmentId === change.userRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "user_role_assignments",
+          "role",
+          "user",
+          row.userRoleAssignmentId,
+          mapUserRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
       return;
     }
-    case "resource_role_assignment": {
-      const row = event.resourceRoleAssignments.find(
-        (r) => r.resourceRoleAssignmentId === change.resourceRoleAssignmentId,
+    case "group_role_assignment": {
+      const row = event.groupRoleAssignments.find(
+        (r) => r.groupRoleAssignmentId === change.groupRoleAssignmentId,
       );
-      if (row) await upsertResourceRoleAssignment(ctx, row, sourceVersion, now);
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "group_role_assignments",
+          "role",
+          "group",
+          row.groupRoleAssignmentId,
+          mapGroupRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
+      return;
+    }
+    case "user_resource_role_assignment": {
+      const row = event.userResourceRoleAssignments.find(
+        (r) => r.userResourceRoleAssignmentId === change.userResourceRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "user_resource_role_assignments",
+          "resource",
+          "user",
+          row.userResourceRoleAssignmentId,
+          mapUserResourceRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
+      return;
+    }
+    case "group_resource_role_assignment": {
+      const row = event.groupResourceRoleAssignments.find(
+        (r) => r.groupResourceRoleAssignmentId === change.groupResourceRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "group_resource_role_assignments",
+          "resource",
+          "group",
+          row.groupResourceRoleAssignmentId,
+          mapGroupResourceRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
       return;
     }
     case "user": {
-      const row = event.users.find((r) => r.herculesAuthUserId === change.herculesAuthUserId);
-      if (row)
-        await upsertByIndex(
-          ctx,
-          "users",
-          "by_auth_user_id",
-          "herculesAuthUserId",
-          row,
-          sourceVersion,
-        );
+      const row = event.users.find((r) => r.userId === change.userId);
+      if (row) await upsertByIndex(ctx, "users", "by_user_id", mapUser(row, sourceVersion));
       return;
     }
   }
@@ -445,53 +716,62 @@ async function applyDelete(
       return deleteGroup(ctx, change.groupId);
     case "group_membership":
       return deleteGroupMembership(ctx, change.groupId, change.membershipId);
-    case "role_assignment":
+    case "user_role_assignment":
       return deleteByIndex(
         ctx,
-        "role_assignments",
+        "user_role_assignments",
         "by_assignment_id",
-        "roleAssignmentId",
-        change.roleAssignmentId,
+        "id",
+        change.userRoleAssignmentId,
       );
-    case "resource_role_assignment":
+    case "group_role_assignment":
       return deleteByIndex(
         ctx,
-        "resource_role_assignments",
+        "group_role_assignments",
         "by_assignment_id",
-        "resourceRoleAssignmentId",
-        change.resourceRoleAssignmentId,
+        "id",
+        change.groupRoleAssignmentId,
+      );
+    case "user_resource_role_assignment":
+      return deleteByIndex(
+        ctx,
+        "user_resource_role_assignments",
+        "by_assignment_id",
+        "id",
+        change.userResourceRoleAssignmentId,
+      );
+    case "group_resource_role_assignment":
+      return deleteByIndex(
+        ctx,
+        "group_resource_role_assignments",
+        "by_assignment_id",
+        "id",
+        change.groupResourceRoleAssignmentId,
       );
     case "user":
-      return deleteByIndex(
-        ctx,
-        "users",
-        "by_auth_user_id",
-        "herculesAuthUserId",
-        change.herculesAuthUserId,
-      );
+      return deleteByIndex(ctx, "users", "by_user_id", "id", change.userId);
   }
 }
 
 // ── generic upsert/delete by a single-column identity index ───────────────────
 // Dynamic table/index access defeats the per-table union types, so these
 // plumbing helpers operate on a type-erased db handle. The zod parse upstream
-// guarantees the row shapes match each table validator.
+// and the mappers above guarantee the row shapes match each table validator.
+// Owning-entity self-id lives in the `id` column (index by_<entity>_id on
+// ["id"]), so the mapped row is queried by its own `id`.
 async function upsertByIndex(
   ctx: MutationCtx,
   table: MirrorTable,
   index: string,
-  field: string,
-  row: Record<string, unknown>,
-  sourceVersion: number,
+  row: { id: string } & Record<string, unknown>,
 ): Promise<void> {
   const db = ctx.db as any;
   const existing = await db
     .query(table)
-    .withIndex(index, (q: any) => q.eq(field, row[field]))
+    .withIndex(index, (q: any) => q.eq("id", row.id))
     .unique();
-  const next = { ...row, sourceVersion };
-  if (existing) await db.replace(existing._id, next);
-  else await db.insert(table, next);
+  if (existing) await db.replace(existing._id, row);
+  else await db.insert(table, row);
 }
 
 async function deleteByIndex(
@@ -510,135 +790,139 @@ async function deleteByIndex(
 }
 
 // ── time-bound assignment upserts (with expiry scheduling) ────────────────────
-async function upsertRoleAssignment(
+// Assignment tables are split by subject, so the target table is chosen 1:1 by
+// the change entityType; the mapped row already carries the self-id as `id`.
+async function upsertAssignment(
   ctx: MutationCtx,
-  row: ProjectionRoleAssignment,
+  table: MirrorTable,
+  kind: "role" | "resource",
+  subject: AssignmentSubject,
+  id: string,
+  row: { id: string } & Record<string, unknown>,
+  expiresAt: number | undefined,
+  updatedAt: number,
   sourceVersion: number,
   now: number,
 ): Promise<void> {
-  const existing = await ctx.db
-    .query("role_assignments")
-    .withIndex("by_assignment_id", (q) => q.eq("roleAssignmentId", row.roleAssignmentId))
+  const db = ctx.db as any;
+  const existing = await db
+    .query(table)
+    .withIndex("by_assignment_id", (q: any) => q.eq("id", id))
     .unique();
-  if (row.expiresAt !== undefined && row.expiresAt <= now) {
-    if (existing) await ctx.db.delete(existing._id);
+  if (expiresAt !== undefined && expiresAt <= now) {
+    if (existing) await db.delete(existing._id);
     return;
   }
-  if (existing) await ctx.db.replace(existing._id, { ...row, sourceVersion });
-  else await ctx.db.insert("role_assignments", { ...row, sourceVersion });
-  await scheduleRoleAssignmentExpiry(ctx, row, sourceVersion);
-}
-
-async function upsertResourceRoleAssignment(
-  ctx: MutationCtx,
-  row: ProjectionResourceRoleAssignment,
-  sourceVersion: number,
-  now: number,
-): Promise<void> {
-  const existing = await ctx.db
-    .query("resource_role_assignments")
-    .withIndex("by_assignment_id", (q) =>
-      q.eq("resourceRoleAssignmentId", row.resourceRoleAssignmentId),
-    )
-    .unique();
-  if (row.expiresAt !== undefined && row.expiresAt <= now) {
-    if (existing) await ctx.db.delete(existing._id);
-    return;
+  if (existing) await db.replace(existing._id, row);
+  else await db.insert(table, row);
+  if (kind === "role") {
+    await scheduleRoleAssignmentExpiry(ctx, subject, id, expiresAt, updatedAt, sourceVersion);
+  } else {
+    await scheduleResourceRoleAssignmentExpiry(
+      ctx,
+      subject,
+      id,
+      expiresAt,
+      updatedAt,
+      sourceVersion,
+    );
   }
-  if (existing) await ctx.db.replace(existing._id, { ...row, sourceVersion });
-  else await ctx.db.insert("resource_role_assignments", { ...row, sourceVersion });
-  await scheduleResourceRoleAssignmentExpiry(ctx, row, sourceVersion);
 }
 
 async function scheduleRoleAssignmentExpiry(
   ctx: MutationCtx,
-  row: ProjectionRoleAssignment,
+  subject: AssignmentSubject,
+  id: string,
+  expiresAt: number | undefined,
+  updatedAt: number,
   sourceVersion: number,
 ): Promise<void> {
-  if (row.expiresAt === undefined) return;
-  await ctx.scheduler.runAt(row.expiresAt, expireRoleAssignmentReference, {
-    roleAssignmentId: row.roleAssignmentId,
-    expiresAt: row.expiresAt,
-    updatedAt: row.updatedAt,
+  if (expiresAt === undefined) return;
+  await ctx.scheduler.runAt(expiresAt, expireRoleAssignmentReference, {
+    id,
+    subject,
+    expiresAt,
+    updatedAt,
     sourceVersion,
   });
 }
 
 async function scheduleResourceRoleAssignmentExpiry(
   ctx: MutationCtx,
-  row: ProjectionResourceRoleAssignment,
+  subject: AssignmentSubject,
+  id: string,
+  expiresAt: number | undefined,
+  updatedAt: number,
   sourceVersion: number,
 ): Promise<void> {
-  if (row.expiresAt === undefined) return;
-  await ctx.scheduler.runAt(row.expiresAt, expireResourceRoleAssignmentReference, {
-    resourceRoleAssignmentId: row.resourceRoleAssignmentId,
-    expiresAt: row.expiresAt,
-    updatedAt: row.updatedAt,
+  if (expiresAt === undefined) return;
+  await ctx.scheduler.runAt(expiresAt, expireResourceRoleAssignmentReference, {
+    id,
+    subject,
+    expiresAt,
+    updatedAt,
     sourceVersion,
   });
 }
 
-// ── cascade deletes (control plane emits only the parent delete) ──────────────
+// ── cascade deletes ───────────────────────────────────────────────────────────
+// Only cascades backed by an index that EXISTS in the schema are performed here.
+// Child rows with no supporting index (role_permissions by permissionId,
+// resource-role assignments by roleId/resourceTypeId) are deleted by the control
+// plane emitting their own delete changes BEFORE the parent delete.
 async function deleteTenant(ctx: MutationCtx, tenantId: string): Promise<void> {
-  await deleteAllByIndex(ctx, "memberships", "by_tenant", (q) => q.eq("tenantId", tenantId));
-  await deleteAllByIndex(ctx, "groups", "by_tenant", (q) => q.eq("tenantId", tenantId));
-  await deleteAllByIndex(ctx, "group_memberships", "by_tenant", (q) => q.eq("tenantId", tenantId));
-  await deleteAllByIndex(ctx, "role_assignments", "by_tenant", (q) => q.eq("tenantId", tenantId));
-  await deleteAllByIndex(ctx, "resource_role_assignments", "by_tenant", (q) =>
-    q.eq("tenantId", tenantId),
-  );
-  await deleteByIndex(ctx, "tenants", "by_tenant_id", "tenantId", tenantId);
+  const memberships = await ctx.db
+    .query("tenant_memberships")
+    .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+    .collect();
+  for (const membership of memberships) await deleteMembership(ctx, membership.id);
+  const groups = await ctx.db
+    .query("groups")
+    .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+    .collect();
+  for (const group of groups) await deleteGroup(ctx, group.id);
+  await deleteByIndex(ctx, "tenants", "by_tenant_id", "id", tenantId);
 }
 
 async function deleteRole(ctx: MutationCtx, roleId: string): Promise<void> {
   await deleteAllByIndex(ctx, "role_permissions", "by_role", (q) => q.eq("roleId", roleId));
-  await deleteAllByIndex(ctx, "role_assignments", "by_role", (q) => q.eq("roleId", roleId));
-  await deleteAllByIndex(ctx, "resource_role_assignments", "by_role", (q) =>
+  await deleteAllByIndex(ctx, "user_role_assignments", "by_role_id", (q) => q.eq("roleId", roleId));
+  await deleteAllByIndex(ctx, "group_role_assignments", "by_role_id", (q) =>
     q.eq("roleId", roleId),
   );
-  await deleteByIndex(ctx, "roles", "by_role_id", "roleId", roleId);
+  await deleteByIndex(ctx, "roles", "by_role_id", "id", roleId);
 }
 
 async function deletePermission(ctx: MutationCtx, permissionId: string): Promise<void> {
-  await deleteAllByIndex(ctx, "role_permissions", "by_permission", (q) =>
-    q.eq("permissionId", permissionId),
-  );
-  await deleteByIndex(ctx, "permissions", "by_permission_id", "permissionId", permissionId);
+  await deleteByIndex(ctx, "permissions", "by_permission_id", "id", permissionId);
 }
 
 async function deleteResourceType(ctx: MutationCtx, resourceTypeId: string): Promise<void> {
-  await deleteAllByIndex(ctx, "resource_role_assignments", "by_resource_type", (q) =>
-    q.eq("resourceTypeId", resourceTypeId),
-  );
-  await deleteByIndex(
-    ctx,
-    "resource_types",
-    "by_resource_type_id",
-    "resourceTypeId",
-    resourceTypeId,
-  );
+  await deleteByIndex(ctx, "resource_types", "by_resource_type_id", "id", resourceTypeId);
 }
 
 async function deleteMembership(ctx: MutationCtx, membershipId: string): Promise<void> {
   await deleteAllByIndex(ctx, "group_memberships", "by_membership", (q) =>
     q.eq("membershipId", membershipId),
   );
-  await deleteAllByIndex(ctx, "role_assignments", "by_membership", (q) =>
+  await deleteAllByIndex(ctx, "user_role_assignments", "by_membership", (q) =>
     q.eq("membershipId", membershipId),
   );
-  await deleteAllByIndex(ctx, "resource_role_assignments", "by_membership", (q) =>
+  await deleteAllByIndex(ctx, "user_resource_role_assignments", "by_membership", (q) =>
     q.eq("membershipId", membershipId),
   );
-  await deleteByIndex(ctx, "memberships", "by_membership_id", "membershipId", membershipId);
+  await deleteByIndex(ctx, "tenant_memberships", "by_membership_id", "id", membershipId);
 }
 
 async function deleteGroup(ctx: MutationCtx, groupId: string): Promise<void> {
   await deleteAllByIndex(ctx, "group_memberships", "by_group", (q) => q.eq("groupId", groupId));
-  await deleteAllByIndex(ctx, "role_assignments", "by_group", (q) => q.eq("groupId", groupId));
-  await deleteAllByIndex(ctx, "resource_role_assignments", "by_group", (q) =>
+  await deleteAllByIndex(ctx, "group_role_assignments", "by_group", (q) =>
     q.eq("groupId", groupId),
   );
-  await deleteByIndex(ctx, "groups", "by_group_id", "groupId", groupId);
+  await deleteAllByIndex(ctx, "group_resource_role_assignments", "by_group", (q) =>
+    q.eq("groupId", groupId),
+  );
+  await deleteByIndex(ctx, "groups", "by_group_id", "id", groupId);
 }
 
 async function deleteGroupMembership(
@@ -695,23 +979,28 @@ function snapshotDocumentCount(snapshot: AccessProjectionSnapshot): number {
     snapshot.memberships.length +
     snapshot.groups.length +
     snapshot.groupMemberships.length +
-    snapshot.roleAssignments.length +
-    snapshot.resourceRoleAssignments.length +
+    snapshot.userRoleAssignments.length +
+    snapshot.groupRoleAssignments.length +
+    snapshot.userResourceRoleAssignments.length +
+    snapshot.groupResourceRoleAssignments.length +
     snapshot.users.length
   );
 }
 
 export const expireRoleAssignment = internalMutation({
   args: {
-    roleAssignmentId: v.string(),
+    id: v.string(),
+    subject: v.union(v.literal("user"), v.literal("group")),
     expiresAt: v.number(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   },
   handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("role_assignments")
-      .withIndex("by_assignment_id", (q) => q.eq("roleAssignmentId", args.roleAssignmentId))
+    const table = args.subject === "user" ? "user_role_assignments" : "group_role_assignments";
+    const db = ctx.db as any;
+    const row = await db
+      .query(table)
+      .withIndex("by_assignment_id", (q: any) => q.eq("id", args.id))
       .unique();
     if (
       !row ||
@@ -725,23 +1014,27 @@ export const expireRoleAssignment = internalMutation({
       await ctx.scheduler.runAt(args.expiresAt, expireRoleAssignmentReference, args);
       return;
     }
-    await ctx.db.delete(row._id);
+    await db.delete(row._id);
   },
 });
 
 export const expireResourceRoleAssignment = internalMutation({
   args: {
-    resourceRoleAssignmentId: v.string(),
+    id: v.string(),
+    subject: v.union(v.literal("user"), v.literal("group")),
     expiresAt: v.number(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   },
   handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("resource_role_assignments")
-      .withIndex("by_assignment_id", (q) =>
-        q.eq("resourceRoleAssignmentId", args.resourceRoleAssignmentId),
-      )
+    const table =
+      args.subject === "user"
+        ? "user_resource_role_assignments"
+        : "group_resource_role_assignments";
+    const db = ctx.db as any;
+    const row = await db
+      .query(table)
+      .withIndex("by_assignment_id", (q: any) => q.eq("id", args.id))
       .unique();
     if (
       !row ||
@@ -755,6 +1048,6 @@ export const expireResourceRoleAssignment = internalMutation({
       await ctx.scheduler.runAt(args.expiresAt, expireResourceRoleAssignmentReference, args);
       return;
     }
-    await ctx.db.delete(row._id);
+    await db.delete(row._id);
   },
 });

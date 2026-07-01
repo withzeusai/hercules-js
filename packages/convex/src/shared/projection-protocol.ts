@@ -1,26 +1,23 @@
-// Hercules IAM projection wire protocol — v5 (schemaVersion 5).
+// Hercules IAM projection wire protocol - v5 (schemaVersion 5).
 //
 // CONSUMER side. This module mirrors, as zod schemas, the producer-side source of
 // truth on the Hercules control plane. Shared golden fixtures prove the two agree.
 //
 // The model is a flat ReBAC projection. There is no per-scope nesting, no catalog
 // block, no wildcards, no effects, and no permission bindings. Every entity is a
-// row in one of eleven top-level arrays. Two payload kinds:
-//   • snapshot — bootstrap ("initialize") or destructive rebuild ("reset"). ONE
+// row in one of thirteen top-level arrays. Two payload kinds:
+//   • snapshot - bootstrap ("initialize") or destructive rebuild ("reset"). ONE
 //     aggregate, applied atomically.
-//   • event — normal delivery. A stored, complete, valid delta at an exact
+//   • event - normal delivery. A stored, complete, valid delta at an exact
 //     sourceVersion. Each `upsert` change ships exactly one row in its entity
 //     array; each `delete` change ships none.
+//
+// Assignments are split by subject: tenant-wide role assignments and per-resource
+// role assignments each split into a user variant (carries membershipId) and a
+// group variant (carries groupId). There is no subjectType discriminator.
 import { z } from "zod";
 
 // ── leaf enums ────────────────────────────────────────────────────────────────
-export const accessProjectionSourceSchema = z.enum(["system", "iam"]);
-export type AccessProjectionSource = z.infer<typeof accessProjectionSourceSchema>;
-
-// Roles add a runtime-created `custom` source (system/iam stay platform/catalog).
-export const accessProjectionRoleSourceSchema = z.enum(["system", "iam", "custom"]);
-export type AccessProjectionRoleSource = z.infer<typeof accessProjectionRoleSourceSchema>;
-
 export const accessProjectionTenantStatusSchema = z.enum(["active", "disabled"]);
 export type AccessProjectionTenantStatus = z.infer<typeof accessProjectionTenantStatusSchema>;
 
@@ -52,13 +49,9 @@ export type AccessProjectionMembershipStatus = z.infer<
   typeof accessProjectionMembershipStatusSchema
 >;
 
-export const accessProjectionSubjectTypeSchema = z.enum(["user", "group"]);
-export type AccessProjectionSubjectType = z.infer<typeof accessProjectionSubjectTypeSchema>;
-
 // ── entity rows ─────────────────────────────────────────────────────────────
 export const projectionTenantSchema = z.strictObject({
   tenantId: z.string().min(1),
-  herculesAuthTenantId: z.string().min(1),
   name: z.string().min(1),
   isPrimaryTenant: z.boolean(),
   status: accessProjectionTenantStatusSchema,
@@ -73,27 +66,29 @@ export const projectionRoleSchema = z.strictObject({
   key: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullable(),
-  // Tenant scope: null = SHARED (available in every tenant); a tenant id = the
-  // OWNING tenant of a tenant-scoped role. Required (always present) at v5.
+  // Tenant scope, read together with isAppScope:
+  //   • tenantId = <id>            → TENANT-SCOPED: usable only in that tenant.
+  //   • tenantId = null, isAppScope=false → SHARED: usable in every tenant.
+  //   • tenantId = null, isAppScope=true  → APP-SCOPED: app-wide authority,
+  //     grantable only to primary-tenant members.
   tenantId: z.string().min(1).nullable(),
-  source: accessProjectionRoleSourceSchema,
-  isRestricted: z.boolean(),
+  isAppScope: z.boolean(),
   updatedAt: z.number().int().nonnegative(),
 });
 export type ProjectionRole = z.infer<typeof projectionRoleSchema>;
 
 export const projectionPermissionSchema = z.strictObject({
   permissionId: z.string().min(1),
+  // `key` (`resourceType:action`) is the identity used by checks; the parsed
+  // resourceType/action halves live only in the control plane and are not sent.
   key: z.string().min(1),
-  resourceType: z.string().min(1),
-  action: z.string().min(1),
-  source: accessProjectionSourceSchema,
-  isRestricted: z.boolean(),
+  // App-scoped permission (vs tenant-scoped), mirroring the role-level scope.
+  isAppScope: z.boolean(),
   updatedAt: z.number().int().nonnegative(),
 });
 export type ProjectionPermission = z.infer<typeof projectionPermissionSchema>;
 
-// Identity is (roleId, permissionId). No effect — this is an allow-only model.
+// Identity is (roleId, permissionId). No effect - this is an allow-only model.
 export const projectionRolePermissionSchema = z.strictObject({
   roleId: z.string().min(1),
   permissionId: z.string().min(1),
@@ -113,7 +108,8 @@ export type ProjectionResourceType = z.infer<typeof projectionResourceTypeSchema
 export const projectionMembershipSchema = z.strictObject({
   membershipId: z.string().min(1),
   tenantId: z.string().min(1),
-  herculesAuthUserId: z.string().min(1),
+  // The end user's OIDC subject (their Hercules Auth user id).
+  userId: z.string().min(1),
   status: accessProjectionMembershipStatusSchema,
   updatedAt: z.number().int().nonnegative(),
 });
@@ -122,6 +118,7 @@ export type ProjectionMembership = z.infer<typeof projectionMembershipSchema>;
 export const projectionGroupSchema = z.strictObject({
   groupId: z.string().min(1),
   tenantId: z.string().min(1),
+  description: z.string().optional(),
   name: z.string().min(1),
   status: accessProjectionGroupStatusSchema,
   updatedAt: z.number().int().nonnegative(),
@@ -137,83 +134,62 @@ export const projectionGroupMembershipSchema = z.strictObject({
 });
 export type ProjectionGroupMembership = z.infer<typeof projectionGroupMembershipSchema>;
 
-// Tenant-wide role assignment. Exactly one subject: a user subject carries
-// membershipId (and no groupId); a group subject carries groupId (and no
-// membershipId).
-function assertExactlyOneAssignmentSubject(
-  assignment: { subjectType: AccessProjectionSubjectType; membershipId?: string; groupId?: string },
-  ctx: z.RefinementCtx,
-): void {
-  if (assignment.subjectType === "user") {
-    if (assignment.membershipId === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["membershipId"],
-        message: "A user subject assignment requires a membershipId",
-      });
-    }
-    if (assignment.groupId !== undefined) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["groupId"],
-        message: "A user subject assignment must not carry a groupId",
-      });
-    }
-    return;
-  }
-  if (assignment.groupId === undefined) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["groupId"],
-      message: "A group subject assignment requires a groupId",
-    });
-  }
-  if (assignment.membershipId !== undefined) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["membershipId"],
-      message: "A group subject assignment must not carry a membershipId",
-    });
-  }
-}
+// Tenant-wide role assignment held by a user (membership) subject.
+export const projectionUserRoleAssignmentSchema = z.strictObject({
+  userRoleAssignmentId: z.string().min(1),
+  tenantId: z.string().min(1),
+  membershipId: z.string().min(1),
+  roleId: z.string().min(1),
+  expiresAt: z.number().int().nonnegative().optional(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type ProjectionUserRoleAssignment = z.infer<typeof projectionUserRoleAssignmentSchema>;
 
-export const projectionRoleAssignmentSchema = z
-  .strictObject({
-    roleAssignmentId: z.string().min(1),
-    tenantId: z.string().min(1),
-    subjectType: accessProjectionSubjectTypeSchema,
-    membershipId: z.string().min(1).optional(),
-    groupId: z.string().min(1).optional(),
-    roleId: z.string().min(1),
-    expiresAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative(),
-  })
-  .superRefine(assertExactlyOneAssignmentSubject);
-export type ProjectionRoleAssignment = z.infer<typeof projectionRoleAssignmentSchema>;
+// Tenant-wide role assignment held by a group subject.
+export const projectionGroupRoleAssignmentSchema = z.strictObject({
+  groupRoleAssignmentId: z.string().min(1),
+  tenantId: z.string().min(1),
+  groupId: z.string().min(1),
+  roleId: z.string().min(1),
+  expiresAt: z.number().int().nonnegative().optional(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type ProjectionGroupRoleAssignment = z.infer<typeof projectionGroupRoleAssignmentSchema>;
 
-// Per-resource role assignment. Same subject rule. The (resourceTypeId,
-// externalId) pair names the resource node; cascade to descendants is inherent
-// in the check (it walks the resource graph upward).
-export const projectionResourceRoleAssignmentSchema = z
-  .strictObject({
-    resourceRoleAssignmentId: z.string().min(1),
-    tenantId: z.string().min(1),
-    subjectType: accessProjectionSubjectTypeSchema,
-    membershipId: z.string().min(1).optional(),
-    groupId: z.string().min(1).optional(),
-    roleId: z.string().min(1),
-    resourceTypeId: z.string().min(1),
-    externalId: z.string().min(1),
-    expiresAt: z.number().int().nonnegative().optional(),
-    updatedAt: z.number().int().nonnegative(),
-  })
-  .superRefine(assertExactlyOneAssignmentSubject);
-export type ProjectionResourceRoleAssignment = z.infer<
-  typeof projectionResourceRoleAssignmentSchema
+// Per-resource role assignment held by a user (membership) subject. The
+// (resourceTypeId, externalId) pair names the resource node; cascade to
+// descendants is inherent in the check (it walks the resource graph upward).
+export const projectionUserResourceRoleAssignmentSchema = z.strictObject({
+  userResourceRoleAssignmentId: z.string().min(1),
+  tenantId: z.string().min(1),
+  membershipId: z.string().min(1),
+  roleId: z.string().min(1),
+  resourceTypeId: z.string().min(1),
+  externalId: z.string().min(1),
+  expiresAt: z.number().int().nonnegative().optional(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type ProjectionUserResourceRoleAssignment = z.infer<
+  typeof projectionUserResourceRoleAssignmentSchema
+>;
+
+// Per-resource role assignment held by a group subject.
+export const projectionGroupResourceRoleAssignmentSchema = z.strictObject({
+  groupResourceRoleAssignmentId: z.string().min(1),
+  tenantId: z.string().min(1),
+  groupId: z.string().min(1),
+  roleId: z.string().min(1),
+  resourceTypeId: z.string().min(1),
+  externalId: z.string().min(1),
+  expiresAt: z.number().int().nonnegative().optional(),
+  updatedAt: z.number().int().nonnegative(),
+});
+export type ProjectionGroupResourceRoleAssignment = z.infer<
+  typeof projectionGroupResourceRoleAssignmentSchema
 >;
 
 export const projectionUserSchema = z.strictObject({
-  herculesAuthUserId: z.string().min(1),
+  userId: z.string().min(1),
   name: z.string(),
   email: z.string().min(1),
   emailVerified: z.boolean(),
@@ -270,19 +246,29 @@ export const projectionGroupMembershipChangeSchema = z.strictObject({
   membershipId: z.string().min(1),
   operation: projectionChangeOperationSchema,
 });
-export const projectionRoleAssignmentChangeSchema = z.strictObject({
-  entityType: z.literal("role_assignment"),
-  roleAssignmentId: z.string().min(1),
+export const projectionUserRoleAssignmentChangeSchema = z.strictObject({
+  entityType: z.literal("user_role_assignment"),
+  userRoleAssignmentId: z.string().min(1),
   operation: projectionChangeOperationSchema,
 });
-export const projectionResourceRoleAssignmentChangeSchema = z.strictObject({
-  entityType: z.literal("resource_role_assignment"),
-  resourceRoleAssignmentId: z.string().min(1),
+export const projectionGroupRoleAssignmentChangeSchema = z.strictObject({
+  entityType: z.literal("group_role_assignment"),
+  groupRoleAssignmentId: z.string().min(1),
+  operation: projectionChangeOperationSchema,
+});
+export const projectionUserResourceRoleAssignmentChangeSchema = z.strictObject({
+  entityType: z.literal("user_resource_role_assignment"),
+  userResourceRoleAssignmentId: z.string().min(1),
+  operation: projectionChangeOperationSchema,
+});
+export const projectionGroupResourceRoleAssignmentChangeSchema = z.strictObject({
+  entityType: z.literal("group_resource_role_assignment"),
+  groupResourceRoleAssignmentId: z.string().min(1),
   operation: projectionChangeOperationSchema,
 });
 export const projectionUserChangeSchema = z.strictObject({
   entityType: z.literal("user"),
-  herculesAuthUserId: z.string().min(1),
+  userId: z.string().min(1),
   operation: projectionChangeOperationSchema,
 });
 
@@ -295,14 +281,16 @@ export const projectionChangeSchema = z.discriminatedUnion("entityType", [
   projectionMembershipChangeSchema,
   projectionGroupChangeSchema,
   projectionGroupMembershipChangeSchema,
-  projectionRoleAssignmentChangeSchema,
-  projectionResourceRoleAssignmentChangeSchema,
+  projectionUserRoleAssignmentChangeSchema,
+  projectionGroupRoleAssignmentChangeSchema,
+  projectionUserResourceRoleAssignmentChangeSchema,
+  projectionGroupResourceRoleAssignmentChangeSchema,
   projectionUserChangeSchema,
 ]);
 export type ProjectionChange = z.infer<typeof projectionChangeSchema>;
 export type ProjectionEntityType = ProjectionChange["entityType"];
 
-// ── the eleven entity arrays carried by both payload kinds ────────────────────
+// ── the thirteen entity arrays carried by both payload kinds ──────────────────
 const entityArrays = {
   tenants: z.array(projectionTenantSchema),
   roles: z.array(projectionRoleSchema),
@@ -312,8 +300,10 @@ const entityArrays = {
   memberships: z.array(projectionMembershipSchema),
   groups: z.array(projectionGroupSchema),
   groupMemberships: z.array(projectionGroupMembershipSchema),
-  roleAssignments: z.array(projectionRoleAssignmentSchema),
-  resourceRoleAssignments: z.array(projectionResourceRoleAssignmentSchema),
+  userRoleAssignments: z.array(projectionUserRoleAssignmentSchema),
+  groupRoleAssignments: z.array(projectionGroupRoleAssignmentSchema),
+  userResourceRoleAssignments: z.array(projectionUserResourceRoleAssignmentSchema),
+  groupResourceRoleAssignments: z.array(projectionGroupResourceRoleAssignmentSchema),
   users: z.array(projectionUserSchema),
 } as const;
 
@@ -396,12 +386,16 @@ function changeKey(change: ProjectionChange): string {
       return `group:${change.groupId}`;
     case "group_membership":
       return `group_membership:${change.groupId}/${change.membershipId}`;
-    case "role_assignment":
-      return `role_assignment:${change.roleAssignmentId}`;
-    case "resource_role_assignment":
-      return `resource_role_assignment:${change.resourceRoleAssignmentId}`;
+    case "user_role_assignment":
+      return `user_role_assignment:${change.userRoleAssignmentId}`;
+    case "group_role_assignment":
+      return `group_role_assignment:${change.groupRoleAssignmentId}`;
+    case "user_resource_role_assignment":
+      return `user_resource_role_assignment:${change.userResourceRoleAssignmentId}`;
+    case "group_resource_role_assignment":
+      return `group_resource_role_assignment:${change.groupResourceRoleAssignmentId}`;
     case "user":
-      return `user:${change.herculesAuthUserId}`;
+      return `user:${change.userId}`;
   }
 }
 
@@ -428,15 +422,23 @@ function countEventRows(event: AccessProjectionEvent, change: ProjectionChange):
       return event.groupMemberships.filter(
         (row) => row.groupId === change.groupId && row.membershipId === change.membershipId,
       ).length;
-    case "role_assignment":
-      return event.roleAssignments.filter((row) => row.roleAssignmentId === change.roleAssignmentId)
-        .length;
-    case "resource_role_assignment":
-      return event.resourceRoleAssignments.filter(
-        (row) => row.resourceRoleAssignmentId === change.resourceRoleAssignmentId,
+    case "user_role_assignment":
+      return event.userRoleAssignments.filter(
+        (row) => row.userRoleAssignmentId === change.userRoleAssignmentId,
+      ).length;
+    case "group_role_assignment":
+      return event.groupRoleAssignments.filter(
+        (row) => row.groupRoleAssignmentId === change.groupRoleAssignmentId,
+      ).length;
+    case "user_resource_role_assignment":
+      return event.userResourceRoleAssignments.filter(
+        (row) => row.userResourceRoleAssignmentId === change.userResourceRoleAssignmentId,
+      ).length;
+    case "group_resource_role_assignment":
+      return event.groupResourceRoleAssignments.filter(
+        (row) => row.groupResourceRoleAssignmentId === change.groupResourceRoleAssignmentId,
       ).length;
     case "user":
-      return event.users.filter((row) => row.herculesAuthUserId === change.herculesAuthUserId)
-        .length;
+      return event.users.filter((row) => row.userId === change.userId).length;
   }
 }

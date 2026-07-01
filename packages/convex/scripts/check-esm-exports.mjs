@@ -1,7 +1,8 @@
 const publicExports = [
-  ["@usehercules/convex", "createIam"],
+  ["@usehercules/convex", "createAccess"],
+  ["@usehercules/convex", "classifyAccessError"],
   ["@usehercules/convex/iam-helpers", "createResourceCreatorBootstrapAction"],
-  ["@usehercules/convex/http", "registerIamRoutes"],
+  ["@usehercules/convex/http", "registerAccessRoutes"],
 ];
 
 for (const [specifier, exportName] of publicExports) {

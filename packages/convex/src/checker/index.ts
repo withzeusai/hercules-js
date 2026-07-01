@@ -12,20 +12,32 @@ import * as ts from "typescript";
 // runtime ReBAC engine, it only checks that the permission and resource-type
 // STRING LITERALS the code references are declared in the catalog.
 //
-// What it scans in the new createIam surface:
-//   - The `permission` option on the auth-aware builders
-//     query/mutation/action (any builder definition object with a handler).
-//   - The permission argument to iam.can(ctx, "app.x:y", ...) and
-//     iam.require(ctx, "app.x:y", ...).
+// What it scans in the createAccess surface:
+//   - The `permission` option on the auth-aware builders accessQuery /
+//     accessMutation / accessAction (any builder definition object with a
+//     handler). The value may be a single key OR an { anyOf: [...] } /
+//     { allOf: [...] } set; every string literal in the set is validated.
+//   - The permission argument to access.can(ctx, "app.x:y", ...) and
+//     access.require(ctx, ...) — also single key or anyOf/allOf set.
 //   - Resource-type literals in resource refs: the `resource` option, the args
 //     to resource.write / resource.get / resource.list, and nested `parent`
 //     refs (any { type: "app.x", externalId | parent }).
+//
+// It also enforces that raw Convex builders (query / mutation / action from
+// `_generated/server`) are NOT imported into app code: every function must be
+// defined with accessQuery/publicQuery (etc.) so there is no unguarded escape
+// hatch. Only the wiring file that calls createAccess may import the raw
+// builders (to pass them in).
 //
 // Dynamic (non-literal) permission and resource values are skipped: the checker
 // cannot resolve them statically, and the runtime engine validates them.
 
 export type IamCheckFinding = {
-  code: "convex_dir_missing" | "undeclared_permission" | "undeclared_resource_type";
+  code:
+    | "convex_dir_missing"
+    | "undeclared_permission"
+    | "undeclared_resource_type"
+    | "raw_builder_import";
   severity: "error";
   filePath: string;
   line: number;
@@ -48,30 +60,6 @@ export type CheckIamSourceOptions = {
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const ignoredDirectories = new Set(["_generated", "node_modules", "dist", "build", ".git"]);
-
-// The complete set of platform (`system.*`) permission keys Hercules seeds for
-// every app. They are provided by the platform and never declared in an app's
-// iam.jsonc, so the checker accepts exactly these and reports any other
-// `system.*` literal as an undeclared permission. Matching by an exact set
-// (rather than by grammar) catches typos like `system.access.tenants:raed`,
-// which would otherwise pass the build and only fail at runtime.
-//
-// This list MUST mirror backend-shared SEEDED_SYSTEM_PERMISSION_CATALOG.
-const SEEDED_SYSTEM_PERMISSIONS = new Set<string>([
-  "system.access.tenants:manage",
-  "system.access.impersonation:manage",
-  "system.access.users:read",
-  "system.access.users:manage",
-  "system.access.groups:read",
-  "system.access.groups:manage",
-  "system.access.roles:read",
-  "system.access.assignments:manage",
-  "system.access.invitations:manage",
-  "system.access.invitations:read",
-  "system.access.admission:manage",
-  "system.access.admission:read",
-  "system.access.audit:read",
-]);
 
 export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckResult {
   const cwd = resolve(options.cwd ?? process.cwd());
@@ -187,13 +175,12 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
   const validatePermission = (literal: { value: string; node: ts.Node }): void => {
     if (catalog.permissionKeys === null) return;
     if (catalog.permissionKeys.has(literal.value)) return;
-    if (SEEDED_SYSTEM_PERMISSIONS.has(literal.value)) return;
     findings.push(
       finding(cwd, sourceFile, literal.node, {
         code: "undeclared_permission",
         message: `Permission "${literal.value}" is not declared in hercules/iam.jsonc.`,
         suggestion:
-          'Declare it under "permissions" as an app.<type>:<action> key, or reference an existing catalog or system.* permission.',
+          'Declare it under "permissions" as an app.<type>:<action> key, or fix it to match a declared permission.',
       }),
     );
   };
@@ -216,10 +203,12 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
 
   const visit = (node: ts.Node): void => {
     if (ts.isObjectLiteralExpression(node)) {
-      // Builder definition: { permission: "app.x:y", ..., handler }.
+      // Builder definition: { permission, ..., handler }. `permission` is a
+      // single key or an { anyOf } / { allOf } set.
       if (hasProperty(node, "handler")) {
-        const permission = getStringProperty(node, "permission");
-        if (permission) validatePermission(permission);
+        for (const literal of getPermissionLiterals(node, "permission")) {
+          validatePermission(literal);
+        }
       }
       // Resource ref / selector: any { type: "app.x", ... } object. These are
       // the `resource` option, nested `parent` refs, and the resource.write /
@@ -234,20 +223,20 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
         validateResourceType(type);
         // resource.get / resource.list may filter by a permission, which is a
         // permission reference too.
-        const permission = getStringProperty(node, "permission");
-        if (permission) validatePermission(permission);
+        for (const literal of getPermissionLiterals(node, "permission")) {
+          validatePermission(literal);
+        }
       }
     } else if (ts.isCallExpression(node)) {
-      // iam.can(ctx, "app.x:y", ...) / iam.require(ctx, "app.x:y", ...).
-      const callee = unwrapExpression(node.expression);
-      if (
-        ts.isPropertyAccessExpression(callee) &&
-        (callee.name.text === "can" || callee.name.text === "require") &&
-        isIamReceiver(callee.expression)
-      ) {
-        const permissionArg = node.arguments[1] && unwrapExpression(node.arguments[1]);
-        if (permissionArg && ts.isStringLiteralLike(permissionArg)) {
-          validatePermission({ value: permissionArg.text, node: permissionArg });
+      // access.can(ctx, perm, ...) / access.require(ctx, perm, ...), including the
+      // destructured bare `can(...)` / `require(...)` forms. `perm` is a single
+      // key or an { anyOf } / { allOf } set.
+      if (isAccessCheckCall(node)) {
+        const permissionArg = node.arguments[1];
+        if (permissionArg) {
+          for (const literal of collectPermissionLiterals(permissionArg)) {
+            validatePermission(literal);
+          }
         }
       }
     }
@@ -255,16 +244,81 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
   };
 
   visit(sourceFile);
+  findings.push(...checkRawBuilderImports(cwd, sourceFile));
   return findings;
 }
 
-// The object before `.can` / `.require` is the destructured `iam` helper (or a
-// member access ending in `iam`, e.g. `hercules.iam`).
-function isIamReceiver(expression: ts.Expression): boolean {
-  const target = unwrapExpression(expression);
-  if (ts.isIdentifier(target)) return target.text === "iam";
-  if (ts.isPropertyAccessExpression(target)) return target.name.text === "iam";
+// A call to the in-handler checks: `access.can` / `access.require` (member
+// access on the wired `access` object) or the destructured bare `can` /
+// `require` identifiers.
+function isAccessCheckCall(node: ts.CallExpression): boolean {
+  const callee = unwrapExpression(node.expression);
+  if (ts.isPropertyAccessExpression(callee)) {
+    return (
+      (callee.name.text === "can" || callee.name.text === "require") &&
+      isAccessReceiver(callee.expression)
+    );
+  }
+  if (ts.isIdentifier(callee)) {
+    return callee.text === "can" || callee.text === "require";
+  }
   return false;
+}
+
+function isAccessReceiver(expression: ts.Expression): boolean {
+  const target = unwrapExpression(expression);
+  if (ts.isIdentifier(target)) return target.text === "access";
+  if (ts.isPropertyAccessExpression(target)) return target.name.text === "access";
+  return false;
+}
+
+// The raw Convex builders may only be imported by the wiring file (the one that
+// calls createAccess). Anywhere else, app code must use accessQuery/publicQuery
+// (etc.) so there is no unguarded function-definition escape hatch.
+const RAW_BUILDER_IMPORTS: ReadonlySet<string> = new Set(["query", "mutation", "action"]);
+
+function checkRawBuilderImports(cwd: string, sourceFile: ts.SourceFile): IamCheckFinding[] {
+  if (fileCallsCreateAccess(sourceFile)) return [];
+  const findings: IamCheckFinding[] = [];
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const moduleSpecifier = statement.moduleSpecifier;
+    if (!ts.isStringLiteralLike(moduleSpecifier)) continue;
+    if (!moduleSpecifier.text.split("\\").join("/").endsWith("_generated/server")) continue;
+    const namedBindings = statement.importClause?.namedBindings;
+    if (namedBindings === undefined || !ts.isNamedImports(namedBindings)) continue;
+    for (const element of namedBindings.elements) {
+      // propertyName is the original import name when aliased (`query as q`).
+      const importedName = (element.propertyName ?? element.name).text;
+      if (!RAW_BUILDER_IMPORTS.has(importedName)) continue;
+      findings.push(
+        finding(cwd, sourceFile, element, {
+          code: "raw_builder_import",
+          message: `Raw Convex builder "${importedName}" is imported from _generated/server outside the access wiring file.`,
+          suggestion:
+            "Define functions with accessQuery/accessMutation/accessAction (auth-enforced) or publicQuery/publicMutation/publicAction. Only the file that calls createAccess (convex/access.ts) may import the raw builders.",
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+function fileCallsCreateAccess(sourceFile: ts.SourceFile): boolean {
+  let found = false;
+  const walk = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapExpression(node.expression);
+      if (ts.isIdentifier(callee) && callee.text === "createAccess") {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(sourceFile);
+  return found;
 }
 
 function hasProperty(object: ts.ObjectLiteralExpression, propertyName: string): boolean {
@@ -290,6 +344,55 @@ function getStringProperty(
     const initializer = unwrapExpression(property.initializer);
     if (ts.isStringLiteralLike(initializer)) {
       return { value: initializer.text, node: initializer };
+    }
+  }
+  return null;
+}
+
+// Extracts every permission string literal from a `permission` property: the
+// single-key form, plus each literal inside an { anyOf: [...] } / { allOf: [...] }
+// set. Dynamic (non-literal) entries are skipped.
+function getPermissionLiterals(
+  object: ts.ObjectLiteralExpression,
+  propertyName: string,
+): { value: string; node: ts.Node }[] {
+  const initializer = getPropertyInitializer(object, propertyName);
+  return initializer ? collectPermissionLiterals(initializer) : [];
+}
+
+function collectPermissionLiterals(expression: ts.Expression): { value: string; node: ts.Node }[] {
+  const node = unwrapExpression(expression);
+  if (ts.isStringLiteralLike(node)) {
+    return [{ value: node.text, node }];
+  }
+  if (ts.isObjectLiteralExpression(node)) {
+    const literals: { value: string; node: ts.Node }[] = [];
+    for (const setKey of ["anyOf", "allOf"] as const) {
+      const initializer = getPropertyInitializer(node, setKey);
+      if (initializer && ts.isArrayLiteralExpression(initializer)) {
+        for (const element of initializer.elements) {
+          const unwrapped = unwrapExpression(element);
+          if (ts.isStringLiteralLike(unwrapped)) {
+            literals.push({ value: unwrapped.text, node: unwrapped });
+          }
+        }
+      }
+    }
+    return literals;
+  }
+  return [];
+}
+
+function getPropertyInitializer(
+  object: ts.ObjectLiteralExpression,
+  propertyName: string,
+): ts.Expression | null {
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = property.name;
+    const nameText = ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : null;
+    if (nameText === propertyName) {
+      return unwrapExpression(property.initializer);
     }
   }
   return null;

@@ -12,19 +12,19 @@ type ApplySyncReference = FunctionReference<
   SyncResponse
 >;
 
-export type IamSyncComponent = {
+export type AccessSyncComponent = {
   sync: { applySync: ApplySyncReference };
 };
 
-export type RegisterIamRoutesOptions = {
+export type RegisterAccessRoutesOptions = {
   httpAction: HttpActionBuilder;
   components?: Record<string, unknown>;
-  component?: IamSyncComponent;
+  component?: AccessSyncComponent;
   componentName?: string;
   path?: string;
 };
 
-export function registerIamRoutes(http: HttpRouter, options: RegisterIamRoutesOptions) {
+export function registerAccessRoutes(http: HttpRouter, options: RegisterAccessRoutesOptions) {
   const component = resolveSyncComponent(options);
   const path = options.path ?? IAM_SYNC_PATH;
 
@@ -73,7 +73,7 @@ function syncResponseStatus(result: SyncResponse): number {
   return 400;
 }
 
-function resolveSyncComponent(options: RegisterIamRoutesOptions): IamSyncComponent {
+function resolveSyncComponent(options: RegisterAccessRoutesOptions): AccessSyncComponent {
   if (options.component) {
     return options.component;
   }
@@ -87,7 +87,7 @@ function resolveSyncComponent(options: RegisterIamRoutesOptions): IamSyncCompone
     );
   }
 
-  return component as IamSyncComponent;
+  return component as AccessSyncComponent;
 }
 
 function jsonResponse(body: unknown, status: number) {
