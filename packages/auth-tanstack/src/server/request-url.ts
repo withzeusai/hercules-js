@@ -34,6 +34,26 @@ export function resolveRedirectUri(request: Request, override?: string): string 
 }
 
 /**
+ * Reconstruct the public callback URL the provider redirected to, for the
+ * authorization-code token exchange.
+ *
+ * `openid-client`'s `authorizationCodeGrant` derives the token request's
+ * `redirect_uri` from the URL it is handed (origin + path), and providers
+ * require that to match the `redirect_uri` used in the authorization request.
+ * Behind a TLS-terminating proxy `request.url` only reflects the internal hop,
+ * so swap in the resolved public origin (see {@link resolveOrigin}) while
+ * keeping the proxy-preserved path and the provider's query params (`code`,
+ * `state`, …) that the grant reads.
+ */
+export function resolveCallbackUrl(request: Request): URL {
+  const requestUrl = new URL(request.url);
+  const callbackUrl = new URL(resolveOrigin(request));
+  callbackUrl.pathname = requestUrl.pathname;
+  callbackUrl.search = requestUrl.search;
+  return callbackUrl;
+}
+
+/**
  * Cookie `secure`/`sameSite` for the current request.
  *
  * Protocol comes from the middleware-configured `redirectUri` when set (correct

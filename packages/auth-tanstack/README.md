@@ -25,32 +25,32 @@ Generate a cookie password:
 openssl rand -base64 24
 ```
 
-Defaults you can rely on: the callback path is `/api/auth/callback`, the requested scope is `openid profile email`, and users are sent to `/` after a successful callback. Override these per call (see the API below).
+Defaults you can rely on: the callback path is `/auth/callback`, the requested scope is `openid profile email`, and users are sent to `/` after a successful callback. Override these per call (see the API below).
 
 ## Setup
 
 ### 1. Callback route
 
-Create `src/routes/api/auth/callback.tsx`. This must match the `redirect_uri` registered with your provider.
+Create `src/routes/auth/callback.tsx`. This must match the `redirect_uri` registered with your provider.
 
 ```ts
 import { createFileRoute } from "@tanstack/react-router";
 import { handleCallbackRoute } from "@usehercules/auth-tanstack";
 
-export const Route = createFileRoute("/api/auth/callback")({
+export const Route = createFileRoute("/auth/callback")({
   server: { handlers: { GET: handleCallbackRoute() } },
 });
 ```
 
 ### 2. Sign-in route
 
-Create `src/routes/api/auth/sign-in.tsx`. Visiting it starts the Authorization Code + PKCE flow and redirects to the provider.
+Create `src/routes/auth/sign-in.tsx`. Visiting it starts the Authorization Code + PKCE flow and redirects to the provider.
 
 ```ts
 import { createFileRoute } from "@tanstack/react-router";
 import { handleSignInRoute } from "@usehercules/auth-tanstack";
 
-export const Route = createFileRoute("/api/auth/sign-in")({
+export const Route = createFileRoute("/auth/sign-in")({
   server: { handlers: { GET: handleSignInRoute() } },
 });
 ```
@@ -83,7 +83,7 @@ import { getAuth } from "@usehercules/auth-tanstack";
 export const Route = createFileRoute("/dashboard")({
   loader: async () => {
     const { user } = await getAuth();
-    if (!user) throw redirect({ href: "/api/auth/sign-in" });
+    if (!user) throw redirect({ href: "/auth/sign-in" });
     return { user };
   },
 });
@@ -97,7 +97,7 @@ import { useAuth } from "@usehercules/auth-tanstack/client";
 function ProfileButton() {
   const { user, loading, signOut } = useAuth();
   if (loading) return <span>Loading…</span>;
-  if (!user) return <a href="/api/auth/sign-in">Sign in</a>;
+  if (!user) return <a href="/auth/sign-in">Sign in</a>;
   return <button onClick={() => signOut()}>Sign out ({user.email})</button>;
 }
 ```

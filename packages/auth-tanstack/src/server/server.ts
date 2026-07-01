@@ -11,7 +11,12 @@ import {
   pkceCookieName,
 } from "./config";
 import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
-import { cookieSecurity, resolveOrigin, resolveRedirectUri } from "./request-url";
+import {
+  cookieSecurity,
+  resolveCallbackUrl,
+  resolveOrigin,
+  resolveRedirectUri,
+} from "./request-url";
 import { type SessionData, sealSession, serializeSessionCookies } from "./session";
 import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
 
@@ -222,7 +227,13 @@ async function handleCallbackInternal(
   let tokens: Awaited<ReturnType<typeof client.authorizationCodeGrant>>;
   try {
     const config = await getConfig();
-    tokens = await client.authorizationCodeGrant(config, url, checks);
+    // authorizationCodeGrant derives the token request's redirect_uri from this
+    // URL (origin + path), and it must match the redirect_uri used in the
+    // authorization request or the provider rejects the exchange. Behind a
+    // TLS-terminating proxy request.url is only the internal hop, so rebuild the
+    // public callback URL — it keeps the code/state params the grant validates.
+    const callbackUrl = resolveCallbackUrl(request);
+    tokens = await client.authorizationCodeGrant(config, callbackUrl, checks);
   } catch (error) {
     return handleError(request, 500, "Token exchange failed", error, options, verifierCookieName);
   }

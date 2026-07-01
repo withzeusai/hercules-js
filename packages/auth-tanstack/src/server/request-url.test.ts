@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { setAuthOptions } from "./auth-options";
-import { cookieSecurity, resolveOrigin, resolveRedirectUri, toCookieSameSite } from "./request-url";
+import {
+  cookieSecurity,
+  resolveCallbackUrl,
+  resolveOrigin,
+  resolveRedirectUri,
+  toCookieSameSite,
+} from "./request-url";
 
 function request(url: string): Request {
   return new Request(url);
@@ -50,6 +56,40 @@ describe("resolveRedirectUri", () => {
     expect(
       resolveRedirectUri(request("http://internal/auth/sign-in"), "https://other.example.com/cb"),
     ).toBe("https://other.example.com/cb");
+  });
+});
+
+describe("resolveCallbackUrl", () => {
+  it("returns the request URL (origin, path, query) when no redirectUri is configured", () => {
+    expect(
+      resolveCallbackUrl(
+        request("http://localhost:3000/auth/callback?code=abc&state=xyz"),
+      ).toString(),
+    ).toBe("http://localhost:3000/auth/callback?code=abc&state=xyz");
+  });
+
+  it("swaps in the configured public origin while keeping the proxied path and query (proxy-correct)", () => {
+    setAuthOptions({ redirectUri: "https://app.example.com/auth/callback" });
+    expect(
+      resolveCallbackUrl(
+        request("http://internal:8080/auth/callback?code=abc&state=xyz"),
+      ).toString(),
+    ).toBe("https://app.example.com/auth/callback?code=abc&state=xyz");
+  });
+
+  it("matches redirect_uri when the configured origin differs from the path (uses the proxied path)", () => {
+    setAuthOptions({ redirectUri: "https://app.example.com/auth/callback" });
+    // The proxy preserves the path, so the reconstructed URL's origin+path
+    // equals the configured redirectUri that the authorization request used.
+    const url = resolveCallbackUrl(request("http://internal/auth/callback?code=1"));
+    expect(url.origin + url.pathname).toBe("https://app.example.com/auth/callback");
+  });
+
+  it("falls back to the request origin when redirectUri is malformed", () => {
+    setAuthOptions({ redirectUri: "not a url" });
+    expect(
+      resolveCallbackUrl(request("http://localhost:3000/auth/callback?code=abc")).toString(),
+    ).toBe("http://localhost:3000/auth/callback?code=abc");
   });
 });
 
