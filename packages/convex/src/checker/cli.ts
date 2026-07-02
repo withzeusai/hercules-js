@@ -6,7 +6,6 @@ type ParsedArgs =
       ok: true;
       convexDir?: string;
       json: boolean;
-      fixAuthenticated: boolean;
       help: boolean;
     }
   | { ok: false; message: string };
@@ -23,7 +22,6 @@ if (!parsedArgs.ok) {
   const result = checkIamSource({
     cwd: process.cwd(),
     convexDir: parsedArgs.convexDir,
-    fixAuthenticated: parsedArgs.fixAuthenticated,
   });
 
   if (parsedArgs.json) {
@@ -38,16 +36,11 @@ if (!parsedArgs.ok) {
 function parseArgs(args: string[]): ParsedArgs {
   let convexDir: string | undefined;
   let json = false;
-  let fixAuthenticated = false;
   let help = false;
 
   for (const arg of args) {
     if (arg === "--json") {
       json = true;
-      continue;
-    }
-    if (arg === "--fix-authenticated") {
-      fixAuthenticated = true;
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -63,24 +56,21 @@ function parseArgs(args: string[]): ParsedArgs {
     convexDir = arg;
   }
 
-  return { ok: true, convexDir, json, fixAuthenticated, help };
+  return { ok: true, convexDir, json, help };
 }
 
 function helpText(): string {
   return [
-    "Usage: hercules-convex-iam-check [convex-dir] [--json] [--fix-authenticated]",
+    "Usage: hercules-convex-iam-check [convex-dir] [--json]",
     "",
-    "Checks exported Convex functions for raw query(), mutation(), or action()",
-    "builders that should use Hercules IAM builders from convex/iam.ts.",
-    "Also checks common managed tenant mistakes such as placeholder tenant ids,",
-    "app-local tenant membership tables, unsafe tenant slug lookups, existing-row tenant extraction,",
-    "row capability checks without a concrete resource,",
-    "and iam* permission keys that are not declared in hercules/iam.jsonc.",
-    "Apps that do not use the @usehercules/convex IAM SDK in their Convex",
-    "functions pass unchanged: raw Convex builders stay allowed there.",
+    "Validates the Convex source against the app's .hercules/iam.jsonc catalog.",
+    "Permission literals (the `permission` option on protectedQuery/protectedMutation/",
+    "protectedAction and the argument to access.hasPermissions / access.requirePermissions,",
+    "a single key, an array, or an anyOf/allOf set) must be a declared app permission.",
+    "Resource-type literals in resource refs",
+    "(the `resource` option and resource.write / resource.get / resource.list)",
+    "must be a declared resource type. Dynamic, non-literal values are skipped.",
     "",
-    "--fix-authenticated rewrites exported raw builders to authenticated* builders",
-    "as a conservative migration starting point. Review public and permissioned",
-    "handlers afterward and switch them to public* or iam* deliberately.",
+    "Apps without a .hercules/iam.jsonc catalog pass unchanged.",
   ].join("\n");
 }

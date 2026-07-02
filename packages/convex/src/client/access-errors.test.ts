@@ -1,19 +1,14 @@
 import { ConvexError } from "convex/values";
 import { describe, expect, test } from "vitest";
-import { classifyIamError } from "./iam-errors";
+import { classifyAccessError } from "./access-errors";
 
-describe("classifyIamError", () => {
+describe("classifyAccessError", () => {
   test.each([
-    ["principal_pending_approval", "pending_approval"],
-    ["app_principal_pending_approval", "pending_approval"],
-    ["principal_blocked", "blocked"],
-    ["app_principal_blocked", "blocked"],
-    ["principal_suspended", "suspended"],
-    ["app_principal_suspended", "suspended"],
-    ["principal_removed", "removed"],
-    ["app_principal_removed", "removed"],
-    ["principal_missing", "missing"],
-    ["app_principal_missing", "missing"],
+    ["membership_pending_approval", "pending_approval"],
+    ["membership_blocked", "blocked"],
+    ["membership_suspended", "suspended"],
+    ["membership_removed", "removed"],
+    ["membership_missing", "missing"],
   ] as const)("classifies %s as an admission denial", (reasonCode, status) => {
     const error = new ConvexError({
       code: "ACCESS_DENIED",
@@ -22,7 +17,7 @@ describe("classifyIamError", () => {
       sourceVersion: 12,
     });
 
-    expect(classifyIamError(error)).toEqual({
+    expect(classifyAccessError(error)).toEqual({
       kind: "admission",
       reasonCode,
       sourceVersion: 12,
@@ -32,7 +27,7 @@ describe("classifyIamError", () => {
 
   test("classifies runtime permission denials", () => {
     expect(
-      classifyIamError({
+      classifyAccessError({
         data: {
           code: "ACCESS_DENIED",
           reasonCode: "permission_denied",
@@ -48,7 +43,7 @@ describe("classifyIamError", () => {
 
   test("classifies a mirror that is not ready", () => {
     expect(
-      classifyIamError({
+      classifyAccessError({
         data: {
           code: "ACCESS_DENIED",
           reasonCode: "mirror_not_ready",
@@ -126,12 +121,12 @@ describe("classifyIamError", () => {
       })),
     ),
   )("classifies $code from a $container.name", ({ code, container, expected, status }) => {
-    expect(classifyIamError(container.make(code, status))).toEqual(expected);
+    expect(classifyAccessError(container.make(code, status))).toEqual(expected);
   });
 
   test("omits malformed public problem details and status", () => {
     expect(
-      classifyIamError({
+      classifyAccessError({
         code: "invalid_request",
         status: 400.5,
         details: ["not", "a", "record"],
@@ -144,7 +139,7 @@ describe("classifyIamError", () => {
 
   test("does not classify unsupported body containers", () => {
     expect(
-      classifyIamError({
+      classifyAccessError({
         status: 400,
         body: makeProblem("invalid_request", 400),
       }),
@@ -160,7 +155,7 @@ describe("classifyIamError", () => {
     new Error(JSON.stringify({ code: "access_denied", details: problemDetails })),
     { status: 503 },
   ])("does not classify malformed or unknown public IAM problems", (error) => {
-    expect(classifyIamError(error)).toBeNull();
+    expect(classifyAccessError(error)).toBeNull();
   });
 
   test.each([
@@ -179,6 +174,6 @@ describe("classifyIamError", () => {
     new Error("Network failed"),
     null,
   ])("does not reinterpret unknown or configuration errors", (error) => {
-    expect(classifyIamError(error)).toBeNull();
+    expect(classifyAccessError(error)).toBeNull();
   });
 });

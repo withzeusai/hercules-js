@@ -3,6 +3,7 @@ import type {
   ArgsArrayForOptionalValidator,
   ArgsArrayToObject,
   DefaultArgsForOptionalValidator,
+  DefaultFunctionArgs,
   FunctionReference,
   GenericActionCtx,
   GenericDataModel,
@@ -16,148 +17,199 @@ import type {
   ReturnValueForOptionalValidator,
 } from "convex/server";
 import { ConvexError } from "convex/values";
-import type { GenericValidator, PropertyValidators, Validator } from "convex/values";
-export { classifyIamError } from "./iam-errors.js";
-export type { IamAdmissionStatus, IamErrorClassification } from "./iam-errors.js";
+import type { PropertyValidators, Validator } from "convex/values";
+export { classifyAccessError } from "./access-errors.js";
+export type { AccessAdmissionStatus, AccessErrorClassification } from "./access-errors.js";
 
-type IamMode = "authenticated" | "permission";
-
-export type AuthorizationDecision = {
-  allowed: boolean;
-  reasonCode: string;
-  explicitDeny?: boolean;
-  sourceVersion?: number;
-  principalId?: string;
-  effectiveRoleIds: string[];
-};
-
-type AuthorizationArgs = {
-  tokenIdentifier?: string;
-  tenantId?: string;
-  permission?: string;
-  // DL16 resource grant support. Optional; when present, authorize also
-  // walks grants whose object is the specific resource.
-  resourceType?: string;
-  resourceId?: string;
-  ancestors?: Array<{ resourceType: string; resourceId: string }>;
-};
-type AuthorizationCheckArgs = Omit<AuthorizationArgs, "tokenIdentifier"> & {
-  permission: string;
-};
-
-type ListMyTenantsArgs = { tokenIdentifier?: string; cursor?: string; limit?: number };
-type ListMyActiveTenantsArgs = ListMyTenantsArgs & {
-  isRoot?: boolean;
-};
-type GetTargetTenantSyncStatusArgs = {
-  tokenIdentifier?: string;
-  tenantId: string;
-  sourceVersion: number;
-};
-type GetTenantAccessStatusArgs = { tokenIdentifier?: string };
-type ListMyRolesArgs = { tokenIdentifier?: string; tenantId: string };
-type GetEffectivePermissionsArgs = {
-  tokenIdentifier?: string;
-  tenantId: string;
-  resourceType?: string;
-  resourceId?: string;
-  ancestors?: Array<{ resourceType: string; resourceId: string }>;
-};
-
-type ListTenantArgs = { tokenIdentifier?: string; tenantId: string };
-type ListTenantPageArgs = ListTenantArgs & {
-  cursor?: string;
-  limit?: number;
-};
-type ListTenantUserDirectoryArgs = ListTenantArgs & {
-  cursor?: string;
-  limit?: number;
-};
-type ListTenantMemberPickerUsersArgs = ListTenantArgs & {
-  permission: string;
-  resourceType?: string;
-  resourceId?: string;
-  ancestors?: Array<{ resourceType: string; resourceId: string }>;
-  cursor?: string;
-  limit?: number;
-};
-type ListResourceSharingRecipientsArgs = ListTenantArgs & {
-  permission: string;
-  resourceType: string;
-  resourceId: string;
-  ancestors?: Array<{ resourceType: string; resourceId: string }>;
-  recipientType: "user" | "group";
-  cursor?: string;
-  limit?: number;
-};
-type GetTenantUserDirectoryEntryArgs = ListTenantArgs & {
-  userId: string;
-};
-type GetTenantRoleArgs = ListTenantArgs & {
-  roleId: string;
-};
-type ListGroupMembersArgs = ListTenantArgs & {
-  groupId: string;
-  cursor?: string;
-  limit?: number;
-};
-type ListUserGroupsArgs = ListTenantArgs & {
-  userId: string;
-  cursor?: string;
-  limit?: number;
-};
+// ── shared model types (match the component return shapes) ────────────────────
+export type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 
 export type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  roleKind: "system" | "custom";
+  isAppScope: boolean;
+  // Tenant scope, read together with isAppScope:
+  //   • tenantId = <id>                  → TENANT-SCOPED: usable only in that tenant.
+  //   • tenantId = null, isAppScope=false → SHARED: usable in every tenant.
+  //   • tenantId = null, isAppScope=true  → APP-SCOPED: app-wide authority,
+  //     grantable only to primary-tenant members.
+  tenantId: string | null;
 };
 
-export type TenantDirectRoleGrant = RoleSummary & {
-  grantId: string;
-  type: "role";
-  expiresAt: number | null;
-};
-
-/** One tenant returned by `listMyTenants`. Select the root tenant by `isRoot`. */
 export type TenantSummary = {
   tenantId: string;
   tenantName: string;
-  isRoot: boolean;
-  roles: RoleSummary[];
-  joinedAt: number;
-  accessStatus: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+  isPrimaryTenant: boolean;
+  accessStatus: MembershipStatus;
   lifecycleStatus: "active" | "archived";
+  roles: RoleSummary[];
 };
 
-export type ActiveTenantSummary = Omit<TenantSummary, "accessStatus" | "lifecycleStatus"> & {
-  accessStatus: "active";
-  lifecycleStatus: "active";
+export type TenantSummariesPage = { tenants: TenantSummary[]; nextCursor?: string };
+
+// The caller's own groups in a tenant (me.groups).
+export type GroupSummary = {
+  groupId: string;
+  name: string;
+  status: "active" | "disabled";
 };
 
-export type TenantSummariesPage = {
-  tenants: TenantSummary[];
-  nextCursor?: string;
+export type ResourceRef = { type: string; externalId: string };
+
+export type ResourceNode = {
+  type: string;
+  externalId: string;
+  parent?: ResourceRef;
 };
 
-export type ActiveTenantSummariesPage = {
-  tenants: ActiveTenantSummary[];
-  nextCursor?: string;
+export type ResourceNodesPage = { resources: ResourceNode[]; nextCursor?: string };
+
+// ── mirror-table record shapes ────────────────────────────────────────────────
+// The generic per-table reads return these clean projections: the Convex system
+// fields (_id, _creationTime) and the internal sourceVersion are dropped.
+export type TenantRecord = {
+  id: string;
+  name: string;
+  isPrimaryTenant: boolean;
+  status: "active" | "disabled";
+  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  defaultRoleId: string | null;
+  updatedAt: number;
 };
+
+export type UserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string;
+  phone?: string;
+  phoneVerified: boolean;
+  updatedAt: number;
+};
+
+export type TenantMembershipRecord = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  status: MembershipStatus;
+  updatedAt: number;
+};
+
+export type GroupRecord = {
+  id: string;
+  tenantId: string;
+  description?: string;
+  name: string;
+  status: "active" | "disabled";
+  updatedAt: number;
+};
+
+export type GroupMembershipRecord = {
+  groupId: string;
+  membershipId: string;
+  tenantId: string;
+  updatedAt: number;
+};
+
+export type RoleRecord = {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  tenantId: string | null;
+  isAppScope: boolean;
+  updatedAt: number;
+};
+
+export type PermissionRecord = {
+  id: string;
+  key: string;
+  isAppScope: boolean;
+  updatedAt: number;
+};
+
+export type RolePermissionRecord = {
+  roleId: string;
+  permissionId: string;
+  updatedAt: number;
+};
+
+export type ResourceTypeRecord = {
+  id: string;
+  key: string;
+  name: string;
+  parentResourceTypeId: string | null;
+  updatedAt: number;
+};
+
+export type UserRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  membershipId: string;
+  roleId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+export type GroupRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  groupId: string;
+  roleId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+export type UserResourceRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  membershipId: string;
+  roleId: string;
+  resourceTypeId: string;
+  externalId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+export type GroupResourceRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  groupId: string;
+  roleId: string;
+  resourceTypeId: string;
+  externalId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+// A page from a generic `list` read: bounded items plus an opaque `nextCursor`
+// (present only when more pages exist; pass it back as `cursor`).
+export type ListPage<V> = { items: V[]; nextCursor?: string };
+
+export type TenantAccessStatusResult =
+  | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
+  | {
+      kind: "fallback";
+      reason:
+        | "identity_missing"
+        | "identity_invalid"
+        | "unexpected_issuer"
+        | "mirror_not_ready"
+        | "tenant_missing"
+        | "membership_missing";
+      stateVersion?: number;
+    };
 
 export type TargetTenantSyncStatus =
-  | {
-      state: "syncing";
-      currentSourceVersion?: number;
-      targetSourceVersion: number;
-    }
+  | { state: "syncing"; currentSourceVersion?: number; targetSourceVersion: number }
   | {
       state: "ready";
       currentSourceVersion: number;
       targetSourceVersion: number;
       tenantId: string;
-      principalId: string;
+      membershipId: string;
     }
   | {
       state: "denied";
@@ -165,7 +217,7 @@ export type TargetTenantSyncStatus =
       currentSourceVersion: number;
       targetSourceVersion: number;
       tenantId?: string;
-      principalId?: string;
+      membershipId?: string;
     }
   | {
       state: "failed";
@@ -174,1853 +226,853 @@ export type TargetTenantSyncStatus =
       targetSourceVersion: number;
     };
 
-export type TenantDetail = {
-  tenantId: string;
-  tenantName: string;
-  isRoot: boolean;
-  lifecycleStatus: "active" | "archived";
-  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
-  defaultRoleId: string;
-  updatedAt: number;
-};
-
-export type IamPrincipalStatus =
-  | "active"
-  | "blocked"
-  | "suspended"
-  | "pending_approval"
-  | "removed";
-
-export type IamTenantAccessStatusResult =
-  | {
-      kind: "principal";
-      principalId: string;
-      status: IamPrincipalStatus;
-      stateVersion: number;
-    }
-  | {
-      kind: "fallback";
-      reason:
-        | "identity_missing"
-        | "identity_invalid"
-        | "unexpected_issuer"
-        | "mirror_not_ready"
-        | "root_tenant_missing"
-        | "principal_missing";
-      stateVersion?: number;
-    };
-
-export type EffectivePermissionsResult = {
+export type AccessDecision = {
   allowed: boolean;
   reasonCode: string;
   sourceVersion?: number;
-  tenantId?: string;
-  principalId?: string;
-  effectiveRoleIds: string[];
-  // §0b: the principal's resolved wildcard mode. Under the wildcard model
-  // `permissions` is a projection over the unbounded catalog (Owner = whole
-  // catalog, Admin = catalog minus Owner-only levers), so callers should treat
-  // a non-"none" mode as future-inclusive rather than exhaustive.
-  wildcard: "none" | "immutable" | "default";
-  permissions: string[];
+  membershipId?: string;
 };
 
-export type TenantUser = {
-  userId: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  joinedAt: number;
-  name?: string;
-  email?: string;
-  image?: string;
-  roles: RoleSummary[];
-  directRoleGrants: TenantDirectRoleGrant[];
-};
-
-export type TenantGroup = {
-  groupId: string;
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  joinedAt: number;
-  memberCount: number;
-  name?: string;
-  roles: RoleSummary[];
-  directRoleGrants: TenantDirectRoleGrant[];
-};
-
-export type TenantUsersPage = {
-  users: TenantUser[];
-  nextCursor?: string;
-};
-
-export type TenantGroupsPage = {
-  groups: TenantGroup[];
-  nextCursor?: string;
-};
-
-export type DirectResourceSubjectsPage = {
-  subjects: DirectResourceSubject[];
-  nextCursor?: string;
-};
-
-/** One user in a `listTenantUserDirectory` page. */
-export type TenantUserDirectoryEntry = {
-  userId: string;
-  name: string;
-  email: string;
-  image?: string;
-  roles: RoleSummary[];
-};
-
-export type TenantUserDirectoryPage = {
-  users: TenantUserDirectoryEntry[];
-  nextCursor?: string;
-};
-
-export type TenantMemberPickerUser = {
-  userId: string;
-  name: string;
-  email: string;
-  image?: string;
-};
-
-export type TenantMemberPickerUsersPage = {
-  users: TenantMemberPickerUser[];
-  nextCursor?: string;
-};
-
-export type SharingRecipient =
-  | {
-      type: "user";
-      userId: string;
-      name: string;
-      email: string;
-      image?: string;
-    }
-  | {
-      type: "group";
-      groupId: string;
-      name?: string;
-    };
-
-export type SharingRecipientsPage = {
-  recipients: SharingRecipient[];
-  nextCursor?: string;
-};
-
-/** One catalog role returned by `listTenantRoles`. Use `roleKey` and `roleName` for display only. */
-export type TenantRoleSummary = RoleSummary & { shared: boolean };
-
-export type TenantPermissionSummary = {
-  permissionId: string;
-  key: string;
-  resourceType: string;
-  action: string;
-  classification: "delegable" | "owner_only";
-  tenantAssignable: boolean;
-};
-
-export type TenantRolePermission = TenantPermissionSummary & {
-  effect: "allow" | "deny";
-};
-
-export type TenantRoleDetail = TenantRoleSummary & {
-  description: string | null;
-  basePermissions: TenantRolePermission[];
-  tenantOverrides: TenantRolePermission[];
-  effectivePermissions: TenantPermissionSummary[];
-};
-
-export type DirectResourceRoleGrant = {
-  grantId: string;
-  type: "role";
-  roleId: string;
-  expiresAt: number | null;
-  appliesTo: "self" | "self_and_descendants";
-};
-
-export type DirectResourcePermissionGrant = {
-  grantId: string;
-  type: "permission";
-  permissionId: string;
-  permissionKey: string;
-  effect: "allow" | "deny";
-  expiresAt: number | null;
-  appliesTo: "self" | "self_and_descendants";
-};
-
-type DirectResourceSubjectBase = {
-  status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-  name?: string;
-  email?: string;
-  image?: string;
-};
-
-export type DirectResourceSubject = DirectResourceSubjectBase &
-  ({ type: "user"; userId: string } | { type: "group"; groupId: string }) &
-  (
-    | { grant: DirectResourceRoleGrant; role: RoleSummary }
-    | { grant: DirectResourcePermissionGrant }
-  );
-
-export type ResourcePermissionOverrideSubject =
-  | { type: "user"; userId: string }
-  | { type: "group"; groupId: string }
-  | { type: "role"; roleId: string };
-
-export type ResourcePermissionOverrideTarget =
-  | { type: "all" }
-  | { type: "resource"; resourceId: string };
-
-export type ResourcePermissionOverridesResult = {
-  tenantId: string;
-  subject: ResourcePermissionOverrideSubject;
-  resourceType: string;
-  target: ResourcePermissionOverrideTarget;
-  grants: DirectResourcePermissionGrant[];
-};
-
-export type ExplainAccessTarget =
-  | { type: "tenant" }
-  | {
-      type: "resource";
-      resourceType: string;
-      resourceId: string;
-      ancestors?: Array<{ resourceType: string; resourceId: string }>;
-    };
-
-export type ExplainAccessGrantSubject =
-  | { type: "user"; userId: string }
-  | { type: "group"; groupId: string }
-  | { type: "role"; roleId: string };
-
-export type ExplainAccessGrantSource = {
-  grantId: string;
-  grantType: "role" | "permission";
-  subject: ExplainAccessGrantSubject;
-  roleId?: string;
-  permissionId?: string;
-  permissionKey?: string;
-  effect: "allow" | "deny";
-  target: { type: "tenant" } | { type: "resource"; resourceType: string; resourceId?: string };
-  appliesTo: "self" | "self_and_descendants";
-  expiresAt: number | null;
-  inherited: boolean;
-};
-
-export type ExplainAccessEntryOrigin =
-  | { kind: "role_permission"; roleId: string }
-  | {
-      kind: "permission_grant";
-      grantId: string;
-      subject: ExplainAccessGrantSubject;
-      inherited: boolean;
-    }
-  | {
-      kind: "resource_role";
-      grantId: string;
-      roleId: string;
-      subject: ExplainAccessGrantSubject;
-      inherited: boolean;
-    };
-
-export type ExplainAccessResult = {
-  tenantId: string;
-  userId: string;
-  permission: string;
-  target: ExplainAccessTarget;
-  allowed: boolean;
-  reasonCode: string;
-  explicitDeny: boolean;
-  decisiveReason: string;
-  sourceVersion?: number;
-  principalId?: string;
-  effectiveRoleIds: string[];
-  sources: {
-    directGrants: ExplainAccessGrantSource[];
-    groupMemberships: Array<{
-      groupId: string;
-      groupName?: string;
-      status?: IamPrincipalStatus;
-      active: boolean;
-    }>;
-    roles: Array<{
-      roleId: string;
-      roleKey: string;
-      roleName: string;
-      description: string | null;
-      wildcard: "none" | "immutable" | "default";
-      permissionEffect: "allow" | "deny" | null;
-      grantIds: string[];
-      viaGroupIds: string[];
-    }>;
-    roleOverrides: Array<{
-      roleId: string;
-      permissionId: string;
-      permissionKey: string;
-      effect: "allow" | "deny";
-    }>;
-    resourceGrants: ExplainAccessGrantSource[];
-    ancestorGrants: ExplainAccessGrantSource[];
-    explicitDenies: Array<{
-      resourceType: string;
-      action: string;
-      objectType: "tenant" | "resource";
-      objectId?: string;
-      source?: ExplainAccessEntryOrigin;
-    }>;
-    expiredIgnoredGrants: ExplainAccessGrantSource[];
-  };
-};
-
-type ListDirectSubjectsArgs = {
+// ── component function-reference contract (what this client calls) ────────────
+type CheckArgs = {
   tokenIdentifier?: string;
-  tenantId: string;
-  resourceType: string;
-  resourceId: string;
-  cursor?: string;
-  limit?: number;
-};
-
-type GetResourcePermissionOverridesArgs = ListTenantArgs & {
-  subject: ResourcePermissionOverrideSubject;
-  resourceType: string;
-  target: ResourcePermissionOverrideTarget;
-};
-
-type ExplainAccessArgs = ListTenantArgs & {
-  userId: string;
+  tenantId?: string;
   permission: string;
-  target: ExplainAccessTarget;
+  resource?: ResourceRef;
 };
 
-export type IamContext<DataModel extends GenericDataModel = any> =
-  | Pick<GenericQueryCtx<DataModel>, "auth" | "runQuery">
-  | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery">
-  | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">;
+type Cursored<T> = T & { cursor?: string };
+type ComponentPage<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
+type PageFilters = { cursor?: string; limit?: number };
+type ComponentItemsPage<V> = { items: V[]; cursor?: string };
 
-export type IamResourceRef = { type: string; id?: string };
-export type IamAuthorizationAncestor = { type: string; id: string };
+// The two generic per-table read references, keyed by their filter/key args and
+// record type. `list` refs carry the pagination args on top of their filters.
+type CompList<Filters extends DefaultFunctionArgs, V> = FunctionReference<
+  "query",
+  "public",
+  Filters & PageFilters,
+  ComponentItemsPage<V>
+>;
+type CompGet<Args extends DefaultFunctionArgs, V> = FunctionReference<
+  "query",
+  "public",
+  Args,
+  V | null
+>;
 
-export type IamComponent = {
+export type AccessComponent = {
   checks: {
-    authorize: FunctionReference<"query", "public", AuthorizationArgs, AuthorizationDecision>;
-    authorizeMany: FunctionReference<
+    check: FunctionReference<"query", "public", CheckArgs, AccessDecision>;
+    checkMany: FunctionReference<
       "query",
       "public",
-      { tokenIdentifier?: string; checks: AuthorizationCheckArgs[] },
-      AuthorizationDecision[]
+      { tokenIdentifier?: string; checks: Omit<CheckArgs, "tokenIdentifier">[] },
+      AccessDecision[]
     >;
   };
   queries: {
+    // Caller-centric reads (me.*) and sync status.
     getTenantAccessStatus: FunctionReference<
       "query",
       "public",
-      GetTenantAccessStatusArgs,
-      IamTenantAccessStatusResult
+      { tokenIdentifier?: string; tenantId?: string },
+      TenantAccessStatusResult
     >;
     listMyTenants: FunctionReference<
       "query",
       "public",
-      ListMyTenantsArgs,
-      { tenants: TenantSummary[]; cursor?: string }
+      { tokenIdentifier?: string; cursor?: string; limit?: number; status?: "active" | "all" },
+      ComponentPage<"tenants", TenantSummary>
     >;
-    listMyActiveTenants: FunctionReference<
+    listMyRoles: FunctionReference<
       "query",
       "public",
-      ListMyActiveTenantsArgs,
-      { tenants: ActiveTenantSummary[]; cursor?: string }
+      { tokenIdentifier?: string; tenantId?: string },
+      RoleSummary[]
+    >;
+    listMyGroups: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string },
+      GroupSummary[]
     >;
     getTargetTenantSyncStatus: FunctionReference<
       "query",
       "public",
-      GetTargetTenantSyncStatusArgs,
+      { tokenIdentifier?: string; tenantId?: string; sourceVersion: number },
       TargetTenantSyncStatus
     >;
-    listMyRoles: FunctionReference<"query", "public", ListMyRolesArgs, RoleSummary[]>;
-    getEffectivePermissions: FunctionReference<
-      "query",
-      "public",
-      GetEffectivePermissionsArgs,
-      EffectivePermissionsResult
+
+    // Generic per-table reads (TRUSTED / UNGATED).
+    tenantsList: CompList<
+      { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+      TenantRecord
     >;
-    getTenant: FunctionReference<"query", "public", ListTenantArgs, TenantDetail | null>;
-    listTenantUsers: FunctionReference<
-      "query",
-      "public",
-      ListTenantPageArgs,
-      { users: TenantUser[]; cursor?: string }
+    tenantsGet: CompGet<{ id?: string; primary?: boolean }, TenantRecord>;
+    usersList: CompList<{ email?: string }, UserRecord>;
+    usersGet: CompGet<{ id?: string; email?: string }, UserRecord>;
+    groupsList: CompList<{ tenantId?: string; status?: "active" | "disabled" }, GroupRecord>;
+    groupsGet: CompGet<{ id: string }, GroupRecord>;
+    rolesList: CompList<{ tenantId?: string | null; isAppScope?: boolean }, RoleRecord>;
+    rolesGet: CompGet<{ id?: string; key?: string; tenantId?: string | null }, RoleRecord>;
+    permissionsList: CompList<{ isAppScope?: boolean }, PermissionRecord>;
+    permissionsGet: CompGet<{ id?: string; key?: string }, PermissionRecord>;
+    resourceTypesList: CompList<{ parentResourceTypeId?: string | null }, ResourceTypeRecord>;
+    resourceTypesGet: CompGet<{ id?: string; key?: string }, ResourceTypeRecord>;
+    tenantMembershipsList: CompList<
+      { tenantId?: string; status?: MembershipStatus; userId?: string },
+      TenantMembershipRecord
     >;
-    listTenantGroups: FunctionReference<
-      "query",
-      "public",
-      ListTenantPageArgs,
-      { groups: TenantGroup[]; cursor?: string }
+    tenantMembershipsGet: CompGet<{ id?: string; tenantId?: string; userId?: string }, TenantMembershipRecord>;
+    userRoleAssignmentsList: CompList<
+      { tenantId?: string; membershipId?: string; roleId?: string },
+      UserRoleAssignmentRecord
     >;
-    listTenantUserDirectory: FunctionReference<
-      "query",
-      "public",
-      ListTenantUserDirectoryArgs,
-      { users: TenantUserDirectoryEntry[]; cursor?: string }
+    userRoleAssignmentsGet: CompGet<{ id: string }, UserRoleAssignmentRecord>;
+    groupRoleAssignmentsList: CompList<
+      { tenantId?: string; groupId?: string; roleId?: string },
+      GroupRoleAssignmentRecord
     >;
-    listTenantMemberPickerUsers: FunctionReference<
-      "query",
-      "public",
-      ListTenantMemberPickerUsersArgs,
-      { users: TenantMemberPickerUser[]; cursor?: string }
+    groupRoleAssignmentsGet: CompGet<{ id: string }, GroupRoleAssignmentRecord>;
+    userResourceRoleAssignmentsList: CompList<
+      {
+        tenantId?: string;
+        membershipId?: string;
+        roleId?: string;
+        resourceTypeId?: string;
+        externalId?: string;
+      },
+      UserResourceRoleAssignmentRecord
     >;
-    listResourceSharingRecipients: FunctionReference<
-      "query",
-      "public",
-      ListResourceSharingRecipientsArgs,
-      { recipients: SharingRecipient[]; cursor?: string }
+    userResourceRoleAssignmentsGet: CompGet<{ id: string }, UserResourceRoleAssignmentRecord>;
+    groupResourceRoleAssignmentsList: CompList<
+      {
+        tenantId?: string;
+        groupId?: string;
+        roleId?: string;
+        resourceTypeId?: string;
+        externalId?: string;
+      },
+      GroupResourceRoleAssignmentRecord
     >;
-    getTenantUserDirectoryEntry: FunctionReference<
-      "query",
-      "public",
-      GetTenantUserDirectoryEntryArgs,
-      TenantUserDirectoryEntry | null
+    groupResourceRoleAssignmentsGet: CompGet<{ id: string }, GroupResourceRoleAssignmentRecord>;
+    groupMembershipsList: CompList<
+      { groupId?: string; membershipId?: string; tenantId?: string },
+      GroupMembershipRecord
     >;
-    listGroupMembers: FunctionReference<
+    groupMembershipsGet: CompGet<{ groupId: string; membershipId: string }, GroupMembershipRecord>;
+    rolePermissionsList: CompList<{ roleId?: string; permissionId?: string }, RolePermissionRecord>;
+    rolePermissionsGet: CompGet<{ roleId: string; permissionId: string }, RolePermissionRecord>;
+  };
+  resources: {
+    list: FunctionReference<
       "query",
       "public",
-      ListGroupMembersArgs,
-      { users: TenantUser[]; cursor?: string }
+      Cursored<{
+        tokenIdentifier?: string;
+        tenantId?: string;
+        type?: string;
+        parent?: ResourceRef;
+        permission?: string;
+        limit?: number;
+      }>,
+      ComponentPage<"resources", ResourceNode>
     >;
-    listUserGroups: FunctionReference<
+    get: FunctionReference<
       "query",
       "public",
-      ListUserGroupsArgs,
-      { groups: TenantGroup[]; cursor?: string }
+      {
+        tokenIdentifier?: string;
+        tenantId?: string;
+        type: string;
+        externalId: string;
+        permission?: string;
+      },
+      ResourceNode | null
     >;
-    listTenantRoles: FunctionReference<"query", "public", ListTenantArgs, TenantRoleSummary[]>;
-    getTenantRole: FunctionReference<"query", "public", GetTenantRoleArgs, TenantRoleDetail | null>;
-    listTenantPermissions: FunctionReference<
-      "query",
+    write: FunctionReference<
+      "mutation",
       "public",
-      ListTenantArgs,
-      TenantPermissionSummary[]
+      { tenantId?: string; type: string; externalId: string; parent?: ResourceRef },
+      ResourceNode | null
     >;
-    getResourcePermissionOverrides: FunctionReference<
-      "query",
+    remove: FunctionReference<
+      "mutation",
       "public",
-      GetResourcePermissionOverridesArgs,
-      ResourcePermissionOverridesResult | null
-    >;
-    explainAccess: FunctionReference<
-      "query",
-      "public",
-      ExplainAccessArgs,
-      ExplainAccessResult | null
-    >;
-    listDirectSubjectsForResource: FunctionReference<
-      "query",
-      "public",
-      ListDirectSubjectsArgs,
-      { subjects: DirectResourceSubject[]; cursor?: string }
+      { tenantId?: string; type: string; externalId: string },
+      { deleted: boolean }
     >;
   };
 };
 
-export type CreateIamOptions<DataModel extends GenericDataModel> = {
+export type CreateAccessOptions<DataModel extends GenericDataModel> = {
   query: QueryBuilder<DataModel, "public">;
   mutation: MutationBuilder<DataModel, "public">;
   action: ActionBuilder<DataModel, "public">;
   components?: Record<string, unknown>;
-  component?: IamComponent;
+  component?: AccessComponent;
   componentName?: string;
 };
 
-// A tenant extractor can return either a bare tenant id or a
-// richer object that also names a specific resource for DL16 resource
-// grant support. resource returns the richer shape so the
-// authorize call can walk resource-object grants.
-export type ExtractedTenant =
+// ── contexts ──────────────────────────────────────────────────────────────────
+export type AccessReadContext<DataModel extends GenericDataModel = GenericDataModel> =
+  | Pick<GenericQueryCtx<DataModel>, "auth" | "runQuery">
+  | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery">
+  | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">;
+
+export type AccessWriteContext<DataModel extends GenericDataModel = GenericDataModel> =
+  | Pick<GenericMutationCtx<DataModel>, "auth" | "runQuery" | "runMutation">
+  | Pick<GenericActionCtx<DataModel>, "auth" | "runQuery" | "runMutation">;
+
+type AnyCtx =
+  | GenericQueryCtx<GenericDataModel>
+  | GenericMutationCtx<GenericDataModel>
+  | GenericActionCtx<GenericDataModel>;
+
+// ── permission-guard selectors ────────────────────────────────────────────────
+export type TenantSelector<Ctx, Args> =
   | string
-  | {
-      tenantId: string;
-      resourceType?: string;
-      resourceId?: string;
-      ancestors?: Array<{ resourceType: string; resourceId: string }>;
-    };
+  | ((ctx: Ctx, args: Args) => string | Promise<string>);
 
-export type ExtractTenant<Ctx, Args> = (
-  ctx: Ctx,
-  args: Args,
-) => ExtractedTenant | Promise<ExtractedTenant>;
+export type ResourceSelector<Ctx, Args> =
+  | ResourceRef
+  | ((ctx: Ctx, args: Args) => ResourceRef | Promise<ResourceRef>);
 
-// Hard cap on resource-hierarchy depth: a request authorizes against the
-// resource plus at most this many ancestors. Generous for real nesting
-// (folder/file, project/task/comment) while bounding the per-call check count.
-const MAX_AUTHORIZE_CHAIN = 10;
-const AUTHORIZE_MANY_CHUNK_SIZE = 50;
+export type PermissionOptions = { tenant?: string; resource?: ResourceRef };
 
-export type IamQueryBuilder<DataModel extends GenericDataModel> = {
-  <
-    ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
-    ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
-    ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
-      DefaultArgsForOptionalValidator<ArgsValidator>,
-  >(query: {
-    permission: string;
-    authorizeAgainst?: ExtractTenant<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
-    args?: ArgsValidator;
-    returns?: ReturnsValidator;
-    handler: (ctx: GenericQueryCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
-  }): RegisteredQuery<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
-};
-
-export type IamMutationBuilder<DataModel extends GenericDataModel> = {
-  <
-    ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
-    ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
-    ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
-      DefaultArgsForOptionalValidator<ArgsValidator>,
-  >(mutation: {
-    permission: string;
-    authorizeAgainst?: ExtractTenant<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
-    args?: ArgsValidator;
-    returns?: ReturnsValidator;
-    handler: (ctx: GenericMutationCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
-  }): RegisteredMutation<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
-};
-
-export type IamActionBuilder<DataModel extends GenericDataModel> = {
-  <
-    ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
-    ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
-    ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
-      DefaultArgsForOptionalValidator<ArgsValidator>,
-  >(action: {
-    permission: string;
-    authorizeAgainst?: ExtractTenant<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
-    args?: ArgsValidator;
-    returns?: ReturnsValidator;
-    handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
-  }): RegisteredAction<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
-};
-
-export type IamBuilders<DataModel extends GenericDataModel> = {
-  publicQuery: QueryBuilder<DataModel, "public">;
-  publicMutation: MutationBuilder<DataModel, "public">;
-  publicAction: ActionBuilder<DataModel, "public">;
-  authenticatedQuery: QueryBuilder<DataModel, "public">;
-  authenticatedMutation: MutationBuilder<DataModel, "public">;
-  authenticatedAction: ActionBuilder<DataModel, "public">;
-  iamQuery: IamQueryBuilder<DataModel>;
-  iamMutation: IamMutationBuilder<DataModel>;
-  iamAction: IamActionBuilder<DataModel>;
-  hasPermission: (ctx: IamContext<DataModel>, args: PermissionCheckArgs) => Promise<boolean>;
-  requirePermission: (ctx: IamContext<DataModel>, args: PermissionCheckArgs) => Promise<void>;
-  requireAnyPermission: (ctx: IamContext<DataModel>, args: AnyPermissionCheckArgs) => Promise<void>;
-  getEffectivePermissions: (
-    ctx: IamContext<DataModel>,
-    args?: EffectivePermissionsArgs,
-  ) => Promise<string[]>;
-  checkPermissions: (
-    ctx: IamContext<DataModel>,
-    checks: Array<Exclude<PermissionCheckArgs, string>>,
-  ) => Promise<AuthorizationDecision[]>;
-  /**
-   * Return the current user's canonical Hercules Auth id (`sub`) from the
-   * verified Convex identity. Use this to link app-owned profile or domain
-   * rows to the signed-in user instead of parsing `tokenIdentifier`.
-   */
-  getCurrentUserId: (ctx: IamContext<DataModel>) => Promise<string | undefined>;
-  getTenantAccessStatus: (ctx: IamContext<DataModel>) => Promise<IamTenantAccessStatusResult>;
-  // Filter a page of the APP's own resource rows down to the ones the caller is
-  // allowed to access, by running the same per-resource permission check as a
-  // real `iamQuery`. Use this for "list my projects" style lists: the app
-  // owns and paginates its rows, Hercules never enumerates them. Pass a bounded
-  // page, not an entire table (checks are batched via authorizeMany).
-  filterAuthorizedResources: <T>(
-    ctx: IamContext<DataModel>,
-    args: {
-      resources: T[];
-      permission: string;
-      tenantId?: string;
-      resource: (item: T) => IamResourceRef;
-      ancestors?: (item: T) => IamAuthorizationAncestor[];
-    },
-  ) => Promise<T[]>;
-  listMyTenants: (
-    ctx: IamContext<DataModel>,
-    args?: { cursor?: string; limit?: number },
-  ) => Promise<TenantSummariesPage>;
-  listMyActiveTenants: (
-    ctx: IamContext<DataModel>,
-    args?: { cursor?: string; limit?: number; isRoot?: boolean },
-  ) => Promise<ActiveTenantSummariesPage>;
-  getTargetTenantSyncStatus: (
-    ctx: IamContext<DataModel>,
-    args: { tenantId: string; sourceVersion: number },
-  ) => Promise<TargetTenantSyncStatus>;
-  listMyRoles: (ctx: IamContext<DataModel>, args?: { tenantId?: string }) => Promise<RoleSummary[]>;
-  // Tenant-admin reads for an in-app management screen. Each requires the caller
-  // to hold the matching read permission (system.access.users:read /
-  // system.access.roles:read / system.access.permissions:read) in the tenant;
-  // otherwise they resolve to an empty
-  // list. Reads come from the local mirror, like every other IAM query.
-  getTenant: (
-    ctx: IamContext<DataModel>,
-    args?: { tenantId?: string },
-  ) => Promise<TenantDetail | null>;
-  listTenantUsers: (
-    ctx: IamContext<DataModel>,
-    args?: { tenantId?: string; cursor?: string; limit?: number },
-  ) => Promise<TenantUsersPage>;
-  listTenantGroups: (
-    ctx: IamContext<DataModel>,
-    args?: { tenantId?: string; cursor?: string; limit?: number },
-  ) => Promise<TenantGroupsPage>;
-  listTenantUserDirectory: (
-    ctx: IamContext<DataModel>,
-    args?: { tenantId?: string; cursor?: string; limit?: number },
-  ) => Promise<TenantUserDirectoryPage>;
-  listTenantMemberPickerUsers: (
-    ctx: IamContext<DataModel>,
-    args: {
-      tenantId?: string;
-      permission: string;
-      resource?: IamResourceRef;
-      ancestors?: IamAuthorizationAncestor[];
-      cursor?: string;
-      limit?: number;
-    },
-  ) => Promise<TenantMemberPickerUsersPage>;
-  listResourceSharingRecipients: (
-    ctx: IamContext<DataModel>,
-    args: {
-      tenantId?: string;
-      permission: string;
-      resourceType: string;
-      resourceId: string;
-      ancestors?: IamAuthorizationAncestor[];
-      recipientType: "user" | "group";
-      cursor?: string;
-      limit?: number;
-    },
-  ) => Promise<SharingRecipientsPage>;
-  getTenantUserDirectoryEntry: (
-    ctx: IamContext<DataModel>,
-    args: {
-      tenantId?: string;
-      userId: string;
-    },
-  ) => Promise<TenantUserDirectoryEntry | null>;
-  listGroupMembers: (
-    ctx: IamContext<DataModel>,
-    args: { tenantId?: string; groupId: string; cursor?: string; limit?: number },
-  ) => Promise<TenantUsersPage>;
-  listUserGroups: (
-    ctx: IamContext<DataModel>,
-    args: { tenantId?: string; userId: string; cursor?: string; limit?: number },
-  ) => Promise<TenantGroupsPage>;
-  listTenantRoles: (
-    ctx: IamContext<DataModel>,
-    args?: { tenantId?: string },
-  ) => Promise<TenantRoleSummary[]>;
-  getTenantRole: (
-    ctx: IamContext<DataModel>,
-    args: { tenantId?: string; roleId: string },
-  ) => Promise<TenantRoleDetail | null>;
-  listTenantPermissions: (
-    ctx: IamContext<DataModel>,
-    args?: { tenantId?: string },
-  ) => Promise<TenantPermissionSummary[]>;
-  getResourcePermissionOverrides: (
-    ctx: IamContext<DataModel>,
-    args: {
-      tenantId?: string;
-      subject: ResourcePermissionOverrideSubject;
-      resourceType: string;
-      target: ResourcePermissionOverrideTarget;
-    },
-  ) => Promise<ResourcePermissionOverridesResult | null>;
-  explainAccess: (
-    ctx: IamContext<DataModel>,
-    args: {
-      tenantId?: string;
-      userId: string;
-      permission: string;
-      target: ExplainAccessTarget;
-    },
-  ) => Promise<ExplainAccessResult | null>;
-  // "Who has a DIRECT grant on this resource" for an in-app membership panel.
-  // DIRECT grants only (excludes tenant-wide role/wildcard and parent-inherited
-  // access). Requires system.access.grants:read in the tenant and returns an
-  // empty page when the caller is not allowed.
-  listDirectSubjectsForResource: (
-    ctx: IamContext<DataModel>,
-    args: {
-      tenantId?: string;
-      resourceType: string;
-      resourceId: string;
-      cursor?: string;
-      limit?: number;
-    },
-  ) => Promise<DirectResourceSubjectsPage>;
-};
-
-export type PermissionCheckArgs =
+// A permission requirement is either a single permission key, a bare array
+// (treated as `allOf`), or a set combined with explicit AND/OR semantics:
+//   • `"app.x:read"`            - hold this one permission.
+//   • `["a", "b"]`              - hold EVERY ONE (AND), shorthand for allOf.
+//   • `{ anyOf: ["a", "b"] }`   - hold AT LEAST ONE (OR).
+//   • `{ allOf: ["a", "b"] }`   - hold EVERY ONE (AND).
+// An empty array / `anyOf` / `allOf` is rejected as a misconfiguration (denied).
+export type PermissionRequirement =
   | string
-  | {
-      tenantId?: string;
-      permission: string;
-      resource?: IamResourceRef;
-      ancestors?: IamAuthorizationAncestor[];
-    };
-
-export type AnyPermissionCheckArgs =
   | string[]
-  | {
+  | { anyOf: string[]; allOf?: never }
+  | { allOf: string[]; anyOf?: never };
+
+// ── auth-aware builders ────────────────────────────────────────────────────────
+type GuardConfig<Ctx, Args> = {
+  permission?: PermissionRequirement;
+  tenant?: TenantSelector<Ctx, Args>;
+  resource?: ResourceSelector<Ctx, Args>;
+};
+
+export type AuthQueryBuilder<DataModel extends GenericDataModel> = <
+  ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
+  ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
+  ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
+  OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+    DefaultArgsForOptionalValidator<ArgsValidator>,
+>(query: {
+  args?: ArgsValidator;
+  returns?: ReturnsValidator;
+  permission?: PermissionRequirement;
+  tenant?: TenantSelector<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
+  resource?: ResourceSelector<GenericQueryCtx<DataModel>, OneOrZeroArgs[0]>;
+  handler: (ctx: GenericQueryCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
+}) => RegisteredQuery<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
+
+export type AuthMutationBuilder<DataModel extends GenericDataModel> = <
+  ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
+  ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
+  ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
+  OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+    DefaultArgsForOptionalValidator<ArgsValidator>,
+>(mutation: {
+  args?: ArgsValidator;
+  returns?: ReturnsValidator;
+  permission?: PermissionRequirement;
+  tenant?: TenantSelector<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
+  resource?: ResourceSelector<GenericMutationCtx<DataModel>, OneOrZeroArgs[0]>;
+  handler: (ctx: GenericMutationCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
+}) => RegisteredMutation<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
+
+export type AuthActionBuilder<DataModel extends GenericDataModel> = <
+  ArgsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
+  ReturnsValidator extends PropertyValidators | Validator<unknown, "required", string> | void,
+  ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
+  OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+    DefaultArgsForOptionalValidator<ArgsValidator>,
+>(action: {
+  args?: ArgsValidator;
+  returns?: ReturnsValidator;
+  permission?: PermissionRequirement;
+  tenant?: TenantSelector<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
+  resource?: ResourceSelector<GenericActionCtx<DataModel>, OneOrZeroArgs[0]>;
+  handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
+}) => RegisteredAction<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
+
+// The uniform list/get pair a mirror-table namespace exposes.
+type TableReads<DataModel extends GenericDataModel, Filters, Key, Rec> = {
+  list: (
+    ctx: AccessReadContext<DataModel>,
+    filters?: Filters & { cursor?: string; limit?: number },
+  ) => Promise<ListPage<Rec>>;
+  get: (ctx: AccessReadContext<DataModel>, key: Key) => Promise<Rec | null>;
+};
+
+// ── the createAccess surface ──────────────────────────────────────────────────────
+export type Access<DataModel extends GenericDataModel> = {
+  // Auth-aware builders. Require a verified identity; add { permission, tenant?,
+  // resource? } to also enforce a permission before the handler runs. For
+  // non-protected functions, import the raw query/mutation/action from
+  // _generated/server directly.
+  protectedQuery: AuthQueryBuilder<DataModel>;
+  protectedMutation: AuthMutationBuilder<DataModel>;
+  protectedAction: AuthActionBuilder<DataModel>;
+  // In-handler authorization. `requirement` accepts a single key, a bare array
+  // (allOf / AND), or an { anyOf } / { allOf } set (see PermissionRequirement).
+  hasPermissions: (
+    ctx: AccessReadContext<DataModel>,
+    requirement: PermissionRequirement,
+    options?: PermissionOptions,
+  ) => Promise<boolean>;
+  requirePermissions: (
+    ctx: AccessReadContext<DataModel>,
+    requirement: PermissionRequirement,
+    options?: PermissionOptions,
+  ) => Promise<void>;
+  // Caller-centric reads.
+  me: {
+    // The signed-in end user's ID (their verified OIDC subject). Link app rows
+    // to this. `undefined` when unauthenticated.
+    id: (ctx: AccessReadContext<DataModel>) => Promise<string | undefined>;
+    tenants: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { cursor?: string; limit?: number; status?: "active" | "all" },
+    ) => Promise<TenantSummariesPage>;
+    roles: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { tenant?: string },
+    ) => Promise<RoleSummary[]>;
+    groups: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { tenant?: string },
+    ) => Promise<GroupSummary[]>;
+    accessStatus: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { tenant?: string },
+    ) => Promise<TenantAccessStatusResult>;
+  };
+  // Generic, uniform mirror reads. These are TRUSTED reads with no identity
+  // check: authorize the calling function (protectedQuery + requirePermissions).
+  tenants: TableReads<
+    DataModel,
+    { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+    { id: string } | { primary: true },
+    TenantRecord
+  >;
+  users: TableReads<DataModel, { email?: string }, { id: string } | { email: string }, UserRecord>;
+  groups: TableReads<
+    DataModel,
+    { tenantId?: string; status?: "active" | "disabled" },
+    { id: string },
+    GroupRecord
+  >;
+  roles: TableReads<
+    DataModel,
+    { tenantId?: string | null; isAppScope?: boolean },
+    { id: string } | { key: string; tenantId?: string | null },
+    RoleRecord
+  >;
+  permissions: TableReads<
+    DataModel,
+    { isAppScope?: boolean },
+    { id: string } | { key: string },
+    PermissionRecord
+  >;
+  resourceTypes: TableReads<
+    DataModel,
+    { parentResourceTypeId?: string | null },
+    { id: string } | { key: string },
+    ResourceTypeRecord
+  >;
+  tenantMemberships: TableReads<
+    DataModel,
+    { tenantId?: string; status?: MembershipStatus; userId?: string },
+    { id: string } | { tenantId: string; userId: string },
+    TenantMembershipRecord
+  >;
+  userRoleAssignments: TableReads<
+    DataModel,
+    { tenantId?: string; membershipId?: string; roleId?: string },
+    { id: string },
+    UserRoleAssignmentRecord
+  >;
+  groupRoleAssignments: TableReads<
+    DataModel,
+    { tenantId?: string; groupId?: string; roleId?: string },
+    { id: string },
+    GroupRoleAssignmentRecord
+  >;
+  userResourceRoleAssignments: TableReads<
+    DataModel,
+    {
       tenantId?: string;
-      permissions: string[];
-      resource?: IamResourceRef;
-      ancestors?: IamAuthorizationAncestor[];
-    };
-
-export type EffectivePermissionsArgs = {
-  tenantId?: string;
-  resource?: IamResourceRef;
-  ancestors?: IamAuthorizationAncestor[];
+      membershipId?: string;
+      roleId?: string;
+      resourceTypeId?: string;
+      externalId?: string;
+    },
+    { id: string },
+    UserResourceRoleAssignmentRecord
+  >;
+  groupResourceRoleAssignments: TableReads<
+    DataModel,
+    {
+      tenantId?: string;
+      groupId?: string;
+      roleId?: string;
+      resourceTypeId?: string;
+      externalId?: string;
+    },
+    { id: string },
+    GroupResourceRoleAssignmentRecord
+  >;
+  groupMemberships: TableReads<
+    DataModel,
+    { groupId?: string; membershipId?: string; tenantId?: string },
+    { groupId: string; membershipId: string },
+    GroupMembershipRecord
+  >;
+  rolePermissions: TableReads<
+    DataModel,
+    { roleId?: string; permissionId?: string },
+    { roleId: string; permissionId: string },
+    RolePermissionRecord
+  >;
+  // Component-owned resource nodes (the app owns lifecycle).
+  resource: {
+    list: (
+      ctx: AccessReadContext<DataModel>,
+      args?: {
+        tenant?: string;
+        type?: string;
+        parent?: ResourceRef;
+        permission?: string;
+        cursor?: string;
+        limit?: number;
+      },
+    ) => Promise<ResourceNodesPage>;
+    get: (
+      ctx: AccessReadContext<DataModel>,
+      args: { tenant?: string; type: string; externalId: string; permission?: string },
+    ) => Promise<ResourceNode | null>;
+    write: (
+      ctx: AccessWriteContext<DataModel>,
+      args: {
+        tenant?: string;
+        type: string;
+        externalId: string;
+        parent?: ResourceRef;
+      },
+    ) => Promise<ResourceNode | null>;
+    delete: (
+      ctx: AccessWriteContext<DataModel>,
+      args: { tenant?: string; type: string; externalId: string },
+    ) => Promise<{ deleted: boolean }>;
+  };
+  // Whether the mirror has caught up to a specific control-plane write.
+  syncStatus: (
+    ctx: AccessReadContext<DataModel>,
+    args: { tenant?: string; sourceVersion: number },
+  ) => Promise<TargetTenantSyncStatus>;
 };
-
-type ConvexDefinitionObject<Ctx> = {
-  args?: GenericValidator | PropertyValidators | void;
-  returns?: GenericValidator | PropertyValidators | void;
-  handler: (ctx: Ctx, ...args: never[]) => unknown;
-};
-
-type BuilderCaller = (definition: unknown) => unknown;
 
 /**
- * Wires Hercules managed IAM into a Convex app. Call once in
- * `convex/iam.ts`, passing the generated `query`/`mutation`/`action`
- * builders and `components`, then re-export the returned builders.
- *
- * Returned builders:
- * - `publicQuery`/`publicMutation`/`publicAction`: no auth.
- * - `authenticatedQuery`/`...Mutation`/`...Action`: require sign-in only.
- * - `iamQuery`/`iamMutation`/`iamAction`: enforce a permission in a
- *   tenant. Pass `{ permission, tenant }`; resolve `tenant` with
- *   `tenantArg` or `resource`.
- * - `hasPermission`/`requirePermission`/`requireAnyPermission`/
- *   `getEffectivePermissions`: in-handler checks. `getEffectivePermissions`
- *   and `hasPermission` accept an optional `{ resource }` ref for per-resource
- *   (e.g. per-project) checks.
- * - `getCurrentUserId`: the verified OIDC subject for linking
- *   app-owned domain rows. Do not parse `tokenIdentifier`.
- * - `listMyTenants`/`listMyRoles`: the caller's own tenants and roles.
- * - `listTenantUsers`/`listTenantGroups`/`listTenantRoles`/
- *   `listTenantPermissions`: complete
- *   mirrored admin reads for an in-app management screen. Each self-gates on
- *   the matching `system.*:read` permission and returns `[]` when the caller
- *   lacks it. Do not use mirror reads as write authorization; write paths
- *   should call generated IAM SDK methods that enforce grantability.
- *
- * Reads resolve against the app's local IAM mirror, which lags the
- * control plane by a short projection-sync window after any change.
+ * Wires Hercules managed access control into a Convex app. Call once in
+ * `convex/access.ts`, then re-export the returned helpers and builders.
  */
-export function createIam<DataModel extends GenericDataModel>(
-  options: CreateIamOptions<DataModel>,
-): IamBuilders<DataModel> {
+export function createAccess<DataModel extends GenericDataModel>(
+  options: CreateAccessOptions<DataModel>,
+): Access<DataModel> {
   const component = resolveComponent(options);
+  const q = component.queries;
+
+  // A generic list wrapper: forward the (compacted) filters, then rename the
+  // component's `cursor` to `nextCursor`. `Args` is inferred whole from the ref
+  // (filters + pagination), so the intersection stays out of inference.
+  const list =
+    <Args extends DefaultFunctionArgs, V>(
+      ref: FunctionReference<"query", "public", Args, ComponentItemsPage<V>>,
+    ) =>
+    async (ctx: AccessReadContext<DataModel>, filters?: Args): Promise<ListPage<V>> =>
+      withItemsCursor(await ctx.runQuery(ref, compact((filters ?? {}) as Args)));
+
+  const get =
+    <Args extends DefaultFunctionArgs, V>(
+      ref: FunctionReference<"query", "public", Args, V | null>,
+    ) =>
+    async (ctx: AccessReadContext<DataModel>, key: Args): Promise<V | null> =>
+      ctx.runQuery(ref, key);
 
   return {
-    publicQuery: options.query,
-    publicMutation: options.mutation,
-    publicAction: options.action,
-    authenticatedQuery: makeAuthenticatedBuilder(options.query, component),
-    authenticatedMutation: makeAuthenticatedBuilder(options.mutation, component),
-    authenticatedAction: makeAuthenticatedBuilder(options.action, component),
-    iamQuery: makeIamBuilder(options.query, component) as IamQueryBuilder<DataModel>,
-    iamMutation: makeIamBuilder(options.mutation, component) as IamMutationBuilder<DataModel>,
-    iamAction: makeIamBuilder(options.action, component) as IamActionBuilder<DataModel>,
-    hasPermission: makeHasPermission(component),
-    requirePermission: makeRequirePermission(component),
-    requireAnyPermission: makeRequireAnyPermission(component),
-    getEffectivePermissions: makeGetEffectivePermissions(component),
-    checkPermissions: makeCheckPermissions(component),
-    getCurrentUserId,
-    getTenantAccessStatus: makeGetTenantAccessStatus(component),
-    filterAuthorizedResources: makeFilterAuthorizedResources(component),
-    listMyTenants: makeListMyTenants(component),
-    listMyActiveTenants: makeListMyActiveTenants(component),
-    getTargetTenantSyncStatus: makeGetTargetTenantSyncStatus(component),
-    listMyRoles: makeListMyRoles(component),
-    getTenant: makeGetTenant(component),
-    listTenantUsers: makeListTenantUsers(component),
-    listTenantGroups: makeListTenantGroups(component),
-    listTenantUserDirectory: makeListTenantUserDirectory(component),
-    listTenantMemberPickerUsers: makeListTenantMemberPickerUsers(component),
-    listResourceSharingRecipients: makeListResourceSharingRecipients(component),
-    getTenantUserDirectoryEntry: makeGetTenantUserDirectoryEntry(component),
-    listGroupMembers: makeListGroupMembers(component),
-    listUserGroups: makeListUserGroups(component),
-    listTenantRoles: makeListTenantRoles(component),
-    getTenantRole: makeGetTenantRole(component),
-    listTenantPermissions: makeListTenantPermissions(component),
-    getResourcePermissionOverrides: makeGetResourcePermissionOverrides(component),
-    explainAccess: makeExplainAccess(component),
-    listDirectSubjectsForResource: makeListDirectSubjectsForResource(component),
+    protectedQuery: makeAuthBuilder(options.query, component) as AuthQueryBuilder<DataModel>,
+    protectedMutation: makeAuthBuilder(
+      options.mutation,
+      component,
+    ) as AuthMutationBuilder<DataModel>,
+    protectedAction: makeAuthBuilder(options.action, component) as AuthActionBuilder<DataModel>,
+    hasPermissions: (ctx, requirement, opts) => hasPermissions(component, ctx, requirement, opts),
+    requirePermissions: (ctx, requirement, opts) =>
+      requirePermissions(component, ctx, requirement, opts),
+    me: {
+      id: (ctx) => getCurrentUserId(ctx),
+      tenants: async (ctx, args = {}) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        if (!tokenIdentifier) return { tenants: [] };
+        const result = await ctx.runQuery(q.listMyTenants, {
+          tokenIdentifier,
+          ...optional("cursor", args.cursor),
+          ...optional("limit", args.limit),
+          ...optional("status", args.status),
+        });
+        return withNextCursor(result);
+      },
+      roles: async (ctx, args = {}) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        if (!tokenIdentifier) return [];
+        return ctx.runQuery(q.listMyRoles, {
+          tokenIdentifier,
+          ...optional("tenantId", args.tenant),
+        });
+      },
+      groups: async (ctx, args = {}) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        if (!tokenIdentifier) return [];
+        return ctx.runQuery(q.listMyGroups, {
+          tokenIdentifier,
+          ...optional("tenantId", args.tenant),
+        });
+      },
+      accessStatus: async (ctx, args = {}) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        if (!tokenIdentifier) return { kind: "fallback", reason: "identity_missing" };
+        return ctx.runQuery(q.getTenantAccessStatus, {
+          tokenIdentifier,
+          ...optional("tenantId", args.tenant),
+        });
+      },
+    },
+    tenants: { list: list(q.tenantsList), get: get(q.tenantsGet) },
+    users: { list: list(q.usersList), get: get(q.usersGet) },
+    groups: { list: list(q.groupsList), get: get(q.groupsGet) },
+    roles: { list: list(q.rolesList), get: get(q.rolesGet) },
+    permissions: { list: list(q.permissionsList), get: get(q.permissionsGet) },
+    resourceTypes: { list: list(q.resourceTypesList), get: get(q.resourceTypesGet) },
+    tenantMemberships: { list: list(q.tenantMembershipsList), get: get(q.tenantMembershipsGet) },
+    userRoleAssignments: { list: list(q.userRoleAssignmentsList), get: get(q.userRoleAssignmentsGet) },
+    groupRoleAssignments: {
+      list: list(q.groupRoleAssignmentsList),
+      get: get(q.groupRoleAssignmentsGet),
+    },
+    userResourceRoleAssignments: {
+      list: list(q.userResourceRoleAssignmentsList),
+      get: get(q.userResourceRoleAssignmentsGet),
+    },
+    groupResourceRoleAssignments: {
+      list: list(q.groupResourceRoleAssignmentsList),
+      get: get(q.groupResourceRoleAssignmentsGet),
+    },
+    groupMemberships: { list: list(q.groupMembershipsList), get: get(q.groupMembershipsGet) },
+    rolePermissions: { list: list(q.rolePermissionsList), get: get(q.rolePermissionsGet) },
+    resource: {
+      list: async (ctx, args = {}) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        const result = await ctx.runQuery(component.resources.list, {
+          ...optional("tokenIdentifier", tokenIdentifier),
+          ...optional("tenantId", args.tenant),
+          ...optional("type", args.type),
+          ...optional("parent", args.parent),
+          ...optional("permission", args.permission),
+          ...optional("cursor", args.cursor),
+          ...optional("limit", args.limit),
+        });
+        return withNextCursor(result);
+      },
+      get: async (ctx, args) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        return ctx.runQuery(component.resources.get, {
+          ...optional("tokenIdentifier", tokenIdentifier),
+          ...optional("tenantId", args.tenant),
+          type: args.type,
+          externalId: args.externalId,
+          ...optional("permission", args.permission),
+        });
+      },
+      write: async (ctx, args) =>
+        ctx.runMutation(component.resources.write, {
+          ...optional("tenantId", args.tenant),
+          type: args.type,
+          externalId: args.externalId,
+          ...optional("parent", args.parent),
+        }),
+      delete: async (ctx, args) =>
+        ctx.runMutation(component.resources.remove, {
+          ...optional("tenantId", args.tenant),
+          type: args.type,
+          externalId: args.externalId,
+        }),
+    },
+    syncStatus: async (ctx, args) => {
+      const tokenIdentifier = await getTokenIdentifier(ctx);
+      return ctx.runQuery(q.getTargetTenantSyncStatus, {
+        ...optional("tokenIdentifier", tokenIdentifier),
+        ...optional("tenantId", args.tenant),
+        sourceVersion: args.sourceVersion,
+      });
+    },
   };
 }
 
-// Single-tenant apps that don't pass a tenant arg resolve to the app's root
-// tenant. The component query looks up the persisted root scope row from the
-// mirror, so this helper just returns a sentinel string and authorize resolves
-// it. The private projection protocol identifies that row with kind="default".
-export const ROOT_TENANT_SENTINEL = "__hercules_root_tenant__";
+// ── helpers ────────────────────────────────────────────────────────────────────
+function optional<K extends string, V>(key: K, value: V | undefined): Record<K, V> | object {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
+}
 
-export const rootTenant: ExtractTenant<unknown, unknown> = () => ROOT_TENANT_SENTINEL;
+// Drop undefined-valued keys so an omitted filter is not sent as an explicit
+// `undefined` (which fails a Convex optional-arg validator).
+function compact<T extends object>(obj: T): T {
+  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as T;
+}
 
-// The resourceType `resource` emits. An extractor only sees the table
-// row, not the permission catalog, so it cannot know the canonical resource
-// type the checked permission uses (e.g. `app.project` for
-// `app.project:archive`). It emits this sentinel instead, and the component's
-// authorize query substitutes the requested permission's canonical catalog
-// resourceType (resolved by catalog lookup). Resource grants are pinned to that
-// same canonical type on the control plane, so the two match by construction.
-// Mirrored in component/checks.ts (like ROOT_TENANT_SENTINEL above).
-export const PERMISSION_RESOURCE_TYPE_SENTINEL = "__hercules_permission_resource_type__";
-
-/**
- * Resolves the tenant for an `iam*` builder from a string arg the caller
- * passes. Use for list/create handlers where the frontend already knows the
- * tenant. Throws if the arg is missing or empty.
- *
- * For operations that receive a tenant-owned row id, use
- * `resource` so the tenant is read from the row.
- */
-export function tenantArg<K extends string>(argKey: K) {
-  return (_ctx: unknown, args: Record<string, unknown>): string => {
-    const value = args?.[argKey];
-    if (typeof value !== "string" || value.length === 0) {
-      throw new ConvexError({
-        code: "INVALID_TENANT_ARG",
-        message: `tenantArg("${argKey}"): expected non-empty string on args.${argKey}`,
-      });
-    }
-    return value;
+function withNextCursor<T extends { cursor?: string }>(
+  result: T,
+): Omit<T, "cursor"> & { nextCursor?: string } {
+  const { cursor, ...rest } = result;
+  return {
+    ...(rest as Omit<T, "cursor">),
+    ...(cursor === undefined ? {} : { nextCursor: cursor }),
   };
 }
 
-type DbResourceCtx = { db: { get(id: unknown): Promise<unknown> } };
-
-/**
- * Resolves the tenant from a referenced row for an `iam*` builder.
- *
- * Params:
- * - `tableName`: the row's table (used in error messages only).
- * - `argKey`: the field on `args` holding the row id.
- * - `options.tenantField`: column carrying the tenant id (default
- *   `"tenantId"`).
- *
- * Resource type: the emitted `resourceType` defers to the checked permission's
- * canonical catalog resource type (e.g. `app.project` for
- * `app.project:archive`), which is also the type resource grants are pinned
- * to, so grants on the row always match the guarded permission.
- *
- * Hierarchy: pass `options.ancestors` to declare ordered parent
- * resources. The target and ancestors are evaluated atomically with the same
- * requested permission, so any applicable deny wins. The app owns these
- * relationships; the chain is bounded to ten ancestors.
- */
-export function resource<T extends string, K extends string>(
-  tableName: T,
-  argKey: K,
-  options: {
-    tenantField?: string;
-    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
-  } = {},
-) {
-  const tenantField = options.tenantField ?? "tenantId";
-  return async (
-    ctx: DbResourceCtx,
-    args: Record<string, unknown>,
-  ): Promise<{
-    tenantId: string;
-    resourceType: string;
-    resourceId: string;
-    ancestors?: Array<{ resourceType: string; resourceId: string }>;
-  }> => {
-    const id = args?.[argKey];
-    if (id == null) {
-      throw new ConvexError({
-        code: "INVALID_TENANT_ARG",
-        message: `resource("${tableName}", "${argKey}"): args.${argKey} is missing`,
-      });
-    }
-    const row = await ctx.db.get(id);
-    if (!row || typeof row !== "object") {
-      throw new ConvexError({
-        code: "RESOURCE_NOT_FOUND",
-        message: `resource("${tableName}", "${argKey}"): resource not found`,
-      });
-    }
-    const tenantId = (row as Record<string, unknown>)[tenantField];
-    if (typeof tenantId !== "string" || tenantId.length === 0) {
-      throw new ConvexError({
-        code: "INVALID_RESOURCE_TENANT",
-        message: `resource("${tableName}", "${argKey}"): resource is missing "${tenantField}"`,
-      });
-    }
-    const ancestors = normalizeAncestors(
-      options.ancestors?.(row as Record<string, unknown>),
-      `resource("${tableName}", "${argKey}")`,
-    );
-    return {
-      tenantId,
-      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
-      resourceId: String(id),
-      ...(ancestors ? { ancestors } : {}),
-    };
-  };
-}
-
-/**
- * Resolves a specific resource in the root app tenant without requiring a
- * tenant id column on the row. Use this for single-tenant apps that need
- * resource grants, denies, or per-resource UI checks.
- *
- * The row is loaded from `args[argKey]`, so authorization and mutation stay
- * bound to the same resource. Pass `ancestors` for trusted parent
- * resources exactly as with {@link resource}.
- */
-export function rootResource<T extends string, K extends string>(
-  tableName: T,
-  argKey: K,
-  options: {
-    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
-  } = {},
-) {
-  return async (
-    ctx: DbResourceCtx,
-    args: Record<string, unknown>,
-  ): Promise<{
-    tenantId: string;
-    resourceType: string;
-    resourceId: string;
-    ancestors?: Array<{ resourceType: string; resourceId: string }>;
-  }> => {
-    const id = args?.[argKey];
-    if (id == null) {
-      throw new ConvexError({
-        code: "INVALID_TENANT_ARG",
-        message: `rootResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
-      });
-    }
-    const row = await ctx.db.get(id);
-    if (!row || typeof row !== "object") {
-      throw new ConvexError({
-        code: "RESOURCE_NOT_FOUND",
-        message: `rootResource("${tableName}", "${argKey}"): resource not found`,
-      });
-    }
-    const ancestors = normalizeAncestors(
-      options.ancestors?.(row as Record<string, unknown>),
-      `rootResource("${tableName}", "${argKey}")`,
-    );
-    return {
-      tenantId: ROOT_TENANT_SENTINEL,
-      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
-      resourceId: String(id),
-      ...(ancestors ? { ancestors } : {}),
-    };
-  };
-}
-
-/**
- * Resolves child-creation authorization from an existing parent row. The
- * requested child permission stays unchanged; the parent is supplied as an
- * explicit ancestor and only descendant-enabled bindings apply through it.
- */
-export function parentResource<T extends string, K extends string>(
-  tableName: T,
-  argKey: K,
-  options: {
-    tenantField?: string;
-    parentResourceType: string;
-    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
-  },
-) {
-  const tenantField = options.tenantField ?? "tenantId";
-  return async (
-    ctx: DbResourceCtx,
-    args: Record<string, unknown>,
-  ): Promise<{
-    tenantId: string;
-    resourceType: string;
-    ancestors: Array<{ resourceType: string; resourceId: string }>;
-  }> => {
-    const id = args?.[argKey];
-    if (id == null) {
-      throw new ConvexError({
-        code: "INVALID_TENANT_ARG",
-        message: `parentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
-      });
-    }
-    const row = await ctx.db.get(id);
-    if (!row || typeof row !== "object") {
-      throw new ConvexError({
-        code: "RESOURCE_NOT_FOUND",
-        message: `parentResource("${tableName}", "${argKey}"): resource not found`,
-      });
-    }
-    const tenantId = (row as Record<string, unknown>)[tenantField];
-    if (typeof tenantId !== "string" || tenantId.length === 0) {
-      throw new ConvexError({
-        code: "INVALID_RESOURCE_TENANT",
-        message: `parentResource("${tableName}", "${argKey}"): resource is missing "${tenantField}"`,
-      });
-    }
-    const ancestors = normalizeAncestors(
-      [
-        { type: options.parentResourceType, id: String(id) },
-        ...(options.ancestors?.(row as Record<string, unknown>) ?? []),
-      ],
-      `parentResource("${tableName}", "${argKey}")`,
-    );
-    return {
-      tenantId,
-      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
-      ancestors: ancestors!,
-    };
-  };
-}
-
-/**
- * Resolves child creation against a parent resource in the root app tenant.
- * The parent row is loaded from `args[argKey]`; no tenant id field is required
- * on the parent or child tables.
- */
-export function rootParentResource<T extends string, K extends string>(
-  tableName: T,
-  argKey: K,
-  options: {
-    parentResourceType: string;
-    ancestors?: (row: Record<string, unknown>) => IamAuthorizationAncestor[];
-  },
-) {
-  return async (
-    ctx: DbResourceCtx,
-    args: Record<string, unknown>,
-  ): Promise<{
-    tenantId: string;
-    resourceType: string;
-    ancestors: Array<{ resourceType: string; resourceId: string }>;
-  }> => {
-    const id = args?.[argKey];
-    if (id == null) {
-      throw new ConvexError({
-        code: "INVALID_TENANT_ARG",
-        message: `rootParentResource("${tableName}", "${argKey}"): args.${argKey} is missing`,
-      });
-    }
-    const row = await ctx.db.get(id);
-    if (!row || typeof row !== "object") {
-      throw new ConvexError({
-        code: "RESOURCE_NOT_FOUND",
-        message: `rootParentResource("${tableName}", "${argKey}"): resource not found`,
-      });
-    }
-    const ancestors = normalizeAncestors(
-      [
-        { type: options.parentResourceType, id: String(id) },
-        ...(options.ancestors?.(row as Record<string, unknown>) ?? []),
-      ],
-      `rootParentResource("${tableName}", "${argKey}")`,
-    );
-    return {
-      tenantId: ROOT_TENANT_SENTINEL,
-      resourceType: PERMISSION_RESOURCE_TYPE_SENTINEL,
-      ancestors: ancestors!,
-    };
+function withItemsCursor<V>(result: ComponentItemsPage<V>): ListPage<V> {
+  return {
+    items: result.items,
+    ...(result.cursor === undefined ? {} : { nextCursor: result.cursor }),
   };
 }
 
 function resolveComponent<DataModel extends GenericDataModel>(
-  options: CreateIamOptions<DataModel>,
-): IamComponent {
-  if (options.component) {
-    return options.component;
-  }
-
+  options: CreateAccessOptions<DataModel>,
+): AccessComponent {
+  if (options.component) return options.component;
   const componentName = options.componentName ?? "hercules";
   const component = options.components?.[componentName];
-
   if (!component) {
     throw new Error(
       "Missing Hercules IAM component. Install @usehercules/convex in convex/convex.config.ts.",
     );
   }
-
-  return component as IamComponent;
+  return component as AccessComponent;
 }
 
-function makeAuthenticatedBuilder<TBuilder>(builder: TBuilder, component: IamComponent): TBuilder {
-  return ((definition: unknown) => {
-    return (builder as BuilderCaller)(wrapDefinition(definition, component, "authenticated"));
-  }) as TBuilder;
-}
-
-function makeIamBuilder<TBuilder>(builder: TBuilder, component: IamComponent): TBuilder {
-  return ((definition: unknown) => {
-    if (typeof definition !== "object" || definition === null || !("handler" in definition)) {
-      throw new Error("iam* builders require an object definition with a permission.");
-    }
-
-    const iamDefinition = definition as ConvexDefinitionObject<AuthorizationCtx> & {
-      permission?: unknown;
-      authorizeAgainst?: unknown;
-    };
-    if (typeof iamDefinition.permission !== "string" || iamDefinition.permission.length === 0) {
-      throw new Error("iam* builders require a non-empty permission.");
-    }
-    if (
-      iamDefinition.authorizeAgainst !== undefined &&
-      typeof iamDefinition.authorizeAgainst !== "function"
-    ) {
-      throw new Error("iam* builders require authorizeAgainst to be a function.");
-    }
-    const { permission, authorizeAgainst, ...convexDefinition } = iamDefinition;
-    const authorizeExtractor = (authorizeAgainst ?? rootTenant) as ExtractTenant<
-      AuthorizationCtx,
-      unknown
-    >;
-    return (builder as BuilderCaller)(
-      wrapDefinition(convexDefinition, component, "permission", {
-        permission,
-        authorizeAgainst: authorizeExtractor,
-      }),
-    );
-  }) as TBuilder;
-}
-
-type IamConfig = {
-  permission?: string;
-  authorizeAgainst?: ExtractTenant<AuthorizationCtx, unknown>;
-};
-
-function wrapDefinition(
-  definition: unknown,
-  component: IamComponent,
-  mode: IamMode,
-  iam?: IamConfig,
-) {
-  if (typeof definition === "function") {
-    return async (ctx: AuthorizationCtx, ...args: never[]) => {
-      await ensureAuthorized(ctx, component, mode, iam, args[0]);
-      return (definition as (ctx: AuthorizationCtx, ...rest: never[]) => unknown)(ctx, ...args);
-    };
-  }
-
-  const objectDefinition = definition as ConvexDefinitionObject<AuthorizationCtx>;
-  return {
-    ...objectDefinition,
-    handler: async (ctx: AuthorizationCtx, ...args: never[]) => {
-      await ensureAuthorized(ctx, component, mode, iam, args[0]);
-      return objectDefinition.handler(ctx, ...args);
-    },
-  };
-}
-
-type AuthorizationCtx =
-  | GenericQueryCtx<GenericDataModel>
-  | GenericMutationCtx<GenericDataModel>
-  | GenericActionCtx<GenericDataModel>;
-
-function resourceArgs(resource?: IamResourceRef) {
-  return { resourceType: resource?.type, resourceId: resource?.id };
-}
-
-function ancestorArgs(ancestors?: Array<{ resourceType: string; resourceId: string }>) {
-  return ancestors ? { ancestors } : {};
-}
-
-function normalizeAncestors(
-  ancestors: IamAuthorizationAncestor[] | undefined,
-  source = "authorization check",
-): Array<{ resourceType: string; resourceId: string }> | undefined {
-  if (!ancestors || ancestors.length === 0) return undefined;
-  if (ancestors.length > MAX_AUTHORIZE_CHAIN) {
-    throw new ConvexError({
-      code: "INVALID_TENANT_ARG",
-      message: `${source}: expected at most ${MAX_AUTHORIZE_CHAIN} ancestors`,
-    });
-  }
-  return ancestors.map((ancestor) => {
-    if (!ancestor.type || !ancestor.id) {
-      throw new ConvexError({
-        code: "INVALID_TENANT_ARG",
-        message: `${source}: ancestors require non-empty type and id`,
-      });
-    }
-    return { resourceType: ancestor.type, resourceId: ancestor.id };
-  });
-}
-
-async function getTokenIdentifier(ctx: IamContext): Promise<string | undefined> {
+async function getTokenIdentifier(ctx: AccessReadContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.tokenIdentifier ?? undefined;
 }
 
-async function getCurrentUserId(ctx: IamContext): Promise<string | undefined> {
+async function getCurrentUserId(ctx: AccessReadContext): Promise<string | undefined> {
   return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
-function normalizePermissionCheckArgs(args: PermissionCheckArgs) {
-  if (typeof args === "string") {
-    return {
-      tenantId: ROOT_TENANT_SENTINEL,
-      permission: args,
-      resource: undefined,
-      ancestors: undefined,
-    };
-  }
-  return {
-    tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-    permission: args.permission,
-    resource: args.resource,
-    ancestors: normalizeAncestors(args.ancestors),
-  };
+async function hasPermissions(
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  requirement: PermissionRequirement,
+  options?: PermissionOptions,
+): Promise<boolean> {
+  const decision = await runCheck(component, ctx, requirement, options);
+  return decision.allowed;
 }
 
-function normalizeAnyPermissionCheckArgs(args: AnyPermissionCheckArgs) {
-  if (Array.isArray(args)) {
-    return {
-      tenantId: ROOT_TENANT_SENTINEL,
-      permissions: args,
-      resource: undefined,
-      ancestors: undefined,
-    };
-  }
-  return {
-    tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-    permissions: args.permissions,
-    resource: args.resource,
-    ancestors: args.ancestors,
-  };
-}
-
-function normalizeEffectivePermissionsArgs(args: EffectivePermissionsArgs | undefined) {
-  return {
-    tenantId: args?.tenantId ?? ROOT_TENANT_SENTINEL,
-    resource: args?.resource,
-    ancestors: normalizeAncestors(args?.ancestors),
-  };
-}
-
-function makeHasPermission(component: IamComponent) {
-  return async (ctx: IamContext, args: PermissionCheckArgs): Promise<boolean> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return false;
-    const normalized = normalizePermissionCheckArgs(args);
-
-    const decision = await ctx.runQuery(component.checks.authorize, {
-      tokenIdentifier,
-      tenantId: normalized.tenantId,
-      permission: normalized.permission,
-      ...resourceArgs(normalized.resource),
-      ...ancestorArgs(normalized.ancestors),
+async function requirePermissions(
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  requirement: PermissionRequirement,
+  options?: PermissionOptions,
+): Promise<void> {
+  const decision = await runCheck(component, ctx, requirement, options);
+  if (!decision.allowed) {
+    throw new ConvexError({
+      code: "ACCESS_DENIED",
+      message: "Access denied",
+      reasonCode: decision.reasonCode,
+      ...(decision.sourceVersion === undefined ? {} : { sourceVersion: decision.sourceVersion }),
     });
-    return decision.allowed;
-  };
+  }
 }
 
-function makeRequirePermission(component: IamComponent) {
-  const hasPermission = makeHasPermission(component);
-  return async (ctx: IamContext, args: PermissionCheckArgs): Promise<void> => {
-    if (await hasPermission(ctx, args)) return;
-    throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
-  };
+async function runCheck(
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  requirement: PermissionRequirement,
+  options?: PermissionOptions,
+): Promise<AccessDecision> {
+  const tokenIdentifier = await getTokenIdentifier(ctx);
+  if (!tokenIdentifier) {
+    return { allowed: false, reasonCode: "missing_identity" };
+  }
+  return evaluateRequirement(
+    component,
+    ctx,
+    tokenIdentifier,
+    requirement,
+    options?.tenant,
+    options?.resource,
+  );
 }
 
-function makeRequireAnyPermission(component: IamComponent) {
-  const hasPermission = makeHasPermission(component);
-  return async (ctx: IamContext, args: AnyPermissionCheckArgs): Promise<void> => {
-    const normalized = normalizeAnyPermissionCheckArgs(args);
-    for (const permission of normalized.permissions) {
-      if (await hasPermission(ctx, { ...normalized, permission })) return;
-    }
-    throw new ConvexError({ code: "ACCESS_DENIED", message: "Access denied" });
-  };
+// Splits a PermissionRequirement into its mode and the keys to check. A bare
+// string is a single AND of one key; a bare array is an allOf.
+function requirementKeys(requirement: PermissionRequirement): {
+  mode: "anyOf" | "allOf";
+  keys: string[];
+} {
+  if (typeof requirement === "string") return { mode: "allOf", keys: [requirement] };
+  if (Array.isArray(requirement)) return { mode: "allOf", keys: requirement };
+  if ("anyOf" in requirement && requirement.anyOf !== undefined) {
+    return { mode: "anyOf", keys: requirement.anyOf };
+  }
+  return { mode: "allOf", keys: requirement.allOf };
 }
 
-function makeGetEffectivePermissions(component: IamComponent) {
-  return async (ctx: IamContext, args?: EffectivePermissionsArgs): Promise<string[]> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return [];
-    const normalized = normalizeEffectivePermissionsArgs(args);
-
-    const result = await ctx.runQuery(component.queries.getEffectivePermissions, {
+// Resolves a PermissionRequirement to a single decision. One key uses the
+// cheaper `check`; a set fans out to `checkMany` and combines with anyOf=OR
+// (allowed if any allow) / allOf=AND (denied at the first deny).
+async function evaluateRequirement(
+  component: AccessComponent,
+  ctx: AccessReadContext,
+  tokenIdentifier: string,
+  requirement: PermissionRequirement,
+  tenantId: string | undefined,
+  resource: ResourceRef | undefined,
+): Promise<AccessDecision> {
+  const { mode, keys } = requirementKeys(requirement);
+  if (keys.length === 0) {
+    return { allowed: false, reasonCode: "empty_permission_set" };
+  }
+  if (keys.length === 1) {
+    return ctx.runQuery(component.checks.check, {
       tokenIdentifier,
-      tenantId: normalized.tenantId,
-      ...resourceArgs(normalized.resource),
-      ...ancestorArgs(normalized.ancestors),
+      ...optional("tenantId", tenantId),
+      permission: keys[0] as string,
+      ...optional("resource", resource),
     });
-    return result.permissions;
-  };
-}
-
-function makeCheckPermissions(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    checks: Array<Exclude<PermissionCheckArgs, string>>,
-  ): Promise<AuthorizationDecision[]> => {
-    if (checks.length > 50) {
-      throw new ConvexError({
-        code: "INVALID_PERMISSION_CHECKS",
-        message: "checkPermissions accepts at most 50 checks",
-      });
-    }
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) {
-      return checks.map(() => ({
-        allowed: false,
-        reasonCode: "missing_identity",
-        effectiveRoleIds: [],
-      }));
-    }
-
-    return await ctx.runQuery(component.checks.authorizeMany, {
-      tokenIdentifier,
-      checks: checks.map((check) => {
-        const normalized = normalizePermissionCheckArgs(check);
-        return {
-          tenantId: normalized.tenantId,
-          permission: normalized.permission,
-          ...resourceArgs(normalized.resource),
-          ...ancestorArgs(normalized.ancestors),
-        };
+  }
+  const decisions = await ctx.runQuery(component.checks.checkMany, {
+    tokenIdentifier,
+    checks: keys.map(
+      (key): Omit<CheckArgs, "tokenIdentifier"> => ({
+        ...optional("tenantId", tenantId),
+        permission: key,
+        ...optional("resource", resource),
       }),
-    });
-  };
+    ),
+  });
+  const fallback: AccessDecision = { allowed: false, reasonCode: "access_denied" };
+  if (mode === "anyOf") {
+    // OR: the first allow wins; otherwise surface the first denial.
+    return decisions.find((decision) => decision.allowed) ?? decisions[0] ?? fallback;
+  }
+  // AND: the first denial wins; otherwise any allow decision is representative.
+  return decisions.find((decision) => !decision.allowed) ?? decisions[0] ?? fallback;
 }
 
-function makeFilterAuthorizedResources(component: IamComponent) {
-  return async <T>(
-    ctx: IamContext,
-    args: {
-      resources: T[];
-      permission: string;
-      tenantId?: string;
-      resource: (item: T) => IamResourceRef;
-      ancestors?: (item: T) => IamAuthorizationAncestor[];
-    },
-  ): Promise<T[]> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return [];
-    const tenantId = args.tenantId ?? ROOT_TENANT_SENTINEL;
-
-    const checks = args.resources.map((item) => {
-      const ref = args.resource(item);
-      const ancestors = normalizeAncestors(args.ancestors?.(item), "filterAuthorizedResources");
-      return {
-        tenantId,
-        permission: args.permission,
-        resourceType: ref.type,
-        resourceId: ref.id,
-        ancestors,
-      };
-    });
-
-    const decisions: AuthorizationDecision[] = [];
-    for (let start = 0; start < checks.length; start += AUTHORIZE_MANY_CHUNK_SIZE) {
-      decisions.push(
-        ...(await ctx.runQuery(component.checks.authorizeMany, {
-          tokenIdentifier,
-          checks: checks.slice(start, start + AUTHORIZE_MANY_CHUNK_SIZE),
-        })),
-      );
+function makeAuthBuilder<TBuilder>(builder: TBuilder, component: AccessComponent): TBuilder {
+  return ((definition: unknown) => {
+    if (typeof definition !== "object" || definition === null || !("handler" in definition)) {
+      throw new Error("Auth-aware builders require an object definition with a handler.");
     }
-
-    return args.resources.filter((_item, index) => decisions[index]?.allowed);
-  };
-}
-
-function makeListMyTenants(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args?: { cursor?: string; limit?: number },
-  ): Promise<TenantSummariesPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { tenants: [] };
-
-    const result = await ctx.runQuery(component.queries.listMyTenants, {
-      tokenIdentifier,
-      cursor: args?.cursor,
-      limit: args?.limit,
-    });
-    return {
-      tenants: result.tenants,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
+    const def = definition as {
+      handler: (ctx: AnyCtx, ...args: never[]) => unknown;
+      permission?: unknown;
+      tenant?: unknown;
+      resource?: unknown;
+      args?: unknown;
+      returns?: unknown;
     };
-  };
-}
-
-function makeListMyActiveTenants(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { cursor?: string; limit?: number; isRoot?: boolean } = {},
-  ): Promise<ActiveTenantSummariesPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { tenants: [] };
-
-    const result = await ctx.runQuery(component.queries.listMyActiveTenants, {
-      tokenIdentifier,
-      cursor: args.cursor,
-      limit: args.limit,
-      isRoot: args.isRoot,
-    });
-    return {
-      tenants: result.tenants,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
+    const { permission, tenant, resource, handler, ...convexDefinition } = def;
+    const guard: GuardConfig<AnyCtx, unknown> = {
+      ...(isPermissionRequirement(permission) ? { permission } : {}),
+      ...(tenant === undefined ? {} : { tenant: tenant as TenantSelector<AnyCtx, unknown> }),
+      ...(resource === undefined
+        ? {}
+        : { resource: resource as ResourceSelector<AnyCtx, unknown> }),
     };
-  };
-}
-
-function makeGetTargetTenantSyncStatus(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId: string; sourceVersion: number },
-  ): Promise<TargetTenantSyncStatus> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    return await ctx.runQuery(component.queries.getTargetTenantSyncStatus, {
-      tokenIdentifier,
-      tenantId: args.tenantId,
-      sourceVersion: args.sourceVersion,
+    return (builder as (def: unknown) => unknown)({
+      ...convexDefinition,
+      handler: async (ctx: AnyCtx, ...args: never[]) => {
+        await ensureAuthorized(component, ctx, guard, args[0]);
+        return handler(ctx, ...args);
+      },
     });
-  };
-}
-
-function makeGetTenantAccessStatus(component: IamComponent) {
-  return async (ctx: IamContext): Promise<IamTenantAccessStatusResult> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) {
-      return { kind: "fallback", reason: "identity_missing" };
-    }
-
-    return await ctx.runQuery(component.queries.getTenantAccessStatus, {
-      tokenIdentifier,
-    });
-  };
-}
-
-function makeListMyRoles(component: IamComponent) {
-  return async (ctx: IamContext, args: { tenantId?: string } = {}): Promise<RoleSummary[]> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return [];
-
-    return await ctx.runQuery(component.queries.listMyRoles, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-    });
-  };
-}
-
-function makeGetTenant(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string } = {},
-  ): Promise<TenantDetail | null> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return null;
-
-    const result = await ctx.runQuery(component.queries.getTenant, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-    });
-    return toPublicTenantDetail(result as InternalOrPublicTenantDetail | null);
-  };
-}
-
-function makeListTenantUsers(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string; cursor?: string; limit?: number } = {},
-  ): Promise<TenantUsersPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { users: [] };
-
-    const result = await ctx.runQuery(component.queries.listTenantUsers, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      users: result.users,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-function makeListTenantGroups(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string; cursor?: string; limit?: number } = {},
-  ): Promise<TenantGroupsPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { groups: [] };
-
-    const result = await ctx.runQuery(component.queries.listTenantGroups, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      groups: result.groups,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-function makeListTenantUserDirectory(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string; cursor?: string; limit?: number } = {},
-  ): Promise<TenantUserDirectoryPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { users: [] };
-
-    const result = await ctx.runQuery(component.queries.listTenantUserDirectory, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      users: result.users,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-function makeListTenantMemberPickerUsers(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: {
-      tenantId?: string;
-      permission: string;
-      resource?: IamResourceRef;
-      ancestors?: IamAuthorizationAncestor[];
-      cursor?: string;
-      limit?: number;
-    },
-  ): Promise<TenantMemberPickerUsersPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { users: [] };
-
-    const result = await ctx.runQuery(component.queries.listTenantMemberPickerUsers, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      permission: args.permission,
-      ...resourceArgs(args.resource),
-      ...ancestorArgs(normalizeAncestors(args.ancestors, "listTenantMemberPickerUsers")),
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      users: result.users,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-type InternalOrPublicTenantDetail = Omit<TenantDetail, "lifecycleStatus"> & {
-  lifecycleStatus: TenantDetail["lifecycleStatus"] | "disabled";
-};
-
-function toPublicTenantDetail(tenant: InternalOrPublicTenantDetail | null): TenantDetail | null {
-  if (!tenant) return null;
-  return {
-    ...tenant,
-    lifecycleStatus: tenant.lifecycleStatus === "disabled" ? "archived" : tenant.lifecycleStatus,
-  };
-}
-
-function makeListResourceSharingRecipients(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: {
-      tenantId?: string;
-      permission: string;
-      resourceType: string;
-      resourceId: string;
-      ancestors?: IamAuthorizationAncestor[];
-      recipientType: "user" | "group";
-      cursor?: string;
-      limit?: number;
-    },
-  ): Promise<SharingRecipientsPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { recipients: [] };
-
-    const result = await ctx.runQuery(component.queries.listResourceSharingRecipients, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      permission: args.permission,
-      resourceType: args.resourceType,
-      resourceId: args.resourceId,
-      ...ancestorArgs(normalizeAncestors(args.ancestors, "listResourceSharingRecipients")),
-      recipientType: args.recipientType,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      recipients: result.recipients,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-function makeGetTenantUserDirectoryEntry(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: {
-      tenantId?: string;
-      userId: string;
-    },
-  ): Promise<TenantUserDirectoryEntry | null> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return null;
-
-    return await ctx.runQuery(component.queries.getTenantUserDirectoryEntry, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      userId: args.userId,
-    });
-  };
-}
-
-function makeListGroupMembers(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string; groupId: string; cursor?: string; limit?: number },
-  ): Promise<TenantUsersPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { users: [] };
-
-    const result = await ctx.runQuery(component.queries.listGroupMembers, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      groupId: args.groupId,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      users: result.users,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-function makeListUserGroups(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string; userId: string; cursor?: string; limit?: number },
-  ): Promise<TenantGroupsPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { groups: [] };
-
-    const result = await ctx.runQuery(component.queries.listUserGroups, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      userId: args.userId,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      groups: result.groups,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
-}
-
-function makeListTenantRoles(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string } = {},
-  ): Promise<TenantRoleSummary[]> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return [];
-
-    return await ctx.runQuery(component.queries.listTenantRoles, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-    });
-  };
-}
-
-function makeGetTenantRole(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string; roleId: string },
-  ): Promise<TenantRoleDetail | null> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return null;
-
-    return await ctx.runQuery(component.queries.getTenantRole, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      roleId: args.roleId,
-    });
-  };
-}
-
-function makeListTenantPermissions(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: { tenantId?: string } = {},
-  ): Promise<TenantPermissionSummary[]> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return [];
-
-    return await ctx.runQuery(component.queries.listTenantPermissions, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-    });
-  };
-}
-
-function makeGetResourcePermissionOverrides(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: {
-      tenantId?: string;
-      subject: ResourcePermissionOverrideSubject;
-      resourceType: string;
-      target: ResourcePermissionOverrideTarget;
-    },
-  ): Promise<ResourcePermissionOverridesResult | null> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return null;
-
-    return await ctx.runQuery(component.queries.getResourcePermissionOverrides, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      subject: args.subject,
-      resourceType: args.resourceType,
-      target: args.target,
-    });
-  };
-}
-
-function makeExplainAccess(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: {
-      tenantId?: string;
-      userId: string;
-      permission: string;
-      target: ExplainAccessTarget;
-    },
-  ): Promise<ExplainAccessResult | null> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return null;
-
-    return await ctx.runQuery(component.queries.explainAccess, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      userId: args.userId,
-      permission: args.permission,
-      target: args.target,
-    });
-  };
-}
-
-function makeListDirectSubjectsForResource(component: IamComponent) {
-  return async (
-    ctx: IamContext,
-    args: {
-      tenantId?: string;
-      resourceType: string;
-      resourceId: string;
-      cursor?: string;
-      limit?: number;
-    },
-  ): Promise<DirectResourceSubjectsPage> => {
-    const tokenIdentifier = await getTokenIdentifier(ctx);
-    if (!tokenIdentifier) return { subjects: [] };
-
-    const result = await ctx.runQuery(component.queries.listDirectSubjectsForResource, {
-      tokenIdentifier,
-      tenantId: args.tenantId ?? ROOT_TENANT_SENTINEL,
-      resourceType: args.resourceType,
-      resourceId: args.resourceId,
-      cursor: args.cursor,
-      limit: args.limit,
-    });
-    return {
-      subjects: result.subjects,
-      ...(result.cursor ? { nextCursor: result.cursor } : {}),
-    };
-  };
+  }) as TBuilder;
 }
 
 async function ensureAuthorized(
-  ctx: AuthorizationCtx,
-  component: IamComponent,
-  mode: IamMode,
-  iam: IamConfig | undefined,
+  component: AccessComponent,
+  ctx: AnyCtx,
+  guard: GuardConfig<AnyCtx, unknown>,
   callerArgs: unknown,
-) {
+): Promise<void> {
   const identity = await ctx.auth.getUserIdentity();
-
-  // MED-01: short-circuit on missing identity before tenant extraction so that
-  // unauthenticated callers cannot probe resource existence by observing
-  // INVALID_TENANT_ARG vs RESOURCE_NOT_FOUND vs INVALID_RESOURCE_TENANT.
   if (!identity?.tokenIdentifier) {
     throw new ConvexError({
-      code: mode === "permission" ? "ACCESS_DENIED" : "UNAUTHENTICATED",
-      message: mode === "permission" ? "Access denied" : "Authentication required",
+      code: guard.permission ? "ACCESS_DENIED" : "UNAUTHENTICATED",
+      message: guard.permission ? "Access denied" : "Authentication required",
       reasonCode: "missing_identity",
     });
   }
+  if (!guard.permission) return;
 
-  let tenantId: string | undefined;
-  let resourceType: string | undefined;
-  let resourceId: string | undefined;
-  let ancestors: Array<{ resourceType: string; resourceId: string }> | undefined;
-  if (mode === "permission") {
-    try {
-      const extracted = await (iam?.authorizeAgainst ?? rootTenant)(ctx, callerArgs);
-      if (typeof extracted === "string") {
-        tenantId = extracted;
-      } else {
-        tenantId = extracted.tenantId;
-        resourceType = extracted.resourceType;
-        resourceId = extracted.resourceId;
-        ancestors = extracted.ancestors;
-      }
-    } catch (error) {
-      if (error instanceof ConvexError) throw error;
-      throw new ConvexError({
-        code: "ACCESS_DENIED",
-        message: "tenant extraction failed",
-        reasonCode: "tenant_extract_failed",
-      });
+  let tenant: string | undefined;
+  let resource: ResourceRef | undefined;
+  try {
+    if (guard.tenant !== undefined) {
+      tenant =
+        typeof guard.tenant === "function" ? await guard.tenant(ctx, callerArgs) : guard.tenant;
     }
-  }
-
-  const decision = await ctx.runQuery(component.checks.authorize, {
-    tokenIdentifier: identity.tokenIdentifier,
-    tenantId,
-    permission: mode === "permission" ? iam?.permission : undefined,
-    resourceType,
-    resourceId,
-    ...ancestorArgs(ancestors),
-  });
-
-  if (!decision.allowed) {
+    if (guard.resource !== undefined) {
+      resource =
+        typeof guard.resource === "function"
+          ? await guard.resource(ctx, callerArgs)
+          : guard.resource;
+    }
+  } catch (error) {
+    if (error instanceof ConvexError) throw error;
     throw new ConvexError({
-      code: mode === "permission" ? "ACCESS_DENIED" : "UNAUTHENTICATED",
-      message: mode === "permission" ? "Access denied" : "Authentication required",
-      reasonCode: decision.reasonCode,
-      sourceVersion: decision.sourceVersion,
+      code: "ACCESS_DENIED",
+      message: "authorization target resolution failed",
+      reasonCode: "target_resolution_failed",
     });
   }
+
+  const decision = await evaluateRequirement(
+    component,
+    ctx,
+    identity.tokenIdentifier,
+    guard.permission,
+    tenant,
+    resource,
+  );
+  if (!decision.allowed) {
+    throw new ConvexError({
+      code: "ACCESS_DENIED",
+      message: "Access denied",
+      reasonCode: decision.reasonCode,
+      ...(decision.sourceVersion === undefined ? {} : { sourceVersion: decision.sourceVersion }),
+    });
+  }
+}
+
+function isPermissionRequirement(value: unknown): value is PermissionRequirement {
+  if (typeof value === "string") return true;
+  if (Array.isArray(value)) return value.every((item) => typeof item === "string");
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as { anyOf?: unknown; allOf?: unknown };
+  return Array.isArray(candidate.anyOf) || Array.isArray(candidate.allOf);
 }
