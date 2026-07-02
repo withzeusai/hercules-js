@@ -6,7 +6,7 @@ import * as ts from "typescript";
 // Build-time IAM static checker for @usehercules/convex apps.
 // ---------------------------------------------------------------------------
 //
-// Validates an app's Convex source against its hercules/iam.jsonc catalog so a
+// Validates an app's Convex source against its .hercules/iam.jsonc catalog so a
 // permission or resource-type typo fails the build instead of failing at
 // runtime. It is deliberately small and membership-only: it does not model the
 // runtime ReBAC engine, it only checks that the permission and resource-type
@@ -107,7 +107,7 @@ export function checkIamSource(options: CheckIamSourceOptions = {}): IamCheckRes
 export function formatIamCheckResult(result: IamCheckResult): string {
   if (result.ok) {
     const fileLabel = result.filesChecked === 1 ? "file" : "files";
-    return `Hercules IAM static check passed (${result.filesChecked} ${fileLabel} checked). This static check only verifies permission and resource-type keys against hercules/iam.jsonc; it does not prove runtime access decisions are authorized.`;
+    return `Hercules IAM static check passed (${result.filesChecked} ${fileLabel} checked). This static check only verifies permission and resource-type keys against .hercules/iam.jsonc; it does not prove runtime access decisions are authorized.`;
   }
 
   const lines = [`Hercules IAM check failed with ${result.findings.length} finding(s):`];
@@ -131,12 +131,12 @@ type IamCatalog = {
   resourceTypeKeys: Set<string> | null;
 };
 
-// The catalog lives at hercules/iam.jsonc at the app root and uses the same
+// The catalog lives at .hercules/iam.jsonc at the app root and uses the same
 // schema the @herculesai/iam compiler reads: `permissions` (app.<type>:<action>
 // keys), `resourceTypes` (app.<type> keys), `roles`, and `rolePermissions`.
 // This checker only needs the declared permission and resource-type keys.
 function loadIamCatalog(cwd: string): IamCatalog | null {
-  const iamFilePath = join(cwd, "hercules", "iam.jsonc");
+  const iamFilePath = join(cwd, ".hercules", "iam.jsonc");
   if (!existsSync(iamFilePath) || !statSync(iamFilePath).isFile()) {
     return null;
   }
@@ -179,7 +179,7 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
     findings.push(
       finding(cwd, sourceFile, literal.node, {
         code: "undeclared_permission",
-        message: `Permission "${literal.value}" is not declared in hercules/iam.jsonc.`,
+        message: `Permission "${literal.value}" is not declared in .hercules/iam.jsonc.`,
         suggestion:
           'Declare it under "permissions" as an app.<type>:<action> key, or fix it to match a declared permission.',
       }),
@@ -195,7 +195,7 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
     findings.push(
       finding(cwd, sourceFile, literal.node, {
         code: "undeclared_resource_type",
-        message: `Resource type "${literal.value}" is not declared in hercules/iam.jsonc.`,
+        message: `Resource type "${literal.value}" is not declared in .hercules/iam.jsonc.`,
         suggestion:
           'Declare it under "resourceTypes", or fix the type to match a declared resource type.',
       }),

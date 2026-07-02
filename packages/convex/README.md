@@ -432,7 +432,7 @@ hercules-convex-iam-check convex
 ```
 
 Catches deterministic source patterns: undeclared permission / resource-type
-literals (validated against `hercules/iam.jsonc`) and a guard option
+literals (validated against `.hercules/iam.jsonc`) and a guard option
 (`permission` / `tenant` / `resource`) passed to a raw Convex builder that would
 silently ignore it. It does not prove runtime role decisions or control-plane
 writes are authorized.
