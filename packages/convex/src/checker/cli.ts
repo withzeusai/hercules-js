@@ -63,7 +63,7 @@ function helpText(): string {
   return [
     "Usage: hercules-convex-iam-check [convex-dir] [--json]",
     "",
-    "Validates the Convex source against the app's hercules/iam.jsonc catalog.",
+    "Validates the Convex source against the app's .hercules/iam.jsonc catalog.",
     "Permission literals (the `permission` option on protectedQuery/protectedMutation/",
     "protectedAction and the argument to access.hasPermissions / access.requirePermissions,",
     "a single key, an array, or an anyOf/allOf set) must be a declared app permission.",
@@ -71,6 +71,6 @@ function helpText(): string {
     "(the `resource` option and resource.write / resource.get / resource.list)",
     "must be a declared resource type. Dynamic, non-literal values are skipped.",
     "",
-    "Apps without a hercules/iam.jsonc catalog pass unchanged.",
+    "Apps without a .hercules/iam.jsonc catalog pass unchanged.",
   ].join("\n");
 }

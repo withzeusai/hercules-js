@@ -26,7 +26,7 @@ const catalog = `{
 describe("checkIamSource", () => {
   test("passes a catalog and code that only reference declared keys", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { v } from "convex/values";
         import { access, protectedMutation, protectedQuery, resource } from "./access.js";
@@ -76,7 +76,7 @@ describe("checkIamSource", () => {
     // app-defined via iam.jsonc, so even a well-formed `system.access.*` literal
     // is now an undeclared permission. This guards against re-adding a bypass.
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/admin.ts": `
         import { protectedQuery } from "./access.js";
 
@@ -94,13 +94,13 @@ describe("checkIamSource", () => {
       { code: "undeclared_permission", filePath: "convex/admin.ts" },
     ]);
     expect(formatIamCheckResult(result)).toContain(
-      'Permission "system.access.users:read" is not declared in hercules/iam.jsonc.',
+      'Permission "system.access.users:read" is not declared in .hercules/iam.jsonc.',
     );
   });
 
   test("fails an undeclared permission on a builder", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
 
@@ -118,13 +118,13 @@ describe("checkIamSource", () => {
       { code: "undeclared_permission", filePath: "convex/documents.ts" },
     ]);
     expect(formatIamCheckResult(result)).toContain(
-      'Permission "app.document:write" is not declared in hercules/iam.jsonc.',
+      'Permission "app.document:write" is not declared in .hercules/iam.jsonc.',
     );
   });
 
   test("fails an undeclared permission passed to access.requirePermissions", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedMutation, access } from "./access.js";
 
@@ -148,7 +148,7 @@ describe("checkIamSource", () => {
 
   test("fails an undeclared permission passed to access.hasPermissions", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery, access } from "./access.js";
 
@@ -171,7 +171,7 @@ describe("checkIamSource", () => {
 
   test("fails an undeclared permission in a resource.get filter", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery, resource } from "./access.js";
 
@@ -197,7 +197,7 @@ describe("checkIamSource", () => {
 
   test("fails a typo'd resource type", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery, resource } from "./access.js";
 
@@ -220,13 +220,13 @@ describe("checkIamSource", () => {
       { code: "undeclared_resource_type", filePath: "convex/documents.ts" },
     ]);
     expect(formatIamCheckResult(result)).toContain(
-      'Resource type "app.documnet" is not declared in hercules/iam.jsonc.',
+      'Resource type "app.documnet" is not declared in .hercules/iam.jsonc.',
     );
   });
 
   test("fails a typo'd resource type in a type-only resource.list selector", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery, resource } from "./access.js";
 
@@ -246,7 +246,7 @@ describe("checkIamSource", () => {
 
   test("passes a valid type-only resource.list selector", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery, resource } from "./access.js";
 
@@ -263,7 +263,7 @@ describe("checkIamSource", () => {
 
   test("skips dynamic, non-literal permission and resource values", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery, access } from "./access.js";
 
@@ -286,7 +286,7 @@ describe("checkIamSource", () => {
     expect(result).toMatchObject({ ok: true, findings: [] });
   });
 
-  test("passes apps without a hercules/iam.jsonc catalog", () => {
+  test("passes apps without a .hercules/iam.jsonc catalog", () => {
     const root = createFixture({
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
@@ -305,7 +305,7 @@ describe("checkIamSource", () => {
 
   test("skips the permission check when the catalog cannot be parsed", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": "{ broken",
+      ".hercules/iam.jsonc": "{ broken",
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
 
@@ -322,7 +322,7 @@ describe("checkIamSource", () => {
   });
 
   test("reports a missing Convex directory", () => {
-    const root = createFixture({ "hercules/iam.jsonc": catalog });
+    const root = createFixture({ ".hercules/iam.jsonc": catalog });
 
     const result = checkIamSource({ cwd: root });
 
@@ -335,7 +335,7 @@ describe("checkIamSource", () => {
 
   test("describes a passing check as static and limited", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
         export const list = protectedQuery({ permission: "app.document:read", handler: async () => [] });
@@ -350,7 +350,7 @@ describe("checkIamSource", () => {
 
   test("passes an anyOf permission set whose keys are all declared", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
 
@@ -366,7 +366,7 @@ describe("checkIamSource", () => {
 
   test("fails an undeclared key inside an allOf permission set", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
 
@@ -388,7 +388,7 @@ describe("checkIamSource", () => {
 
   test("fails an undeclared key inside a bare array permission (allOf shorthand)", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedQuery } from "./access.js";
 
@@ -410,7 +410,7 @@ describe("checkIamSource", () => {
 
   test("fails an undeclared key inside an anyOf passed to access.requirePermissions", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { protectedMutation, access } from "./access.js";
 
@@ -432,7 +432,7 @@ describe("checkIamSource", () => {
 
   test("flags a raw _generated/server builder used with a permission guard", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { query } from "./_generated/server";
 
@@ -454,7 +454,7 @@ describe("checkIamSource", () => {
 
   test("flags an aliased raw builder used with a tenant guard", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { mutation as m } from "./_generated/server";
 
@@ -475,7 +475,7 @@ describe("checkIamSource", () => {
 
   test("allows a raw builder used without any guard option", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/public.ts": `
         import { query } from "./_generated/server";
 
@@ -488,7 +488,7 @@ describe("checkIamSource", () => {
 
   test("allows raw builder imports in the createAccess wiring file", () => {
     const root = createFixture({
-      "hercules/iam.jsonc": catalog,
+      ".hercules/iam.jsonc": catalog,
       "convex/access.ts": `
         import { createAccess } from "@usehercules/convex";
         import { action, mutation, query } from "./_generated/server";
