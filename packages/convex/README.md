@@ -198,21 +198,21 @@ loading, not as proof of authorization.
 - `get(ctx, key) => Promise<Record | null>` - `key` is one of the table's unique
   lookups.
 
-| Namespace                       | Table                          | `get` key                          | `list` filters                                                        |
-| ------------------------------- | ------------------------------ | ---------------------------------- | --------------------------------------------------------------------- |
-| `access.tenants`                | tenants                        | `{ id }` \| `{ primary: true }`    | `status`, `isPrimaryTenant`                                           |
-| `access.users`                  | users                          | `{ id }` \| `{ email }`            | `email`                                                               |
-| `access.groups`                 | groups                         | `{ id }`                           | `tenantId`, `status`                                                  |
-| `access.roles`                  | roles                          | `{ id }` \| `{ key, tenantId? }`   | `tenantId`, `isAppScope`                                              |
-| `access.permissions`            | permissions                    | `{ id }` \| `{ key }`              | `isAppScope`                                                          |
-| `access.resourceTypes`          | resource_types                 | `{ id }` \| `{ key }`              | `parentResourceTypeId`                                                |
-| `access.memberships`            | tenant_memberships             | `{ id }` \| `{ tenantId, userId }` | `tenantId`, `status`, `userId`                                        |
-| `access.roleAssignments`        | user_role_assignments          | `{ id }`                           | `tenantId`, `membershipId`, `roleId`                                  |
-| `access.groupRoleAssignments`   | group_role_assignments         | `{ id }`                           | `tenantId`, `groupId`, `roleId`                                       |
-| `access.resourceRoleAssignments`| user_resource_role_assignments | `{ id }`                           | `tenantId`, `membershipId`, `roleId`, `resourceTypeId`, `externalId` |
-| `access.groupResourceRoleAssignments` | group_resource_role_assignments | `{ id }`                    | `tenantId`, `groupId`, `roleId`, `resourceTypeId`, `externalId`      |
-| `access.groupMemberships`       | group_memberships              | `{ groupId, membershipId }`        | `groupId`, `membershipId`, `tenantId`                                 |
-| `access.rolePermissions`        | role_permissions               | `{ roleId, permissionId }`         | `roleId`, `permissionId`                                              |
+| Namespace                              | Table                            | `get` key                          | `list` filters                                                       |
+| -------------------------------------- | -------------------------------- | ---------------------------------- | ------------------------------------------------------------------- |
+| `access.tenants`                       | tenants                          | `{ id }` \| `{ primary: true }`    | `status`, `isPrimaryTenant`                                         |
+| `access.users`                         | users                            | `{ id }` \| `{ email }`            | `email`                                                             |
+| `access.groups`                        | groups                           | `{ id }`                           | `tenantId`, `status`                                               |
+| `access.roles`                         | roles                            | `{ id }` \| `{ key, tenantId? }`   | `tenantId`, `isAppScope`                                           |
+| `access.permissions`                   | permissions                      | `{ id }` \| `{ key }`              | `isAppScope`                                                       |
+| `access.resourceTypes`                 | resource_types                   | `{ id }` \| `{ key }`              | `parentResourceTypeId`                                             |
+| `access.tenantMemberships`             | tenant_memberships               | `{ id }` \| `{ tenantId, userId }` | `tenantId`, `status`, `userId`                                     |
+| `access.userRoleAssignments`           | user_role_assignments            | `{ id }`                           | `tenantId`, `membershipId`, `roleId`                              |
+| `access.groupRoleAssignments`          | group_role_assignments           | `{ id }`                           | `tenantId`, `groupId`, `roleId`                                   |
+| `access.userResourceRoleAssignments`   | user_resource_role_assignments   | `{ id }`                           | `tenantId`, `membershipId`, `roleId`, `resourceTypeId`, `externalId` |
+| `access.groupResourceRoleAssignments`  | group_resource_role_assignments  | `{ id }`                           | `tenantId`, `groupId`, `roleId`, `resourceTypeId`, `externalId`   |
+| `access.groupMemberships`              | group_memberships                | `{ groupId, membershipId }`        | `groupId`, `membershipId`, `tenantId`                             |
+| `access.rolePermissions`               | role_permissions                 | `{ roleId, permissionId }`         | `roleId`, `permissionId`                                          |
 
 ### Resource nodes (`resource.*`)
 
@@ -247,7 +247,7 @@ rarely references them directly except where a helper requires a `FunctionRefere
 - `queries.getTenantAccessStatus`, `queries.listMyTenants`, `queries.listMyRoles`,
   `queries.listMyGroups`, `queries.getTargetTenantSyncStatus`
 - The generic per-table reads `queries.<namespace>List` / `queries.<namespace>Get`
-  (e.g. `queries.tenantsList`, `queries.membershipsGet`) - one pair per mirror
+  (e.g. `queries.tenantsList`, `queries.tenantMembershipsGet`) - one pair per mirror
   table (see the Mirror reads table above)
 - `resources.list`, `resources.get`, `resources.write`, `resources.remove`
 - `sync.applySync` - a signature-verifying ACTION (the sole public write path to

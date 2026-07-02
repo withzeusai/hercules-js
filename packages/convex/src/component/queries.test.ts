@@ -124,7 +124,7 @@ describe("generic per-table reads", () => {
     expect(appScoped.items.map((row: { id: string }) => row.id)).toEqual(["r-shared"]);
   });
 
-  test("membershipsList filters and composite-key gets resolve", async () => {
+  test("tenantMembershipsList filters and composite-key gets resolve", async () => {
     const t = harness();
     await t.run(async (ctx) => {
       await ctx.db.insert("tenant_memberships", {
@@ -158,13 +158,13 @@ describe("generic per-table reads", () => {
       });
     });
 
-    const active = await t.query(q("membershipsList"), { tenantId: "T", status: "active" });
+    const active = await t.query(q("tenantMembershipsList"), { tenantId: "T", status: "active" });
     expect(active.items.map((row: { id: string }) => row.id)).toEqual(["m1"]);
 
-    const byUser = await t.query(q("membershipsList"), { userId: "u2" });
+    const byUser = await t.query(q("tenantMembershipsList"), { userId: "u2" });
     expect(byUser.items.map((row: { id: string }) => row.id)).toEqual(["m2"]);
 
-    const membership = await t.query(q("membershipsGet"), { tenantId: "T", userId: "u1" });
+    const membership = await t.query(q("tenantMembershipsGet"), { tenantId: "T", userId: "u1" });
     expect(membership).toMatchObject({ id: "m1" });
 
     const gm = await t.query(q("groupMembershipsGet"), { groupId: "g1", membershipId: "m1" });
