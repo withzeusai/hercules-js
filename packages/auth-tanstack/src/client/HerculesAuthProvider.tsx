@@ -1,5 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { checkSessionAction, getAuthAction, getSignOutUrl, refreshAuthAction } from "../server/actions";
+import {
+  checkSessionAction,
+  getAuthAction,
+  getSignOutUrl,
+  refreshAuthAction,
+} from "../server/actions";
 import type { ClientUserInfo, Impersonator, NoUserInfo, User } from "../types";
 import type { AuthContextType, HerculesAuthProviderProps } from "./types";
 
@@ -19,7 +24,11 @@ function getProps(auth: ClientUserInfo | NoUserInfo | undefined) {
   };
 }
 
-export function HerculesAuthProvider({ children, onSessionExpired, initialAuth }: HerculesAuthProviderProps) {
+export function HerculesAuthProvider({
+  children,
+  onSessionExpired,
+  initialAuth,
+}: HerculesAuthProviderProps) {
   const initial = getProps(initialAuth);
   const [user, setUser] = useState<User | null>(initial.user);
   const [sessionId, setSessionId] = useState(initial.sessionId);

@@ -30,10 +30,14 @@ export function useManagedToken(store: TokenStore): ManagedToken {
   const prevSessionRef = useRef(sessionId);
   const prevUserIdRef = useRef(userId);
 
-  const tokenState = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
+  const tokenState = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getServerSnapshot,
+  );
 
-  const [isInitialTokenLoading, setIsInitialTokenLoading] = useState(
-    () => Boolean(user && !tokenState.token && !tokenState.error),
+  const [isInitialTokenLoading, setIsInitialTokenLoading] = useState(() =>
+    Boolean(user && !tokenState.token && !tokenState.error),
   );
 
   useEffect(() => {
@@ -45,7 +49,8 @@ export function useManagedToken(store: TokenStore): ManagedToken {
       return;
     }
 
-    const sessionChanged = prevSessionRef.current !== undefined && prevSessionRef.current !== sessionId;
+    const sessionChanged =
+      prevSessionRef.current !== undefined && prevSessionRef.current !== sessionId;
     const userChanged = prevUserIdRef.current !== undefined && prevUserIdRef.current !== userId;
     if (sessionChanged || userChanged) store.clearToken();
 

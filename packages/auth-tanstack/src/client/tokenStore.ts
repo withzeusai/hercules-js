@@ -53,7 +53,9 @@ export class TokenStore {
    */
   constructor(
     private readonly fetchToken: () => Promise<string | undefined> = getAccessTokenAction,
-    private readonly refreshTokenAction: () => Promise<string | undefined> = refreshAccessTokenAction,
+    private readonly refreshTokenAction: () => Promise<
+      string | undefined
+    > = refreshAccessTokenAction,
   ) {}
 
   subscribe = (listener: () => void): (() => void) => {
@@ -119,7 +121,8 @@ export class TokenStore {
       clearTimeout(this.refreshTimeout);
       this.refreshTimeout = undefined;
     }
-    const delay = tokenData === undefined ? RETRY_DELAY_SECONDS * 1000 : this.getRefreshDelay(tokenData);
+    const delay =
+      tokenData === undefined ? RETRY_DELAY_SECONDS * 1000 : this.getRefreshDelay(tokenData);
     this.refreshTimeout = setTimeout(() => {
       void this.getTokenSilently().catch(() => {});
     }, delay);
@@ -197,7 +200,10 @@ export class TokenStore {
 
         return token;
       } catch (error) {
-        this.setState({ loading: false, error: error instanceof Error ? error : new Error(String(error)) });
+        this.setState({
+          loading: false,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
         this.scheduleRefresh();
         throw error;
       } finally {

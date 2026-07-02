@@ -62,7 +62,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@usehercules/sdk": "^1.15.7",
+    "@usehercules/sdk": "^1.15.13",
     "convex-helpers": "0.1.120",
     "standardwebhooks": "^1.0.0",
     "tslib": "^2.8.1",
@@ -75,10 +75,10 @@
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^24.13.2",
-    "convex": "^1.42.0",
+    "convex": "^1.42.1",
     "convex-test": "^0.0.53",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "main": "./dist/client/index.js",
   "module": "./dist/client/index.js",

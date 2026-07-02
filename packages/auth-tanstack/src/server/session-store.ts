@@ -1,4 +1,5 @@
 import { deleteCookie, getCookies, getRequest, setCookie } from "@tanstack/react-start/server";
+import { cookieSecurity, toCookieSameSite } from "./request-url";
 import {
   type SessionData,
   chunkValue,
@@ -29,12 +30,16 @@ export async function readSession(): Promise<SessionData | null> {
 export async function writeSession(session: SessionData, maxAgeSeconds?: number): Promise<void> {
   const sealed = await sealSession(session);
   const chunks = chunkValue(sealed);
-  const secure = new URL(getRequest().url).protocol === "https:";
+  // Over HTTPS use SameSite=None; Secure so the session cookie keeps working
+  // when the app is embedded cross-site (e.g. read via a server-function fetch
+  // from an iframe); fall back to Lax over plain HTTP (local dev).
+  const { secure, sameSite } = cookieSecurity(getRequest());
+  const sameSiteOption = toCookieSameSite(sameSite);
 
   const options = {
     httpOnly: true,
     secure,
-    sameSite: "lax" as const,
+    sameSite: sameSiteOption,
     path: "/",
     ...(maxAgeSeconds !== undefined ? { maxAge: maxAgeSeconds } : {}),
   };
@@ -42,13 +47,15 @@ export async function writeSession(session: SessionData, maxAgeSeconds?: number)
   chunks.forEach((chunk, index) => setCookie(sessionChunkName(index), chunk, options));
 
   for (const name of staleSessionCookieNames(Object.keys(getCookies()), chunks.length)) {
-    deleteCookie(name, { path: "/" });
+    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption });
   }
 }
 
 /** Expire every session cookie on the outgoing response. */
 export function clearSession(): void {
+  const { secure, sameSite } = cookieSecurity(getRequest());
+  const sameSiteOption = toCookieSameSite(sameSite);
   for (const name of staleSessionCookieNames(Object.keys(getCookies()), 0)) {
-    deleteCookie(name, { path: "/" });
+    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption });
   }
 }
