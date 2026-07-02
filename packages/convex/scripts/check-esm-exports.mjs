@@ -1,7 +1,6 @@
 const publicExports = [
   ["@usehercules/convex", "createAccess"],
   ["@usehercules/convex", "classifyAccessError"],
-  ["@usehercules/convex/iam-helpers", "createResourceCreatorBootstrapAction"],
   ["@usehercules/convex/http", "registerAccessRoutes"],
 ];
 
