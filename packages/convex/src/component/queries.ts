@@ -343,18 +343,18 @@ type SystemRow = { _id: unknown; _creationTime: number; sourceVersion: number };
 
 export type TenantRecord = StripSystem<DataModel["tenants"]["document"]>;
 export type UserRecord = StripSystem<DataModel["users"]["document"]>;
-export type MembershipRecord = StripSystem<DataModel["tenant_memberships"]["document"]>;
+export type TenantMembershipRecord = StripSystem<DataModel["tenant_memberships"]["document"]>;
 export type GroupRecord = StripSystem<DataModel["groups"]["document"]>;
 export type GroupMembershipRecord = StripSystem<DataModel["group_memberships"]["document"]>;
 export type RoleRecord = StripSystem<DataModel["roles"]["document"]>;
 export type PermissionRecord = StripSystem<DataModel["permissions"]["document"]>;
 export type RolePermissionRecord = StripSystem<DataModel["role_permissions"]["document"]>;
 export type ResourceTypeRecord = StripSystem<DataModel["resource_types"]["document"]>;
-export type RoleAssignmentRecord = StripSystem<DataModel["user_role_assignments"]["document"]>;
+export type UserRoleAssignmentRecord = StripSystem<DataModel["user_role_assignments"]["document"]>;
 export type GroupRoleAssignmentRecord = StripSystem<
   DataModel["group_role_assignments"]["document"]
 >;
-export type ResourceRoleAssignmentRecord = StripSystem<
+export type UserResourceRoleAssignmentRecord = StripSystem<
   DataModel["user_resource_role_assignments"]["document"]
 >;
 export type GroupResourceRoleAssignmentRecord = StripSystem<
@@ -628,14 +628,14 @@ export const resourceTypesGet = query({
 });
 
 // ── tenant memberships ────────────────────────────────────────────────────────
-export const membershipsList = query({
+export const tenantMembershipsList = query({
   args: {
     tenantId: v.optional(v.string()),
     status: v.optional(membershipStatusFilter),
     userId: v.optional(v.string()),
     ...pageArgs,
   },
-  handler: async (ctx, args): Promise<ItemsPage<MembershipRecord>> => {
+  handler: async (ctx, args): Promise<ItemsPage<TenantMembershipRecord>> => {
     const { tenantId, status, userId } = args;
     const base = paginator(ctx.db, schema).query("tenant_memberships");
     const q =
@@ -657,13 +657,13 @@ export const membershipsList = query({
   },
 });
 
-export const membershipsGet = query({
+export const tenantMembershipsGet = query({
   args: {
     id: v.optional(v.string()),
     tenantId: v.optional(v.string()),
     userId: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<MembershipRecord | null> => {
+  handler: async (ctx, args): Promise<TenantMembershipRecord | null> => {
     const { id, tenantId, userId } = args;
     if (id !== undefined) {
       return got(
@@ -686,14 +686,14 @@ export const membershipsGet = query({
 });
 
 // ── user role assignments ─────────────────────────────────────────────────────
-export const roleAssignmentsList = query({
+export const userRoleAssignmentsList = query({
   args: {
     tenantId: v.optional(v.string()),
     membershipId: v.optional(v.string()),
     roleId: v.optional(v.string()),
     ...pageArgs,
   },
-  handler: async (ctx, args): Promise<ItemsPage<RoleAssignmentRecord>> => {
+  handler: async (ctx, args): Promise<ItemsPage<UserRoleAssignmentRecord>> => {
     const { tenantId, membershipId, roleId } = args;
     const base = paginator(ctx.db, schema).query("user_role_assignments");
     const q =
@@ -713,9 +713,9 @@ export const roleAssignmentsList = query({
   },
 });
 
-export const roleAssignmentsGet = query({
+export const userRoleAssignmentsGet = query({
   args: { id: v.string() },
-  handler: async (ctx, args): Promise<RoleAssignmentRecord | null> => {
+  handler: async (ctx, args): Promise<UserRoleAssignmentRecord | null> => {
     return got(
       await ctx.db
         .query("user_role_assignments")
@@ -766,7 +766,7 @@ export const groupRoleAssignmentsGet = query({
 });
 
 // ── user resource role assignments ────────────────────────────────────────────
-export const resourceRoleAssignmentsList = query({
+export const userResourceRoleAssignmentsList = query({
   args: {
     tenantId: v.optional(v.string()),
     membershipId: v.optional(v.string()),
@@ -775,7 +775,7 @@ export const resourceRoleAssignmentsList = query({
     externalId: v.optional(v.string()),
     ...pageArgs,
   },
-  handler: async (ctx, args): Promise<ItemsPage<ResourceRoleAssignmentRecord>> => {
+  handler: async (ctx, args): Promise<ItemsPage<UserResourceRoleAssignmentRecord>> => {
     const { tenantId, membershipId, roleId, resourceTypeId, externalId } = args;
     const base = paginator(ctx.db, schema).query("user_resource_role_assignments");
     const q =
@@ -795,9 +795,9 @@ export const resourceRoleAssignmentsList = query({
   },
 });
 
-export const resourceRoleAssignmentsGet = query({
+export const userResourceRoleAssignmentsGet = query({
   args: { id: v.string() },
-  handler: async (ctx, args): Promise<ResourceRoleAssignmentRecord | null> => {
+  handler: async (ctx, args): Promise<UserResourceRoleAssignmentRecord | null> => {
     return got(
       await ctx.db
         .query("user_resource_role_assignments")

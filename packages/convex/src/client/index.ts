@@ -89,7 +89,7 @@ export type UserRecord = {
   updatedAt: number;
 };
 
-export type MembershipRecord = {
+export type TenantMembershipRecord = {
   id: string;
   tenantId: string;
   userId: string;
@@ -144,7 +144,7 @@ export type ResourceTypeRecord = {
   updatedAt: number;
 };
 
-export type RoleAssignmentRecord = {
+export type UserRoleAssignmentRecord = {
   id: string;
   tenantId: string;
   membershipId: string;
@@ -162,7 +162,7 @@ export type GroupRoleAssignmentRecord = {
   updatedAt: number;
 };
 
-export type ResourceRoleAssignmentRecord = {
+export type UserResourceRoleAssignmentRecord = {
   id: string;
   tenantId: string;
   membershipId: string;
@@ -320,22 +320,22 @@ export type AccessComponent = {
     permissionsGet: CompGet<{ id?: string; key?: string }, PermissionRecord>;
     resourceTypesList: CompList<{ parentResourceTypeId?: string | null }, ResourceTypeRecord>;
     resourceTypesGet: CompGet<{ id?: string; key?: string }, ResourceTypeRecord>;
-    membershipsList: CompList<
+    tenantMembershipsList: CompList<
       { tenantId?: string; status?: MembershipStatus; userId?: string },
-      MembershipRecord
+      TenantMembershipRecord
     >;
-    membershipsGet: CompGet<{ id?: string; tenantId?: string; userId?: string }, MembershipRecord>;
-    roleAssignmentsList: CompList<
+    tenantMembershipsGet: CompGet<{ id?: string; tenantId?: string; userId?: string }, TenantMembershipRecord>;
+    userRoleAssignmentsList: CompList<
       { tenantId?: string; membershipId?: string; roleId?: string },
-      RoleAssignmentRecord
+      UserRoleAssignmentRecord
     >;
-    roleAssignmentsGet: CompGet<{ id: string }, RoleAssignmentRecord>;
+    userRoleAssignmentsGet: CompGet<{ id: string }, UserRoleAssignmentRecord>;
     groupRoleAssignmentsList: CompList<
       { tenantId?: string; groupId?: string; roleId?: string },
       GroupRoleAssignmentRecord
     >;
     groupRoleAssignmentsGet: CompGet<{ id: string }, GroupRoleAssignmentRecord>;
-    resourceRoleAssignmentsList: CompList<
+    userResourceRoleAssignmentsList: CompList<
       {
         tenantId?: string;
         membershipId?: string;
@@ -343,9 +343,9 @@ export type AccessComponent = {
         resourceTypeId?: string;
         externalId?: string;
       },
-      ResourceRoleAssignmentRecord
+      UserResourceRoleAssignmentRecord
     >;
-    resourceRoleAssignmentsGet: CompGet<{ id: string }, ResourceRoleAssignmentRecord>;
+    userResourceRoleAssignmentsGet: CompGet<{ id: string }, UserResourceRoleAssignmentRecord>;
     groupResourceRoleAssignmentsList: CompList<
       {
         tenantId?: string;
@@ -591,17 +591,17 @@ export type Access<DataModel extends GenericDataModel> = {
     { id: string } | { key: string },
     ResourceTypeRecord
   >;
-  memberships: TableReads<
+  tenantMemberships: TableReads<
     DataModel,
     { tenantId?: string; status?: MembershipStatus; userId?: string },
     { id: string } | { tenantId: string; userId: string },
-    MembershipRecord
+    TenantMembershipRecord
   >;
-  roleAssignments: TableReads<
+  userRoleAssignments: TableReads<
     DataModel,
     { tenantId?: string; membershipId?: string; roleId?: string },
     { id: string },
-    RoleAssignmentRecord
+    UserRoleAssignmentRecord
   >;
   groupRoleAssignments: TableReads<
     DataModel,
@@ -609,7 +609,7 @@ export type Access<DataModel extends GenericDataModel> = {
     { id: string },
     GroupRoleAssignmentRecord
   >;
-  resourceRoleAssignments: TableReads<
+  userResourceRoleAssignments: TableReads<
     DataModel,
     {
       tenantId?: string;
@@ -619,7 +619,7 @@ export type Access<DataModel extends GenericDataModel> = {
       externalId?: string;
     },
     { id: string },
-    ResourceRoleAssignmentRecord
+    UserResourceRoleAssignmentRecord
   >;
   groupResourceRoleAssignments: TableReads<
     DataModel,
@@ -764,15 +764,15 @@ export function createAccess<DataModel extends GenericDataModel>(
     roles: { list: list(q.rolesList), get: get(q.rolesGet) },
     permissions: { list: list(q.permissionsList), get: get(q.permissionsGet) },
     resourceTypes: { list: list(q.resourceTypesList), get: get(q.resourceTypesGet) },
-    memberships: { list: list(q.membershipsList), get: get(q.membershipsGet) },
-    roleAssignments: { list: list(q.roleAssignmentsList), get: get(q.roleAssignmentsGet) },
+    tenantMemberships: { list: list(q.tenantMembershipsList), get: get(q.tenantMembershipsGet) },
+    userRoleAssignments: { list: list(q.userRoleAssignmentsList), get: get(q.userRoleAssignmentsGet) },
     groupRoleAssignments: {
       list: list(q.groupRoleAssignmentsList),
       get: get(q.groupRoleAssignmentsGet),
     },
-    resourceRoleAssignments: {
-      list: list(q.resourceRoleAssignmentsList),
-      get: get(q.resourceRoleAssignmentsGet),
+    userResourceRoleAssignments: {
+      list: list(q.userResourceRoleAssignmentsList),
+      get: get(q.userResourceRoleAssignmentsGet),
     },
     groupResourceRoleAssignments: {
       list: list(q.groupResourceRoleAssignmentsList),

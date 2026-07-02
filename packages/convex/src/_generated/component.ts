@@ -118,7 +118,7 @@ type UserRecord = {
   updatedAt: number;
 };
 
-type MembershipRecord = {
+type TenantMembershipRecord = {
   id: string;
   tenantId: string;
   userId: string;
@@ -173,7 +173,7 @@ type ResourceTypeRecord = {
   updatedAt: number;
 };
 
-type RoleAssignmentRecord = {
+type UserRoleAssignmentRecord = {
   id: string;
   tenantId: string;
   membershipId: string;
@@ -191,7 +191,7 @@ type GroupRoleAssignmentRecord = {
   updatedAt: number;
 };
 
-type ResourceRoleAssignmentRecord = {
+type UserResourceRoleAssignmentRecord = {
   id: string;
   tenantId: string;
   membershipId: string;
@@ -312,23 +312,23 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     >;
     resourceTypesGet: GetQuery<{ id?: string; key?: string }, ResourceTypeRecord, Name>;
 
-    membershipsList: ListQuery<
+    tenantMembershipsList: ListQuery<
       { tenantId?: string; status?: MembershipStatus; userId?: string },
-      MembershipRecord,
+      TenantMembershipRecord,
       Name
     >;
-    membershipsGet: GetQuery<
+    tenantMembershipsGet: GetQuery<
       { id?: string; tenantId?: string; userId?: string },
-      MembershipRecord,
+      TenantMembershipRecord,
       Name
     >;
 
-    roleAssignmentsList: ListQuery<
+    userRoleAssignmentsList: ListQuery<
       { tenantId?: string; membershipId?: string; roleId?: string },
-      RoleAssignmentRecord,
+      UserRoleAssignmentRecord,
       Name
     >;
-    roleAssignmentsGet: GetQuery<{ id: string }, RoleAssignmentRecord, Name>;
+    userRoleAssignmentsGet: GetQuery<{ id: string }, UserRoleAssignmentRecord, Name>;
 
     groupRoleAssignmentsList: ListQuery<
       { tenantId?: string; groupId?: string; roleId?: string },
@@ -337,7 +337,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     >;
     groupRoleAssignmentsGet: GetQuery<{ id: string }, GroupRoleAssignmentRecord, Name>;
 
-    resourceRoleAssignmentsList: ListQuery<
+    userResourceRoleAssignmentsList: ListQuery<
       {
         tenantId?: string;
         membershipId?: string;
@@ -345,10 +345,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         resourceTypeId?: string;
         externalId?: string;
       },
-      ResourceRoleAssignmentRecord,
+      UserResourceRoleAssignmentRecord,
       Name
     >;
-    resourceRoleAssignmentsGet: GetQuery<{ id: string }, ResourceRoleAssignmentRecord, Name>;
+    userResourceRoleAssignmentsGet: GetQuery<{ id: string }, UserResourceRoleAssignmentRecord, Name>;
 
     groupResourceRoleAssignmentsList: ListQuery<
       {
