@@ -16,10 +16,14 @@ describe("evaluateRecentAuth", () => {
   });
 
   it("fails closed when auth_time is missing or non-numeric", () => {
-    expect(evaluateRecentAuth({ authTime: undefined, maxAgeSeconds: 300, nowSeconds: now })).toEqual({
+    expect(
+      evaluateRecentAuth({ authTime: undefined, maxAgeSeconds: 300, nowSeconds: now }),
+    ).toEqual({
       authenticatedAt: null,
       isStale: true,
     });
-    expect(evaluateRecentAuth({ authTime: "nope", maxAgeSeconds: 300, nowSeconds: now }).isStale).toBe(true);
+    expect(
+      evaluateRecentAuth({ authTime: "nope", maxAgeSeconds: 300, nowSeconds: now }).isStale,
+    ).toBe(true);
   });
 });

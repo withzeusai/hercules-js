@@ -12,5 +12,10 @@ export { useRecentAuth } from "./useRecentAuth";
 
 export { getAuthAction } from "../server/actions";
 
-export type { AuthContextType, HerculesAuthProviderProps, UseAccessTokenReturn, UseIdTokenReturn } from "./types";
+export type {
+  AuthContextType,
+  HerculesAuthProviderProps,
+  UseAccessTokenReturn,
+  UseIdTokenReturn,
+} from "./types";
 export type { JWTPayload, TokenClaims } from "./jwt";

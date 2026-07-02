@@ -16,10 +16,12 @@ export const getAuthAction = createServerFn({ method: "GET" }).handler(
 );
 
 /** Whether a valid session exists. Used to detect session expiration. */
-export const checkSessionAction = createServerFn({ method: "GET" }).handler(async (): Promise<boolean> => {
-  const { checkSessionBody } = await import("./action-bodies");
-  return checkSessionBody();
-});
+export const checkSessionAction = createServerFn({ method: "GET" }).handler(
+  async (): Promise<boolean> => {
+    const { checkSessionBody } = await import("./action-bodies");
+    return checkSessionBody();
+  },
+);
 
 /** The current access token for the session, if authenticated. */
 export const getAccessTokenAction = createServerFn({ method: "GET" }).handler(

@@ -3,12 +3,12 @@ import type { IDToken } from "openid-client";
 export interface HandleSignInOptions {
   /**
    * Callback URL the provider redirects back to after authentication. Accepts
-   * an absolute URL (`https://app.example.com/api/auth/callback`) or a path
-   * (`/api/auth/callback`); a path resolves against the request origin.
+   * an absolute URL (`https://app.example.com/auth/callback`) or a path
+   * (`/auth/callback`); a path resolves against the request origin.
    *
    * This must match both the `redirect_uri` registered with the provider and
    * the route where {@link HandleCallbackOptions} is mounted. Defaults to
-   * `/api/auth/callback`.
+   * `/auth/callback`.
    */
   redirectUri?: string;
   /**

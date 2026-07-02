@@ -6,7 +6,6 @@ import * as client from "openid-client";
 import type { NoUserInfo, UserInfo } from "../types";
 import { userInfoFromSession } from "./claims";
 import {
-  DEFAULT_CALLBACK_PATH,
   DEFAULT_REDIRECT,
   DEFAULT_SCOPE,
   MAX_PENDING_SIGN_INS,
@@ -17,6 +16,7 @@ import {
   pkceCookieName,
 } from "./config";
 import { resolveLogoutLocation } from "./refresh";
+import { cookieSecurity, resolveOrigin, resolveRedirectUri, toCookieSameSite } from "./request-url";
 import { clearSessionCookies } from "./session";
 import { readSession } from "./session-store";
 
@@ -51,13 +51,13 @@ type SignInUrlOptions = Omit<GetAuthURLOptions, "screenHint">;
  * eliminate, the pile-up).
  */
 async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promise<string> {
-  const url = new URL(getRequest().url);
+  const request = getRequest();
 
   const codeVerifier = client.randomPKCECodeVerifier();
   const codeChallenge = await client.calculatePKCECodeChallenge(codeVerifier);
   const state = client.randomState();
 
-  const redirectUri = new URL(options.redirectUri ?? DEFAULT_CALLBACK_PATH, url.origin).toString();
+  const redirectUri = resolveRedirectUri(request, options.redirectUri);
 
   const config = await getConfig();
   const parameters: Record<string, string> = {
@@ -70,22 +70,37 @@ async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promis
   if (options.screenHint) parameters.screen_hint = options.screenHint;
   const authorizationUrl = client.buildAuthorizationUrl(config, parameters);
 
-  // SameSite=Lax so the cookie survives the top-level redirect back from the
-  // provider.
-  setCookie(pkceCookieName(state), encodePkceState({ verifier: codeVerifier, returnPathname: options.returnPathname }), {
-    httpOnly: true,
-    secure: url.protocol === "https:",
-    sameSite: "lax",
-    path: "/",
-    maxAge: SIGN_IN_COOKIE_MAX_AGE,
-  });
+  // Over HTTPS default to SameSite=None; Secure so the cookie can be set even
+  // when the app is embedded cross-site (this runs in a server-function fetch
+  // response, and a SameSite=Lax cookie is dropped when set from a cross-site
+  // response that isn't a top-level navigation). SameSite=None requires Secure,
+  // so fall back to Lax over plain HTTP (local dev); overridable via
+  // herculesAuthMiddleware({ cookieSameSite }).
+  const { secure, sameSite } = cookieSecurity(request);
+  setCookie(
+    pkceCookieName(state),
+    encodePkceState({
+      verifier: codeVerifier,
+      returnPathname: options.returnPathname,
+      redirectUri,
+    }),
+    {
+      httpOnly: true,
+      secure,
+      sameSite: toCookieSameSite(sameSite),
+      path: "/",
+      maxAge: SIGN_IN_COOKIE_MAX_AGE,
+    },
+  );
 
   // Bound the number of pending verifier cookies. `getCookies()` reflects the
   // incoming request (the cookie just set is not included), so keep the newest
-  // MAX-1 of the prior flows plus this fresh one.
+  // MAX-1 of the prior flows plus this fresh one. Clear with the same
+  // SameSite/Secure the cookies were set with so the deletion is honored in the
+  // cross-site server-function context.
   const pending = Object.keys(getCookies()).filter((name) => name.startsWith(PKCE_COOKIE_PREFIX));
   for (const name of pending.slice(MAX_PENDING_SIGN_INS - 1)) {
-    deleteCookie(name, { path: "/" });
+    deleteCookie(name, { path: "/", secure, sameSite: toCookieSameSite(sameSite) });
   }
 
   return authorizationUrl.toString();
@@ -117,11 +132,17 @@ export const signOut = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const idTokenHint = (await readSession())?.idToken;
 
-    const origin = new URL(getRequest().url).origin;
-    const postLogoutRedirectUri = new URL(data?.returnTo ?? DEFAULT_REDIRECT, origin).toString();
+    const request = getRequest();
+    const postLogoutRedirectUri = new URL(
+      data?.returnTo ?? DEFAULT_REDIRECT,
+      resolveOrigin(request),
+    ).toString();
     const location = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
 
-    const clearHeaders = clearSessionCookies(Object.keys(getCookies())).map(
+    // Clear with the same SameSite/Secure used to set the session so the cookies
+    // are removed even when sign-out runs in a cross-site context.
+    const { secure, sameSite } = cookieSecurity(request);
+    const clearHeaders = clearSessionCookies(Object.keys(getCookies()), { secure, sameSite }).map(
       (header) => ["Set-Cookie", header] as [string, string],
     );
 

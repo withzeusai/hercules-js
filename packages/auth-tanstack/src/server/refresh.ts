@@ -56,7 +56,9 @@ export async function resolveLogoutLocation(
   try {
     const config = await getConfig();
     if (config.serverMetadata().end_session_endpoint) {
-      const parameters: Record<string, string> = { post_logout_redirect_uri: postLogoutRedirectUri };
+      const parameters: Record<string, string> = {
+        post_logout_redirect_uri: postLogoutRedirectUri,
+      };
       if (idTokenHint) parameters.id_token_hint = idTokenHint;
       return client.buildEndSessionUrl(config, parameters).toString();
     }

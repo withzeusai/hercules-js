@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the server actions the store calls. `vi.hoisted` so the spies exist
 // before the hoisted `vi.mock` factory runs.
-const { getAccessTokenAction, refreshAccessTokenAction, getIdTokenAction, refreshIdTokenAction } = vi.hoisted(
-  () => ({
+const { getAccessTokenAction, refreshAccessTokenAction, getIdTokenAction, refreshIdTokenAction } =
+  vi.hoisted(() => ({
     getAccessTokenAction: vi.fn(),
     refreshAccessTokenAction: vi.fn(),
     getIdTokenAction: vi.fn(),
     refreshIdTokenAction: vi.fn(),
-  }),
-);
+  }));
 vi.mock("../server/actions", () => ({
   getAccessTokenAction,
   refreshAccessTokenAction,
