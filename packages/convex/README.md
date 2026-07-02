@@ -15,7 +15,6 @@ deny, no wildcard, and no permission override.
 
 ```ts
 import { createAccess, classifyAccessError } from "@usehercules/convex";
-import { createResourceCreatorBootstrapAction } from "@usehercules/convex/iam-helpers";
 import { registerAccessRoutes } from "@usehercules/convex/http";
 import herculesComponent from "@usehercules/convex/convex.config"; // defineComponent("hercules")
 ```
@@ -23,7 +22,6 @@ import herculesComponent from "@usehercules/convex/convex.config"; // defineComp
 | Export path                         | Provides                                                   |
 | ----------------------------------- | ---------------------------------------------------------- |
 | `@usehercules/convex`               | `createAccess`, `classifyAccessError`, public types        |
-| `@usehercules/convex/iam-helpers`   | `createResourceCreatorBootstrapAction`                     |
 | `@usehercules/convex/http`          | `registerAccessRoutes`                                     |
 | `@usehercules/convex/convex.config` | the `hercules` Convex component definition                 |
 | `hercules-convex-iam-check` (bin)   | static source checker (`hercules-convex-iam-check convex`) |
@@ -417,13 +415,6 @@ export default http;
 Options: `{ httpAction, components?, component?, componentName?, path? }`.
 Default path `/_hercules/iam/sync`. The signing secret is read by the component
 from its bound `HERCULES_SYNC_SECRET` (see Setup), not by this route.
-
-## Resource creator bootstrap
-
-`createResourceCreatorBootstrapAction` (from `@usehercules/convex/iam-helpers`)
-grants one fixed initial resource role to the trusted creator of a provisioning
-row, gating on active root and target tenant access. See the helper's typed
-options; the browser passes only `resourceId`.
 
 ## Static checker
 
