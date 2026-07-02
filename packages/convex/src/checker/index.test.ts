@@ -29,9 +29,9 @@ describe("checkIamSource", () => {
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { v } from "convex/values";
-        import { access, accessMutation, accessQuery, resource } from "./access.js";
+        import { access, protectedMutation, protectedQuery, resource } from "./access.js";
 
-        export const createDocument = accessMutation({
+        export const createDocument = protectedMutation({
           args: { projectId: v.string(), documentId: v.string(), title: v.string() },
           permission: "app.document:manage",
           resource: (_ctx, args) => ({ type: "app.project", externalId: args.projectId }),
@@ -45,16 +45,16 @@ describe("checkIamSource", () => {
           },
         });
 
-        export const updateTitle = accessMutation({
+        export const updateTitle = protectedMutation({
           args: { documentId: v.string() },
           handler: async (ctx, args) => {
             const target = { type: "app.document", externalId: args.documentId };
-            await access.require(ctx, "app.document:manage", { resource: target });
+            await access.requirePermissions(ctx, "app.document:manage", { resource: target });
             return resource.get(ctx, target);
           },
         });
 
-        export const getDocument = accessQuery({
+        export const getDocument = protectedQuery({
           args: { documentId: v.string() },
           handler: async (ctx, args) =>
             resource.get(ctx, {
@@ -78,9 +78,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/admin.ts": `
-        import { accessQuery } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const members = accessQuery({
+        export const members = protectedQuery({
           permission: "system.access.users:read",
           handler: async () => [],
         });
@@ -102,9 +102,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           permission: "app.document:write",
           handler: async () => [],
         });
@@ -122,17 +122,40 @@ describe("checkIamSource", () => {
     );
   });
 
-  test("fails an undeclared permission passed to access.require", () => {
+  test("fails an undeclared permission passed to access.requirePermissions", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessMutation, access } from "./access.js";
+        import { protectedMutation, access } from "./access.js";
 
-        export const remove = accessMutation({
+        export const remove = protectedMutation({
           handler: async (ctx, args) => {
-            await access.require(ctx, "app.document:destroy", {
+            await access.requirePermissions(ctx, "app.document:destroy", {
               resource: { type: "app.document", externalId: args.documentId },
             });
+          },
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      { code: "undeclared_permission", filePath: "convex/documents.ts" },
+    ]);
+  });
+
+  test("fails an undeclared permission passed to access.hasPermissions", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/documents.ts": `
+        import { protectedQuery, access } from "./access.js";
+
+        export const list = protectedQuery({
+          handler: async (ctx) => {
+            if (await access.hasPermissions(ctx, "app.document:peek")) return [];
+            return null;
           },
         });
       `,
@@ -150,9 +173,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery, resource } from "./access.js";
+        import { protectedQuery, resource } from "./access.js";
 
-        export const getDocument = accessQuery({
+        export const getDocument = protectedQuery({
           args: {},
           handler: async (ctx, args) =>
             resource.get(ctx, {
@@ -176,9 +199,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery, resource } from "./access.js";
+        import { protectedQuery, resource } from "./access.js";
 
-        export const getDocument = accessQuery({
+        export const getDocument = protectedQuery({
           args: {},
           handler: async (ctx, args) =>
             resource.get(ctx, {
@@ -205,9 +228,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery, resource } from "./access.js";
+        import { protectedQuery, resource } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           handler: async (ctx) => resource.list(ctx, { type: "app.documnet" }),
         });
       `,
@@ -225,9 +248,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery, resource } from "./access.js";
+        import { protectedQuery, resource } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           handler: async (ctx) => resource.list(ctx, { type: "app.document" }),
         });
       `,
@@ -242,14 +265,14 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery, access } from "./access.js";
+        import { protectedQuery, access } from "./access.js";
 
         const DOC_READ = "app.document:totally_made_up";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           permission: DOC_READ,
           handler: async (ctx, args) => {
-            await access.require(ctx, args.permission, {
+            await access.requirePermissions(ctx, args.permission, {
               resource: { type: args.resourceType, externalId: args.id },
             });
             return [];
@@ -266,9 +289,9 @@ describe("checkIamSource", () => {
   test("passes apps without a hercules/iam.jsonc catalog", () => {
     const root = createFixture({
       "convex/documents.ts": `
-        import { accessQuery } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           permission: "app.anything:goes",
           handler: async () => [],
         });
@@ -284,9 +307,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": "{ broken",
       "convex/documents.ts": `
-        import { accessQuery } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           permission: "app.unknown:read",
           handler: async () => [],
         });
@@ -314,8 +337,8 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery } from "./access.js";
-        export const list = accessQuery({ permission: "app.document:read", handler: async () => [] });
+        import { protectedQuery } from "./access.js";
+        export const list = protectedQuery({ permission: "app.document:read", handler: async () => [] });
       `,
     });
 
@@ -329,9 +352,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           permission: { anyOf: ["app.document:read", "app.document:manage"] },
           handler: async () => [],
         });
@@ -345,9 +368,9 @@ describe("checkIamSource", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessQuery } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const list = accessQuery({
+        export const list = protectedQuery({
           permission: { allOf: ["app.document:read", "app.document:write"] },
           handler: async () => [],
         });
@@ -363,15 +386,37 @@ describe("checkIamSource", () => {
     expect(formatIamCheckResult(result)).toContain('Permission "app.document:write"');
   });
 
-  test("fails an undeclared key inside an anyOf passed to access.require", () => {
+  test("fails an undeclared key inside a bare array permission (allOf shorthand)", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
-        import { accessMutation, access } from "./access.js";
+        import { protectedQuery } from "./access.js";
 
-        export const remove = accessMutation({
+        export const list = protectedQuery({
+          permission: ["app.document:read", "app.document:write"],
+          handler: async () => [],
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      { code: "undeclared_permission", filePath: "convex/documents.ts" },
+    ]);
+    expect(formatIamCheckResult(result)).toContain('Permission "app.document:write"');
+  });
+
+  test("fails an undeclared key inside an anyOf passed to access.requirePermissions", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/documents.ts": `
+        import { protectedMutation, access } from "./access.js";
+
+        export const remove = protectedMutation({
           handler: async (ctx) => {
-            await access.require(ctx, { anyOf: ["app.document:manage", "app.document:destroy"] });
+            await access.requirePermissions(ctx, { anyOf: ["app.document:manage", "app.document:destroy"] });
           },
         });
       `,
@@ -385,13 +430,16 @@ describe("checkIamSource", () => {
     ]);
   });
 
-  test("fails a raw _generated/server builder import outside the wiring file", () => {
+  test("flags a raw _generated/server builder used with a permission guard", () => {
     const root = createFixture({
       "hercules/iam.jsonc": catalog,
       "convex/documents.ts": `
         import { query } from "./_generated/server";
 
-        export const list = query({ handler: async () => [] });
+        export const list = query({
+          permission: "app.document:read",
+          handler: async () => [],
+        });
       `,
     });
 
@@ -399,9 +447,43 @@ describe("checkIamSource", () => {
 
     expect(result.ok).toBe(false);
     expect(result.findings).toMatchObject([
-      { code: "raw_builder_import", filePath: "convex/documents.ts" },
+      { code: "guard_on_raw_builder", filePath: "convex/documents.ts" },
     ]);
     expect(formatIamCheckResult(result)).toContain('Raw Convex builder "query"');
+  });
+
+  test("flags an aliased raw builder used with a tenant guard", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/documents.ts": `
+        import { mutation as m } from "./_generated/server";
+
+        export const save = m({
+          tenant: (_ctx, args) => args.tenantId,
+          handler: async () => null,
+        });
+      `,
+    });
+
+    const result = checkIamSource({ cwd: root });
+
+    expect(result.ok).toBe(false);
+    expect(result.findings).toMatchObject([
+      { code: "guard_on_raw_builder", filePath: "convex/documents.ts" },
+    ]);
+  });
+
+  test("allows a raw builder used without any guard option", () => {
+    const root = createFixture({
+      "hercules/iam.jsonc": catalog,
+      "convex/public.ts": `
+        import { query } from "./_generated/server";
+
+        export const ping = query({ handler: async () => "ok" });
+      `,
+    });
+
+    expect(checkIamSource({ cwd: root })).toMatchObject({ ok: true, findings: [] });
   });
 
   test("allows raw builder imports in the createAccess wiring file", () => {
@@ -413,7 +495,7 @@ describe("checkIamSource", () => {
         import { components } from "./_generated/api";
 
         export const access = createAccess({ query, mutation, action, components });
-        export const { accessQuery, accessMutation, accessAction, publicQuery } = access;
+        export const { protectedQuery, protectedMutation, protectedAction } = access;
       `,
     });
 

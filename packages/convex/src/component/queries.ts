@@ -6,16 +6,14 @@ import {
 } from "convex/server";
 import { paginator } from "convex-helpers/server/pagination";
 import { v } from "convex/values";
-import { collectMembershipRoleIds, resolvePrimaryTenant, resolveTenantRow } from "./access";
+import { collectMembershipRoleIds, resolveTenantRow } from "./access";
 import { parseTokenIdentifier } from "../shared/token";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 type QueryCtx = GenericQueryCtx<DataModel>;
-type TenantRow = DataModel["tenants"]["document"];
 type RoleRow = DataModel["roles"]["document"];
 type MembershipRow = DataModel["tenant_memberships"]["document"];
-type GroupRow = DataModel["groups"]["document"];
 
 const query = queryGeneric as QueryBuilder<DataModel, "public">;
 
@@ -24,6 +22,18 @@ function pageLimit(limit: number | undefined): number {
   if (limit === undefined || limit <= 0) return PAGE_LIMIT;
   return Math.min(limit, PAGE_LIMIT);
 }
+
+// ── validators reused by the generic reads ────────────────────────────────────
+const tenantStatusFilter = v.union(v.literal("active"), v.literal("disabled"));
+const groupStatusFilter = v.union(v.literal("active"), v.literal("disabled"));
+const membershipStatusFilter = v.union(
+  v.literal("active"),
+  v.literal("blocked"),
+  v.literal("suspended"),
+  v.literal("pending_approval"),
+  v.literal("removed"),
+);
+const nullableString = v.union(v.string(), v.null());
 
 export type RoleSummary = {
   roleId: string;
@@ -37,12 +47,14 @@ export type RoleSummary = {
   tenantId: string | null;
 };
 
-export type DirectRoleAssignment = RoleSummary & {
-  assignmentId: string;
-  expiresAt: number | null;
-};
-
 export type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
+
+// Caller-centric group summary (me.groups): the caller's own groups in a tenant.
+export type GroupSummary = {
+  groupId: string;
+  name: string;
+  status: "active" | "disabled";
+};
 
 export type TenantSummary = {
   tenantId: string;
@@ -54,45 +66,6 @@ export type TenantSummary = {
 };
 
 export type TenantSummariesPage = { tenants: TenantSummary[]; cursor?: string };
-
-export type TenantDetail = {
-  tenantId: string;
-  tenantName: string;
-  isPrimaryTenant: boolean;
-  lifecycleStatus: "active" | "archived";
-  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
-  defaultRoleId: string | null;
-  updatedAt: number;
-};
-
-export type TenantDetailsPage = { tenants: TenantDetail[]; cursor?: string };
-
-export type TenantUser = {
-  userId: string;
-  status: MembershipStatus;
-  name?: string;
-  email?: string;
-  image?: string;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
-};
-
-export type TenantGroup = {
-  groupId: string;
-  name: string;
-  status: "active" | "disabled";
-  memberCount: number;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
-};
-
-export type TenantUsersPage = { users: TenantUser[]; cursor?: string };
-export type TenantGroupsPage = { groups: TenantGroup[]; cursor?: string };
-
-export type RoleDetail = RoleSummary & {
-  description: string | null;
-  permissionKeys: string[];
-};
 
 export type TenantAccessStatus =
   | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
@@ -161,129 +134,6 @@ async function membershipRoles(ctx: QueryCtx, membership: MembershipRow): Promis
     if (role) roles.push(roleSummary(role));
   }
   return roles.sort((a, b) => a.roleKey.localeCompare(b.roleKey));
-}
-
-async function directRoleAssignments(
-  ctx: QueryCtx,
-  subject: { membershipId: string } | { groupId: string },
-  tenantId: string,
-): Promise<DirectRoleAssignment[]> {
-  const rows =
-    "membershipId" in subject
-      ? await ctx.db
-          .query("user_role_assignments")
-          .withIndex("by_membership", (q) => q.eq("membershipId", subject.membershipId))
-          .collect()
-      : await ctx.db
-          .query("group_role_assignments")
-          .withIndex("by_group", (q) => q.eq("groupId", subject.groupId))
-          .collect();
-  const now = Date.now();
-  const assignments: DirectRoleAssignment[] = [];
-  for (const row of rows) {
-    if (row.tenantId !== tenantId) continue;
-    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
-    const role = await resolveRole(ctx, row.roleId);
-    if (!role) continue;
-    assignments.push({
-      ...roleSummary(role),
-      assignmentId: row.id,
-      expiresAt: row.expiresAt ?? null,
-    });
-  }
-  return assignments.sort((a, b) => a.roleKey.localeCompare(b.roleKey));
-}
-
-async function tenantUserFromMembership(
-  ctx: QueryCtx,
-  membership: MembershipRow,
-): Promise<TenantUser> {
-  const user = await ctx.db
-    .query("users")
-    .withIndex("by_user_id", (q) => q.eq("id", membership.userId))
-    .unique();
-  return {
-    userId: membership.userId,
-    status: membership.status,
-    ...(user?.name === undefined ? {} : { name: user.name }),
-    ...(user?.email === undefined ? {} : { email: user.email }),
-    ...(user?.image === undefined ? {} : { image: user.image }),
-    roles: await membershipRoles(ctx, membership),
-    directRoleAssignments: await directRoleAssignments(
-      ctx,
-      { membershipId: membership.id },
-      membership.tenantId,
-    ),
-  };
-}
-
-async function tenantGroupFromRow(ctx: QueryCtx, group: GroupRow): Promise<TenantGroup> {
-  const members = await ctx.db
-    .query("group_memberships")
-    .withIndex("by_group", (q) => q.eq("groupId", group.id))
-    .collect();
-  const direct = await directRoleAssignments(ctx, { groupId: group.id }, group.tenantId);
-  return {
-    groupId: group.id,
-    name: group.name,
-    status: group.status,
-    memberCount: members.length,
-    roles: direct.map((assignment) => ({
-      roleId: assignment.roleId,
-      roleKey: assignment.roleKey,
-      roleName: assignment.roleName,
-      isAppScope: assignment.isAppScope,
-      tenantId: assignment.tenantId,
-    })),
-    directRoleAssignments: direct,
-  };
-}
-
-// Structural admin-read gate: the caller must hold an ACTIVE membership in the
-// resolved tenant. Returns the resolved tenant row when allowed, `null`
-// otherwise. There is no permission catalog for admin reads.
-async function gate(
-  ctx: QueryCtx,
-  args: { tokenIdentifier?: string; tenantId?: string },
-): Promise<TenantRow | null> {
-  if (!args.tokenIdentifier) return null;
-  const state = await ctx.db.query("sync_state").unique();
-  if (!state) return null;
-  const token = parseTokenIdentifier(args.tokenIdentifier);
-  if (!token || token.issuer !== state.expectedIssuer) return null;
-  const tenant = await resolveTenantRow(ctx, args.tenantId);
-  if (!tenant) return null;
-  const membership = await ctx.db
-    .query("tenant_memberships")
-    .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", token.subject))
-    .unique();
-  if (!membership || membership.status !== "active") return null;
-  return tenant;
-}
-
-// Structural gate for a primary-tenant-admin operation (e.g. listing EVERY
-// tenant). The membership is checked against the deployment's PRIMARY tenant
-// specifically and the caller-supplied tenant id is ignored: holding a
-// membership in some non-primary tenant must never authorize a global,
-// cross-tenant read. Returns the primary tenant row when allowed, `null`
-// otherwise.
-async function gatePrimaryTenant(
-  ctx: QueryCtx,
-  args: { tokenIdentifier?: string },
-): Promise<TenantRow | null> {
-  if (!args.tokenIdentifier) return null;
-  const state = await ctx.db.query("sync_state").unique();
-  if (!state) return null;
-  const token = parseTokenIdentifier(args.tokenIdentifier);
-  if (!token || token.issuer !== state.expectedIssuer) return null;
-  const primary = await resolvePrimaryTenant(ctx);
-  if (!primary) return null;
-  const membership = await ctx.db
-    .query("tenant_memberships")
-    .withIndex("by_tenant_user", (q) => q.eq("tenantId", primary.id).eq("userId", token.subject))
-    .unique();
-  if (!membership || membership.status !== "active") return null;
-  return primary;
 }
 
 // ── caller-centric reads (me.*) ───────────────────────────────────────────────
@@ -356,6 +206,44 @@ export const listMyRoles = query({
       .unique();
     if (!membership) return [];
     return membershipRoles(ctx, membership);
+  },
+});
+
+// The caller's OWN groups in the resolved tenant. Gated like the other me.*
+// reads: validate identity/issuer, require the caller's ACTIVE membership in the
+// tenant, then return that membership's groups via group_memberships.
+export const listMyGroups = query({
+  args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<GroupSummary[]> => {
+    if (!args.tokenIdentifier) return [];
+    const state = await ctx.db.query("sync_state").unique();
+    if (!state) return [];
+    const token = parseTokenIdentifier(args.tokenIdentifier);
+    if (!token || token.issuer !== state.expectedIssuer) return [];
+    const tenant = await resolveTenantRow(ctx, args.tenantId);
+    if (!tenant) return [];
+    const membership = await ctx.db
+      .query("tenant_memberships")
+      .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", token.subject))
+      .unique();
+    if (!membership || membership.status !== "active") return [];
+
+    const groupMemberships = await ctx.db
+      .query("group_memberships")
+      .withIndex("by_membership", (q) => q.eq("membershipId", membership.id))
+      .collect();
+    const groups: GroupSummary[] = [];
+    for (const groupMembership of groupMemberships) {
+      if (groupMembership.tenantId !== tenant.id) continue;
+      const group = await ctx.db
+        .query("groups")
+        .withIndex("by_group_id", (q) => q.eq("id", groupMembership.groupId))
+        .unique();
+      if (group) groups.push({ groupId: group.id, name: group.name, status: group.status });
+    }
+    return groups.sort(
+      (a, b) => a.name.localeCompare(b.name) || a.groupId.localeCompare(b.groupId),
+    );
   },
 });
 
@@ -441,245 +329,606 @@ async function getTenantAccessStatusInline(
   };
 }
 
-// ── tenant reads ──────────────────────────────────────────────────────────────
-export const getTenant = query({
-  args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<TenantDetail | null> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return null;
-    return {
-      tenantId: tenant.id,
-      tenantName: tenant.name,
-      isPrimaryTenant: tenant.isPrimaryTenant,
-      lifecycleStatus: lifecycleStatus(tenant.status),
-      accountEntryMode: tenant.accountEntryMode,
-      defaultRoleId: tenant.defaultRoleId,
-      updatedAt: tenant.updatedAt,
-    };
-  },
-});
+// ── generic per-table reads (TRUSTED / UNGATED) ───────────────────────────────
+//
+// Plain ctx.db reads over the mirror tables: index-based scans plus unique-key
+// lookups, with NO identity check and NO membership gate. The installing app is
+// responsible for authorizing them (wrap the calling function in protectedQuery
+// and/or call requirePermissions). Every returned record drops the Convex system
+// fields (_id, _creationTime) and the internal sourceVersion bookkeeping.
 
-export const listTenants = query({
+type StripSystem<T> = Omit<T, "_id" | "_creationTime" | "sourceVersion">;
+
+type SystemRow = { _id: unknown; _creationTime: number; sourceVersion: number };
+
+export type TenantRecord = StripSystem<DataModel["tenants"]["document"]>;
+export type UserRecord = StripSystem<DataModel["users"]["document"]>;
+export type MembershipRecord = StripSystem<DataModel["tenant_memberships"]["document"]>;
+export type GroupRecord = StripSystem<DataModel["groups"]["document"]>;
+export type GroupMembershipRecord = StripSystem<DataModel["group_memberships"]["document"]>;
+export type RoleRecord = StripSystem<DataModel["roles"]["document"]>;
+export type PermissionRecord = StripSystem<DataModel["permissions"]["document"]>;
+export type RolePermissionRecord = StripSystem<DataModel["role_permissions"]["document"]>;
+export type ResourceTypeRecord = StripSystem<DataModel["resource_types"]["document"]>;
+export type RoleAssignmentRecord = StripSystem<DataModel["user_role_assignments"]["document"]>;
+export type GroupRoleAssignmentRecord = StripSystem<
+  DataModel["group_role_assignments"]["document"]
+>;
+export type ResourceRoleAssignmentRecord = StripSystem<
+  DataModel["user_resource_role_assignments"]["document"]
+>;
+export type GroupResourceRoleAssignmentRecord = StripSystem<
+  DataModel["group_resource_role_assignments"]["document"]
+>;
+
+export type ItemsPage<V> = { items: V[]; cursor?: string };
+
+// Drop Convex system fields + the internal sync version.
+function record<Row extends SystemRow>(row: Row): StripSystem<Row> {
+  const { _id, _creationTime, sourceVersion, ...rest } = row;
+  return rest as StripSystem<Row>;
+}
+
+function got<Row extends SystemRow>(row: Row | null): StripSystem<Row> | null {
+  return row ? record(row) : null;
+}
+
+// Paginate an index scan, drop system fields, and apply the (already
+// index-narrowed) filters in JS. Like listMyTenants, a page may come back short
+// after filtering; the cursor still advances the underlying index.
+type PageableQuery<Row> = {
+  paginate(opts: { cursor: string | null; numItems: number }): Promise<{
+    page: Row[];
+    isDone: boolean;
+    continueCursor: string;
+  }>;
+};
+
+async function paginate<Row extends SystemRow>(
+  q: PageableQuery<Row>,
+  args: { cursor?: string; limit?: number },
+  predicate: (row: Row) => boolean,
+): Promise<ItemsPage<StripSystem<Row>>> {
+  const page = await q.paginate({ cursor: args.cursor ?? null, numItems: pageLimit(args.limit) });
+  const items = page.page.filter(predicate).map(record);
+  return { items, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
+}
+
+const pageArgs = { cursor: v.optional(v.string()), limit: v.optional(v.number()) };
+
+// ── tenants ───────────────────────────────────────────────────────────────────
+export const tenantsList = query({
   args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    cursor: v.optional(v.string()),
-    limit: v.optional(v.number()),
+    status: v.optional(tenantStatusFilter),
+    isPrimaryTenant: v.optional(v.boolean()),
+    ...pageArgs,
   },
-  handler: async (ctx, args): Promise<TenantDetailsPage> => {
-    // Listing every tenant is a primary-tenant-admin read. Gate on an active
-    // membership in the PRIMARY tenant, ignoring any caller-supplied tenant id.
-    const primary = await gatePrimaryTenant(ctx, args);
-    if (!primary) return { tenants: [] };
-    const limit = pageLimit(args.limit);
-    const page = await paginator(ctx.db, schema)
-      .query("tenants")
-      .withIndex("by_tenant_id")
-      .paginate({ cursor: args.cursor ?? null, numItems: limit });
-    return {
-      tenants: page.page.map((tenant) => ({
-        tenantId: tenant.id,
-        tenantName: tenant.name,
-        isPrimaryTenant: tenant.isPrimaryTenant,
-        lifecycleStatus: lifecycleStatus(tenant.status),
-        accountEntryMode: tenant.accountEntryMode,
-        defaultRoleId: tenant.defaultRoleId,
-        updatedAt: tenant.updatedAt,
-      })),
-      ...(page.isDone ? {} : { cursor: page.continueCursor }),
-    };
+  handler: async (ctx, args): Promise<ItemsPage<TenantRecord>> => {
+    const { status, isPrimaryTenant } = args;
+    const base = paginator(ctx.db, schema).query("tenants");
+    const q =
+      isPrimaryTenant === undefined
+        ? base.withIndex("by_tenant_id")
+        : base.withIndex("by_primary", (i) => i.eq("isPrimaryTenant", isPrimaryTenant));
+    return paginate(q, args, (row) => status === undefined || row.status === status);
   },
 });
 
-// ── user reads ────────────────────────────────────────────────────────────────
-export const listTenantUsers = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    cursor: v.optional(v.string()),
-    limit: v.optional(v.number()),
-    status: v.optional(
-      v.union(
-        v.literal("active"),
-        v.literal("blocked"),
-        v.literal("suspended"),
-        v.literal("pending_approval"),
-        v.literal("removed"),
-        v.literal("all"),
-      ),
-    ),
-  },
-  handler: async (ctx, args): Promise<TenantUsersPage> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return { users: [] };
-    const tenantId = tenant.id;
-    const limit = pageLimit(args.limit);
-    const status = args.status ?? "all";
-    const page =
-      status === "all"
-        ? await paginator(ctx.db, schema)
-            .query("tenant_memberships")
-            .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
-            .paginate({ cursor: args.cursor ?? null, numItems: limit })
-        : await paginator(ctx.db, schema)
-            .query("tenant_memberships")
-            .withIndex("by_tenant_status", (q) => q.eq("tenantId", tenantId).eq("status", status))
-            .paginate({ cursor: args.cursor ?? null, numItems: limit });
-    const users = await Promise.all(
-      page.page.map((membership) => tenantUserFromMembership(ctx, membership)),
-    );
-    return { users, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
-  },
-});
-
-export const getTenantUser = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    userId: v.string(),
-  },
-  handler: async (ctx, args): Promise<TenantUser | null> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return null;
-    const membership = await ctx.db
-      .query("tenant_memberships")
-      .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenant.id).eq("userId", args.userId))
-      .unique();
-    if (!membership) return null;
-    return tenantUserFromMembership(ctx, membership);
-  },
-});
-
-// ── group reads ───────────────────────────────────────────────────────────────
-export const listTenantGroups = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    cursor: v.optional(v.string()),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args): Promise<TenantGroupsPage> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return { groups: [] };
-    const limit = pageLimit(args.limit);
-    const page = await paginator(ctx.db, schema)
-      .query("groups")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenant.id))
-      .paginate({ cursor: args.cursor ?? null, numItems: limit });
-    const groups = await Promise.all(page.page.map((group) => tenantGroupFromRow(ctx, group)));
-    return { groups, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
-  },
-});
-
-export const getTenantGroup = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    groupId: v.string(),
-  },
-  handler: async (ctx, args): Promise<TenantGroup | null> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return null;
-    const group = await ctx.db
-      .query("groups")
-      .withIndex("by_group_id", (q) => q.eq("id", args.groupId))
-      .unique();
-    if (!group || group.tenantId !== tenant.id) return null;
-    return tenantGroupFromRow(ctx, group);
-  },
-});
-
-export const listGroupMembers = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    groupId: v.string(),
-    cursor: v.optional(v.string()),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, args): Promise<TenantUsersPage> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return { users: [] };
-    const group = await ctx.db
-      .query("groups")
-      .withIndex("by_group_id", (q) => q.eq("id", args.groupId))
-      .unique();
-    if (!group || group.tenantId !== tenant.id) return { users: [] };
-    const limit = pageLimit(args.limit);
-    const page = await paginator(ctx.db, schema)
-      .query("group_memberships")
-      .withIndex("by_group", (q) => q.eq("groupId", group.id))
-      .paginate({ cursor: args.cursor ?? null, numItems: limit });
-    const users = (
-      await Promise.all(
-        page.page.map(async (groupMembership) => {
-          const membership = await ctx.db
-            .query("tenant_memberships")
-            .withIndex("by_membership_id", (q) => q.eq("id", groupMembership.membershipId))
-            .unique();
-          return membership ? tenantUserFromMembership(ctx, membership) : null;
-        }),
-      )
-    ).filter((user): user is TenantUser => user !== null);
-    return { users, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
-  },
-});
-
-// ── role catalog reads ────────────────────────────────────────────────────────
-export const listTenantRoles = query({
-  args: { tokenIdentifier: v.optional(v.string()), tenantId: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<RoleSummary[]> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return [];
-    // Roles usable in this tenant = the tenant's own TENANT-SCOPED roles plus
-    // SHARED roles (tenantId null, isAppScope false). APP-SCOPED roles (tenantId
-    // null, isAppScope true) are app-wide authority grantable only to
-    // primary-tenant members, so they surface only for the primary tenant.
-    const sharedRoles = await ctx.db
-      .query("roles")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", null))
-      .collect();
-    const tenantRoles = await ctx.db
-      .query("roles")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenant.id))
-      .collect();
-    const visibleShared = tenant.isPrimaryTenant
-      ? sharedRoles
-      : sharedRoles.filter((role) => !role.isAppScope);
-    return [...visibleShared, ...tenantRoles]
-      .map(roleSummary)
-      .sort((a, b) => a.roleKey.localeCompare(b.roleKey) || a.roleId.localeCompare(b.roleId));
-  },
-});
-
-export const getTenantRole = query({
-  args: {
-    tokenIdentifier: v.optional(v.string()),
-    tenantId: v.optional(v.string()),
-    roleId: v.string(),
-  },
-  handler: async (ctx, args): Promise<RoleDetail | null> => {
-    const tenant = await gate(ctx, args);
-    if (!tenant) return null;
-    const role = await resolveRole(ctx, args.roleId);
-    if (!role) return null;
-    const rolePermissions = await ctx.db
-      .query("role_permissions")
-      .withIndex("by_role", (q) => q.eq("roleId", role.id))
-      .collect();
-    const permissionKeys: string[] = [];
-    for (const rolePermission of rolePermissions) {
-      const permission = await ctx.db
-        .query("permissions")
-        .withIndex("by_permission_id", (q) => q.eq("id", rolePermission.permissionId))
-        .unique();
-      if (permission) permissionKeys.push(permission.key);
+export const tenantsGet = query({
+  args: { id: v.optional(v.string()), primary: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<TenantRecord | null> => {
+    const { id, primary } = args;
+    if (id !== undefined) {
+      return got(
+        await ctx.db
+          .query("tenants")
+          .withIndex("by_tenant_id", (q) => q.eq("id", id))
+          .unique(),
+      );
     }
-    permissionKeys.sort();
-    return {
-      ...roleSummary(role),
-      description: role.description,
-      permissionKeys,
-    };
+    if (primary) {
+      return got(
+        await ctx.db
+          .query("tenants")
+          .withIndex("by_primary", (q) => q.eq("isPrimaryTenant", true))
+          .first(),
+      );
+    }
+    return null;
+  },
+});
+
+// ── users ─────────────────────────────────────────────────────────────────────
+export const usersList = query({
+  args: { email: v.optional(v.string()), ...pageArgs },
+  handler: async (ctx, args): Promise<ItemsPage<UserRecord>> => {
+    const { email } = args;
+    const base = paginator(ctx.db, schema).query("users");
+    const q =
+      email === undefined
+        ? base.withIndex("by_user_id")
+        : base.withIndex("by_email", (i) => i.eq("email", email));
+    return paginate(q, args, () => true);
+  },
+});
+
+export const usersGet = query({
+  args: { id: v.optional(v.string()), email: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<UserRecord | null> => {
+    const { id, email } = args;
+    if (id !== undefined) {
+      return got(
+        await ctx.db
+          .query("users")
+          .withIndex("by_user_id", (q) => q.eq("id", id))
+          .unique(),
+      );
+    }
+    if (email !== undefined) {
+      return got(
+        await ctx.db
+          .query("users")
+          .withIndex("by_email", (q) => q.eq("email", email))
+          .unique(),
+      );
+    }
+    return null;
+  },
+});
+
+// ── groups ────────────────────────────────────────────────────────────────────
+export const groupsList = query({
+  args: {
+    tenantId: v.optional(v.string()),
+    status: v.optional(groupStatusFilter),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<GroupRecord>> => {
+    const { tenantId, status } = args;
+    const base = paginator(ctx.db, schema).query("groups");
+    const q =
+      tenantId === undefined
+        ? base.withIndex("by_group_id")
+        : base.withIndex("by_tenant", (i) => i.eq("tenantId", tenantId));
+    return paginate(q, args, (row) => status === undefined || row.status === status);
+  },
+});
+
+export const groupsGet = query({
+  args: { id: v.string() },
+  handler: async (ctx, args): Promise<GroupRecord | null> => {
+    return got(
+      await ctx.db
+        .query("groups")
+        .withIndex("by_group_id", (q) => q.eq("id", args.id))
+        .unique(),
+    );
+  },
+});
+
+// ── roles ─────────────────────────────────────────────────────────────────────
+export const rolesList = query({
+  args: {
+    tenantId: v.optional(nullableString),
+    isAppScope: v.optional(v.boolean()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<RoleRecord>> => {
+    const { tenantId, isAppScope } = args;
+    const base = paginator(ctx.db, schema).query("roles");
+    const q =
+      tenantId === undefined
+        ? base.withIndex("by_role_id")
+        : base.withIndex("by_tenant", (i) => i.eq("tenantId", tenantId));
+    return paginate(q, args, (row) => isAppScope === undefined || row.isAppScope === isAppScope);
+  },
+});
+
+export const rolesGet = query({
+  args: {
+    id: v.optional(v.string()),
+    key: v.optional(v.string()),
+    tenantId: v.optional(nullableString),
+  },
+  handler: async (ctx, args): Promise<RoleRecord | null> => {
+    const { id, key, tenantId } = args;
+    if (id !== undefined) {
+      return got(
+        await ctx.db
+          .query("roles")
+          .withIndex("by_role_id", (q) => q.eq("id", id))
+          .unique(),
+      );
+    }
+    if (key !== undefined) {
+      // A role key is not globally unique (a tenant-scoped and a shared role can
+      // share a key), so narrow by tenantId when supplied, else take the first.
+      const rows = await ctx.db
+        .query("roles")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .collect();
+      const match = tenantId !== undefined ? rows.find((r) => r.tenantId === tenantId) : rows[0];
+      return match ? record(match) : null;
+    }
+    return null;
+  },
+});
+
+// ── permissions ───────────────────────────────────────────────────────────────
+export const permissionsList = query({
+  args: { isAppScope: v.optional(v.boolean()), ...pageArgs },
+  handler: async (ctx, args): Promise<ItemsPage<PermissionRecord>> => {
+    const { isAppScope } = args;
+    const q = paginator(ctx.db, schema).query("permissions").withIndex("by_permission_id");
+    return paginate(q, args, (row) => isAppScope === undefined || row.isAppScope === isAppScope);
+  },
+});
+
+export const permissionsGet = query({
+  args: { id: v.optional(v.string()), key: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<PermissionRecord | null> => {
+    const { id, key } = args;
+    if (id !== undefined) {
+      return got(
+        await ctx.db
+          .query("permissions")
+          .withIndex("by_permission_id", (q) => q.eq("id", id))
+          .unique(),
+      );
+    }
+    if (key !== undefined) {
+      return got(
+        await ctx.db
+          .query("permissions")
+          .withIndex("by_key", (q) => q.eq("key", key))
+          .unique(),
+      );
+    }
+    return null;
+  },
+});
+
+// ── resource types ────────────────────────────────────────────────────────────
+export const resourceTypesList = query({
+  args: { parentResourceTypeId: v.optional(nullableString), ...pageArgs },
+  handler: async (ctx, args): Promise<ItemsPage<ResourceTypeRecord>> => {
+    const { parentResourceTypeId } = args;
+    const q = paginator(ctx.db, schema).query("resource_types").withIndex("by_resource_type_id");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        parentResourceTypeId === undefined || row.parentResourceTypeId === parentResourceTypeId,
+    );
+  },
+});
+
+export const resourceTypesGet = query({
+  args: { id: v.optional(v.string()), key: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<ResourceTypeRecord | null> => {
+    const { id, key } = args;
+    if (id !== undefined) {
+      return got(
+        await ctx.db
+          .query("resource_types")
+          .withIndex("by_resource_type_id", (q) => q.eq("id", id))
+          .unique(),
+      );
+    }
+    if (key !== undefined) {
+      return got(
+        await ctx.db
+          .query("resource_types")
+          .withIndex("by_key", (q) => q.eq("key", key))
+          .unique(),
+      );
+    }
+    return null;
+  },
+});
+
+// ── tenant memberships ────────────────────────────────────────────────────────
+export const membershipsList = query({
+  args: {
+    tenantId: v.optional(v.string()),
+    status: v.optional(membershipStatusFilter),
+    userId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<MembershipRecord>> => {
+    const { tenantId, status, userId } = args;
+    const base = paginator(ctx.db, schema).query("tenant_memberships");
+    const q =
+      tenantId !== undefined && status !== undefined
+        ? base.withIndex("by_tenant_status", (i) => i.eq("tenantId", tenantId).eq("status", status))
+        : tenantId !== undefined
+          ? base.withIndex("by_tenant", (i) => i.eq("tenantId", tenantId))
+          : userId !== undefined
+            ? base.withIndex("by_user", (i) => i.eq("userId", userId))
+            : base.withIndex("by_membership_id");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (status === undefined || row.status === status) &&
+        (userId === undefined || row.userId === userId) &&
+        (tenantId === undefined || row.tenantId === tenantId),
+    );
+  },
+});
+
+export const membershipsGet = query({
+  args: {
+    id: v.optional(v.string()),
+    tenantId: v.optional(v.string()),
+    userId: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<MembershipRecord | null> => {
+    const { id, tenantId, userId } = args;
+    if (id !== undefined) {
+      return got(
+        await ctx.db
+          .query("tenant_memberships")
+          .withIndex("by_membership_id", (q) => q.eq("id", id))
+          .unique(),
+      );
+    }
+    if (tenantId !== undefined && userId !== undefined) {
+      return got(
+        await ctx.db
+          .query("tenant_memberships")
+          .withIndex("by_tenant_user", (q) => q.eq("tenantId", tenantId).eq("userId", userId))
+          .unique(),
+      );
+    }
+    return null;
+  },
+});
+
+// ── user role assignments ─────────────────────────────────────────────────────
+export const roleAssignmentsList = query({
+  args: {
+    tenantId: v.optional(v.string()),
+    membershipId: v.optional(v.string()),
+    roleId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<RoleAssignmentRecord>> => {
+    const { tenantId, membershipId, roleId } = args;
+    const base = paginator(ctx.db, schema).query("user_role_assignments");
+    const q =
+      membershipId !== undefined
+        ? base.withIndex("by_membership", (i) => i.eq("membershipId", membershipId))
+        : roleId !== undefined
+          ? base.withIndex("by_role_id", (i) => i.eq("roleId", roleId))
+          : base.withIndex("by_assignment_id");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (tenantId === undefined || row.tenantId === tenantId) &&
+        (membershipId === undefined || row.membershipId === membershipId) &&
+        (roleId === undefined || row.roleId === roleId),
+    );
+  },
+});
+
+export const roleAssignmentsGet = query({
+  args: { id: v.string() },
+  handler: async (ctx, args): Promise<RoleAssignmentRecord | null> => {
+    return got(
+      await ctx.db
+        .query("user_role_assignments")
+        .withIndex("by_assignment_id", (q) => q.eq("id", args.id))
+        .unique(),
+    );
+  },
+});
+
+// ── group role assignments ────────────────────────────────────────────────────
+export const groupRoleAssignmentsList = query({
+  args: {
+    tenantId: v.optional(v.string()),
+    groupId: v.optional(v.string()),
+    roleId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<GroupRoleAssignmentRecord>> => {
+    const { tenantId, groupId, roleId } = args;
+    const base = paginator(ctx.db, schema).query("group_role_assignments");
+    const q =
+      groupId !== undefined
+        ? base.withIndex("by_group", (i) => i.eq("groupId", groupId))
+        : roleId !== undefined
+          ? base.withIndex("by_role_id", (i) => i.eq("roleId", roleId))
+          : base.withIndex("by_assignment_id");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (tenantId === undefined || row.tenantId === tenantId) &&
+        (groupId === undefined || row.groupId === groupId) &&
+        (roleId === undefined || row.roleId === roleId),
+    );
+  },
+});
+
+export const groupRoleAssignmentsGet = query({
+  args: { id: v.string() },
+  handler: async (ctx, args): Promise<GroupRoleAssignmentRecord | null> => {
+    return got(
+      await ctx.db
+        .query("group_role_assignments")
+        .withIndex("by_assignment_id", (q) => q.eq("id", args.id))
+        .unique(),
+    );
+  },
+});
+
+// ── user resource role assignments ────────────────────────────────────────────
+export const resourceRoleAssignmentsList = query({
+  args: {
+    tenantId: v.optional(v.string()),
+    membershipId: v.optional(v.string()),
+    roleId: v.optional(v.string()),
+    resourceTypeId: v.optional(v.string()),
+    externalId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<ResourceRoleAssignmentRecord>> => {
+    const { tenantId, membershipId, roleId, resourceTypeId, externalId } = args;
+    const base = paginator(ctx.db, schema).query("user_resource_role_assignments");
+    const q =
+      membershipId !== undefined
+        ? base.withIndex("by_membership", (i) => i.eq("membershipId", membershipId))
+        : base.withIndex("by_assignment_id");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (tenantId === undefined || row.tenantId === tenantId) &&
+        (membershipId === undefined || row.membershipId === membershipId) &&
+        (roleId === undefined || row.roleId === roleId) &&
+        (resourceTypeId === undefined || row.resourceTypeId === resourceTypeId) &&
+        (externalId === undefined || row.externalId === externalId),
+    );
+  },
+});
+
+export const resourceRoleAssignmentsGet = query({
+  args: { id: v.string() },
+  handler: async (ctx, args): Promise<ResourceRoleAssignmentRecord | null> => {
+    return got(
+      await ctx.db
+        .query("user_resource_role_assignments")
+        .withIndex("by_assignment_id", (q) => q.eq("id", args.id))
+        .unique(),
+    );
+  },
+});
+
+// ── group resource role assignments ───────────────────────────────────────────
+export const groupResourceRoleAssignmentsList = query({
+  args: {
+    tenantId: v.optional(v.string()),
+    groupId: v.optional(v.string()),
+    roleId: v.optional(v.string()),
+    resourceTypeId: v.optional(v.string()),
+    externalId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<GroupResourceRoleAssignmentRecord>> => {
+    const { tenantId, groupId, roleId, resourceTypeId, externalId } = args;
+    const base = paginator(ctx.db, schema).query("group_resource_role_assignments");
+    const q =
+      groupId !== undefined
+        ? base.withIndex("by_group", (i) => i.eq("groupId", groupId))
+        : base.withIndex("by_assignment_id");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (tenantId === undefined || row.tenantId === tenantId) &&
+        (groupId === undefined || row.groupId === groupId) &&
+        (roleId === undefined || row.roleId === roleId) &&
+        (resourceTypeId === undefined || row.resourceTypeId === resourceTypeId) &&
+        (externalId === undefined || row.externalId === externalId),
+    );
+  },
+});
+
+export const groupResourceRoleAssignmentsGet = query({
+  args: { id: v.string() },
+  handler: async (ctx, args): Promise<GroupResourceRoleAssignmentRecord | null> => {
+    return got(
+      await ctx.db
+        .query("group_resource_role_assignments")
+        .withIndex("by_assignment_id", (q) => q.eq("id", args.id))
+        .unique(),
+    );
+  },
+});
+
+// ── group memberships ─────────────────────────────────────────────────────────
+export const groupMembershipsList = query({
+  args: {
+    groupId: v.optional(v.string()),
+    membershipId: v.optional(v.string()),
+    tenantId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<GroupMembershipRecord>> => {
+    const { groupId, membershipId, tenantId } = args;
+    const base = paginator(ctx.db, schema).query("group_memberships");
+    // group_memberships has no own-id index; by_group with no range is the
+    // full-table scan.
+    const q =
+      groupId !== undefined
+        ? base.withIndex("by_group", (i) => i.eq("groupId", groupId))
+        : membershipId !== undefined
+          ? base.withIndex("by_membership", (i) => i.eq("membershipId", membershipId))
+          : base.withIndex("by_group");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (groupId === undefined || row.groupId === groupId) &&
+        (membershipId === undefined || row.membershipId === membershipId) &&
+        (tenantId === undefined || row.tenantId === tenantId),
+    );
+  },
+});
+
+export const groupMembershipsGet = query({
+  args: { groupId: v.string(), membershipId: v.string() },
+  handler: async (ctx, args): Promise<GroupMembershipRecord | null> => {
+    return got(
+      await ctx.db
+        .query("group_memberships")
+        .withIndex("by_group_membership", (q) =>
+          q.eq("groupId", args.groupId).eq("membershipId", args.membershipId),
+        )
+        .unique(),
+    );
+  },
+});
+
+// ── role permissions ──────────────────────────────────────────────────────────
+export const rolePermissionsList = query({
+  args: {
+    roleId: v.optional(v.string()),
+    permissionId: v.optional(v.string()),
+    ...pageArgs,
+  },
+  handler: async (ctx, args): Promise<ItemsPage<RolePermissionRecord>> => {
+    const { roleId, permissionId } = args;
+    const base = paginator(ctx.db, schema).query("role_permissions");
+    // role_permissions has no own-id index; by_role with no range is the
+    // full-table scan.
+    const q =
+      roleId !== undefined
+        ? base.withIndex("by_role", (i) => i.eq("roleId", roleId))
+        : base.withIndex("by_role");
+    return paginate(
+      q,
+      args,
+      (row) =>
+        (roleId === undefined || row.roleId === roleId) &&
+        (permissionId === undefined || row.permissionId === permissionId),
+    );
+  },
+});
+
+export const rolePermissionsGet = query({
+  args: { roleId: v.string(), permissionId: v.string() },
+  handler: async (ctx, args): Promise<RolePermissionRecord | null> => {
+    return got(
+      await ctx.db
+        .query("role_permissions")
+        .withIndex("by_role_permission", (q) =>
+          q.eq("roleId", args.roleId).eq("permissionId", args.permissionId),
+        )
+        .unique(),
+    );
   },
 });

@@ -8,7 +8,7 @@
  * @module
  */
 
-import type { FunctionReference } from "convex/server";
+import type { DefaultFunctionArgs, FunctionReference } from "convex/server";
 import type { SyncResponse } from "../shared/sync";
 
 type ResourceRef = { type: string; externalId: string };
@@ -37,9 +37,10 @@ type RoleSummary = {
   tenantId: string | null;
 };
 
-type DirectRoleAssignment = RoleSummary & {
-  assignmentId: string;
-  expiresAt: number | null;
+type GroupSummary = {
+  groupId: string;
+  name: string;
+  status: "active" | "disabled";
 };
 
 type TenantSummary = {
@@ -49,40 +50,6 @@ type TenantSummary = {
   accessStatus: MembershipStatus;
   lifecycleStatus: "active" | "archived";
   roles: RoleSummary[];
-};
-
-type TenantDetail = {
-  tenantId: string;
-  tenantName: string;
-  isPrimaryTenant: boolean;
-  lifecycleStatus: "active" | "archived";
-  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
-  defaultRoleId: string | null;
-  updatedAt: number;
-};
-
-type TenantUser = {
-  userId: string;
-  status: MembershipStatus;
-  name?: string;
-  email?: string;
-  image?: string;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
-};
-
-type TenantGroup = {
-  groupId: string;
-  name: string;
-  status: "active" | "disabled";
-  memberCount: number;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
-};
-
-type RoleDetail = RoleSummary & {
-  description: string | null;
-  permissionKeys: string[];
 };
 
 type ResourceNode = {
@@ -129,7 +96,140 @@ type TargetTenantSyncStatus =
       targetSourceVersion: number;
     };
 
+// ── mirror-table record shapes (Convex system fields + sourceVersion dropped) ──
+type TenantRecord = {
+  id: string;
+  name: string;
+  isPrimaryTenant: boolean;
+  status: "active" | "disabled";
+  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  defaultRoleId: string | null;
+  updatedAt: number;
+};
+
+type UserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string;
+  phone?: string;
+  phoneVerified: boolean;
+  updatedAt: number;
+};
+
+type MembershipRecord = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  status: MembershipStatus;
+  updatedAt: number;
+};
+
+type GroupRecord = {
+  id: string;
+  tenantId: string;
+  description?: string;
+  name: string;
+  status: "active" | "disabled";
+  updatedAt: number;
+};
+
+type GroupMembershipRecord = {
+  groupId: string;
+  membershipId: string;
+  tenantId: string;
+  updatedAt: number;
+};
+
+type RoleRecord = {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  tenantId: string | null;
+  isAppScope: boolean;
+  updatedAt: number;
+};
+
+type PermissionRecord = {
+  id: string;
+  key: string;
+  isAppScope: boolean;
+  updatedAt: number;
+};
+
+type RolePermissionRecord = {
+  roleId: string;
+  permissionId: string;
+  updatedAt: number;
+};
+
+type ResourceTypeRecord = {
+  id: string;
+  key: string;
+  name: string;
+  parentResourceTypeId: string | null;
+  updatedAt: number;
+};
+
+type RoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  membershipId: string;
+  roleId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+type GroupRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  groupId: string;
+  roleId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+type ResourceRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  membershipId: string;
+  roleId: string;
+  resourceTypeId: string;
+  externalId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+type GroupResourceRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  groupId: string;
+  roleId: string;
+  resourceTypeId: string;
+  externalId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
 type Page<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
+type ItemsPage<V> = { items: V[]; cursor?: string };
+
+type ListQuery<Args extends DefaultFunctionArgs, V, Name> = FunctionReference<
+  "query",
+  "public",
+  Args & { cursor?: string; limit?: number },
+  ItemsPage<V>,
+  Name
+>;
+type GetQuery<Args extends DefaultFunctionArgs, V, Name> = FunctionReference<
+  "query",
+  "public",
+  Args,
+  V | null,
+  Name
+>;
 
 /**
  * A utility for referencing the Hercules IAM component's exposed API.
@@ -148,6 +248,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     >;
   };
   queries: {
+    // Caller-centric reads (me.*) and sync status.
     getTenantAccessStatus: FunctionReference<
       "query",
       "public",
@@ -169,6 +270,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       RoleSummary[],
       Name
     >;
+    listMyGroups: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string },
+      GroupSummary[],
+      Name
+    >;
     getTargetTenantSyncStatus: FunctionReference<
       "query",
       "public",
@@ -176,79 +284,108 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       TargetTenantSyncStatus,
       Name
     >;
-    getTenant: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string },
-      TenantDetail | null,
+
+    // Generic per-table reads (TRUSTED / UNGATED).
+    tenantsList: ListQuery<
+      { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+      TenantRecord,
       Name
     >;
-    listTenants: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; cursor?: string; limit?: number },
-      Page<"tenants", TenantDetail>,
+    tenantsGet: GetQuery<{ id?: string; primary?: boolean }, TenantRecord, Name>;
+
+    usersList: ListQuery<{ email?: string }, UserRecord, Name>;
+    usersGet: GetQuery<{ id?: string; email?: string }, UserRecord, Name>;
+
+    groupsList: ListQuery<{ tenantId?: string; status?: "active" | "disabled" }, GroupRecord, Name>;
+    groupsGet: GetQuery<{ id: string }, GroupRecord, Name>;
+
+    rolesList: ListQuery<{ tenantId?: string | null; isAppScope?: boolean }, RoleRecord, Name>;
+    rolesGet: GetQuery<{ id?: string; key?: string; tenantId?: string | null }, RoleRecord, Name>;
+
+    permissionsList: ListQuery<{ isAppScope?: boolean }, PermissionRecord, Name>;
+    permissionsGet: GetQuery<{ id?: string; key?: string }, PermissionRecord, Name>;
+
+    resourceTypesList: ListQuery<
+      { parentResourceTypeId?: string | null },
+      ResourceTypeRecord,
       Name
     >;
-    listTenantUsers: FunctionReference<
-      "query",
-      "public",
+    resourceTypesGet: GetQuery<{ id?: string; key?: string }, ResourceTypeRecord, Name>;
+
+    membershipsList: ListQuery<
+      { tenantId?: string; status?: MembershipStatus; userId?: string },
+      MembershipRecord,
+      Name
+    >;
+    membershipsGet: GetQuery<
+      { id?: string; tenantId?: string; userId?: string },
+      MembershipRecord,
+      Name
+    >;
+
+    roleAssignmentsList: ListQuery<
+      { tenantId?: string; membershipId?: string; roleId?: string },
+      RoleAssignmentRecord,
+      Name
+    >;
+    roleAssignmentsGet: GetQuery<{ id: string }, RoleAssignmentRecord, Name>;
+
+    groupRoleAssignmentsList: ListQuery<
+      { tenantId?: string; groupId?: string; roleId?: string },
+      GroupRoleAssignmentRecord,
+      Name
+    >;
+    groupRoleAssignmentsGet: GetQuery<{ id: string }, GroupRoleAssignmentRecord, Name>;
+
+    resourceRoleAssignmentsList: ListQuery<
       {
-        tokenIdentifier?: string;
         tenantId?: string;
-        cursor?: string;
-        limit?: number;
-        status?: MembershipStatus | "all";
+        membershipId?: string;
+        roleId?: string;
+        resourceTypeId?: string;
+        externalId?: string;
       },
-      Page<"users", TenantUser>,
+      ResourceRoleAssignmentRecord,
       Name
     >;
-    getTenantUser: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; userId: string },
-      TenantUser | null,
-      Name
-    >;
-    listTenantGroups: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; cursor?: string; limit?: number },
-      Page<"groups", TenantGroup>,
-      Name
-    >;
-    getTenantGroup: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; groupId: string },
-      TenantGroup | null,
-      Name
-    >;
-    listGroupMembers: FunctionReference<
-      "query",
-      "public",
+    resourceRoleAssignmentsGet: GetQuery<{ id: string }, ResourceRoleAssignmentRecord, Name>;
+
+    groupResourceRoleAssignmentsList: ListQuery<
       {
-        tokenIdentifier?: string;
         tenantId?: string;
-        groupId: string;
-        cursor?: string;
-        limit?: number;
+        groupId?: string;
+        roleId?: string;
+        resourceTypeId?: string;
+        externalId?: string;
       },
-      Page<"users", TenantUser>,
+      GroupResourceRoleAssignmentRecord,
       Name
     >;
-    listTenantRoles: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string },
-      RoleSummary[],
+    groupResourceRoleAssignmentsGet: GetQuery<
+      { id: string },
+      GroupResourceRoleAssignmentRecord,
       Name
     >;
-    getTenantRole: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; roleId: string },
-      RoleDetail | null,
+
+    groupMembershipsList: ListQuery<
+      { groupId?: string; membershipId?: string; tenantId?: string },
+      GroupMembershipRecord,
+      Name
+    >;
+    groupMembershipsGet: GetQuery<
+      { groupId: string; membershipId: string },
+      GroupMembershipRecord,
+      Name
+    >;
+
+    rolePermissionsList: ListQuery<
+      { roleId?: string; permissionId?: string },
+      RolePermissionRecord,
+      Name
+    >;
+    rolePermissionsGet: GetQuery<
+      { roleId: string; permissionId: string },
+      RolePermissionRecord,
       Name
     >;
   };

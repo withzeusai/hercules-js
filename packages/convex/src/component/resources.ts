@@ -135,7 +135,7 @@ async function resolveResourceRow(
 
 // resource.list - the access-scoped resource listing. When `permission` is
 // provided, each node is filtered through the same allow-only check used by
-// access.can, so the page contains only resources the caller may access.
+// access.hasPermissions, so the page contains only resources the caller may access.
 export const list = query({
   args: {
     tokenIdentifier: v.optional(v.string()),

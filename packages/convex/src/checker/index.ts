@@ -13,21 +13,22 @@ import * as ts from "typescript";
 // STRING LITERALS the code references are declared in the catalog.
 //
 // What it scans in the createAccess surface:
-//   - The `permission` option on the auth-aware builders accessQuery /
-//     accessMutation / accessAction (any builder definition object with a
-//     handler). The value may be a single key OR an { anyOf: [...] } /
-//     { allOf: [...] } set; every string literal in the set is validated.
-//   - The permission argument to access.can(ctx, "app.x:y", ...) and
-//     access.require(ctx, ...) - also single key or anyOf/allOf set.
+//   - The `permission` option on the auth-aware builders protectedQuery /
+//     protectedMutation / protectedAction (any builder definition object with a
+//     handler). The value may be a single key, a bare array (allOf), OR an
+//     { anyOf: [...] } / { allOf: [...] } set; every string literal is validated.
+//   - The permission argument to access.hasPermissions(ctx, "app.x:y", ...) and
+//     access.requirePermissions(ctx, ...) - single key, array, or anyOf/allOf set.
 //   - Resource-type literals in resource refs: the `resource` option, the args
 //     to resource.write / resource.get / resource.list, and nested `parent`
 //     refs (any { type: "app.x", externalId | parent }).
 //
-// It also enforces that raw Convex builders (query / mutation / action from
-// `_generated/server`) are NOT imported into app code: every function must be
-// defined with accessQuery/publicQuery (etc.) so there is no unguarded escape
-// hatch. Only the wiring file that calls createAccess may import the raw
-// builders (to pass them in).
+// It also enforces that a permission-guarded function uses the PROTECTED
+// builders: raw Convex builders (query / mutation / action from
+// `_generated/server`) silently IGNORE a `permission` / `tenant` / `resource`
+// guard option, so using one with a raw builder is flagged. Raw builders are
+// otherwise allowed - they are the sanctioned way to define unauthenticated,
+// unguarded functions.
 //
 // Dynamic (non-literal) permission and resource values are skipped: the checker
 // cannot resolve them statically, and the runtime engine validates them.
@@ -37,7 +38,7 @@ export type IamCheckFinding = {
     | "convex_dir_missing"
     | "undeclared_permission"
     | "undeclared_resource_type"
-    | "raw_builder_import";
+    | "guard_on_raw_builder";
   severity: "error";
   filePath: string;
   line: number;
@@ -228,9 +229,9 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
         }
       }
     } else if (ts.isCallExpression(node)) {
-      // access.can(ctx, perm, ...) / access.require(ctx, perm, ...), including the
-      // destructured bare `can(...)` / `require(...)` forms. `perm` is a single
-      // key or an { anyOf } / { allOf } set.
+      // access.hasPermissions(ctx, perm, ...) / access.requirePermissions(ctx,
+      // perm, ...), including the destructured bare forms. `perm` is a single
+      // key, a bare array, or an { anyOf } / { allOf } set.
       if (isAccessCheckCall(node)) {
         const permissionArg = node.arguments[1];
         if (permissionArg) {
@@ -244,23 +245,22 @@ function checkSourceFile(cwd: string, filePath: string, catalog: IamCatalog): Ia
   };
 
   visit(sourceFile);
-  findings.push(...checkRawBuilderImports(cwd, sourceFile));
+  findings.push(...checkGuardedRawBuilders(cwd, sourceFile));
   return findings;
 }
 
-// A call to the in-handler checks: `access.can` / `access.require` (member
-// access on the wired `access` object) or the destructured bare `can` /
-// `require` identifiers.
+// A call to the in-handler checks: `access.hasPermissions` /
+// `access.requirePermissions` (member access on the wired `access` object) or
+// the destructured bare `hasPermissions` / `requirePermissions` identifiers.
+const ACCESS_CHECK_NAMES: ReadonlySet<string> = new Set(["hasPermissions", "requirePermissions"]);
+
 function isAccessCheckCall(node: ts.CallExpression): boolean {
   const callee = unwrapExpression(node.expression);
   if (ts.isPropertyAccessExpression(callee)) {
-    return (
-      (callee.name.text === "can" || callee.name.text === "require") &&
-      isAccessReceiver(callee.expression)
-    );
+    return ACCESS_CHECK_NAMES.has(callee.name.text) && isAccessReceiver(callee.expression);
   }
   if (ts.isIdentifier(callee)) {
-    return callee.text === "can" || callee.text === "require";
+    return ACCESS_CHECK_NAMES.has(callee.text);
   }
   return false;
 }
@@ -272,14 +272,54 @@ function isAccessReceiver(expression: ts.Expression): boolean {
   return false;
 }
 
-// The raw Convex builders may only be imported by the wiring file (the one that
-// calls createAccess). Anywhere else, app code must use accessQuery/publicQuery
-// (etc.) so there is no unguarded function-definition escape hatch.
+// The raw Convex builder names. Raw builders ignore the access guard options, so
+// using one WITH a `permission` / `tenant` / `resource` guard is a bug: the
+// guard silently does nothing. App code should define such functions with the
+// PROTECTED builders instead. (Importing raw builders is otherwise fine - they
+// are how unauthenticated, unguarded functions are defined.)
 const RAW_BUILDER_IMPORTS: ReadonlySet<string> = new Set(["query", "mutation", "action"]);
+const GUARD_OPTIONS: readonly string[] = ["permission", "tenant", "resource"];
 
-function checkRawBuilderImports(cwd: string, sourceFile: ts.SourceFile): IamCheckFinding[] {
-  if (fileCallsCreateAccess(sourceFile)) return [];
+function checkGuardedRawBuilders(cwd: string, sourceFile: ts.SourceFile): IamCheckFinding[] {
+  // Local names bound to a raw builder imported from _generated/server
+  // (honoring aliases like `import { query as q }`).
+  const rawBuilderLocals = collectRawBuilderLocalNames(sourceFile);
+  if (rawBuilderLocals.size === 0) return [];
+
   const findings: IamCheckFinding[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapExpression(node.expression);
+      if (ts.isIdentifier(callee) && rawBuilderLocals.has(callee.text)) {
+        const firstArg = node.arguments[0];
+        const definition = firstArg ? unwrapExpression(firstArg) : undefined;
+        if (
+          definition &&
+          ts.isObjectLiteralExpression(definition) &&
+          hasProperty(definition, "handler")
+        ) {
+          const guardOption = GUARD_OPTIONS.find((option) => hasProperty(definition, option));
+          if (guardOption) {
+            findings.push(
+              finding(cwd, sourceFile, callee, {
+                code: "guard_on_raw_builder",
+                message: `Raw Convex builder "${callee.text}" is used with a "${guardOption}" guard option, which it ignores.`,
+                suggestion:
+                  "Define permission-guarded functions with protectedQuery/protectedMutation/protectedAction (which enforce the guard). Raw query/mutation/action are only for unauthenticated, unguarded functions.",
+              }),
+            );
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return findings;
+}
+
+function collectRawBuilderLocalNames(sourceFile: ts.SourceFile): Set<string> {
+  const locals = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const moduleSpecifier = statement.moduleSpecifier;
@@ -290,35 +330,10 @@ function checkRawBuilderImports(cwd: string, sourceFile: ts.SourceFile): IamChec
     for (const element of namedBindings.elements) {
       // propertyName is the original import name when aliased (`query as q`).
       const importedName = (element.propertyName ?? element.name).text;
-      if (!RAW_BUILDER_IMPORTS.has(importedName)) continue;
-      findings.push(
-        finding(cwd, sourceFile, element, {
-          code: "raw_builder_import",
-          message: `Raw Convex builder "${importedName}" is imported from _generated/server outside the access wiring file.`,
-          suggestion:
-            "Define functions with accessQuery/accessMutation/accessAction (auth-enforced) or publicQuery/publicMutation/publicAction. Only the file that calls createAccess (convex/access.ts) may import the raw builders.",
-        }),
-      );
+      if (RAW_BUILDER_IMPORTS.has(importedName)) locals.add(element.name.text);
     }
   }
-  return findings;
-}
-
-function fileCallsCreateAccess(sourceFile: ts.SourceFile): boolean {
-  let found = false;
-  const walk = (node: ts.Node): void => {
-    if (found) return;
-    if (ts.isCallExpression(node)) {
-      const callee = unwrapExpression(node.expression);
-      if (ts.isIdentifier(callee) && callee.text === "createAccess") {
-        found = true;
-        return;
-      }
-    }
-    ts.forEachChild(node, walk);
-  };
-  walk(sourceFile);
-  return found;
+  return locals;
 }
 
 function hasProperty(object: ts.ObjectLiteralExpression, propertyName: string): boolean {
@@ -350,8 +365,9 @@ function getStringProperty(
 }
 
 // Extracts every permission string literal from a `permission` property: the
-// single-key form, plus each literal inside an { anyOf: [...] } / { allOf: [...] }
-// set. Dynamic (non-literal) entries are skipped.
+// single-key form, a bare array (allOf), plus each literal inside an
+// { anyOf: [...] } / { allOf: [...] } set. Dynamic (non-literal) entries are
+// skipped.
 function getPermissionLiterals(
   object: ts.ObjectLiteralExpression,
   propertyName: string,
@@ -364,6 +380,17 @@ function collectPermissionLiterals(expression: ts.Expression): { value: string; 
   const node = unwrapExpression(expression);
   if (ts.isStringLiteralLike(node)) {
     return [{ value: node.text, node }];
+  }
+  if (ts.isArrayLiteralExpression(node)) {
+    // A bare array is an allOf shorthand: validate every string literal.
+    const literals: { value: string; node: ts.Node }[] = [];
+    for (const element of node.elements) {
+      const unwrapped = unwrapExpression(element);
+      if (ts.isStringLiteralLike(unwrapped)) {
+        literals.push({ value: unwrapped.text, node: unwrapped });
+      }
+    }
+    return literals;
   }
   if (ts.isObjectLiteralExpression(node)) {
     const literals: { value: string; node: ts.Node }[] = [];

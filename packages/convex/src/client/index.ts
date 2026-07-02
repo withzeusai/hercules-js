@@ -3,6 +3,7 @@ import type {
   ArgsArrayForOptionalValidator,
   ArgsArrayToObject,
   DefaultArgsForOptionalValidator,
+  DefaultFunctionArgs,
   FunctionReference,
   GenericActionCtx,
   GenericDataModel,
@@ -36,11 +37,6 @@ export type RoleSummary = {
   tenantId: string | null;
 };
 
-export type DirectRoleAssignment = RoleSummary & {
-  assignmentId: string;
-  expiresAt: number | null;
-};
-
 export type TenantSummary = {
   tenantId: string;
   tenantName: string;
@@ -52,43 +48,11 @@ export type TenantSummary = {
 
 export type TenantSummariesPage = { tenants: TenantSummary[]; nextCursor?: string };
 
-export type TenantDetail = {
-  tenantId: string;
-  tenantName: string;
-  isPrimaryTenant: boolean;
-  lifecycleStatus: "active" | "archived";
-  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
-  defaultRoleId: string | null;
-  updatedAt: number;
-};
-
-export type TenantDetailsPage = { tenants: TenantDetail[]; nextCursor?: string };
-
-export type TenantUser = {
-  userId: string;
-  status: MembershipStatus;
-  name?: string;
-  email?: string;
-  image?: string;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
-};
-
-export type TenantGroup = {
+// The caller's own groups in a tenant (me.groups).
+export type GroupSummary = {
   groupId: string;
   name: string;
   status: "active" | "disabled";
-  memberCount: number;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
-};
-
-export type TenantUsersPage = { users: TenantUser[]; nextCursor?: string };
-export type TenantGroupsPage = { groups: TenantGroup[]; nextCursor?: string };
-
-export type RoleDetail = RoleSummary & {
-  description: string | null;
-  permissionKeys: string[];
 };
 
 export type ResourceRef = { type: string; externalId: string };
@@ -100,6 +64,129 @@ export type ResourceNode = {
 };
 
 export type ResourceNodesPage = { resources: ResourceNode[]; nextCursor?: string };
+
+// ── mirror-table record shapes ────────────────────────────────────────────────
+// The generic per-table reads return these clean projections: the Convex system
+// fields (_id, _creationTime) and the internal sourceVersion are dropped.
+export type TenantRecord = {
+  id: string;
+  name: string;
+  isPrimaryTenant: boolean;
+  status: "active" | "disabled";
+  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  defaultRoleId: string | null;
+  updatedAt: number;
+};
+
+export type UserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string;
+  phone?: string;
+  phoneVerified: boolean;
+  updatedAt: number;
+};
+
+export type MembershipRecord = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  status: MembershipStatus;
+  updatedAt: number;
+};
+
+export type GroupRecord = {
+  id: string;
+  tenantId: string;
+  description?: string;
+  name: string;
+  status: "active" | "disabled";
+  updatedAt: number;
+};
+
+export type GroupMembershipRecord = {
+  groupId: string;
+  membershipId: string;
+  tenantId: string;
+  updatedAt: number;
+};
+
+export type RoleRecord = {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  tenantId: string | null;
+  isAppScope: boolean;
+  updatedAt: number;
+};
+
+export type PermissionRecord = {
+  id: string;
+  key: string;
+  isAppScope: boolean;
+  updatedAt: number;
+};
+
+export type RolePermissionRecord = {
+  roleId: string;
+  permissionId: string;
+  updatedAt: number;
+};
+
+export type ResourceTypeRecord = {
+  id: string;
+  key: string;
+  name: string;
+  parentResourceTypeId: string | null;
+  updatedAt: number;
+};
+
+export type RoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  membershipId: string;
+  roleId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+export type GroupRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  groupId: string;
+  roleId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+export type ResourceRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  membershipId: string;
+  roleId: string;
+  resourceTypeId: string;
+  externalId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+export type GroupResourceRoleAssignmentRecord = {
+  id: string;
+  tenantId: string;
+  groupId: string;
+  roleId: string;
+  resourceTypeId: string;
+  externalId: string;
+  expiresAt?: number;
+  updatedAt: number;
+};
+
+// A page from a generic `list` read: bounded items plus an opaque `nextCursor`
+// (present only when more pages exist; pass it back as `cursor`).
+export type ListPage<V> = { items: V[]; nextCursor?: string };
 
 export type TenantAccessStatusResult =
   | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
@@ -156,6 +243,23 @@ type CheckArgs = {
 
 type Cursored<T> = T & { cursor?: string };
 type ComponentPage<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
+type PageFilters = { cursor?: string; limit?: number };
+type ComponentItemsPage<V> = { items: V[]; cursor?: string };
+
+// The two generic per-table read references, keyed by their filter/key args and
+// record type. `list` refs carry the pagination args on top of their filters.
+type CompList<Filters extends DefaultFunctionArgs, V> = FunctionReference<
+  "query",
+  "public",
+  Filters & PageFilters,
+  ComponentItemsPage<V>
+>;
+type CompGet<Args extends DefaultFunctionArgs, V> = FunctionReference<
+  "query",
+  "public",
+  Args,
+  V | null
+>;
 
 export type AccessComponent = {
   checks: {
@@ -168,6 +272,7 @@ export type AccessComponent = {
     >;
   };
   queries: {
+    // Caller-centric reads (me.*) and sync status.
     getTenantAccessStatus: FunctionReference<
       "query",
       "public",
@@ -186,71 +291,79 @@ export type AccessComponent = {
       { tokenIdentifier?: string; tenantId?: string },
       RoleSummary[]
     >;
+    listMyGroups: FunctionReference<
+      "query",
+      "public",
+      { tokenIdentifier?: string; tenantId?: string },
+      GroupSummary[]
+    >;
     getTargetTenantSyncStatus: FunctionReference<
       "query",
       "public",
       { tokenIdentifier?: string; tenantId?: string; sourceVersion: number },
       TargetTenantSyncStatus
     >;
-    getTenant: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string },
-      TenantDetail | null
+
+    // Generic per-table reads (TRUSTED / UNGATED).
+    tenantsList: CompList<
+      { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+      TenantRecord
     >;
-    listTenants: FunctionReference<
-      "query",
-      "public",
-      Cursored<{ tokenIdentifier?: string; tenantId?: string; limit?: number }>,
-      ComponentPage<"tenants", TenantDetail>
+    tenantsGet: CompGet<{ id?: string; primary?: boolean }, TenantRecord>;
+    usersList: CompList<{ email?: string }, UserRecord>;
+    usersGet: CompGet<{ id?: string; email?: string }, UserRecord>;
+    groupsList: CompList<{ tenantId?: string; status?: "active" | "disabled" }, GroupRecord>;
+    groupsGet: CompGet<{ id: string }, GroupRecord>;
+    rolesList: CompList<{ tenantId?: string | null; isAppScope?: boolean }, RoleRecord>;
+    rolesGet: CompGet<{ id?: string; key?: string; tenantId?: string | null }, RoleRecord>;
+    permissionsList: CompList<{ isAppScope?: boolean }, PermissionRecord>;
+    permissionsGet: CompGet<{ id?: string; key?: string }, PermissionRecord>;
+    resourceTypesList: CompList<{ parentResourceTypeId?: string | null }, ResourceTypeRecord>;
+    resourceTypesGet: CompGet<{ id?: string; key?: string }, ResourceTypeRecord>;
+    membershipsList: CompList<
+      { tenantId?: string; status?: MembershipStatus; userId?: string },
+      MembershipRecord
     >;
-    listTenantUsers: FunctionReference<
-      "query",
-      "public",
-      Cursored<{
-        tokenIdentifier?: string;
+    membershipsGet: CompGet<{ id?: string; tenantId?: string; userId?: string }, MembershipRecord>;
+    roleAssignmentsList: CompList<
+      { tenantId?: string; membershipId?: string; roleId?: string },
+      RoleAssignmentRecord
+    >;
+    roleAssignmentsGet: CompGet<{ id: string }, RoleAssignmentRecord>;
+    groupRoleAssignmentsList: CompList<
+      { tenantId?: string; groupId?: string; roleId?: string },
+      GroupRoleAssignmentRecord
+    >;
+    groupRoleAssignmentsGet: CompGet<{ id: string }, GroupRoleAssignmentRecord>;
+    resourceRoleAssignmentsList: CompList<
+      {
         tenantId?: string;
-        limit?: number;
-        status?: MembershipStatus | "all";
-      }>,
-      ComponentPage<"users", TenantUser>
+        membershipId?: string;
+        roleId?: string;
+        resourceTypeId?: string;
+        externalId?: string;
+      },
+      ResourceRoleAssignmentRecord
     >;
-    getTenantUser: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; userId: string },
-      TenantUser | null
+    resourceRoleAssignmentsGet: CompGet<{ id: string }, ResourceRoleAssignmentRecord>;
+    groupResourceRoleAssignmentsList: CompList<
+      {
+        tenantId?: string;
+        groupId?: string;
+        roleId?: string;
+        resourceTypeId?: string;
+        externalId?: string;
+      },
+      GroupResourceRoleAssignmentRecord
     >;
-    listTenantGroups: FunctionReference<
-      "query",
-      "public",
-      Cursored<{ tokenIdentifier?: string; tenantId?: string; limit?: number }>,
-      ComponentPage<"groups", TenantGroup>
+    groupResourceRoleAssignmentsGet: CompGet<{ id: string }, GroupResourceRoleAssignmentRecord>;
+    groupMembershipsList: CompList<
+      { groupId?: string; membershipId?: string; tenantId?: string },
+      GroupMembershipRecord
     >;
-    getTenantGroup: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; groupId: string },
-      TenantGroup | null
-    >;
-    listGroupMembers: FunctionReference<
-      "query",
-      "public",
-      Cursored<{ tokenIdentifier?: string; tenantId?: string; groupId: string; limit?: number }>,
-      ComponentPage<"users", TenantUser>
-    >;
-    listTenantRoles: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string },
-      RoleSummary[]
-    >;
-    getTenantRole: FunctionReference<
-      "query",
-      "public",
-      { tokenIdentifier?: string; tenantId?: string; roleId: string },
-      RoleDetail | null
-    >;
+    groupMembershipsGet: CompGet<{ groupId: string; membershipId: string }, GroupMembershipRecord>;
+    rolePermissionsList: CompList<{ roleId?: string; permissionId?: string }, RolePermissionRecord>;
+    rolePermissionsGet: CompGet<{ roleId: string; permissionId: string }, RolePermissionRecord>;
   };
   resources: {
     list: FunctionReference<
@@ -326,16 +439,18 @@ export type ResourceSelector<Ctx, Args> =
   | ResourceRef
   | ((ctx: Ctx, args: Args) => ResourceRef | Promise<ResourceRef>);
 
-export type CanOptions = { tenant?: string; resource?: ResourceRef };
+export type PermissionOptions = { tenant?: string; resource?: ResourceRef };
 
-// A permission requirement is either a single permission key, or a set combined
-// with explicit AND/OR semantics:
+// A permission requirement is either a single permission key, a bare array
+// (treated as `allOf`), or a set combined with explicit AND/OR semantics:
 //   • `"app.x:read"`            - hold this one permission.
+//   • `["a", "b"]`              - hold EVERY ONE (AND), shorthand for allOf.
 //   • `{ anyOf: ["a", "b"] }`   - hold AT LEAST ONE (OR).
 //   • `{ allOf: ["a", "b"] }`   - hold EVERY ONE (AND).
-// An empty `anyOf`/`allOf` array is rejected as a misconfiguration (denied).
+// An empty array / `anyOf` / `allOf` is rejected as a misconfiguration (denied).
 export type PermissionRequirement =
   | string
+  | string[]
   | { anyOf: string[]; allOf?: never }
   | { allOf: string[]; anyOf?: never };
 
@@ -391,33 +506,41 @@ export type AuthActionBuilder<DataModel extends GenericDataModel> = <
   handler: (ctx: GenericActionCtx<DataModel>, ...args: OneOrZeroArgs) => ReturnValue;
 }) => RegisteredAction<"public", ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
+// The uniform list/get pair a mirror-table namespace exposes.
+type TableReads<DataModel extends GenericDataModel, Filters, Key, Rec> = {
+  list: (
+    ctx: AccessReadContext<DataModel>,
+    filters?: Filters & { cursor?: string; limit?: number },
+  ) => Promise<ListPage<Rec>>;
+  get: (ctx: AccessReadContext<DataModel>, key: Key) => Promise<Rec | null>;
+};
+
 // ── the createAccess surface ──────────────────────────────────────────────────────
 export type Access<DataModel extends GenericDataModel> = {
-  // Raw builders, no auth.
-  publicQuery: QueryBuilder<DataModel, "public">;
-  publicMutation: MutationBuilder<DataModel, "public">;
-  publicAction: ActionBuilder<DataModel, "public">;
   // Auth-aware builders. Require a verified identity; add { permission, tenant?,
-  // resource? } to also enforce a permission before the handler runs.
-  accessQuery: AuthQueryBuilder<DataModel>;
-  accessMutation: AuthMutationBuilder<DataModel>;
-  accessAction: AuthActionBuilder<DataModel>;
-  // The signed-in end user's ID (their verified OIDC subject). Link app rows to this.
-  getCurrentUserId: (ctx: AccessReadContext<DataModel>) => Promise<string | undefined>;
-  // In-handler authorization. `permission` accepts a single key or an
-  // { anyOf } / { allOf } set (see PermissionRequirement).
-  can: (
+  // resource? } to also enforce a permission before the handler runs. For
+  // non-protected functions, import the raw query/mutation/action from
+  // _generated/server directly.
+  protectedQuery: AuthQueryBuilder<DataModel>;
+  protectedMutation: AuthMutationBuilder<DataModel>;
+  protectedAction: AuthActionBuilder<DataModel>;
+  // In-handler authorization. `requirement` accepts a single key, a bare array
+  // (allOf / AND), or an { anyOf } / { allOf } set (see PermissionRequirement).
+  hasPermissions: (
     ctx: AccessReadContext<DataModel>,
-    permission: PermissionRequirement,
-    options?: CanOptions,
+    requirement: PermissionRequirement,
+    options?: PermissionOptions,
   ) => Promise<boolean>;
-  require: (
+  requirePermissions: (
     ctx: AccessReadContext<DataModel>,
-    permission: PermissionRequirement,
-    options?: CanOptions,
+    requirement: PermissionRequirement,
+    options?: PermissionOptions,
   ) => Promise<void>;
   // Caller-centric reads.
   me: {
+    // The signed-in end user's ID (their verified OIDC subject). Link app rows
+    // to this. `undefined` when unauthenticated.
+    id: (ctx: AccessReadContext<DataModel>) => Promise<string | undefined>;
     tenants: (
       ctx: AccessReadContext<DataModel>,
       args?: { cursor?: string; limit?: number; status?: "active" | "all" },
@@ -426,58 +549,102 @@ export type Access<DataModel extends GenericDataModel> = {
       ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string },
     ) => Promise<RoleSummary[]>;
+    groups: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { tenant?: string },
+    ) => Promise<GroupSummary[]>;
     accessStatus: (
       ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string },
     ) => Promise<TenantAccessStatusResult>;
   };
-  // Mirror reads (admin reads self-gate on the matching system read capability).
-  tenant: {
-    list: (
-      ctx: AccessReadContext<DataModel>,
-      args?: { tenant?: string; cursor?: string; limit?: number },
-    ) => Promise<TenantDetailsPage>;
-    get: (
-      ctx: AccessReadContext<DataModel>,
-      args?: { tenant?: string },
-    ) => Promise<TenantDetail | null>;
-  };
-  user: {
-    list: (
-      ctx: AccessReadContext<DataModel>,
-      args?: {
-        tenant?: string;
-        cursor?: string;
-        limit?: number;
-        status?: MembershipStatus | "all";
-      },
-    ) => Promise<TenantUsersPage>;
-    get: (
-      ctx: AccessReadContext<DataModel>,
-      args: { tenant?: string; userId: string },
-    ) => Promise<TenantUser | null>;
-  };
-  group: {
-    list: (
-      ctx: AccessReadContext<DataModel>,
-      args?: { tenant?: string; cursor?: string; limit?: number },
-    ) => Promise<TenantGroupsPage>;
-    get: (
-      ctx: AccessReadContext<DataModel>,
-      args: { tenant?: string; groupId: string },
-    ) => Promise<TenantGroup | null>;
-    members: (
-      ctx: AccessReadContext<DataModel>,
-      args: { tenant?: string; groupId: string; cursor?: string; limit?: number },
-    ) => Promise<TenantUsersPage>;
-  };
-  role: {
-    list: (ctx: AccessReadContext<DataModel>, args?: { tenant?: string }) => Promise<RoleSummary[]>;
-    get: (
-      ctx: AccessReadContext<DataModel>,
-      args: { tenant?: string; roleId: string },
-    ) => Promise<RoleDetail | null>;
-  };
+  // Generic, uniform mirror reads. These are TRUSTED reads with no identity
+  // check: authorize the calling function (protectedQuery + requirePermissions).
+  tenants: TableReads<
+    DataModel,
+    { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+    { id: string } | { primary: true },
+    TenantRecord
+  >;
+  users: TableReads<DataModel, { email?: string }, { id: string } | { email: string }, UserRecord>;
+  groups: TableReads<
+    DataModel,
+    { tenantId?: string; status?: "active" | "disabled" },
+    { id: string },
+    GroupRecord
+  >;
+  roles: TableReads<
+    DataModel,
+    { tenantId?: string | null; isAppScope?: boolean },
+    { id: string } | { key: string; tenantId?: string | null },
+    RoleRecord
+  >;
+  permissions: TableReads<
+    DataModel,
+    { isAppScope?: boolean },
+    { id: string } | { key: string },
+    PermissionRecord
+  >;
+  resourceTypes: TableReads<
+    DataModel,
+    { parentResourceTypeId?: string | null },
+    { id: string } | { key: string },
+    ResourceTypeRecord
+  >;
+  memberships: TableReads<
+    DataModel,
+    { tenantId?: string; status?: MembershipStatus; userId?: string },
+    { id: string } | { tenantId: string; userId: string },
+    MembershipRecord
+  >;
+  roleAssignments: TableReads<
+    DataModel,
+    { tenantId?: string; membershipId?: string; roleId?: string },
+    { id: string },
+    RoleAssignmentRecord
+  >;
+  groupRoleAssignments: TableReads<
+    DataModel,
+    { tenantId?: string; groupId?: string; roleId?: string },
+    { id: string },
+    GroupRoleAssignmentRecord
+  >;
+  resourceRoleAssignments: TableReads<
+    DataModel,
+    {
+      tenantId?: string;
+      membershipId?: string;
+      roleId?: string;
+      resourceTypeId?: string;
+      externalId?: string;
+    },
+    { id: string },
+    ResourceRoleAssignmentRecord
+  >;
+  groupResourceRoleAssignments: TableReads<
+    DataModel,
+    {
+      tenantId?: string;
+      groupId?: string;
+      roleId?: string;
+      resourceTypeId?: string;
+      externalId?: string;
+    },
+    { id: string },
+    GroupResourceRoleAssignmentRecord
+  >;
+  groupMemberships: TableReads<
+    DataModel,
+    { groupId?: string; membershipId?: string; tenantId?: string },
+    { groupId: string; membershipId: string },
+    GroupMembershipRecord
+  >;
+  rolePermissions: TableReads<
+    DataModel,
+    { roleId?: string; permissionId?: string },
+    { roleId: string; permissionId: string },
+    RolePermissionRecord
+  >;
   // Component-owned resource nodes (the app owns lifecycle).
   resource: {
     list: (
@@ -524,22 +691,41 @@ export function createAccess<DataModel extends GenericDataModel>(
   options: CreateAccessOptions<DataModel>,
 ): Access<DataModel> {
   const component = resolveComponent(options);
+  const q = component.queries;
+
+  // A generic list wrapper: forward the (compacted) filters, then rename the
+  // component's `cursor` to `nextCursor`. `Args` is inferred whole from the ref
+  // (filters + pagination), so the intersection stays out of inference.
+  const list =
+    <Args extends DefaultFunctionArgs, V>(
+      ref: FunctionReference<"query", "public", Args, ComponentItemsPage<V>>,
+    ) =>
+    async (ctx: AccessReadContext<DataModel>, filters?: Args): Promise<ListPage<V>> =>
+      withItemsCursor(await ctx.runQuery(ref, compact((filters ?? {}) as Args)));
+
+  const get =
+    <Args extends DefaultFunctionArgs, V>(
+      ref: FunctionReference<"query", "public", Args, V | null>,
+    ) =>
+    async (ctx: AccessReadContext<DataModel>, key: Args): Promise<V | null> =>
+      ctx.runQuery(ref, key);
 
   return {
-    publicQuery: options.query,
-    publicMutation: options.mutation,
-    publicAction: options.action,
-    accessQuery: makeAuthBuilder(options.query, component) as AuthQueryBuilder<DataModel>,
-    accessMutation: makeAuthBuilder(options.mutation, component) as AuthMutationBuilder<DataModel>,
-    accessAction: makeAuthBuilder(options.action, component) as AuthActionBuilder<DataModel>,
-    getCurrentUserId,
-    can: (ctx, permission, opts) => can(component, ctx, permission, opts),
-    require: (ctx, permission, opts) => requirePermission(component, ctx, permission, opts),
+    protectedQuery: makeAuthBuilder(options.query, component) as AuthQueryBuilder<DataModel>,
+    protectedMutation: makeAuthBuilder(
+      options.mutation,
+      component,
+    ) as AuthMutationBuilder<DataModel>,
+    protectedAction: makeAuthBuilder(options.action, component) as AuthActionBuilder<DataModel>,
+    hasPermissions: (ctx, requirement, opts) => hasPermissions(component, ctx, requirement, opts),
+    requirePermissions: (ctx, requirement, opts) =>
+      requirePermissions(component, ctx, requirement, opts),
     me: {
+      id: (ctx) => getCurrentUserId(ctx),
       tenants: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
         if (!tokenIdentifier) return { tenants: [] };
-        const result = await ctx.runQuery(component.queries.listMyTenants, {
+        const result = await ctx.runQuery(q.listMyTenants, {
           tokenIdentifier,
           ...optional("cursor", args.cursor),
           ...optional("limit", args.limit),
@@ -550,7 +736,15 @@ export function createAccess<DataModel extends GenericDataModel>(
       roles: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
         if (!tokenIdentifier) return [];
-        return ctx.runQuery(component.queries.listMyRoles, {
+        return ctx.runQuery(q.listMyRoles, {
+          tokenIdentifier,
+          ...optional("tenantId", args.tenant),
+        });
+      },
+      groups: async (ctx, args = {}) => {
+        const tokenIdentifier = await getTokenIdentifier(ctx);
+        if (!tokenIdentifier) return [];
+        return ctx.runQuery(q.listMyGroups, {
           tokenIdentifier,
           ...optional("tenantId", args.tenant),
         });
@@ -558,109 +752,34 @@ export function createAccess<DataModel extends GenericDataModel>(
       accessStatus: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
         if (!tokenIdentifier) return { kind: "fallback", reason: "identity_missing" };
-        return ctx.runQuery(component.queries.getTenantAccessStatus, {
+        return ctx.runQuery(q.getTenantAccessStatus, {
           tokenIdentifier,
           ...optional("tenantId", args.tenant),
         });
       },
     },
-    tenant: {
-      list: async (ctx, args = {}) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return { tenants: [] };
-        const result = await ctx.runQuery(component.queries.listTenants, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          ...optional("cursor", args.cursor),
-          ...optional("limit", args.limit),
-        });
-        return withNextCursor(result);
-      },
-      get: async (ctx, args = {}) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return null;
-        return ctx.runQuery(component.queries.getTenant, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-        });
-      },
+    tenants: { list: list(q.tenantsList), get: get(q.tenantsGet) },
+    users: { list: list(q.usersList), get: get(q.usersGet) },
+    groups: { list: list(q.groupsList), get: get(q.groupsGet) },
+    roles: { list: list(q.rolesList), get: get(q.rolesGet) },
+    permissions: { list: list(q.permissionsList), get: get(q.permissionsGet) },
+    resourceTypes: { list: list(q.resourceTypesList), get: get(q.resourceTypesGet) },
+    memberships: { list: list(q.membershipsList), get: get(q.membershipsGet) },
+    roleAssignments: { list: list(q.roleAssignmentsList), get: get(q.roleAssignmentsGet) },
+    groupRoleAssignments: {
+      list: list(q.groupRoleAssignmentsList),
+      get: get(q.groupRoleAssignmentsGet),
     },
-    user: {
-      list: async (ctx, args = {}) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return { users: [] };
-        const result = await ctx.runQuery(component.queries.listTenantUsers, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          ...optional("cursor", args.cursor),
-          ...optional("limit", args.limit),
-          ...optional("status", args.status),
-        });
-        return withNextCursor(result);
-      },
-      get: async (ctx, args) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return null;
-        return ctx.runQuery(component.queries.getTenantUser, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          userId: args.userId,
-        });
-      },
+    resourceRoleAssignments: {
+      list: list(q.resourceRoleAssignmentsList),
+      get: get(q.resourceRoleAssignmentsGet),
     },
-    group: {
-      list: async (ctx, args = {}) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return { groups: [] };
-        const result = await ctx.runQuery(component.queries.listTenantGroups, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          ...optional("cursor", args.cursor),
-          ...optional("limit", args.limit),
-        });
-        return withNextCursor(result);
-      },
-      get: async (ctx, args) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return null;
-        return ctx.runQuery(component.queries.getTenantGroup, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          groupId: args.groupId,
-        });
-      },
-      members: async (ctx, args) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return { users: [] };
-        const result = await ctx.runQuery(component.queries.listGroupMembers, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          groupId: args.groupId,
-          ...optional("cursor", args.cursor),
-          ...optional("limit", args.limit),
-        });
-        return withNextCursor(result);
-      },
+    groupResourceRoleAssignments: {
+      list: list(q.groupResourceRoleAssignmentsList),
+      get: get(q.groupResourceRoleAssignmentsGet),
     },
-    role: {
-      list: async (ctx, args = {}) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return [];
-        return ctx.runQuery(component.queries.listTenantRoles, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-        });
-      },
-      get: async (ctx, args) => {
-        const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return null;
-        return ctx.runQuery(component.queries.getTenantRole, {
-          tokenIdentifier,
-          ...optional("tenantId", args.tenant),
-          roleId: args.roleId,
-        });
-      },
-    },
+    groupMemberships: { list: list(q.groupMembershipsList), get: get(q.groupMembershipsGet) },
+    rolePermissions: { list: list(q.rolePermissionsList), get: get(q.rolePermissionsGet) },
     resource: {
       list: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -701,7 +820,7 @@ export function createAccess<DataModel extends GenericDataModel>(
     },
     syncStatus: async (ctx, args) => {
       const tokenIdentifier = await getTokenIdentifier(ctx);
-      return ctx.runQuery(component.queries.getTargetTenantSyncStatus, {
+      return ctx.runQuery(q.getTargetTenantSyncStatus, {
         ...optional("tokenIdentifier", tokenIdentifier),
         ...optional("tenantId", args.tenant),
         sourceVersion: args.sourceVersion,
@@ -715,6 +834,12 @@ function optional<K extends string, V>(key: K, value: V | undefined): Record<K, 
   return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
 }
 
+// Drop undefined-valued keys so an omitted filter is not sent as an explicit
+// `undefined` (which fails a Convex optional-arg validator).
+function compact<T extends object>(obj: T): T {
+  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as T;
+}
+
 function withNextCursor<T extends { cursor?: string }>(
   result: T,
 ): Omit<T, "cursor"> & { nextCursor?: string } {
@@ -722,6 +847,13 @@ function withNextCursor<T extends { cursor?: string }>(
   return {
     ...(rest as Omit<T, "cursor">),
     ...(cursor === undefined ? {} : { nextCursor: cursor }),
+  };
+}
+
+function withItemsCursor<V>(result: ComponentItemsPage<V>): ListPage<V> {
+  return {
+    items: result.items,
+    ...(result.cursor === undefined ? {} : { nextCursor: result.cursor }),
   };
 }
 
@@ -747,23 +879,23 @@ async function getCurrentUserId(ctx: AccessReadContext): Promise<string | undefi
   return (await ctx.auth.getUserIdentity())?.subject ?? undefined;
 }
 
-async function can(
+async function hasPermissions(
   component: AccessComponent,
   ctx: AccessReadContext,
-  permission: PermissionRequirement,
-  options?: CanOptions,
+  requirement: PermissionRequirement,
+  options?: PermissionOptions,
 ): Promise<boolean> {
-  const decision = await runCheck(component, ctx, permission, options);
+  const decision = await runCheck(component, ctx, requirement, options);
   return decision.allowed;
 }
 
-async function requirePermission(
+async function requirePermissions(
   component: AccessComponent,
   ctx: AccessReadContext,
-  permission: PermissionRequirement,
-  options?: CanOptions,
+  requirement: PermissionRequirement,
+  options?: PermissionOptions,
 ): Promise<void> {
-  const decision = await runCheck(component, ctx, permission, options);
+  const decision = await runCheck(component, ctx, requirement, options);
   if (!decision.allowed) {
     throw new ConvexError({
       code: "ACCESS_DENIED",
@@ -777,8 +909,8 @@ async function requirePermission(
 async function runCheck(
   component: AccessComponent,
   ctx: AccessReadContext,
-  permission: PermissionRequirement,
-  options?: CanOptions,
+  requirement: PermissionRequirement,
+  options?: PermissionOptions,
 ): Promise<AccessDecision> {
   const tokenIdentifier = await getTokenIdentifier(ctx);
   if (!tokenIdentifier) {
@@ -788,23 +920,24 @@ async function runCheck(
     component,
     ctx,
     tokenIdentifier,
-    permission,
+    requirement,
     options?.tenant,
     options?.resource,
   );
 }
 
 // Splits a PermissionRequirement into its mode and the keys to check. A bare
-// string is a single AND of one key.
-function requirementKeys(permission: PermissionRequirement): {
+// string is a single AND of one key; a bare array is an allOf.
+function requirementKeys(requirement: PermissionRequirement): {
   mode: "anyOf" | "allOf";
   keys: string[];
 } {
-  if (typeof permission === "string") return { mode: "allOf", keys: [permission] };
-  if ("anyOf" in permission && permission.anyOf !== undefined) {
-    return { mode: "anyOf", keys: permission.anyOf };
+  if (typeof requirement === "string") return { mode: "allOf", keys: [requirement] };
+  if (Array.isArray(requirement)) return { mode: "allOf", keys: requirement };
+  if ("anyOf" in requirement && requirement.anyOf !== undefined) {
+    return { mode: "anyOf", keys: requirement.anyOf };
   }
-  return { mode: "allOf", keys: permission.allOf };
+  return { mode: "allOf", keys: requirement.allOf };
 }
 
 // Resolves a PermissionRequirement to a single decision. One key uses the
@@ -814,11 +947,11 @@ async function evaluateRequirement(
   component: AccessComponent,
   ctx: AccessReadContext,
   tokenIdentifier: string,
-  permission: PermissionRequirement,
+  requirement: PermissionRequirement,
   tenantId: string | undefined,
   resource: ResourceRef | undefined,
 ): Promise<AccessDecision> {
-  const { mode, keys } = requirementKeys(permission);
+  const { mode, keys } = requirementKeys(requirement);
   if (keys.length === 0) {
     return { allowed: false, reasonCode: "empty_permission_set" };
   }
@@ -938,6 +1071,7 @@ async function ensureAuthorized(
 
 function isPermissionRequirement(value: unknown): value is PermissionRequirement {
   if (typeof value === "string") return true;
+  if (Array.isArray(value)) return value.every((item) => typeof item === "string");
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as { anyOf?: unknown; allOf?: unknown };
   return Array.isArray(candidate.anyOf) || Array.isArray(candidate.allOf);

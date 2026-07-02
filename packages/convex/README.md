@@ -32,12 +32,12 @@ import herculesComponent from "@usehercules/convex/convex.config"; // defineComp
 
 There is ONE end-user identifier across IAM: the signed-in user's ID, which is
 their OIDC `sub` (`identity.subject` from `ctx.auth.getUserIdentity()`). Get it
-with `getCurrentUserId(ctx)`. Mirror reads expose it as `userId`; the SDK takes
+with `access.me.id(ctx)`. Mirror reads expose it as `userId`; the SDK takes
 the same value as `user_id` on writes.
 
 `tokenIdentifier` (`issuer|sub`) is DIFFERENT. The client passes it to the
 component for issuer fencing and identity resolution; never accept it from
-browser args. Link app rows to `getCurrentUserId(ctx)`, not to `tokenIdentifier`.
+browser args. Link app rows to `access.me.id(ctx)`, not to `tokenIdentifier`.
 
 ## Setup
 
@@ -61,10 +61,12 @@ app.use(hercules, {
 export default app;
 ```
 
-Wire access control once in `convex/access.ts`, then re-export. This is the ONLY
-file that may import the raw Convex builders (`query` / `mutation` / `action`);
-everywhere else, define functions with `accessQuery` / `publicQuery` (etc.) so
-there is no unguarded escape hatch - the static checker enforces this.
+Wire access control once in `convex/access.ts`, then re-export. Define
+permission-guarded functions with the PROTECTED builders (`protectedQuery` /
+`protectedMutation` / `protectedAction`). For non-protected functions, import the
+raw `query` / `mutation` / `action` from your own `_generated/server` directly -
+the static checker only flags a raw builder used WITH a guard option (which it
+silently ignores).
 
 ```ts
 import { createAccess } from "@usehercules/convex";
@@ -72,15 +74,8 @@ import { components } from "./_generated/api";
 import { action, mutation, query } from "./_generated/server";
 
 export const access = createAccess({ query, mutation, action, components });
-// Re-export the builders you define functions with:
-export const {
-  accessQuery,
-  accessMutation,
-  accessAction,
-  publicQuery,
-  publicMutation,
-  publicAction,
-} = access;
+// Re-export the auth-aware builders you define guarded functions with:
+export const { protectedQuery, protectedMutation, protectedAction } = access;
 ```
 
 ### `createAccess(options)` parameters (`CreateAccessOptions<DataModel>`)
@@ -103,35 +98,37 @@ the primary-tenant id is resolved inside the component and never exposed.
 
 ### Function builders
 
-- `accessQuery` / `accessMutation` / `accessAction`: auth-aware. They require a
-  verified identity and throw
+- `protectedQuery` / `protectedMutation` / `protectedAction`: auth-aware. They
+  require a verified identity and throw
   `ConvexError { code: "UNAUTHENTICATED", reasonCode: "missing_identity" }` when
   absent. Add `{ permission, tenant?, resource? }` to the definition object to
   also enforce a permission before the handler runs; on denial they throw
   `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }`. **Use these
   for almost every function.**
-- `publicQuery` / `publicMutation` / `publicAction`: the raw generated builders.
-  No authentication. Use ONLY for truly public endpoints.
+- Raw `query` / `mutation` / `action` (imported from your own `_generated/server`):
+  no authentication. Use ONLY for truly public endpoints. Passing a `permission` /
+  `tenant` / `resource` guard to a raw builder does NOTHING (the checker flags it).
 
-`permission` is a `PermissionRequirement` - a single key, or a set with explicit
-AND/OR semantics:
+`permission` is a `PermissionRequirement` - a single key, a bare array
+(shorthand for `allOf`), or a set with explicit AND/OR semantics:
 
 - `"app.projects:read"` - hold this one permission.
+- `["a", "b"]` - hold EVERY ONE (AND); shorthand for `{ allOf: [...] }`.
 - `{ anyOf: ["a", "b"] }` - hold AT LEAST ONE (OR).
 - `{ allOf: ["a", "b"] }` - hold EVERY ONE (AND).
 
 ```ts
 import { v } from "convex/values";
-import { accessQuery, accessMutation } from "./access";
+import { protectedQuery, protectedMutation } from "./access";
 
-export const listProjects = accessQuery({
+export const listProjects = protectedQuery({
   permission: "app.projects:read",
   tenant: (_ctx, args) => args.tenantId, // string | (ctx,args)=>string; omit for primary
   args: { tenantId: v.string() },
   handler: async (ctx, args) => ctx.db.query("projects").collect(),
 });
 
-export const archiveProject = accessMutation({
+export const archiveProject = protectedMutation({
   permission: { allOf: ["app.projects:archive", "app.projects:write"] },
   resource: (_ctx, args) => ({ type: "app.projects", externalId: args.projectId }),
   args: { projectId: v.string() },
@@ -147,12 +144,12 @@ the resource from trusted server data, not raw browser input.
 
 ### In-handler authorization
 
-- `access.can(ctx, permission, { tenant?, resource? }?) => Promise<boolean>`
-- `access.require(ctx, permission, { tenant?, resource? }?) => Promise<void>` -
+- `access.hasPermissions(ctx, requirement, { tenant?, resource? }?) => Promise<boolean>`
+- `access.requirePermissions(ctx, requirement, { tenant?, resource? }?) => Promise<void>` -
   throws `ConvexError { code: "ACCESS_DENIED", reasonCode, sourceVersion? }` on deny.
 
-`permission` accepts the same single-key or `{ anyOf }` / `{ allOf }` set as the
-builder option. `tenant` is the resolved tenant id `string`, and `resource` is
+`requirement` accepts the same single-key, bare-array, or `{ anyOf }` / `{ allOf }`
+set as the builder option. `tenant` is the resolved tenant id `string`, and `resource` is
 `{ type, externalId }`. A resource-scoped check authorizes if the caller holds a
 role with the permission tenant-wide, OR on the resource, OR on any ancestor of
 the resource in the component resource graph.
@@ -164,7 +161,7 @@ permission X," use the builder's `permission` option instead.
 
 ```ts
 if (
-  !(await access.can(ctx, "app.documents:read", {
+  !(await access.hasPermissions(ctx, "app.documents:read", {
     resource: { type: "app.documents", externalId: id },
   }))
 ) {
@@ -172,41 +169,50 @@ if (
 }
 ```
 
-### `getCurrentUserId(ctx) => Promise<string | undefined>`
-
-The signed-in end user's ID (their verified OIDC subject). `undefined` when
-unauthenticated.
-
 ### Caller-centric reads (`me.*`)
 
+- `me.id(ctx) => Promise<string | undefined>` - the signed-in end user's ID (their
+  verified OIDC subject). `undefined` when unauthenticated.
 - `me.tenants(ctx, { cursor?, limit?, status? }?) => Promise<TenantSummariesPage>` -
   the caller's tenant memberships. `status: "active"` keeps only active
   memberships in active tenants.
 - `me.roles(ctx, { tenant? }?) => Promise<RoleSummary[]>` - the caller's effective
   roles in a tenant (display only; do not infer authorization from it).
-- `me.accessStatus(ctx, { tenant? }?) => Promise<IamTenantAccessStatusResult>` -
+- `me.groups(ctx, { tenant? }?) => Promise<GroupSummary[]>` - the caller's own
+  groups in a tenant (requires an active membership there).
+- `me.accessStatus(ctx, { tenant? }?) => Promise<TenantAccessStatusResult>` -
   the caller's membership status in a tenant.
 
-### Mirror reads
+### Mirror reads (generic per-table)
 
-Each admin read self-gates on the matching system read capability in the tenant
-(`system.access.tenants:read`, `system.access.users:read`,
-`system.access.roles:read`) and returns its empty value when the caller lacks it.
-Reads come from the local mirror, which lags the control plane by a short sync
-window. Treat a not-yet-synced state as loading, not as proof of authorization.
+Every mirror table exposes a uniform, TRUSTED read pair. These do NO identity
+check and NO permission gate - authorize the calling function yourself
+(`protectedQuery` + `access.requirePermissions`). Records drop the Convex system
+fields and the internal `sourceVersion`. Reads come from the local mirror, which
+lags the control plane by a short sync window; treat a not-yet-synced state as
+loading, not as proof of authorization.
 
-- `tenant.list(ctx, { tenant?, cursor?, limit? }?) => Promise<TenantDetailsPage>`
-- `tenant.get(ctx, { tenant? }?) => Promise<TenantDetail | null>`
-- `user.list(ctx, { tenant?, cursor?, limit?, status? }?) => Promise<TenantUsersPage>`
-- `user.get(ctx, { tenant?, userId }) => Promise<TenantUser | null>`
-- `group.list(ctx, { tenant?, cursor?, limit? }?) => Promise<TenantGroupsPage>`
-- `group.get(ctx, { tenant?, groupId }) => Promise<TenantGroup | null>`
-- `group.members(ctx, { tenant?, groupId, cursor?, limit? }) => Promise<TenantUsersPage>`
-- `role.list(ctx, { tenant? }?) => Promise<RoleSummary[]>`
-- `role.get(ctx, { tenant?, roleId }) => Promise<RoleDetail | null>`
+- `list(ctx, filters?) => Promise<ListPage<Record>>` - cursor + limit plus the
+  table's filters (all optional). Pages cap at 100 and return `nextCursor?`
+  (present only when more pages exist); pass it back as `cursor`.
+- `get(ctx, key) => Promise<Record | null>` - `key` is one of the table's unique
+  lookups.
 
-Paginated reads cap pages at 100 and return `nextCursor?` (present only when more
-pages exist); pass it back as `cursor`.
+| Namespace                       | Table                          | `get` key                          | `list` filters                                                        |
+| ------------------------------- | ------------------------------ | ---------------------------------- | --------------------------------------------------------------------- |
+| `access.tenants`                | tenants                        | `{ id }` \| `{ primary: true }`    | `status`, `isPrimaryTenant`                                           |
+| `access.users`                  | users                          | `{ id }` \| `{ email }`            | `email`                                                               |
+| `access.groups`                 | groups                         | `{ id }`                           | `tenantId`, `status`                                                  |
+| `access.roles`                  | roles                          | `{ id }` \| `{ key, tenantId? }`   | `tenantId`, `isAppScope`                                              |
+| `access.permissions`            | permissions                    | `{ id }` \| `{ key }`              | `isAppScope`                                                          |
+| `access.resourceTypes`          | resource_types                 | `{ id }` \| `{ key }`              | `parentResourceTypeId`                                                |
+| `access.memberships`            | tenant_memberships             | `{ id }` \| `{ tenantId, userId }` | `tenantId`, `status`, `userId`                                        |
+| `access.roleAssignments`        | user_role_assignments          | `{ id }`                           | `tenantId`, `membershipId`, `roleId`                                  |
+| `access.groupRoleAssignments`   | group_role_assignments         | `{ id }`                           | `tenantId`, `groupId`, `roleId`                                       |
+| `access.resourceRoleAssignments`| user_resource_role_assignments | `{ id }`                           | `tenantId`, `membershipId`, `roleId`, `resourceTypeId`, `externalId` |
+| `access.groupResourceRoleAssignments` | group_resource_role_assignments | `{ id }`                    | `tenantId`, `groupId`, `roleId`, `resourceTypeId`, `externalId`      |
+| `access.groupMemberships`       | group_memberships              | `{ groupId, membershipId }`        | `groupId`, `membershipId`, `tenantId`                                 |
+| `access.rolePermissions`        | role_permissions               | `{ roleId, permissionId }`         | `roleId`, `permissionId`                                              |
 
 ### Resource nodes (`resource.*`)
 
@@ -239,10 +245,10 @@ rarely references them directly except where a helper requires a `FunctionRefere
 
 - `checks.check`, `checks.checkMany`
 - `queries.getTenantAccessStatus`, `queries.listMyTenants`, `queries.listMyRoles`,
-  `queries.getTargetTenantSyncStatus`, `queries.getTenant`, `queries.listTenants`,
-  `queries.listTenantUsers`, `queries.getTenantUser`, `queries.listTenantGroups`,
-  `queries.getTenantGroup`, `queries.listGroupMembers`, `queries.listTenantRoles`,
-  `queries.getTenantRole`
+  `queries.listMyGroups`, `queries.getTargetTenantSyncStatus`
+- The generic per-table reads `queries.<namespace>List` / `queries.<namespace>Get`
+  (e.g. `queries.tenantsList`, `queries.membershipsGet`) - one pair per mirror
+  table (see the Mirror reads table above)
 - `resources.list`, `resources.get`, `resources.write`, `resources.remove`
 - `sync.applySync` - a signature-verifying ACTION (the sole public write path to
   the mirror). The raw apply is an internal mutation and is not exposed.
@@ -252,19 +258,20 @@ rarely references them directly except where a helper requires a `FunctionRefere
 ```ts
 type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 
+// Role scope: tenantId=<id> → tenant-scoped; tenantId=null & isAppScope=false →
+// shared; tenantId=null & isAppScope=true → app-scoped (app-wide authority).
 type RoleSummary = {
   roleId: string;
   roleKey: string;
   roleName: string;
-  isSystemRole: boolean;
-  isRestricted: boolean;
+  isAppScope: boolean;
+  tenantId: string | null;
 };
 
-type DirectRoleAssignment = RoleSummary & { assignmentId: string; expiresAt: number | null };
+type GroupSummary = { groupId: string; name: string; status: "active" | "disabled" };
 
 type TenantSummary = {
   tenantId: string;
-  herculesAuthTenantId: string;
   tenantName: string;
   isPrimaryTenant: boolean;
   accessStatus: MembershipStatus;
@@ -272,42 +279,58 @@ type TenantSummary = {
   roles: RoleSummary[];
 };
 
-type TenantDetail = {
-  tenantId: string;
-  herculesAuthTenantId: string;
-  tenantName: string;
+type TenantSummariesPage = { tenants: TenantSummary[]; nextCursor?: string };
+
+// Generic per-table read records (Convex system fields + sourceVersion dropped).
+type ListPage<V> = { items: V[]; nextCursor?: string };
+
+type TenantRecord = {
+  id: string;
+  name: string;
   isPrimaryTenant: boolean;
-  lifecycleStatus: "active" | "archived";
+  status: "active" | "disabled";
   accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string | null;
   updatedAt: number;
 };
 
-type TenantUser = {
+type UserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string;
+  phone?: string;
+  phoneVerified: boolean;
+  updatedAt: number;
+};
+
+type MembershipRecord = {
+  id: string;
+  tenantId: string;
   userId: string;
   status: MembershipStatus;
-  name?: string;
-  email?: string;
-  image?: string;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
+  updatedAt: number;
 };
 
-type TenantGroup = {
-  groupId: string;
+type RoleRecord = {
+  id: string;
+  key: string;
   name: string;
-  status: "active" | "disabled";
-  memberCount: number;
-  roles: RoleSummary[];
-  directRoleAssignments: DirectRoleAssignment[];
+  description: string | null;
+  tenantId: string | null;
+  isAppScope: boolean;
+  updatedAt: number;
 };
 
-type RoleDetail = RoleSummary & { description: string | null; permissionKeys: string[] };
+// ...and one record type per remaining mirror table (GroupRecord,
+// PermissionRecord, ResourceTypeRecord, RoleAssignmentRecord, etc.), each the
+// row's own columns minus _id / _creationTime / sourceVersion.
 
 type ResourceRef = { type: string; externalId: string };
-type ResourceNode = { type: string; externalId: string; parent?: ResourceRef; data?: unknown };
+type ResourceNode = { type: string; externalId: string; parent?: ResourceRef };
 
-type IamTenantAccessStatusResult =
+type TenantAccessStatusResult =
   | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
   | {
       kind: "fallback";
@@ -408,9 +431,11 @@ options; the browser passes only `resourceId`.
 hercules-convex-iam-check convex
 ```
 
-Catches deterministic source patterns (raw exported Convex builders, optional
-tenant ids on tenant-owned rows, unsafe service authority). It does not prove
-runtime role decisions or control-plane writes are authorized.
+Catches deterministic source patterns: undeclared permission / resource-type
+literals (validated against `hercules/iam.jsonc`) and a guard option
+(`permission` / `tenant` / `resource`) passed to a raw Convex builder that would
+silently ignore it. It does not prove runtime role decisions or control-plane
+writes are authorized.
 
 ## Operational notes
 
