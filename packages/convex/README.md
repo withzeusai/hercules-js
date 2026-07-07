@@ -13,10 +13,10 @@ The app wires IAM once in `convex/iam.ts` (scaffolded). Import the permission
 builders and the `access` object from there:
 
 - `protectedQuery` / `protectedMutation` / `protectedAction` - permission-aware builders.
-- `access` - everything else: in-handler auth (`access.hasPermissions`,
-  `access.requirePermissions`), resource nodes (`access.resource.*`), caller
-  reads (`access.me.*`), mirror-table reads (`access.tenants`, ...), and
-  `access.syncStatus`.
+- `access` - everything else: deployment entry (`access.enter`), in-handler auth
+  (`access.hasPermissions`, `access.requirePermissions`), resource nodes
+  (`access.resource.*`), caller reads (`access.me.*`), mirror-table reads
+  (`access.tenants`, ...), and `access.syncStatus`.
 
 For truly public endpoints, import raw `query` / `mutation` / `action` from
 `./_generated/server` directly.
@@ -132,6 +132,27 @@ without `?`. Each row's **Record** is the return type (defined under Types).
 Whether the local mirror has reached a specific control-plane write. Pass
 `response.convex_source_data.version` as `sourceVersion`.
 
+## Entry (`access.enter`)
+
+`access.enter(ctx, { tenant?: string }?) => Promise<EnterTenantResult>`
+
+Admission on first contact: asks the control plane to admit the signed-in user
+into the tenant (default `primary`) under its entry mode. `open` creates an
+active membership with the tenant default role, `approval_required` creates a
+`pending_approval` membership, and `invite_only` or a matching deny rule
+returns `denied` without creating anything. Idempotent: an existing membership
+is returned unchanged, and the control-plane call is skipped entirely when the
+mirror already shows an active membership.
+
+Call it from an app-owned **action** (it makes an outbound HTTP call) once
+after sign-in, before reading `access.me.accessStatus`. On a `sourceVersion`
+result, the mirror may lag briefly; poll `access.syncStatus` with it, or rely
+on a reactive `accessStatus` query to converge.
+
+Multi-tenant apps pass the target tenant: `access.enter(ctx, { tenant })`. Each
+tenant applies its own entry mode, so the same user can be `active` in one
+tenant and `pending_approval` in another.
+
 ## Resource nodes (`access.resource.*`)
 
 The component stores a resource NODE graph the app owns and writes (nodes hold NO
@@ -148,6 +169,7 @@ Reads above come from the local mirror. To WRITE IAM state (memberships, role
 assignments, groups, invitations), create app-owned Convex actions that call the
 generated `@usehercules/sdk` with `actor_token_identifier` derived from
 `ctx.auth.getUserIdentity().tokenIdentifier`. Never accept that token from args.
+The one packaged write is `access.enter` (deployment entry, above).
 
 ## Error classification
 
@@ -241,6 +263,17 @@ type ResourceNodesPage = { resources: ResourceNode[]; nextCursor?: string };
 type TenantAccessStatusResult =
   | { kind: "principal"; membershipId: string; status: MembershipStatus; stateVersion: number }
   | { kind: "fallback"; reason: "identity_missing" | "identity_invalid" | "unexpected_issuer" | "mirror_not_ready" | "tenant_missing" | "membership_missing"; stateVersion?: number };
+
+// ── enter return shape ──────────────────────────────────────────────────────────
+// sourceVersion: pass to access.syncStatus before relying on mirror reads; null
+// when the mirror already showed an active membership (no control-plane call).
+type EnterTenantResult = {
+  allowed: boolean;
+  status: "active" | "pending_approval" | "denied";
+  reason: "deny_rule" | "not_allowlisted" | "invite_only" | "tenant_disabled" | null;
+  membershipId: string | null;
+  sourceVersion: number | null;
+};
 
 type TargetTenantSyncStatus =
   | { state: "syncing"; currentSourceVersion?: number; targetSourceVersion: number }

@@ -1,3 +1,4 @@
+import Hercules from "@usehercules/sdk";
 import type {
   ActionBuilder,
   ArgsArrayForOptionalValidator,
@@ -20,6 +21,9 @@ import { ConvexError } from "convex/values";
 import type { PropertyValidators, Validator } from "convex/values";
 export { classifyAccessError } from "./access-errors.js";
 export type { AccessAdmissionStatus, AccessErrorClassification } from "./access-errors.js";
+
+// The pinned public-API version for control-plane calls (access.enter).
+const HERCULES_PUBLIC_API_VERSION = "2025-12-09";
 
 // ── shared model types (match the component return shapes) ────────────────────
 export type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
@@ -226,6 +230,18 @@ export type TargetTenantSyncStatus =
       targetSourceVersion: number;
     };
 
+// The deployment-entry outcome for the signed-in user (access.enter).
+export type EnterTenantResult = {
+  allowed: boolean;
+  status: "active" | "pending_approval" | "denied";
+  reason: "deny_rule" | "not_allowlisted" | "invite_only" | "tenant_disabled" | null;
+  membershipId: string | null;
+  // Control-plane IAM state version to pass to access.syncStatus before relying
+  // on mirror reads. Null when the mirror already showed an active membership,
+  // so no control-plane call was made and the mirror is already current.
+  sourceVersion: number | null;
+};
+
 export type AccessDecision = {
   allowed: boolean;
   reasonCode: string;
@@ -324,7 +340,10 @@ export type AccessComponent = {
       { tenantId?: string; status?: MembershipStatus; userId?: string },
       TenantMembershipRecord
     >;
-    tenantMembershipsGet: CompGet<{ id?: string; tenantId?: string; userId?: string }, TenantMembershipRecord>;
+    tenantMembershipsGet: CompGet<
+      { id?: string; tenantId?: string; userId?: string },
+      TenantMembershipRecord
+    >;
     userRoleAssignmentsList: CompList<
       { tenantId?: string; membershipId?: string; roleId?: string },
       UserRoleAssignmentRecord
@@ -676,6 +695,17 @@ export type Access<DataModel extends GenericDataModel> = {
       args: { tenant?: string; type: string; externalId: string },
     ) => Promise<{ deleted: boolean }>;
   };
+  // Deployment entry: asks the control plane to admit the signed-in user into
+  // the tenant (default `primary`) per its entry mode: `open` admits with the
+  // tenant default role, `approval_required` creates a pending membership, and
+  // `invite_only` or a failing admission rule denies. Idempotent, so call it
+  // freely after sign-in before reading access status; the network call is
+  // skipped when the mirror already shows an active membership. Must run
+  // inside an action (it performs an outbound HTTP call).
+  enter: (
+    ctx: Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">,
+    args?: { tenant?: string },
+  ) => Promise<EnterTenantResult>;
   // Whether the mirror has caught up to a specific control-plane write.
   syncStatus: (
     ctx: AccessReadContext<DataModel>,
@@ -765,7 +795,10 @@ export function createAccess<DataModel extends GenericDataModel>(
     permissions: { list: list(q.permissionsList), get: get(q.permissionsGet) },
     resourceTypes: { list: list(q.resourceTypesList), get: get(q.resourceTypesGet) },
     tenantMemberships: { list: list(q.tenantMembershipsList), get: get(q.tenantMembershipsGet) },
-    userRoleAssignments: { list: list(q.userRoleAssignmentsList), get: get(q.userRoleAssignmentsGet) },
+    userRoleAssignments: {
+      list: list(q.userRoleAssignmentsList),
+      get: get(q.userRoleAssignmentsGet),
+    },
     groupRoleAssignments: {
       list: list(q.groupRoleAssignmentsList),
       get: get(q.groupRoleAssignmentsGet),
@@ -817,6 +850,45 @@ export function createAccess<DataModel extends GenericDataModel>(
           type: args.type,
           externalId: args.externalId,
         }),
+    },
+    enter: async (ctx, args = {}) => {
+      const tokenIdentifier = await getTokenIdentifier(ctx);
+      if (!tokenIdentifier) {
+        throw new ConvexError({
+          code: "UNAUTHENTICATED",
+          message: "Authentication required",
+          reasonCode: "missing_identity",
+        });
+      }
+      // An active mirror membership means entry already happened; skip the
+      // control-plane round trip. Any other state (missing, pending, denied,
+      // stale mirror) defers to the control plane for the authoritative answer.
+      const mirror = await ctx.runQuery(q.getTenantAccessStatus, {
+        tokenIdentifier,
+        ...optional("tenantId", args.tenant),
+      });
+      if (mirror.kind === "principal" && mirror.status === "active") {
+        return {
+          allowed: true,
+          status: "active",
+          reason: null,
+          membershipId: mirror.membershipId,
+          sourceVersion: null,
+        };
+      }
+      // The SDK reads HERCULES_API_KEY from the deployment env (provisioned on
+      // every managed deployment) and defaults to the public API base URL.
+      const hercules = new Hercules({ apiVersion: HERCULES_PUBLIC_API_VERSION });
+      const result = await hercules.iam.tenants.evaluateAccess(args.tenant ?? "primary", {
+        actor_token_identifier: tokenIdentifier,
+      });
+      return {
+        allowed: result.allowed,
+        status: result.status,
+        reason: result.reason,
+        membershipId: result.membership_id,
+        sourceVersion: result.convex_source_data.version,
+      };
     },
     syncStatus: async (ctx, args) => {
       const tokenIdentifier = await getTokenIdentifier(ctx);
