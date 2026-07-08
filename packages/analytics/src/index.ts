@@ -69,6 +69,7 @@ export class Analytics {
   private sessionId: string;
   private userId: string | undefined;
   private webVitalsMetrics: PerformanceMetrics = {};
+  private lastTrackedUrl: string | undefined;
 
   constructor(config: AnalyticsConfig) {
     this.config = {
@@ -105,6 +106,11 @@ export class Analytics {
       window.addEventListener("beforeunload", () => {
         this.trackPageleave();
       });
+    }
+
+    // Track single-page-app navigations (History API + popstate)
+    if (typeof window !== "undefined" && typeof history !== "undefined") {
+      this.setupHistoryTracking();
     }
 
     // Set up click tracking
@@ -238,6 +244,49 @@ export class Analytics {
   }
 
   /**
+   * Stable key for the current location, used to dedupe pageviews. Path and
+   * query identify a page; the hash is ignored so in-page anchor jumps do not
+   * count as navigations.
+   */
+  private getLocationKey(): string {
+    return window.location.pathname + window.location.search;
+  }
+
+  /**
+   * Track a pageview for a client-side navigation, skipping it when the
+   * location is unchanged from the last tracked pageview. Because the initial
+   * load pageview also records the location, a router that replaces the entry
+   * URL on mount does not produce a duplicate pageview.
+   */
+  private handleLocationChange(): void {
+    if (this.getLocationKey() === this.lastTrackedUrl) return;
+    this.trackPageview();
+  }
+
+  /**
+   * Instrument the History API so single-page-app route changes emit
+   * pageviews. Wraps pushState/replaceState (which do not fire events) and
+   * listens for popstate (back/forward).
+   */
+  private setupHistoryTracking(): void {
+    const originalPushState = history.pushState.bind(history);
+    history.pushState = (...args: Parameters<History["pushState"]>) => {
+      originalPushState(...args);
+      this.handleLocationChange();
+    };
+
+    const originalReplaceState = history.replaceState.bind(history);
+    history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+      originalReplaceState(...args);
+      this.handleLocationChange();
+    };
+
+    window.addEventListener("popstate", () => {
+      this.handleLocationChange();
+    });
+  }
+
+  /**
    * Send events to the endpoint
    */
   private async sendToEndpoint(events: HerculesEvent[]): Promise<void> {
@@ -356,6 +405,7 @@ export class Analytics {
   trackPageview(properties?: Record<string, any>): void {
     if (!this.config.enabled) return;
 
+    this.lastTrackedUrl = this.getLocationKey();
     const event = this.createEvent("pageview", "", properties);
 
     // Add immediate performance metrics (not web vitals)
