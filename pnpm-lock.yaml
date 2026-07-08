@@ -80,8 +80,8 @@ importers:
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
       convex:
-        specifier: ^1.42.0
-        version: 1.42.0(react@19.2.7)
+        specifier: ^1.42.1
+        version: 1.42.1(react@19.2.7)
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1
@@ -142,7 +142,7 @@ importers:
         version: 1.15.7
       convex-helpers:
         specifier: 0.1.120
-        version: 0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.0(react@19.2.7))(react@19.2.7)(typescript@6.0.3)(zod@4.4.3)
+        version: 0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(react@19.2.7))(react@19.2.7)(typescript@6.0.3)(zod@4.4.3)
       standardwebhooks:
         specifier: ^1.0.0
         version: 1.0.0
@@ -163,11 +163,11 @@ importers:
         specifier: ^24.13.2
         version: 24.13.2
       convex:
-        specifier: ^1.42.0
-        version: 1.42.0(react@19.2.7)
+        specifier: ^1.42.1
+        version: 1.42.1(react@19.2.7)
       convex-test:
         specifier: ^0.0.53
-        version: 0.0.53(convex@1.42.0(react@19.2.7))
+        version: 0.0.53(convex@1.42.1(react@19.2.7))
       vitest:
         specifier: ^4.1.9
         version: 4.1.9(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0))
@@ -1479,8 +1479,8 @@ packages:
     peerDependencies:
       convex: ^1.32.0
 
-  convex@1.42.0:
-    resolution: {integrity: sha512-KS1U+YkE7N7jDfucPW28iNehnb9/N5n9RJmdAFNdPIHTeNpbLKNqk1pJHp4ajHyMBAhGmri8Z4S1lc1LjliZWQ==}
+  convex@1.42.1:
+    resolution: {integrity: sha512-yFKp4xerVuBwQqpuTtvosOk9F/fX0twZs+Xti3oj/MlwPUU90QuhgCYo/I2wvFBAFwXsmx9tXpf2q8ekh1+3ug==}
     engines: {node: '>=18.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
@@ -2158,8 +2158,8 @@ packages:
     engines: {node: '>=10.13.0'}
     hasBin: true
 
-  prettier@3.8.4:
-    resolution: {integrity: sha512-N2MylSdi48+5N/6S5j+maeHbUSIzzZ5uOcX5Hm4QpV8Dkb1HFjfAKTKX6yNPJQD9AhcT3ifHNB66tWTTJDi11Q==}
+  prettier@3.9.4:
+    resolution: {integrity: sha512-yWG/o/4oJfo036EKAfK6ACAoDOfHeRHx4tuxkfBZiauURiaSmYwlpOr5LQqKtIkRD2z1PLteme2WoxEnj4tHTg==}
     engines: {node: '>=14'}
     hasBin: true
 
@@ -2320,6 +2320,11 @@ packages:
 
   srvx@0.11.17:
     resolution: {integrity: sha512-43yM4luKfCJamyCMhrUeHUPOrf8TdZe7kN8s5zayZCH5OeprYqi49Aso5ZvHXR4aB+DHaRNO/diNFgZSMNG8Xw==}
+    engines: {node: '>=20.16.0'}
+    hasBin: true
+
+  srvx@0.11.21:
+    resolution: {integrity: sha512-GWTHjKMeekX8CwJf4VU9Oo6mJpSGaflGMddbCvR+Cmmh9sslRMiGbAoqqZacE0r1ncARh6buCEETr2W52F8b1w==}
     engines: {node: '>=20.16.0'}
     hasBin: true
 
@@ -3501,7 +3506,7 @@ snapshots:
       '@tanstack/virtual-file-routes': 1.162.0
       jiti: 2.7.0
       magic-string: 0.30.21
-      prettier: 3.8.4
+      prettier: 3.9.4
       zod: 4.4.3
     transitivePeerDependencies:
       - supports-color
@@ -3961,23 +3966,23 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex-helpers@0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.0(react@19.2.7))(react@19.2.7)(typescript@6.0.3)(zod@4.4.3):
+  convex-helpers@0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(react@19.2.7))(react@19.2.7)(typescript@6.0.3)(zod@4.4.3):
     dependencies:
-      convex: 1.42.0(react@19.2.7)
+      convex: 1.42.1(react@19.2.7)
     optionalDependencies:
       '@standard-schema/spec': 1.1.0
       react: 19.2.7
       typescript: 6.0.3
       zod: 4.4.3
 
-  convex-test@0.0.53(convex@1.42.0(react@19.2.7)):
+  convex-test@0.0.53(convex@1.42.1(react@19.2.7)):
     dependencies:
-      convex: 1.42.0(react@19.2.7)
+      convex: 1.42.1(react@19.2.7)
 
-  convex@1.42.0(react@19.2.7):
+  convex@1.42.1(react@19.2.7):
     dependencies:
       esbuild: 0.27.0
-      prettier: 3.8.4
+      prettier: 3.9.4
       ws: 8.21.0
     optionalDependencies:
       react: 19.2.7
@@ -4259,7 +4264,7 @@ snapshots:
   h3@2.0.1-rc.20:
     dependencies:
       rou3: 0.8.1
-      srvx: 0.11.17
+      srvx: 0.11.21
 
   hookable@6.1.1: {}
 
@@ -4581,7 +4586,7 @@ snapshots:
 
   prettier@2.8.8: {}
 
-  prettier@3.8.4: {}
+  prettier@3.9.4: {}
 
   pretty-format@27.5.1:
     dependencies:
@@ -4718,6 +4723,8 @@ snapshots:
   sprintf-js@1.0.3: {}
 
   srvx@0.11.17: {}
+
+  srvx@0.11.21: {}
 
   stackback@0.0.2: {}
 
