@@ -71,6 +71,7 @@ export class Analytics {
   private webVitalsMetrics: PerformanceMetrics = {};
   private lastTrackedUrl: string | undefined;
   private historyCleanup: (() => void) | undefined;
+  private historyTrackingActive = false;
 
   constructor(config: AnalyticsConfig) {
     this.config = {
@@ -255,8 +256,13 @@ export class Analytics {
    * URL on mount does not produce a duplicate pageview.
    */
   private handleLocationChange(): void {
+    // Retained wrappers (another library layered on top of ours) still invoke
+    // this after destroy; bail so a torn-down instance never buffers pageviews.
+    if (!this.historyTrackingActive) return;
     if (this.getLocationKey() === this.lastTrackedUrl) return;
-    this.trackPageview();
+    // SPA navigations must not reuse the document's Navigation Timing load
+    // metrics, which describe the original landing page, not this new route.
+    this.trackPageviewInternal(undefined, false);
   }
 
   /**
@@ -265,6 +271,7 @@ export class Analytics {
    * listens for popstate (back/forward).
    */
   private setupHistoryTracking(): void {
+    this.historyTrackingActive = true;
     const previousPushState = history.pushState;
     const originalPushState = previousPushState.bind(history);
     const pushStateWrapper = (...args: Parameters<History["pushState"]>) => {
@@ -287,6 +294,9 @@ export class Analytics {
     window.addEventListener("popstate", handlePopState);
 
     this.historyCleanup = () => {
+      // Always mark tracking inactive so a wrapper we cannot unwrap (because a
+      // later library wrapped on top) becomes an inert no-op after destroy.
+      this.historyTrackingActive = false;
       // Only unwrap methods still pointing at our wrapper. If another instance
       // or library wrapped on top after us, restoring the previous ref would
       // clobber their instrumentation, so leave theirs in place.
@@ -414,16 +424,31 @@ export class Analytics {
   }
 
   /**
-   * Track a pageview
+   * Track a pageview. Public callers get Navigation Timing load metrics
+   * (plt/di/ttfb) by default; the SPA-navigation path routes through
+   * trackPageviewInternal to suppress them.
    */
   trackPageview(properties?: Record<string, any>): void {
+    this.trackPageviewInternal(properties, true);
+  }
+
+  /**
+   * Shared pageview implementation. Navigation Timing load metrics describe the
+   * initial document load, so includeLoadMetrics is true only for the real
+   * document-load pageview and false for history-driven SPA navigations, which
+   * would otherwise stamp every route with the landing page's load timings.
+   */
+  private trackPageviewInternal(
+    properties: Record<string, any> | undefined,
+    includeLoadMetrics: boolean,
+  ): void {
     if (!this.config.enabled) return;
 
     this.lastTrackedUrl = this.getLocationKey();
     const event = this.createEvent("pageview", "", properties);
 
     // Add immediate performance metrics (not web vitals)
-    if (this.config.trackPerformance) {
+    if (includeLoadMetrics && this.config.trackPerformance) {
       const perfMetrics = getPerformanceMetrics();
       // Only include basic performance metrics in pageview (using abbreviated field names)
       if (perfMetrics.page_load_time !== undefined) {
