@@ -109,11 +109,6 @@ export class Analytics {
       });
     }
 
-    // Track single-page-app navigations (History API + popstate)
-    if (typeof window !== "undefined" && typeof history !== "undefined") {
-      this.setupHistoryTracking();
-    }
-
     // Set up click tracking
     if (this.config.trackClicks && typeof document !== "undefined") {
       this.setupClickTracking();
@@ -272,28 +267,35 @@ export class Analytics {
   private setupHistoryTracking(): void {
     const previousPushState = history.pushState;
     const originalPushState = previousPushState.bind(history);
-    history.pushState = (...args: Parameters<History["pushState"]>) => {
+    const pushStateWrapper = (...args: Parameters<History["pushState"]>) => {
       originalPushState(...args);
       this.handleLocationChange();
     };
+    history.pushState = pushStateWrapper;
 
     const previousReplaceState = history.replaceState;
     const originalReplaceState = previousReplaceState.bind(history);
-    history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+    const replaceStateWrapper = (...args: Parameters<History["replaceState"]>) => {
       originalReplaceState(...args);
       this.handleLocationChange();
     };
+    history.replaceState = replaceStateWrapper;
 
     const handlePopState = () => {
       this.handleLocationChange();
     };
     window.addEventListener("popstate", handlePopState);
 
-    // Restore the refs present before we wrapped, not the native methods, so we
-    // don't clobber another instance's or library's instrumentation.
     this.historyCleanup = () => {
-      history.pushState = previousPushState;
-      history.replaceState = previousReplaceState;
+      // Only unwrap methods still pointing at our wrapper. If another instance
+      // or library wrapped on top after us, restoring the previous ref would
+      // clobber their instrumentation, so leave theirs in place.
+      if (history.pushState === pushStateWrapper) {
+        history.pushState = previousPushState;
+      }
+      if (history.replaceState === replaceStateWrapper) {
+        history.replaceState = previousReplaceState;
+      }
       window.removeEventListener("popstate", handlePopState);
     };
   }
@@ -439,6 +441,18 @@ export class Analytics {
 
     if (this.buffer.length >= this.config.bufferSize) {
       this.flush();
+    }
+  }
+
+  /**
+   * Fire the initial pageview, then start tracking SPA navigations. Seeding
+   * lastTrackedUrl via the initial pageview before wrapping the History API
+   * means a boot-time route rewrite can't double-count against it.
+   */
+  trackInitialPageview(): void {
+    this.trackPageview();
+    if (typeof window !== "undefined" && typeof history !== "undefined") {
+      this.setupHistoryTracking();
     }
   }
 
@@ -629,16 +643,16 @@ export function initAnalytics(config: AnalyticsConfig): Analytics {
   if (!defaultInstance) {
     defaultInstance = new Analytics(config);
 
-    // Auto-track pageview on initialization - immediately
+    // Auto-track the initial pageview, then wire up SPA navigation tracking.
     if (typeof window !== "undefined") {
       // Track pageview immediately, don't wait for web vitals
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", () => {
-          defaultInstance?.trackPageview();
+          defaultInstance?.trackInitialPageview();
         });
       } else {
         // DOM is already loaded, track immediately
-        defaultInstance?.trackPageview();
+        defaultInstance?.trackInitialPageview();
       }
     }
   }
