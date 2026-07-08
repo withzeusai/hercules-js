@@ -70,6 +70,7 @@ export class Analytics {
   private userId: string | undefined;
   private webVitalsMetrics: PerformanceMetrics = {};
   private lastTrackedUrl: string | undefined;
+  private historyCleanup: (() => void) | undefined;
 
   constructor(config: AnalyticsConfig) {
     this.config = {
@@ -269,21 +270,32 @@ export class Analytics {
    * listens for popstate (back/forward).
    */
   private setupHistoryTracking(): void {
-    const originalPushState = history.pushState.bind(history);
+    const previousPushState = history.pushState;
+    const originalPushState = previousPushState.bind(history);
     history.pushState = (...args: Parameters<History["pushState"]>) => {
       originalPushState(...args);
       this.handleLocationChange();
     };
 
-    const originalReplaceState = history.replaceState.bind(history);
+    const previousReplaceState = history.replaceState;
+    const originalReplaceState = previousReplaceState.bind(history);
     history.replaceState = (...args: Parameters<History["replaceState"]>) => {
       originalReplaceState(...args);
       this.handleLocationChange();
     };
 
-    window.addEventListener("popstate", () => {
+    const handlePopState = () => {
       this.handleLocationChange();
-    });
+    };
+    window.addEventListener("popstate", handlePopState);
+
+    // Restore the refs present before we wrapped, not the native methods, so we
+    // don't clobber another instance's or library's instrumentation.
+    this.historyCleanup = () => {
+      history.pushState = previousPushState;
+      history.replaceState = previousReplaceState;
+      window.removeEventListener("popstate", handlePopState);
+    };
   }
 
   /**
@@ -579,6 +591,8 @@ export class Analytics {
    */
   destroy(): void {
     this.stopAutoFlush();
+    this.historyCleanup?.();
+    this.historyCleanup = undefined;
     this.flush();
     this.providers = [];
     this.buffer = [];
