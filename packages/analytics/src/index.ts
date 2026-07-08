@@ -60,6 +60,29 @@ export {
 // Core Analytics Class
 // ============================================================================
 
+const LOCATION_CHANGE_EVENT = "hercules:locationchange";
+let historyPatched = false;
+
+/** Patch history.pushState/replaceState once so SPA navigations emit a location-change event. */
+function patchHistory(): void {
+  if (historyPatched || typeof history === "undefined") return;
+  historyPatched = true;
+
+  const emit = () => window.dispatchEvent(new Event(LOCATION_CHANGE_EVENT));
+
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = (...args: Parameters<History["pushState"]>) => {
+    originalPushState(...args);
+    emit();
+  };
+
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+    originalReplaceState(...args);
+    emit();
+  };
+}
+
 export class Analytics {
   private config: Required<AnalyticsConfig>;
   private buffer: HerculesEvent[] = [];
@@ -70,8 +93,7 @@ export class Analytics {
   private userId: string | undefined;
   private webVitalsMetrics: PerformanceMetrics = {};
   private lastTrackedUrl: string | undefined;
-  private historyCleanup: (() => void) | undefined;
-  private historyTrackingActive = false;
+  private removeHistoryListeners: (() => void) | undefined;
 
   constructor(config: AnalyticsConfig) {
     this.config = {
@@ -240,71 +262,25 @@ export class Analytics {
     });
   }
 
-  /**
-   * Stable key for the current location, used to dedupe pageviews. Path and
-   * query identify a page; the hash is ignored so in-page anchor jumps do not
-   * count as navigations.
-   */
+  /** Path + query key for the current location; the hash is ignored so anchor jumps are not navigations. */
   private getLocationKey(): string {
     return window.location.pathname + window.location.search;
   }
 
-  /**
-   * Track a pageview for a client-side navigation, skipping it when the
-   * location is unchanged from the last tracked pageview. Because the initial
-   * load pageview also records the location, a router that replaces the entry
-   * URL on mount does not produce a duplicate pageview.
-   */
-  private handleLocationChange(): void {
-    // Retained wrappers (another library layered on top of ours) still invoke
-    // this after destroy; bail so a torn-down instance never buffers pageviews.
-    if (!this.historyTrackingActive) return;
+  private handleLocationChange = (): void => {
     if (this.getLocationKey() === this.lastTrackedUrl) return;
-    // SPA navigations must not reuse the document's Navigation Timing load
-    // metrics, which describe the original landing page, not this new route.
     this.trackPageviewInternal(undefined, false);
-  }
+  };
 
-  /**
-   * Instrument the History API so single-page-app route changes emit
-   * pageviews. Wraps pushState/replaceState (which do not fire events) and
-   * listens for popstate (back/forward).
-   */
+  /** Emit a pageview on each SPA navigation (pushState/replaceState/popstate). */
   private setupHistoryTracking(): void {
-    this.historyTrackingActive = true;
-    const previousPushState = history.pushState;
-    const pushStateWrapper = (...args: Parameters<History["pushState"]>) => {
-      previousPushState.apply(history, args);
-      this.handleLocationChange();
-    };
-    history.pushState = pushStateWrapper;
-
-    const previousReplaceState = history.replaceState;
-    const replaceStateWrapper = (...args: Parameters<History["replaceState"]>) => {
-      previousReplaceState.apply(history, args);
-      this.handleLocationChange();
-    };
-    history.replaceState = replaceStateWrapper;
-
-    const handlePopState = () => {
-      this.handleLocationChange();
-    };
-    window.addEventListener("popstate", handlePopState);
-
-    this.historyCleanup = () => {
-      // Always mark tracking inactive so a wrapper we cannot unwrap (because a
-      // later library wrapped on top) becomes an inert no-op after destroy.
-      this.historyTrackingActive = false;
-      // Only unwrap methods still pointing at our wrapper. If another instance
-      // or library wrapped on top after us, restoring the previous ref would
-      // clobber their instrumentation, so leave theirs in place.
-      if (history.pushState === pushStateWrapper) {
-        history.pushState = previousPushState;
-      }
-      if (history.replaceState === replaceStateWrapper) {
-        history.replaceState = previousReplaceState;
-      }
-      window.removeEventListener("popstate", handlePopState);
+    if (!this.config.enabled) return;
+    patchHistory();
+    window.addEventListener(LOCATION_CHANGE_EVENT, this.handleLocationChange);
+    window.addEventListener("popstate", this.handleLocationChange);
+    this.removeHistoryListeners = () => {
+      window.removeEventListener(LOCATION_CHANGE_EVENT, this.handleLocationChange);
+      window.removeEventListener("popstate", this.handleLocationChange);
     };
   }
 
@@ -421,21 +397,12 @@ export class Analytics {
     }, 5000);
   }
 
-  /**
-   * Track a pageview. Public callers get Navigation Timing load metrics
-   * (plt/di/ttfb) by default; the SPA-navigation path routes through
-   * trackPageviewInternal to suppress them.
-   */
+  /** Track a pageview, including the document's load-timing metrics. */
   trackPageview(properties?: Record<string, any>): void {
     this.trackPageviewInternal(properties, true);
   }
 
-  /**
-   * Shared pageview implementation. Navigation Timing load metrics describe the
-   * initial document load, so includeLoadMetrics is true only for the real
-   * document-load pageview and false for history-driven SPA navigations, which
-   * would otherwise stamp every route with the landing page's load timings.
-   */
+  /** Shared pageview path; SPA navigations omit load metrics, which describe only the initial document load. */
   private trackPageviewInternal(
     properties: Record<string, any> | undefined,
     includeLoadMetrics: boolean,
@@ -467,11 +434,7 @@ export class Analytics {
     }
   }
 
-  /**
-   * Fire the initial pageview, then start tracking SPA navigations. Seeding
-   * lastTrackedUrl via the initial pageview before wrapping the History API
-   * means a boot-time route rewrite can't double-count against it.
-   */
+  /** Fire the initial pageview, then start SPA navigation tracking. */
   trackInitialPageview(): void {
     this.trackPageview();
     if (typeof window !== "undefined" && typeof history !== "undefined") {
@@ -621,6 +584,7 @@ export class Analytics {
     this.sessionId = this.getSessionId();
     this.userId = undefined;
     this.webVitalsMetrics = {};
+    this.lastTrackedUrl = undefined;
   }
 
   /**
@@ -628,8 +592,8 @@ export class Analytics {
    */
   destroy(): void {
     this.stopAutoFlush();
-    this.historyCleanup?.();
-    this.historyCleanup = undefined;
+    this.removeHistoryListeners?.();
+    this.removeHistoryListeners = undefined;
     this.flush();
     this.providers = [];
     this.buffer = [];
