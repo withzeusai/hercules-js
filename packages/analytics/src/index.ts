@@ -273,17 +273,15 @@ export class Analytics {
   private setupHistoryTracking(): void {
     this.historyTrackingActive = true;
     const previousPushState = history.pushState;
-    const originalPushState = previousPushState.bind(history);
     const pushStateWrapper = (...args: Parameters<History["pushState"]>) => {
-      originalPushState(...args);
+      previousPushState.apply(history, args);
       this.handleLocationChange();
     };
     history.pushState = pushStateWrapper;
 
     const previousReplaceState = history.replaceState;
-    const originalReplaceState = previousReplaceState.bind(history);
     const replaceStateWrapper = (...args: Parameters<History["replaceState"]>) => {
-      originalReplaceState(...args);
+      previousReplaceState.apply(history, args);
       this.handleLocationChange();
     };
     history.replaceState = replaceStateWrapper;
