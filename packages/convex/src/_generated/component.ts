@@ -30,22 +30,22 @@ type CheckArgs = {
 };
 
 type RoleSummary = {
-  roleId: string;
-  roleKey: string;
-  roleName: string;
+  id: string;
+  key: string;
+  name: string;
   isAppScope: boolean;
   tenantId: string | null;
 };
 
 type GroupSummary = {
-  groupId: string;
+  id: string;
   name: string;
-  status: "active" | "disabled";
+  status: "active" | "archived";
 };
 
 type TenantSummary = {
-  tenantId: string;
-  tenantName: string;
+  id: string;
+  name: string;
   isPrimaryTenant: boolean;
   accessStatus: MembershipStatus;
   lifecycleStatus: "active" | "archived";
@@ -101,8 +101,8 @@ type TenantRecord = {
   id: string;
   name: string;
   isPrimaryTenant: boolean;
-  status: "active" | "disabled";
-  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  status: "active" | "archived";
+  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string | null;
   updatedAt: number;
 };
@@ -112,7 +112,7 @@ type UserRecord = {
   name: string;
   email: string;
   emailVerified: boolean;
-  image?: string;
+  avatar?: string;
   phone?: string;
   phoneVerified: boolean;
   updatedAt: number;
@@ -131,9 +131,24 @@ type GroupRecord = {
   tenantId: string;
   description?: string;
   name: string;
-  status: "active" | "disabled";
+  status: "active" | "archived";
   updatedAt: number;
 };
+
+type MemberRoleSummary = RoleSummary & { heldVia: "direct" | "group" };
+type MemberUser = { id: string; name: string; email: string; avatar?: string };
+type MemberSummary = {
+  membershipId: string;
+  status: MembershipStatus;
+  user: MemberUser;
+  roles: MemberRoleSummary[];
+};
+type MemberResourceRoleAssignment = {
+  resource: ResourceRef;
+  role: RoleSummary;
+  heldVia: "direct" | "group";
+};
+type MemberDetail = MemberSummary & { resourceRoleAssignments: MemberResourceRoleAssignment[] };
 
 type GroupMembershipRecord = {
   groupId: string;
@@ -213,7 +228,6 @@ type GroupResourceRoleAssignmentRecord = {
   updatedAt: number;
 };
 
-type Page<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
 type ItemsPage<V> = { items: V[]; cursor?: string };
 
 type ListQuery<Args extends DefaultFunctionArgs, V, Name> = FunctionReference<
@@ -260,7 +274,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "query",
       "public",
       { tokenIdentifier?: string; cursor?: string; limit?: number; status?: "active" | "all" },
-      Page<"tenants", TenantSummary>,
+      ItemsPage<TenantSummary>,
       Name
     >;
     listMyRoles: FunctionReference<
@@ -287,7 +301,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
 
     // Generic per-table reads (TRUSTED / UNGATED).
     tenantsList: ListQuery<
-      { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+      { status?: "active" | "archived"; isPrimaryTenant?: boolean },
       TenantRecord,
       Name
     >;
@@ -296,7 +310,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     usersList: ListQuery<{ email?: string }, UserRecord, Name>;
     usersGet: GetQuery<{ id?: string; email?: string }, UserRecord, Name>;
 
-    groupsList: ListQuery<{ tenantId?: string; status?: "active" | "disabled" }, GroupRecord, Name>;
+    groupsList: ListQuery<{ tenantId?: string; status?: "active" | "archived" }, GroupRecord, Name>;
     groupsGet: GetQuery<{ id: string }, GroupRecord, Name>;
 
     rolesList: ListQuery<{ tenantId?: string | null; isAppScope?: boolean }, RoleRecord, Name>;
@@ -322,6 +336,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       TenantMembershipRecord,
       Name
     >;
+    // Members directory (composed, TRUSTED like the table reads).
+    membersList: ListQuery<{ tenantId?: string; status?: MembershipStatus }, MemberSummary, Name>;
+    membersGet: GetQuery<{ tenantId?: string; membershipId: string }, MemberDetail, Name>;
 
     userRoleAssignmentsList: ListQuery<
       { tenantId?: string; membershipId?: string; roleId?: string },
@@ -348,7 +365,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       UserResourceRoleAssignmentRecord,
       Name
     >;
-    userResourceRoleAssignmentsGet: GetQuery<{ id: string }, UserResourceRoleAssignmentRecord, Name>;
+    userResourceRoleAssignmentsGet: GetQuery<
+      { id: string },
+      UserResourceRoleAssignmentRecord,
+      Name
+    >;
 
     groupResourceRoleAssignmentsList: ListQuery<
       {
@@ -402,7 +423,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         cursor?: string;
         limit?: number;
       },
-      Page<"resources", ResourceNode>,
+      ItemsPage<ResourceNode>,
       Name
     >;
     get: FunctionReference<
@@ -422,7 +443,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       "mutation",
       "public",
       { tenantId?: string; type: string; externalId: string; parent?: ResourceRef },
-      ResourceNode | null,
+      ResourceNode,
       Name
     >;
     remove: FunctionReference<

@@ -18,21 +18,19 @@
 import { z } from "zod";
 
 // ── leaf enums ────────────────────────────────────────────────────────────────
-export const accessProjectionTenantStatusSchema = z.enum(["active", "disabled"]);
+export const accessProjectionTenantStatusSchema = z.enum(["active", "archived"]);
 export type AccessProjectionTenantStatus = z.infer<typeof accessProjectionTenantStatusSchema>;
 
-export const accessProjectionGroupStatusSchema = z.enum(["active", "disabled"]);
+export const accessProjectionGroupStatusSchema = z.enum(["active", "archived"]);
 export type AccessProjectionGroupStatus = z.infer<typeof accessProjectionGroupStatusSchema>;
 
-export const accessProjectionAccountEntryModeSchema = z.enum([
+export const accessProjectionAccessModeSchema = z.enum([
   "open",
   "allowlisted_only",
   "invite_only",
   "approval_required",
 ]);
-export type AccessProjectionAccountEntryMode = z.infer<
-  typeof accessProjectionAccountEntryModeSchema
->;
+export type AccessProjectionAccessMode = z.infer<typeof accessProjectionAccessModeSchema>;
 
 // "blocked" and "pending_approval" are POLICY states (admission reconciliation
 // may move memberships among active/pending_approval/blocked). "suspended" and
@@ -55,7 +53,7 @@ export const projectionTenantSchema = z.strictObject({
   name: z.string().min(1),
   isPrimaryTenant: z.boolean(),
   status: accessProjectionTenantStatusSchema,
-  accountEntryMode: accessProjectionAccountEntryModeSchema,
+  accessMode: accessProjectionAccessModeSchema,
   defaultRoleId: z.string().min(1).nullable(),
   updatedAt: z.number().int().nonnegative(),
 });

@@ -21,9 +21,9 @@ import { v } from "convex/values";
 // (role_permissions, group_memberships) have no own id - their identity is the
 // FK pair.
 
-const tenantStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
-const groupStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
-const accountEntryModeValidator = v.union(
+const tenantStatusValidator = v.union(v.literal("active"), v.literal("archived"));
+const groupStatusValidator = v.union(v.literal("active"), v.literal("archived"));
+const accessModeValidator = v.union(
   v.literal("open"),
   v.literal("allowlisted_only"),
   v.literal("invite_only"),
@@ -52,7 +52,7 @@ export default defineSchema({
     name: v.string(),
     isPrimaryTenant: v.boolean(),
     status: tenantStatusValidator,
-    accountEntryMode: accountEntryModeValidator,
+    accessMode: accessModeValidator,
     defaultRoleId: v.union(v.string(), v.null()),
     updatedAt: v.number(),
     sourceVersion: v.number(),
@@ -65,6 +65,9 @@ export default defineSchema({
     name: v.string(),
     email: v.string(),
     emailVerified: v.boolean(),
+    // The avatar URL. Stored as `image` because the sync protocol writes that
+    // field name; the read surface exposes it as `avatar` (see toUserRecord /
+    // memberUser in queries.ts). Do not rename either side independently.
     image: v.optional(v.string()),
     phone: v.optional(v.string()),
     phoneVerified: v.boolean(),

@@ -292,7 +292,7 @@ export async function evaluateAccess(
   if (!tenant) return deny("tenant_missing", sourceVersion);
   // A disabled (archived) tenant blocks all access, even for an otherwise-valid
   // membership or an app-scoped role held via the primary tenant.
-  if (tenant.status !== "active") return deny("tenant_disabled", sourceVersion);
+  if (tenant.status !== "active") return deny("tenant_archived", sourceVersion);
 
   // Resolve the permission's canonical row up front: an unknown permission can
   // never be granted, regardless of membership.

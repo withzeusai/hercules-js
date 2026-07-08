@@ -25,13 +25,23 @@ export type { AccessAdmissionStatus, AccessErrorClassification } from "./access-
 // The pinned public-API version for control-plane calls (access.enter).
 const HERCULES_PUBLIC_API_VERSION = "2025-12-09";
 
+// The component's checkMany query rejects more than 100 checks per call;
+// checkPermissions chunks its input to stay under it.
+const CHECK_MANY_LIMIT = 100;
+
+// waitForSync polling: exponential backoff between syncStatus polls, and the
+// default overall budget before giving up with a temporary (retryable) error.
+const WAIT_FOR_SYNC_INITIAL_DELAY_MS = 100;
+const WAIT_FOR_SYNC_MAX_DELAY_MS = 1_600;
+const WAIT_FOR_SYNC_DEFAULT_TIMEOUT_MS = 15_000;
+
 // ── shared model types (match the component return shapes) ────────────────────
 export type MembershipStatus = "active" | "blocked" | "suspended" | "pending_approval" | "removed";
 
 export type RoleSummary = {
-  roleId: string;
-  roleKey: string;
-  roleName: string;
+  id: string;
+  key: string;
+  name: string;
   isAppScope: boolean;
   // Tenant scope, read together with isAppScope:
   //   • tenantId = <id>                  → TENANT-SCOPED: usable only in that tenant.
@@ -42,32 +52,57 @@ export type RoleSummary = {
 };
 
 export type TenantSummary = {
-  tenantId: string;
-  tenantName: string;
+  id: string;
+  name: string;
   isPrimaryTenant: boolean;
   accessStatus: MembershipStatus;
   lifecycleStatus: "active" | "archived";
   roles: RoleSummary[];
 };
 
-export type TenantSummariesPage = { tenants: TenantSummary[]; nextCursor?: string };
-
 // The caller's own groups in a tenant (me.groups).
 export type GroupSummary = {
-  groupId: string;
+  id: string;
   name: string;
-  status: "active" | "disabled";
+  status: "active" | "archived";
 };
 
 export type ResourceRef = { type: string; externalId: string };
+
+// ── members directory shapes (members.*) ──────────────────────────────────────
+export type MemberRoleSummary = RoleSummary & {
+  // How the member holds the role. Write paths that reconcile a member's
+  // direct assignments must ignore `group` entries: those are conferred by
+  // group membership and cannot be unassigned per-user.
+  heldVia: "direct" | "group";
+};
+
+export type MemberUser = { id: string; name: string; email: string; avatar?: string };
+
+export type MemberSummary = {
+  membershipId: string;
+  status: MembershipStatus;
+  user: MemberUser;
+  roles: MemberRoleSummary[];
+};
+
+export type MemberResourceRoleAssignment = {
+  // `resource.type` is the resource type KEY (e.g. "app.project"), already
+  // translated from the mirror's internal resourceTypeId.
+  resource: ResourceRef;
+  role: RoleSummary;
+  heldVia: "direct" | "group";
+};
+
+export type MemberDetail = MemberSummary & {
+  resourceRoleAssignments: MemberResourceRoleAssignment[];
+};
 
 export type ResourceNode = {
   type: string;
   externalId: string;
   parent?: ResourceRef;
 };
-
-export type ResourceNodesPage = { resources: ResourceNode[]; nextCursor?: string };
 
 // ── mirror-table record shapes ────────────────────────────────────────────────
 // The generic per-table reads return these clean projections: the Convex system
@@ -76,8 +111,9 @@ export type TenantRecord = {
   id: string;
   name: string;
   isPrimaryTenant: boolean;
-  status: "active" | "disabled";
-  accountEntryMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
+  // "archived" matches the SDK's archive/unarchive verbs.
+  status: "active" | "archived";
+  accessMode: "open" | "allowlisted_only" | "invite_only" | "approval_required";
   defaultRoleId: string | null;
   updatedAt: number;
 };
@@ -87,7 +123,9 @@ export type UserRecord = {
   name: string;
   email: string;
   emailVerified: boolean;
-  image?: string;
+  // The user's avatar URL. Stored as `image` internally (Better Auth
+  // convention); exposed as `avatar` to match the auth SDK's useUser().avatar.
+  avatar?: string;
   phone?: string;
   phoneVerified: boolean;
   updatedAt: number;
@@ -106,7 +144,7 @@ export type GroupRecord = {
   tenantId: string;
   description?: string;
   name: string;
-  status: "active" | "disabled";
+  status: "active" | "archived";
   updatedAt: number;
 };
 
@@ -234,7 +272,7 @@ export type TargetTenantSyncStatus =
 export type EnterTenantResult = {
   allowed: boolean;
   status: "active" | "pending_approval" | "denied";
-  reason: "deny_rule" | "not_allowlisted" | "invite_only" | "tenant_disabled" | null;
+  reason: "deny_rule" | "not_allowlisted" | "invite_only" | "tenant_archived" | null;
   membershipId: string | null;
   // Control-plane IAM state version to pass to access.syncStatus before relying
   // on mirror reads. Null when the mirror already showed an active membership,
@@ -258,7 +296,6 @@ type CheckArgs = {
 };
 
 type Cursored<T> = T & { cursor?: string };
-type ComponentPage<K extends string, V> = { [P in K]: V[] } & { cursor?: string };
 type PageFilters = { cursor?: string; limit?: number };
 type ComponentItemsPage<V> = { items: V[]; cursor?: string };
 
@@ -299,7 +336,7 @@ export type AccessComponent = {
       "query",
       "public",
       { tokenIdentifier?: string; cursor?: string; limit?: number; status?: "active" | "all" },
-      ComponentPage<"tenants", TenantSummary>
+      ComponentItemsPage<TenantSummary>
     >;
     listMyRoles: FunctionReference<
       "query",
@@ -322,13 +359,13 @@ export type AccessComponent = {
 
     // Generic per-table reads (TRUSTED / UNGATED).
     tenantsList: CompList<
-      { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+      { status?: "active" | "archived"; isPrimaryTenant?: boolean },
       TenantRecord
     >;
     tenantsGet: CompGet<{ id?: string; primary?: boolean }, TenantRecord>;
     usersList: CompList<{ email?: string }, UserRecord>;
     usersGet: CompGet<{ id?: string; email?: string }, UserRecord>;
-    groupsList: CompList<{ tenantId?: string; status?: "active" | "disabled" }, GroupRecord>;
+    groupsList: CompList<{ tenantId?: string; status?: "active" | "archived" }, GroupRecord>;
     groupsGet: CompGet<{ id: string }, GroupRecord>;
     rolesList: CompList<{ tenantId?: string | null; isAppScope?: boolean }, RoleRecord>;
     rolesGet: CompGet<{ id?: string; key?: string; tenantId?: string | null }, RoleRecord>;
@@ -344,6 +381,9 @@ export type AccessComponent = {
       { id?: string; tenantId?: string; userId?: string },
       TenantMembershipRecord
     >;
+    // Members directory (composed, TRUSTED like the table reads).
+    membersList: CompList<{ tenantId?: string; status?: MembershipStatus }, MemberSummary>;
+    membersGet: CompGet<{ tenantId?: string; membershipId: string }, MemberDetail>;
     userRoleAssignmentsList: CompList<
       { tenantId?: string; membershipId?: string; roleId?: string },
       UserRoleAssignmentRecord
@@ -396,7 +436,7 @@ export type AccessComponent = {
         permission?: string;
         limit?: number;
       }>,
-      ComponentPage<"resources", ResourceNode>
+      ComponentItemsPage<ResourceNode>
     >;
     get: FunctionReference<
       "query",
@@ -414,7 +454,7 @@ export type AccessComponent = {
       "mutation",
       "public",
       { tenantId?: string; type: string; externalId: string; parent?: ResourceRef },
-      ResourceNode | null
+      ResourceNode
     >;
     remove: FunctionReference<
       "mutation",
@@ -555,6 +595,16 @@ export type Access<DataModel extends GenericDataModel> = {
     requirement: PermissionRequirement,
     options?: PermissionOptions,
   ) => Promise<void>;
+  // Batched permission checks: many (permission, tenant?, resource?) probes in
+  // one component round trip (chunked internally past the component's
+  // 100-check limit), results aligned with `checks` by index. A resource check
+  // also passes when the permission is held tenant-wide or on an ancestor
+  // node, so a per-resource capability sweep needs no separate tenant-wide
+  // baseline pass. Unauthenticated callers get all-false.
+  checkPermissions: (
+    ctx: AccessReadContext<DataModel>,
+    checks: ReadonlyArray<{ permission: string; tenant?: string; resource?: ResourceRef }>,
+  ) => Promise<boolean[]>;
   // Caller-centric reads.
   me: {
     // The signed-in end user's ID (their verified OIDC subject). Link app rows
@@ -563,7 +613,7 @@ export type Access<DataModel extends GenericDataModel> = {
     tenants: (
       ctx: AccessReadContext<DataModel>,
       args?: { cursor?: string; limit?: number; status?: "active" | "all" },
-    ) => Promise<TenantSummariesPage>;
+    ) => Promise<ListPage<TenantSummary>>;
     roles: (
       ctx: AccessReadContext<DataModel>,
       args?: { tenant?: string },
@@ -577,18 +627,34 @@ export type Access<DataModel extends GenericDataModel> = {
       args?: { tenant?: string },
     ) => Promise<TenantAccessStatusResult>;
   };
+  // Members directory: composed, admin-facing reads. `me.*` for the caller,
+  // `members.*` for everyone else: memberships joined with user info and
+  // heldVia-tagged roles; the single-member `get` adds resource role assignments
+  // with resource type KEYS. TRUSTED like the table reads below: no identity check
+  // here, so authorize the calling function. `list` returns one status at a
+  // time, defaulting to active members.
+  members: {
+    list: (
+      ctx: AccessReadContext<DataModel>,
+      args?: { tenant?: string; status?: MembershipStatus; cursor?: string; limit?: number },
+    ) => Promise<ListPage<MemberSummary>>;
+    get: (
+      ctx: AccessReadContext<DataModel>,
+      args: { tenant?: string; membershipId: string },
+    ) => Promise<MemberDetail | null>;
+  };
   // Generic, uniform mirror reads. These are TRUSTED reads with no identity
   // check: authorize the calling function (protectedQuery + requirePermissions).
   tenants: TableReads<
     DataModel,
-    { status?: "active" | "disabled"; isPrimaryTenant?: boolean },
+    { status?: "active" | "archived"; isPrimaryTenant?: boolean },
     { id: string } | { primary: true },
     TenantRecord
   >;
   users: TableReads<DataModel, { email?: string }, { id: string } | { email: string }, UserRecord>;
   groups: TableReads<
     DataModel,
-    { tenantId?: string; status?: "active" | "disabled" },
+    { tenantId?: string; status?: "active" | "archived" },
     { id: string },
     GroupRecord
   >;
@@ -676,11 +742,14 @@ export type Access<DataModel extends GenericDataModel> = {
         cursor?: string;
         limit?: number;
       },
-    ) => Promise<ResourceNodesPage>;
+    ) => Promise<ListPage<ResourceNode>>;
     get: (
       ctx: AccessReadContext<DataModel>,
       args: { tenant?: string; type: string; externalId: string; permission?: string },
     ) => Promise<ResourceNode | null>;
+    // Throws instead of silently no-op'ing: ACCESS_DENIED/mirror_not_ready
+    // (temporary) when the mirror has no tenant yet, IAM_CONFIG when the type
+    // is undeclared or the parent does not match the type's declared parent.
     write: (
       ctx: AccessWriteContext<DataModel>,
       args: {
@@ -689,16 +758,16 @@ export type Access<DataModel extends GenericDataModel> = {
         externalId: string;
         parent?: ResourceRef;
       },
-    ) => Promise<ResourceNode | null>;
+    ) => Promise<ResourceNode>;
     delete: (
       ctx: AccessWriteContext<DataModel>,
       args: { tenant?: string; type: string; externalId: string },
     ) => Promise<{ deleted: boolean }>;
   };
   // Deployment entry: asks the control plane to admit the signed-in user into
-  // the tenant (default `primary`) per its entry mode: `open` admits with the
+  // the tenant (default `primary`) per its access mode: `open` admits with the
   // tenant default role, `approval_required` creates a pending membership, and
-  // `invite_only` or a failing admission rule denies. Idempotent, so call it
+  // `invite_only` or a failing access rule denies. Idempotent, so call it
   // freely after sign-in before reading access status; the network call is
   // skipped when the mirror already shows an active membership. Must run
   // inside an action (it performs an outbound HTTP call).
@@ -711,6 +780,17 @@ export type Access<DataModel extends GenericDataModel> = {
     ctx: AccessReadContext<DataModel>,
     args: { tenant?: string; sourceVersion: number },
   ) => Promise<TargetTenantSyncStatus>;
+  // Awaits the mirror catching up to a control-plane write. Pass the write
+  // response's `convex_source_data.source_version` (or enter's
+  // `sourceVersion`). Polls syncStatus with backoff, so it must run inside an
+  // ACTION; resolves with the terminal status (`ready`, `denied`, or
+  // `failed`) and throws ACCESS_DENIED/mirror_not_ready (classified
+  // `temporary`) when still syncing after `timeoutMs`. For UI freshness
+  // outside an action, subscribe to a reactive query instead of waiting.
+  waitForSync: (
+    ctx: Pick<GenericActionCtx<DataModel>, "auth" | "runQuery">,
+    args: { sourceVersion: number; tenant?: string; timeoutMs?: number },
+  ) => Promise<Exclude<TargetTenantSyncStatus, { state: "syncing" }>>;
 };
 
 /**
@@ -750,18 +830,40 @@ export function createAccess<DataModel extends GenericDataModel>(
     hasPermissions: (ctx, requirement, opts) => hasPermissions(component, ctx, requirement, opts),
     requirePermissions: (ctx, requirement, opts) =>
       requirePermissions(component, ctx, requirement, opts),
+    checkPermissions: async (ctx, checks) => {
+      if (checks.length === 0) return [];
+      const tokenIdentifier = await getTokenIdentifier(ctx);
+      if (!tokenIdentifier) return checks.map(() => false);
+      const inputs = checks.map(
+        (check): Omit<CheckArgs, "tokenIdentifier"> => ({
+          ...optional("tenantId", check.tenant),
+          permission: check.permission,
+          ...optional("resource", check.resource),
+        }),
+      );
+      const chunks: (typeof inputs)[] = [];
+      for (let i = 0; i < inputs.length; i += CHECK_MANY_LIMIT) {
+        chunks.push(inputs.slice(i, i + CHECK_MANY_LIMIT));
+      }
+      const decisions = await Promise.all(
+        chunks.map((chunk) =>
+          ctx.runQuery(component.checks.checkMany, { tokenIdentifier, checks: chunk }),
+        ),
+      );
+      return decisions.flat().map((decision) => decision.allowed);
+    },
     me: {
       id: (ctx) => getCurrentUserId(ctx),
       tenants: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
-        if (!tokenIdentifier) return { tenants: [] };
+        if (!tokenIdentifier) return { items: [] };
         const result = await ctx.runQuery(q.listMyTenants, {
           tokenIdentifier,
           ...optional("cursor", args.cursor),
           ...optional("limit", args.limit),
           ...optional("status", args.status),
         });
-        return withNextCursor(result);
+        return withItemsCursor(result);
       },
       roles: async (ctx, args = {}) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -787,6 +889,22 @@ export function createAccess<DataModel extends GenericDataModel>(
           ...optional("tenantId", args.tenant),
         });
       },
+    },
+    members: {
+      list: async (ctx, args = {}) =>
+        withItemsCursor(
+          await ctx.runQuery(q.membersList, {
+            ...optional("tenantId", args.tenant),
+            ...optional("status", args.status),
+            ...optional("cursor", args.cursor),
+            ...optional("limit", args.limit),
+          }),
+        ),
+      get: async (ctx, args) =>
+        ctx.runQuery(q.membersGet, {
+          ...optional("tenantId", args.tenant),
+          membershipId: args.membershipId,
+        }),
     },
     tenants: { list: list(q.tenantsList), get: get(q.tenantsGet) },
     users: { list: list(q.usersList), get: get(q.usersGet) },
@@ -825,7 +943,7 @@ export function createAccess<DataModel extends GenericDataModel>(
           ...optional("cursor", args.cursor),
           ...optional("limit", args.limit),
         });
-        return withNextCursor(result);
+        return withItemsCursor(result);
       },
       get: async (ctx, args) => {
         const tokenIdentifier = await getTokenIdentifier(ctx);
@@ -852,8 +970,9 @@ export function createAccess<DataModel extends GenericDataModel>(
         }),
     },
     enter: async (ctx, args = {}) => {
-      const tokenIdentifier = await getTokenIdentifier(ctx);
-      if (!tokenIdentifier) {
+      const identity = await ctx.auth.getUserIdentity();
+      const tokenIdentifier = identity?.tokenIdentifier;
+      if (!identity || !tokenIdentifier) {
         throw new ConvexError({
           code: "UNAUTHENTICATED",
           message: "Authentication required",
@@ -880,14 +999,14 @@ export function createAccess<DataModel extends GenericDataModel>(
       // every managed deployment) and defaults to the public API base URL.
       const hercules = new Hercules({ apiVersion: HERCULES_PUBLIC_API_VERSION });
       const result = await hercules.iam.tenants.evaluateAccess(args.tenant ?? "primary", {
-        actor_token_identifier: tokenIdentifier,
+        actor_user_id: identity.subject,
       });
       return {
         allowed: result.allowed,
         status: result.status,
         reason: result.reason,
         membershipId: result.membership_id,
-        sourceVersion: result.convex_source_data.version,
+        sourceVersion: result.convex_source_data.source_version,
       };
     },
     syncStatus: async (ctx, args) => {
@@ -897,6 +1016,31 @@ export function createAccess<DataModel extends GenericDataModel>(
         ...optional("tenantId", args.tenant),
         sourceVersion: args.sourceVersion,
       });
+    },
+    waitForSync: async (ctx, args) => {
+      const timeoutMs = args.timeoutMs ?? WAIT_FOR_SYNC_DEFAULT_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
+      const tokenIdentifier = await getTokenIdentifier(ctx);
+      let delay = WAIT_FOR_SYNC_INITIAL_DELAY_MS;
+      for (;;) {
+        const status = await ctx.runQuery(q.getTargetTenantSyncStatus, {
+          ...optional("tokenIdentifier", tokenIdentifier),
+          ...optional("tenantId", args.tenant),
+          sourceVersion: args.sourceVersion,
+        });
+        if (status.state !== "syncing") return status;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          throw new ConvexError({
+            code: "ACCESS_DENIED",
+            reasonCode: "mirror_not_ready",
+            message: `The IAM mirror did not reach source version ${args.sourceVersion} within ${timeoutMs}ms.`,
+            sourceVersion: args.sourceVersion,
+          });
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(delay, remaining)));
+        delay = Math.min(delay * 2, WAIT_FOR_SYNC_MAX_DELAY_MS);
+      }
     },
   };
 }
@@ -910,16 +1054,6 @@ function optional<K extends string, V>(key: K, value: V | undefined): Record<K, 
 // `undefined` (which fails a Convex optional-arg validator).
 function compact<T extends object>(obj: T): T {
   return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined)) as T;
-}
-
-function withNextCursor<T extends { cursor?: string }>(
-  result: T,
-): Omit<T, "cursor"> & { nextCursor?: string } {
-  const { cursor, ...rest } = result;
-  return {
-    ...(rest as Omit<T, "cursor">),
-    ...(cursor === undefined ? {} : { nextCursor: cursor }),
-  };
 }
 
 function withItemsCursor<V>(result: ComponentItemsPage<V>): ListPage<V> {

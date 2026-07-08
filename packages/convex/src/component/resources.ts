@@ -8,7 +8,7 @@ import {
   type QueryBuilder,
 } from "convex/server";
 import { paginator } from "convex-helpers/server/pagination";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { composeKey, evaluateAccess, resolveTenantRow } from "./access";
 import schema from "./schema";
 
@@ -33,7 +33,7 @@ export type ResourceNode = {
   parent?: { type: string; externalId: string };
 };
 
-export type ResourceNodesPage = { resources: ResourceNode[]; cursor?: string };
+export type ResourceNodesPage = { items: ResourceNode[]; cursor?: string };
 
 const parentValidator = v.object({ type: v.string(), externalId: v.string() });
 
@@ -148,7 +148,7 @@ export const list = query({
   },
   handler: async (ctx, args): Promise<ResourceNodesPage> => {
     const tenant = await resolveTenantRow(ctx, args.tenantId);
-    if (!tenant) return { resources: [] };
+    if (!tenant) return { items: [] };
     const tenantId = tenant.id;
     const limit = pageLimit(args.limit);
 
@@ -158,7 +158,7 @@ export const list = query({
       args.type === undefined
         ? undefined
         : ((await resolveResourceTypeByKey(ctx, args.type))?.id ?? null);
-    if (childTypeId === null) return { resources: [] };
+    if (childTypeId === null) return { items: [] };
 
     // Resolve the optional `parent` filter to its deterministic node id.
     const parent = args.parent;
@@ -169,7 +169,7 @@ export const list = query({
             const parentType = await resolveResourceTypeByKey(ctx, parent.type);
             return parentType ? resourceNodeId(tenantId, parentType.id, parent.externalId) : null;
           })();
-    if (parentNodeId === null) return { resources: [] };
+    if (parentNodeId === null) return { items: [] };
 
     const page =
       parentNodeId !== undefined
@@ -215,10 +215,10 @@ export const list = query({
       rows = rows.filter((_row, index) => allowed[index]);
     }
 
-    const resources = (await Promise.all(rows.map((row) => toNode(ctx, row, cache)))).filter(
+    const items = (await Promise.all(rows.map((row) => toNode(ctx, row, cache)))).filter(
       (node): node is ResourceNode => node !== null,
     );
-    return { resources, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
+    return { items, ...(page.isDone ? {} : { cursor: page.continueCursor }) };
   },
 });
 
@@ -263,20 +263,50 @@ export const write = mutation({
     externalId: v.string(),
     parent: v.optional(parentValidator),
   },
-  handler: async (ctx, args): Promise<ResourceNode | null> => {
+  // Fails LOUD instead of silently no-op'ing: a discarded null here used to
+  // leave app rows without a backing access node (per-resource grants could
+  // never target them). Throwing rolls the calling mutation back, keeping app
+  // data and the access graph consistent.
+  handler: async (ctx, args): Promise<ResourceNode> => {
     const tenantId = await resolveWriteTenantId(ctx, args.tenantId);
-    if (!tenantId) return null;
+    if (!tenantId) {
+      // No mirrored tenant yet: the projection has not caught up. Transient;
+      // classifyAccessError buckets this as `temporary`.
+      throw new ConvexError({
+        code: "ACCESS_DENIED",
+        reasonCode: "mirror_not_ready",
+        message: "The IAM mirror has no tenant yet; retry after the projection syncs.",
+      });
+    }
     const childType = await resolveResourceTypeByKey(ctx, args.type);
-    if (!childType) return null; // unknown resource type
+    if (!childType) {
+      throw new ConvexError({
+        code: "IAM_CONFIG",
+        message: `Unknown resource type "${args.type}". Declare it under resourceTypes in .hercules/iam.jsonc and redeploy before writing nodes of this type.`,
+      });
+    }
 
     let parentId: string | undefined;
-    if (args.parent !== undefined && childType.parentResourceTypeId !== null) {
-      // The supplied parent `type` must resolve to the child's declared parent
-      // type; a mismatch is ignored (no parent edge stored).
-      const parentType = await resolveResourceTypeByKey(ctx, args.parent.type);
-      if (parentType && parentType.id === childType.parentResourceTypeId) {
-        parentId = resourceNodeId(tenantId, childType.parentResourceTypeId, args.parent.externalId);
+    if (args.parent !== undefined) {
+      if (childType.parentResourceTypeId === null) {
+        throw new ConvexError({
+          code: "IAM_CONFIG",
+          message: `Resource type "${args.type}" declares no parent in .hercules/iam.jsonc, but a parent was supplied. Add "parent" to the type declaration or drop the parent argument.`,
+        });
       }
+      const parentType = await resolveResourceTypeByKey(ctx, args.parent.type);
+      if (!parentType || parentType.id !== childType.parentResourceTypeId) {
+        const expectedKey = await resourceTypeKey(
+          ctx,
+          childType.parentResourceTypeId,
+          new Map<string, string | null>(),
+        );
+        throw new ConvexError({
+          code: "IAM_CONFIG",
+          message: `Resource type "${args.type}" declares parent "${expectedKey ?? childType.parentResourceTypeId}", but the supplied parent has type "${args.parent.type}".`,
+        });
+      }
+      parentId = resourceNodeId(tenantId, childType.parentResourceTypeId, args.parent.externalId);
     }
 
     const id = resourceNodeId(tenantId, childType.id, args.externalId);
@@ -291,7 +321,16 @@ export const write = mutation({
     const existing = await resolveResourceRow(ctx, tenantId, childType.id, args.externalId);
     if (existing) await ctx.db.replace(existing._id, row);
     else await ctx.db.insert("resources", row);
-    return toNode(ctx, row as ResourceRow, new Map<string, string | null>());
+    const node = await toNode(
+      ctx,
+      row as ResourceRow,
+      new Map<string, string | null>([[childType.id, childType.key]]),
+    );
+    if (!node) {
+      // Unreachable: the child type was resolved above and seeds the cache.
+      throw new ConvexError({ code: "IAM_CONFIG", message: "Failed to resolve the written node." });
+    }
+    return node;
   },
 });
 

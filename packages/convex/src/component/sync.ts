@@ -282,7 +282,7 @@ function mapTenant(row: AccessProjectionSnapshot["tenants"][number], sourceVersi
     name: row.name,
     isPrimaryTenant: row.isPrimaryTenant,
     status: row.status,
-    accountEntryMode: row.accountEntryMode,
+    accessMode: row.accessMode,
     defaultRoleId: row.defaultRoleId,
     updatedAt: row.updatedAt,
     sourceVersion,

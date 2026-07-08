@@ -32,14 +32,14 @@ async function addSyncState(ctx: SeedCtx, issuer = ISSUER, sourceVersion = 1): P
 async function addTenant(
   ctx: SeedCtx,
   id: string,
-  opts: { primary?: boolean; status?: "active" | "disabled"; defaultRoleId?: string | null } = {},
+  opts: { primary?: boolean; status?: "active" | "archived"; defaultRoleId?: string | null } = {},
 ): Promise<void> {
   await ctx.db.insert("tenants", {
     id,
     name: id,
     isPrimaryTenant: opts.primary ?? false,
     status: opts.status ?? "active",
-    accountEntryMode: "open",
+    accessMode: "open",
     defaultRoleId: opts.defaultRoleId ?? null,
     updatedAt: 0,
     sourceVersion: 1,
@@ -116,7 +116,7 @@ async function addGroup(
   ctx: SeedCtx,
   id: string,
   tenantId: string,
-  status: "active" | "disabled" = "active",
+  status: "active" | "archived" = "active",
 ): Promise<void> {
   await ctx.db.insert("groups", { id, tenantId, name: id, status, updatedAt: 0, sourceVersion: 1 });
 }
@@ -277,11 +277,11 @@ describe("evaluateAccess guards", () => {
     expect(decision).toMatchObject({ allowed: false, reasonCode: "tenant_missing" });
   });
 
-  test("tenant_disabled when the tenant is archived, even with a valid grant", async () => {
+  test("tenant_archived when the tenant is archived, even with a valid grant", async () => {
     const t = harness();
     await t.run(async (ctx) => {
       await addSyncState(ctx);
-      await addTenant(ctx, "T", { primary: true, status: "disabled" });
+      await addTenant(ctx, "T", { primary: true, status: "archived" });
       await addMembership(ctx, "m1", "T", "u1");
       await addRole(ctx, "r1");
       await addPermission(ctx, "p1", "app.doc:read");
@@ -295,7 +295,7 @@ describe("evaluateAccess guards", () => {
         permissionKey: "app.doc:read",
       }),
     );
-    expect(decision).toMatchObject({ allowed: false, reasonCode: "tenant_disabled" });
+    expect(decision).toMatchObject({ allowed: false, reasonCode: "tenant_archived" });
   });
 
   test("permission_missing when the permission key is unknown", async () => {
@@ -415,7 +415,7 @@ describe("evaluateAccess tenant-wide", () => {
       await addPermission(ctx, "perm-read", "app.doc:read");
       await addRole(ctx, "role-reader", { tenantId: "t-p" });
       await grant(ctx, "role-reader", "perm-read");
-      await addGroup(ctx, "g1", "t-p", "disabled");
+      await addGroup(ctx, "g1", "t-p", "archived");
       await addGroupMembership(ctx, "g1", "m1", "t-p");
       await addGroupRoleAssignment(ctx, "gra1", "t-p", "g1", "role-reader");
     });

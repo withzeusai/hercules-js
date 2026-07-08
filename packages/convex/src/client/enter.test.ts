@@ -71,7 +71,7 @@ describe("access.enter", () => {
       status: "active",
       reason: null,
       membership_id: "mem_2",
-      convex_source_data: { changed: true, version: 9, projection_ids: ["dep_1"] },
+      convex_source_data: { changed: true, source_version: 9, projection_ids: ["dep_1"] },
     });
     const ctx = makeCtx({ tokenIdentifier: "https://acme.auth|user_1" });
 
@@ -83,7 +83,7 @@ describe("access.enter", () => {
       sourceVersion: 9,
     });
     expect(evaluateAccess).toHaveBeenCalledWith("primary", {
-      actor_token_identifier: "https://acme.auth|user_1",
+      actor_user_id: "user_1",
     });
   });
 
@@ -95,7 +95,7 @@ describe("access.enter", () => {
       status: "denied",
       reason: "invite_only",
       membership_id: null,
-      convex_source_data: { changed: false, version: 3, projection_ids: ["dep_1"] },
+      convex_source_data: { changed: false, source_version: 3, projection_ids: ["dep_1"] },
     });
     const ctx = makeCtx({ tokenIdentifier: "https://acme.auth|user_1" });
 
@@ -111,7 +111,7 @@ describe("access.enter", () => {
       tenantId: "tenant_42",
     });
     expect(evaluateAccess).toHaveBeenCalledWith("tenant_42", {
-      actor_token_identifier: "https://acme.auth|user_1",
+      actor_user_id: "user_1",
     });
   });
 });
