@@ -173,8 +173,13 @@ the ingest side deduplicates on `event_id`.
 ## Core Web Vitals
 
 With `trackPerformance` enabled, LCP, CLS, INP, FCP, and TTFB are buffered as
-they arrive and sent as one `web_vitals` event 5 seconds after the first
-metric, together with page-load timings from the Navigation Timing API.
+they arrive and sent as one `web_vitals` event, together with page-load timings
+from the Navigation Timing API. The event flushes 5 seconds after the first
+metric, or immediately when the page is hidden/unloading — whichever comes
+first. The page-hidden flush matters because LCP, CLS, and INP only settle at
+that moment, so a bounce shorter than 5 seconds would otherwise report no web
+vitals at all. Implausible timing values (≥ 15 minutes, from bfcache restores or
+clock skew) are dropped, matching posthog-js.
 
 ## License
 

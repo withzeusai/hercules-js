@@ -23,3 +23,9 @@ export const MAX_RETRIES = 10;
 
 /** Flush web vitals this long after the first metric arrives (posthog-js web-vitals) */
 export const WEB_VITALS_FLUSH_MS = 5000;
+/**
+ * Ignore web-vitals values at or above this (15 min), matching posthog-js
+ * `_maxAllowedValue`. bfcache restores and clock skew can produce absurd LCP/INP
+ * readings that would otherwise wreck p75s.
+ */
+export const WEB_VITALS_MAX_VALUE_MS = 15 * 60 * 1000;

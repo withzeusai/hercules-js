@@ -264,7 +264,10 @@ export function getPerformanceMetrics(): PerformanceMetrics {
     if (navTiming) {
       const pageLoadTime = navTiming.loadEventEnd - navTiming.fetchStart;
       const domInteractive = navTiming.domInteractive - navTiming.fetchStart;
-      const ttfb = navTiming.responseStart - navTiming.requestStart;
+      // TTFB is measured from the navigation start (fetchStart), not requestStart
+      // — the old formula captured only server think time and excluded
+      // DNS/TCP/TLS, undercounting it and disagreeing with web-vitals' onTTFB
+      const ttfb = navTiming.responseStart - navTiming.fetchStart;
 
       if (pageLoadTime > 0 && isFinite(pageLoadTime)) {
         metrics.page_load_time = Math.round(pageLoadTime);

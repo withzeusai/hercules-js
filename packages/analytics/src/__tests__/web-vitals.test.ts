@@ -41,7 +41,8 @@ describe("WebVitalsCapture without PerformanceObserver", () => {
     expect(onFlush).toHaveBeenCalledWith({
       plt: 1100,
       di: 500,
-      ttfb: 100,
+      // ttfb is responseStart - fetchStart (250 - 100), not responseStart - requestStart
+      ttfb: 150,
     });
   });
 
@@ -52,5 +53,33 @@ describe("WebVitalsCapture without PerformanceObserver", () => {
 
     vi.advanceTimersByTime(WEB_VITALS_FLUSH_MS);
     expect(onFlush).not.toHaveBeenCalled();
+  });
+
+  it("flushNow() emits immediately and only once, even before the timer fires", () => {
+    vi.spyOn(performance, "getEntriesByType").mockImplementation((type: string) =>
+      type === "navigation"
+        ? [
+            {
+              loadEventEnd: 1200,
+              fetchStart: 100,
+              domInteractive: 600,
+              responseStart: 250,
+              requestStart: 150,
+            } as unknown as PerformanceEntry,
+          ]
+        : [],
+    );
+
+    const onFlush = vi.fn();
+    capture = new WebVitalsCapture(onFlush);
+
+    // Bounce before the 5s timer: without flushNow() nothing would be sent
+    capture.flushNow();
+    expect(onFlush).toHaveBeenCalledTimes(1);
+    expect(onFlush).toHaveBeenCalledWith({ plt: 1100, di: 500, ttfb: 150 });
+
+    // The pending timer must not double-send
+    vi.advanceTimersByTime(WEB_VITALS_FLUSH_MS);
+    expect(onFlush).toHaveBeenCalledTimes(1);
   });
 });

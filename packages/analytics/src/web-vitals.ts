@@ -4,7 +4,7 @@
 // library is statically bundled — the artifact must stay self-contained.
 
 import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from "web-vitals";
-import { WEB_VITALS_FLUSH_MS } from "./constants";
+import { WEB_VITALS_FLUSH_MS, WEB_VITALS_MAX_VALUE_MS } from "./constants";
 import { doc, win } from "./globals";
 import { getPerformanceMetrics } from "./utils";
 
@@ -35,6 +35,11 @@ export class WebVitalsCapture {
       return;
     }
     const buffered = (key: keyof WebVitalsMetrics) => (metric: Metric) => {
+      // Drop implausible timing values (bfcache restores, clock skew). CLS is a
+      // small unitless decimal so this never trips it.
+      if (key !== "cls" && metric.value >= WEB_VITALS_MAX_VALUE_MS) {
+        return;
+      }
       // CLS is a small decimal; everything else is whole milliseconds
       this.addMetric(
         key,
@@ -54,6 +59,16 @@ export class WebVitalsCapture {
     }
     this.buffer[key] = value;
     this.flushTimeout ??= setTimeout(() => this.flush(), WEB_VITALS_FLUSH_MS);
+  }
+
+  /**
+   * Flush whatever has been collected right now, instead of waiting out the
+   * timer. Called when the page is hidden/unloading: web-vitals delivers the
+   * terminal LCP/CLS/INP values at exactly that moment, and a bounce shorter
+   * than the flush timer would otherwise send no web_vitals event at all.
+   */
+  flushNow(): void {
+    this.flush();
   }
 
   private flush(): void {

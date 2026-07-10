@@ -118,6 +118,9 @@ export class Analytics {
 
       const onVisibilityChange = () => {
         if (listenerDoc.visibilityState === "hidden") {
+          // web-vitals reports terminal LCP/CLS/INP as the page hides — drain
+          // them into the queue before the beacon flush so they aren't stranded
+          this.webVitals?.flushNow();
           this.flush("sendBeacon");
         }
       };
@@ -331,6 +334,9 @@ export class Analytics {
   }
 
   private handleUnload(): void {
+    // Drain buffered web vitals first so a fast bounce (shorter than the flush
+    // timer) still reports its metrics; the pageleave flush below carries them
+    this.webVitals?.flushNow();
     this.trackPageleave();
     this.requestQueue.unload();
     this.retryQueue.unload((events) => this.send(events, 0, "sendBeacon"));
