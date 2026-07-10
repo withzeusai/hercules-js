@@ -184,6 +184,58 @@ export function getReferrerInfo(): ReferrerInfo {
 }
 
 /**
+ * Ad click-ID query parameters, kept in sync with posthog-js CAMPAIGN_PARAMS.
+ * Paid traffic often arrives with only one of these and no UTM parameters.
+ */
+const CLICK_ID_PARAMS = [
+  "gclid", // google ads
+  "gclsrc", // google ads 360
+  "dclid", // google display ads
+  "gbraid", // google ads, web to app
+  "wbraid", // google ads, app to web
+  "gad_source", // google ads source
+  "fbclid", // facebook
+  "msclkid", // microsoft
+  "twclid", // twitter
+  "li_fat_id", // linkedin
+  "igshid", // instagram
+  "ttclid", // tiktok
+  "rdt_cid", // reddit
+  "epik", // pinterest
+  "qclid", // quora
+  "sccid", // snapchat
+  "irclid", // impact
+  "_kx", // klaviyo
+  "mc_cid", // mailchimp campaign id
+];
+
+/**
+ * Get ad click-ID parameters present in the URL (only keys that are set)
+ */
+export function getClickIds(url?: string): Record<string, string> {
+  const params = new URLSearchParams(url || window.location.search);
+  const clickIds: Record<string, string> = {};
+  for (const key of CLICK_ID_PARAMS) {
+    const value = params.get(key);
+    if (value) {
+      clickIds[key] = value;
+    }
+  }
+  return clickIds;
+}
+
+/**
+ * Get the IANA timezone of the browser, e.g. "America/Los_Angeles"
+ */
+export function getTimezone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Get UTM parameters from URL
  */
 export function getUTMParams(url?: string): UTMParams {
@@ -303,10 +355,6 @@ export function observeWebVitals(callback: (metrics: PerformanceMetrics) => void
     updateMetrics("first_contentful_paint", metric.value);
   });
 
-  // First Input Delay (FID) is deprecated in web-vitals v4+
-  // We now use INP (Interaction to Next Paint) which is a better metric
-  // But we'll map INP to first_input_delay for backward compatibility if needed
-
   // Largest Contentful Paint (LCP)
   onLCP(
     (metric: Metric) => {
@@ -320,15 +368,10 @@ export function observeWebVitals(callback: (metrics: PerformanceMetrics) => void
     updateMetrics("time_to_first_byte", metric.value);
   });
 
-  // Interaction to Next Paint (INP) - newer metric replacing FID
+  // Interaction to Next Paint (INP) - newer metric replacing the deprecated FID
   onINP(
     (metric: Metric) => {
       updateMetrics("interaction_to_next_paint", metric.value);
-      // Also map to first_input_delay for backward compatibility
-      // Note: INP and FID are different metrics, but INP is the recommended replacement
-      if (metrics.first_input_delay === undefined) {
-        updateMetrics("first_input_delay", metric.value);
-      }
     },
     { reportAllChanges: false },
   );

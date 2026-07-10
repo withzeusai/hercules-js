@@ -14,6 +14,7 @@ import type {
   AnalyticsProvider,
 } from "./types";
 
+import { LIB_VERSION } from "./lib-version";
 import {
   generateId,
   getCookie,
@@ -21,6 +22,8 @@ import {
   parseUserAgent,
   getReferrerInfo,
   getUTMParams,
+  getClickIds,
+  getTimezone,
   getPerformanceMetrics,
   observeWebVitals,
   debounce,
@@ -48,6 +51,8 @@ export {
   parseUserAgent,
   getReferrerInfo,
   getUTMParams,
+  getClickIds,
+  getTimezone,
   getPerformanceMetrics,
   observeWebVitals,
   debounce,
@@ -55,6 +60,7 @@ export {
   safeStringify,
   getBrowserInfo,
 };
+export { LIB_VERSION };
 
 // ============================================================================
 // Core Analytics Class
@@ -69,6 +75,8 @@ export class Analytics {
   private sessionId: string;
   private userId: string | undefined;
   private webVitalsMetrics: PerformanceMetrics = {};
+  private currentPageview: { pageviewId: string; pathname: string; timestamp: number } | undefined;
+  private scrollContext: { maxScrollY: number; maxScrollHeight: number } | undefined;
 
   constructor(config: AnalyticsConfig) {
     this.config = {
@@ -105,6 +113,11 @@ export class Analytics {
       window.addEventListener("beforeunload", () => {
         this.trackPageleave();
       });
+    }
+
+    // Set up scroll depth tracking
+    if (typeof window !== "undefined") {
+      this.setupScrollTracking();
     }
 
     // Set up click tracking
@@ -167,9 +180,10 @@ export class Analytics {
     eventName = "",
     properties?: Record<string, any>,
   ): HerculesEvent {
-    const { browser, os } = parseUserAgent();
+    const { browser, os, deviceType } = parseUserAgent();
     const referrerInfo = getReferrerInfo();
     const utmParams = getUTMParams();
+    const clickIds = getClickIds();
     const url = new URL(window.location.href);
 
     const event: HerculesEvent = {
@@ -192,12 +206,21 @@ export class Analytics {
       browser_version: browser.version,
       os: os.name,
       os_version: os.version,
+      device_type: deviceType,
+      language: navigator.language,
+      timezone: getTimezone(),
+      screen_width: window.screen.width,
+      screen_height: window.screen.height,
+      viewport_width: window.innerWidth,
+      viewport_height: window.innerHeight,
+      lib_version: LIB_VERSION,
+      ...(this.currentPageview && { pageview_id: this.currentPageview.pageviewId }),
       utm_source: utmParams.utm_source,
       utm_medium: utmParams.utm_medium,
       utm_campaign: utmParams.utm_campaign,
       utm_content: utmParams.utm_content,
       utm_term: utmParams.utm_term,
-      properties: {},
+      properties: { ...clickIds },
       properties_numeric: {},
     };
 
@@ -210,6 +233,68 @@ export class Analytics {
     }
 
     return event;
+  }
+
+  /**
+   * Track how far down the page the visitor scrolls. Uses a capturing listener
+   * like posthog-js so scrolls inside nested containers still update the context.
+   */
+  private setupScrollTracking(): void {
+    window.addEventListener(
+      "scroll",
+      () => {
+        const context = (this.scrollContext ??= { maxScrollY: 0, maxScrollHeight: 0 });
+        context.maxScrollY = Math.max(context.maxScrollY, window.scrollY);
+        context.maxScrollHeight = Math.max(
+          context.maxScrollHeight,
+          document.documentElement.scrollHeight - window.innerHeight,
+        );
+      },
+      { capture: true, passive: true },
+    );
+  }
+
+  private resetScrollContext(): void {
+    if (typeof window === "undefined") {
+      this.scrollContext = undefined;
+      return;
+    }
+    this.scrollContext = {
+      maxScrollY: window.scrollY,
+      maxScrollHeight: document.documentElement.scrollHeight - window.innerHeight,
+    };
+  }
+
+  /**
+   * Properties linking an event to the previous pageview (posthog-style
+   * $prev_pageview_*). On a pageview, `pageviewId` is the new pageview's id and
+   * prev_* describes the page being left; on a pageleave, `pageviewId` is the
+   * current pageview's id and prev_* describes that same (ending) pageview.
+   */
+  private prevPageviewProperties(
+    timestamp: number,
+    pageviewId: string | undefined,
+  ): Partial<HerculesEvent> {
+    const previous = this.currentPageview;
+    const properties: Partial<HerculesEvent> = { pageview_id: pageviewId };
+
+    if (!previous) {
+      return properties;
+    }
+
+    properties.prev_pageview_id = previous.pageviewId;
+    properties.prev_pageview_pathname = previous.pathname;
+    properties.prev_pageview_duration = (timestamp - previous.timestamp) / 1000;
+
+    if (this.scrollContext) {
+      const maxScrollHeight = Math.ceil(this.scrollContext.maxScrollHeight);
+      const maxScrollY = Math.ceil(this.scrollContext.maxScrollY);
+      // A page that doesn't scroll counts as fully scrolled, matching posthog-js
+      properties.prev_pageview_max_scroll_percentage =
+        maxScrollHeight <= 1 ? 1 : Math.min(1, Math.max(0, maxScrollY / maxScrollHeight));
+    }
+
+    return properties;
   }
 
   /**
@@ -243,7 +328,8 @@ export class Analytics {
   private async sendToEndpoint(events: HerculesEvent[]): Promise<void> {
     if (!this.config.apiEndpoint || !this.config.enabled) return;
 
-    const payload = { events };
+    // sent_at lets the server correct event timestamps for client clock skew
+    const payload = { sent_at: Date.now(), events };
     const jsonString = JSON.stringify(payload);
 
     if (this.config.debug) {
@@ -358,20 +444,14 @@ export class Analytics {
 
     const event = this.createEvent("pageview", "", properties);
 
-    // Add immediate performance metrics (not web vitals)
-    if (this.config.trackPerformance) {
-      const perfMetrics = getPerformanceMetrics();
-      // Only include basic performance metrics in pageview (using abbreviated field names)
-      if (perfMetrics.page_load_time !== undefined) {
-        event.plt = perfMetrics.page_load_time;
-      }
-      if (perfMetrics.dom_interactive !== undefined) {
-        event.di = perfMetrics.dom_interactive;
-      }
-      if (perfMetrics.time_to_first_byte !== undefined) {
-        event.ttfb = perfMetrics.time_to_first_byte;
-      }
-    }
+    const pageviewId = generateId();
+    Object.assign(event, this.prevPageviewProperties(event.timestamp, pageviewId));
+    this.currentPageview = {
+      pageviewId,
+      pathname: event.url_path,
+      timestamp: event.timestamp,
+    };
+    this.resetScrollContext();
 
     this.buffer.push(event);
 
@@ -391,7 +471,6 @@ export class Analytics {
       this.webVitalsMetrics.first_contentful_paint !== undefined ||
       this.webVitalsMetrics.largest_contentful_paint !== undefined ||
       this.webVitalsMetrics.cumulative_layout_shift !== undefined ||
-      this.webVitalsMetrics.first_input_delay !== undefined ||
       this.webVitalsMetrics.interaction_to_next_paint !== undefined;
 
     if (!hasVitals) return;
@@ -407,9 +486,6 @@ export class Analytics {
     }
     if (this.webVitalsMetrics.cumulative_layout_shift !== undefined) {
       event.cls = this.webVitalsMetrics.cumulative_layout_shift;
-    }
-    if (this.webVitalsMetrics.first_input_delay !== undefined) {
-      event.fid = this.webVitalsMetrics.first_input_delay;
     }
     if (this.webVitalsMetrics.interaction_to_next_paint !== undefined) {
       event.inp = this.webVitalsMetrics.interaction_to_next_paint;
@@ -438,6 +514,10 @@ export class Analytics {
     if (!this.config.enabled) return;
 
     const event = this.createEvent("pageleave", "");
+    Object.assign(
+      event,
+      this.prevPageviewProperties(event.timestamp, this.currentPageview?.pageviewId),
+    );
     this.buffer.push(event);
     this.flush(); // Always flush immediately on page leave
   }
@@ -522,6 +602,8 @@ export class Analytics {
     this.sessionId = this.getSessionId();
     this.userId = undefined;
     this.webVitalsMetrics = {};
+    this.currentPageview = undefined;
+    this.resetScrollContext();
   }
 
   /**

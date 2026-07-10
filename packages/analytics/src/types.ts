@@ -34,6 +34,7 @@ export interface PerformanceMetrics {
   time_to_first_byte?: number;
   first_contentful_paint?: number;
   largest_contentful_paint?: number;
+  /** @deprecated FID is deprecated in favor of INP and is no longer collected */
   first_input_delay?: number;
   cumulative_layout_shift?: number;
   interaction_to_next_paint?: number;

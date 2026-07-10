@@ -86,7 +86,7 @@ Each event contains comprehensive data:
 interface HerculesEvent {
   // Core fields
   event_id: string;
-  event_type: "pageview" | "pageleave" | "custom" | "click" | "identify";
+  event_type: "pageview" | "pageleave" | "web_vitals" | "click" | "custom";
   event_name: string;
   timestamp: number;
 
@@ -96,9 +96,20 @@ interface HerculesEvent {
   user_id?: string; // Set via identify()
 
   // Page context
+  origin: string;
+  url: string;
   url_path: string;
   url_query: string;
   url_hash: string;
+
+  // Pageview linking — every event carries the id of the pageview it happened
+  // on; pageview/pageleave events also describe the previous pageview so view
+  // duration and bounce rate can be computed per page
+  pageview_id?: string;
+  prev_pageview_id?: string;
+  prev_pageview_pathname?: string;
+  prev_pageview_duration?: number; // seconds
+  prev_pageview_max_scroll_percentage?: number; // 0-1
 
   // Traffic source
   referrer: string;
@@ -117,24 +128,32 @@ interface HerculesEvent {
   browser_version: string;
   os: string;
   os_version: string;
-  device_type?: string; // desktop, mobile, tablet
-  screen_resolution?: string;
-  viewport_size?: string;
+  device_type: string; // desktop, mobile, tablet, ...
+  language: string;
+  timezone: string; // IANA name, e.g. "America/Los_Angeles"
+  screen_width: number;
+  screen_height: number;
+  viewport_width: number;
+  viewport_height: number;
+  lib_version: string;
 
-  // Custom properties
+  // Custom properties (ad click IDs like gclid/fbclid are captured here)
   properties: Record<string, string>;
   properties_numeric: Record<string, number>;
 
-  // Performance metrics (pageview only)
-  page_load_time?: number;
-  dom_interactive?: number;
-  time_to_first_byte?: number;
-  first_contentful_paint?: number;
-  largest_contentful_paint?: number;
-  first_input_delay?: number;
-  cumulative_layout_shift?: number;
+  // Performance metrics (web_vitals events only, abbreviated field names)
+  plt?: number; // Page load time
+  di?: number; // DOM interactive
+  ttfb?: number; // Time to first byte
+  fcp?: number; // First contentful paint
+  lcp?: number; // Largest contentful paint
+  cls?: number; // Cumulative layout shift
+  inp?: number; // Interaction to next paint
 }
 ```
+
+Events are posted in batches as `{ sent_at, events }`, where `sent_at` is the
+client clock at send time so the server can correct for clock skew.
 
 ## Providers
 
