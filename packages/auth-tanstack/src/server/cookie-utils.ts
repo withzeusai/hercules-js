@@ -33,6 +33,7 @@ export interface CookieOptions {
   sameSite?: "Strict" | "Lax" | "None";
   path?: string;
   maxAge?: number;
+  domain?: string;
 }
 
 /**
@@ -44,6 +45,7 @@ export interface CookieOptions {
 export function serializeCookie(name: string, value: string, options: CookieOptions = {}): string {
   const parts = [`${name}=${value}`];
   if (options.path) parts.push(`Path=${options.path}`);
+  if (options.domain) parts.push(`Domain=${options.domain}`);
   if (options.maxAge !== undefined) parts.push(`Max-Age=${Math.floor(options.maxAge)}`);
   if (options.httpOnly) parts.push("HttpOnly");
   if (options.secure) parts.push("Secure");

@@ -29,6 +29,21 @@ export interface HerculesAuthMiddlewareOptions {
    * redirect back and break sign-in.
    */
   cookieSameSite?: "lax" | "none";
+  /**
+   * Lifetime (seconds) of the sealed session cookie. Defaults to
+   * `HERCULES_AUTH_COOKIE_MAX_AGE` (or `AUTH_COOKIE_MAX_AGE`), then ~400 days.
+   *
+   * The session cookie deliberately outlives the access token: it carries the
+   * refresh token, so an idle user is refreshed on their next visit instead of
+   * signed out when the access token expires.
+   */
+  cookieMaxAge?: number;
+  /**
+   * `Domain` attribute for the session cookie (e.g. `.example.com` to share the
+   * session across subdomains). Defaults to `HERCULES_AUTH_COOKIE_DOMAIN` (or
+   * `AUTH_COOKIE_DOMAIN`), then unset (host-only).
+   */
+  cookieDomain?: string;
 }
 
 let current: HerculesAuthMiddlewareOptions = {};

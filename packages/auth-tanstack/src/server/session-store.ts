@@ -1,4 +1,5 @@
 import { deleteCookie, getCookies, getRequest, setCookie } from "@tanstack/react-start/server";
+import { sessionCookieDomain, sessionCookieMaxAge } from "./config";
 import { cookieSecurity, toCookieSameSite } from "./request-url";
 import {
   type SessionData,
@@ -25,9 +26,11 @@ export async function readSession(): Promise<SessionData | null> {
  * Seal `session` and write it across the (chunked) session cookies on the
  * outgoing response, expiring any stale chunks left by a prior session.
  *
- * @param maxAgeSeconds Cookie lifetime; omit for a session-scoped cookie.
+ * The cookie's lifetime is the configured session-cookie max age (default ~400
+ * days), NOT the access token's: the sealed refresh token must survive the
+ * access token so an idle user can be refreshed instead of signed out.
  */
-export async function writeSession(session: SessionData, maxAgeSeconds?: number): Promise<void> {
+export async function writeSession(session: SessionData): Promise<void> {
   const sealed = await sealSession(session);
   const chunks = chunkValue(sealed);
   // Over HTTPS use SameSite=None; Secure so the session cookie keeps working
@@ -35,19 +38,21 @@ export async function writeSession(session: SessionData, maxAgeSeconds?: number)
   // from an iframe); fall back to Lax over plain HTTP (local dev).
   const { secure, sameSite } = cookieSecurity(getRequest());
   const sameSiteOption = toCookieSameSite(sameSite);
+  const domain = sessionCookieDomain();
 
   const options = {
     httpOnly: true,
     secure,
     sameSite: sameSiteOption,
     path: "/",
-    ...(maxAgeSeconds !== undefined ? { maxAge: maxAgeSeconds } : {}),
+    maxAge: sessionCookieMaxAge(),
+    ...(domain ? { domain } : {}),
   };
 
   chunks.forEach((chunk, index) => setCookie(sessionChunkName(index), chunk, options));
 
   for (const name of staleSessionCookieNames(Object.keys(getCookies()), chunks.length)) {
-    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption });
+    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption, ...(domain ? { domain } : {}) });
   }
 }
 
@@ -55,7 +60,8 @@ export async function writeSession(session: SessionData, maxAgeSeconds?: number)
 export function clearSession(): void {
   const { secure, sameSite } = cookieSecurity(getRequest());
   const sameSiteOption = toCookieSameSite(sameSite);
+  const domain = sessionCookieDomain();
   for (const name of staleSessionCookieNames(Object.keys(getCookies()), 0)) {
-    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption });
+    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption, ...(domain ? { domain } : {}) });
   }
 }

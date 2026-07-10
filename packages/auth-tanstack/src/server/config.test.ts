@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { decodePkceState, encodePkceState, pkceCookieName } from "./config";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { setAuthOptions } from "./auth-options";
+import {
+  DEFAULT_SESSION_COOKIE_MAX_AGE,
+  decodePkceState,
+  encodePkceState,
+  pkceCookieName,
+  sessionCookieDomain,
+  sessionCookieMaxAge,
+} from "./config";
 
 describe("pkceCookieName", () => {
   it("namespaces by state", () => {
@@ -50,5 +58,57 @@ describe("PKCE state envelope", () => {
 
   it("treats a bare (non-envelope) value as the verifier for back-compat", () => {
     expect(decodePkceState("raw-verifier-string")).toEqual({ verifier: "raw-verifier-string" });
+  });
+});
+
+describe("sessionCookieMaxAge", () => {
+  afterEach(() => {
+    setAuthOptions({});
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to ~400 days, decoupled from token lifetimes", () => {
+    expect(sessionCookieMaxAge()).toBe(DEFAULT_SESSION_COOKIE_MAX_AGE);
+    expect(DEFAULT_SESSION_COOKIE_MAX_AGE).toBe(60 * 60 * 24 * 400);
+  });
+
+  it("honors HERCULES_AUTH_COOKIE_MAX_AGE", () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_MAX_AGE", "86400");
+    expect(sessionCookieMaxAge()).toBe(86400);
+  });
+
+  it("lets the middleware option win over the environment", () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_MAX_AGE", "86400");
+    setAuthOptions({ cookieMaxAge: 3600 });
+    expect(sessionCookieMaxAge()).toBe(3600);
+  });
+
+  it("ignores non-numeric or non-positive values", () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_MAX_AGE", "not-a-number");
+    expect(sessionCookieMaxAge()).toBe(DEFAULT_SESSION_COOKIE_MAX_AGE);
+    vi.stubEnv("HERCULES_AUTH_COOKIE_MAX_AGE", "-1");
+    expect(sessionCookieMaxAge()).toBe(DEFAULT_SESSION_COOKIE_MAX_AGE);
+  });
+});
+
+describe("sessionCookieDomain", () => {
+  afterEach(() => {
+    setAuthOptions({});
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to host-only (undefined)", () => {
+    expect(sessionCookieDomain()).toBeUndefined();
+  });
+
+  it("honors HERCULES_AUTH_COOKIE_DOMAIN", () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_DOMAIN", ".example.com");
+    expect(sessionCookieDomain()).toBe(".example.com");
+  });
+
+  it("lets the middleware option win over the environment", () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_DOMAIN", ".example.com");
+    setAuthOptions({ cookieDomain: ".other.com" });
+    expect(sessionCookieDomain()).toBe(".other.com");
   });
 });

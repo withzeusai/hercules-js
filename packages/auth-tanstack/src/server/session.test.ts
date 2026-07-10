@@ -1,10 +1,13 @@
-import { beforeAll, describe, it, expect } from "vitest";
+import { afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import {
   SESSION_COOKIE,
   clearSessionCookies,
   deserializeSessionCookies,
+  isSessionExpired,
   sealSession,
   serializeSessionCookies,
+  sessionChunkName,
+  sessionCookieBase,
   unsealSession,
   type SessionData,
 } from "./session";
@@ -112,5 +115,62 @@ describe("session cookie chunking", () => {
     const names = cleared.map((h) => cookieFromHeader(h)[0]);
     expect(names).toEqual([SESSION_COOKIE, `${SESSION_COOKIE}.0`, `${SESSION_COOKIE}.1`]);
     expect(cleared.every((h) => h.includes("Max-Age=0"))).toBe(true);
+  });
+});
+
+describe("isSessionExpired", () => {
+  it("reports expired when expiresAt has passed", () => {
+    expect(isSessionExpired({ accessToken: "a", expiresAt: 1000 }, 1001)).toBe(true);
+    expect(isSessionExpired({ accessToken: "a", expiresAt: 1000 }, 1000)).toBe(true);
+  });
+
+  it("reports unexpired when expiresAt is in the future", () => {
+    expect(isSessionExpired({ accessToken: "a", expiresAt: 1000 }, 999)).toBe(false);
+  });
+
+  it("treats an unknown expiry as unexpired (provider is the arbiter)", () => {
+    expect(isSessionExpired({ accessToken: "a" }, 999)).toBe(false);
+  });
+});
+
+describe("session cookie name override", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to hercules_session", () => {
+    expect(sessionCookieBase()).toBe(SESSION_COOKIE);
+    expect(sessionChunkName(0)).toBe(`${SESSION_COOKIE}.0`);
+  });
+
+  it("honors HERCULES_AUTH_COOKIE_NAME across name, chunking, reads, and clears", () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_NAME", "custom_session");
+    expect(sessionCookieBase()).toBe("custom_session");
+    expect(sessionChunkName(1)).toBe("custom_session.1");
+    expect(deserializeSessionCookies({ "custom_session.0": "abc" })).toBe("abc");
+    // The default-named cookie is no longer treated as a session cookie.
+    expect(deserializeSessionCookies({ [SESSION_COOKIE]: "abc" })).toBeNull();
+    const cleared = clearSessionCookies(["custom_session", "custom_session.0", SESSION_COOKIE]);
+    expect(cleared.map((h) => cookieFromHeader(h)[0])).toEqual([
+      "custom_session",
+      "custom_session.0",
+    ]);
+  });
+});
+
+describe("session cookie domain", () => {
+  it("stamps Domain on fresh chunks and on stale-chunk deletes", () => {
+    const headers = serializeSessionCookies("small", { path: "/", domain: ".example.com" }, [
+      `${SESSION_COOKIE}.0`,
+      `${SESSION_COOKIE}.1`,
+    ]);
+    expect(headers.every((h) => h.includes("Domain=.example.com"))).toBe(true);
+  });
+
+  it("stamps Domain on sign-out clears", () => {
+    const cleared = clearSessionCookies([`${SESSION_COOKIE}.0`], { domain: ".example.com" });
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0]).toContain("Domain=.example.com");
+    expect(cleared[0]).toContain("Max-Age=0");
   });
 });

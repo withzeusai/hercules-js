@@ -1,4 +1,5 @@
 import * as client from "openid-client";
+import { getAuthOptions } from "./auth-options";
 import { fromBase64Url, toBase64Url } from "./encoding";
 
 // Each value accepts several variable names, tried in order: the canonical
@@ -27,6 +28,21 @@ export const CLIENT_SECRET_ENV_VARS = [
   "HERCULES_AUTH_CLIENT_SECRET",
   "AUTH_CLIENT_SECRET",
 ] as const;
+/**
+ * Public callback URL (`redirect_uri`). Optional — used as the fallback when
+ * `herculesAuthMiddleware({ redirectUri })` is not configured.
+ */
+export const REDIRECT_URI_ENV_VARS = ["HERCULES_AUTH_REDIRECT_URI", "AUTH_REDIRECT_URI"] as const;
+/** Session cookie lifetime in seconds. Optional — see {@link sessionCookieMaxAge}. */
+export const COOKIE_MAX_AGE_ENV_VARS = [
+  "HERCULES_AUTH_COOKIE_MAX_AGE",
+  "AUTH_COOKIE_MAX_AGE",
+] as const;
+/** Session cookie `Domain` attribute. Optional — unset means host-only. */
+export const COOKIE_DOMAIN_ENV_VARS = [
+  "HERCULES_AUTH_COOKIE_DOMAIN",
+  "AUTH_COOKIE_DOMAIN",
+] as const;
 
 /** Where to send the user once the callback completes. */
 export const DEFAULT_REDIRECT = "/";
@@ -50,9 +66,36 @@ export const MAX_PENDING_SIGN_INS = 10;
  */
 export const PKCE_COOKIE_PREFIX = "hercules_pkce_";
 
+/**
+ * Default session-cookie lifetime: 400 days (the practical browser cap).
+ *
+ * Deliberately decoupled from token lifetimes: the sealed session carries the
+ * refresh token, which must outlive the access token, or an idle user is
+ * permanently signed out the moment the access token expires. The session's
+ * real validity is enforced by the tokens inside it, not the cookie's age.
+ */
+export const DEFAULT_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 400;
+
 /** Cookie name holding the PKCE verifier for the flow identified by `state`. */
 export function pkceCookieName(state: string): string {
   return PKCE_COOKIE_PREFIX + state;
+}
+
+/**
+ * Session cookie lifetime (seconds): the middleware option, then the
+ * environment, then {@link DEFAULT_SESSION_COOKIE_MAX_AGE}.
+ */
+export function sessionCookieMaxAge(): number {
+  const { cookieMaxAge } = getAuthOptions();
+  if (typeof cookieMaxAge === "number" && cookieMaxAge > 0) return cookieMaxAge;
+  const fromEnv = Number(readEnv(COOKIE_MAX_AGE_ENV_VARS));
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return DEFAULT_SESSION_COOKIE_MAX_AGE;
+}
+
+/** Session cookie `Domain`: the middleware option, then the environment, then host-only. */
+export function sessionCookieDomain(): string | undefined {
+  return getAuthOptions().cookieDomain ?? readEnv(COOKIE_DOMAIN_ENV_VARS);
 }
 
 /** First non-empty value among `names`, or undefined when none are set. */

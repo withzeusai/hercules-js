@@ -22,6 +22,13 @@ export interface HandleSignInOptions {
    * own `returnPathname` overrides it.
    */
   returnPathname?: string;
+  /**
+   * OIDC `max_age` (seconds): the provider forces re-authentication when the
+   * user's most recent sign-in is older. `0` always forces reauth.
+   */
+  maxAge?: number;
+  /** OIDC `login_hint`: pre-fill the provider's login form (e.g. an email). */
+  loginHint?: string;
 }
 
 export interface HandleCallbackOptions {

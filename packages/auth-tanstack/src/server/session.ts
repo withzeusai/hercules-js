@@ -1,8 +1,22 @@
 import { serializeCookie, type CookieOptions } from "./cookie-utils";
 import { fromBase64Url, toBase64Url } from "./encoding";
 
-/** Base name of the (chunked) sealed session cookie. */
+/** Default base name of the (chunked) sealed session cookie. */
 export const SESSION_COOKIE = "hercules_session";
+/**
+ * Overrides for the session cookie's base name, tried in order. Useful when two
+ * apps on one host must keep separate sessions.
+ */
+const COOKIE_NAME_ENV_VARS = ["HERCULES_AUTH_COOKIE_NAME", "AUTH_COOKIE_NAME"] as const;
+
+/** Base name of the session cookie: the environment override or {@link SESSION_COOKIE}. */
+export function sessionCookieBase(): string {
+  for (const name of COOKIE_NAME_ENV_VARS) {
+    const value = process.env[name];
+    if (value) return value;
+  }
+  return SESSION_COOKIE;
+}
 /**
  * Password used to derive the session-sealing key. Accepted variable names,
  * tried in order: the canonical `HERCULES_AUTH_*` name, then the unprefixed
@@ -38,6 +52,17 @@ export interface SessionData {
   refreshToken?: string;
   /** Absolute access-token expiry, epoch seconds, when known. */
   expiresAt?: number;
+}
+
+/**
+ * Whether the session's access token has expired. An unknown expiry counts as
+ * unexpired — the token is passed through and the provider is the arbiter.
+ */
+export function isSessionExpired(
+  session: SessionData,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): boolean {
+  return session.expiresAt !== undefined && session.expiresAt <= nowSeconds;
 }
 
 // The AES-GCM key is derived from the password once (PBKDF2 is deliberately
@@ -126,7 +151,7 @@ export async function unsealSession(value: string): Promise<SessionData | null> 
 
 /** Cookie name for the Nth session chunk. */
 export function sessionChunkName(index: number): string {
-  return `${SESSION_COOKIE}.${index}`;
+  return `${sessionCookieBase()}.${index}`;
 }
 
 /** Split a sealed value into cookie-sized chunk values. */
@@ -139,8 +164,9 @@ export function chunkValue(value: string): string[] {
 }
 
 function isWrittenChunk(name: string, writtenCount: number): boolean {
-  if (!name.startsWith(`${SESSION_COOKIE}.`)) return false;
-  const index = Number(name.slice(SESSION_COOKIE.length + 1));
+  const base = sessionCookieBase();
+  if (!name.startsWith(`${base}.`)) return false;
+  const index = Number(name.slice(base.length + 1));
   return Number.isInteger(index) && index >= 0 && index < writtenCount;
 }
 
@@ -153,8 +179,9 @@ export function staleSessionCookieNames(
   existingNames: readonly string[],
   writtenCount: number,
 ): string[] {
+  const base = sessionCookieBase();
   return existingNames.filter((name) => {
-    const isSessionCookie = name === SESSION_COOKIE || name.startsWith(`${SESSION_COOKIE}.`);
+    const isSessionCookie = name === base || name.startsWith(`${base}.`);
     return isSessionCookie && !isWrittenChunk(name, writtenCount);
   });
 }
@@ -182,6 +209,7 @@ export function serializeSessionCookies(
     maxAge: 0,
     ...(options.sameSite ? { sameSite: options.sameSite } : {}),
     ...(options.secure ? { secure: options.secure } : {}),
+    ...(options.domain ? { domain: options.domain } : {}),
   };
   for (const name of staleSessionCookieNames(existingNames, chunks.length)) {
     headers.push(serializeCookie(name, "", clearOptions));
@@ -201,7 +229,7 @@ export function deserializeSessionCookies(cookies: Record<string, string>): stri
     parts.push(part);
   }
   if (parts.length > 0) return parts.join("");
-  return cookies[SESSION_COOKIE] ?? null;
+  return cookies[sessionCookieBase()] ?? null;
 }
 
 /**
@@ -213,15 +241,17 @@ export function deserializeSessionCookies(cookies: Record<string, string>): stri
  */
 export function clearSessionCookies(
   existingNames: readonly string[],
-  options: Pick<CookieOptions, "secure" | "sameSite"> = {},
+  options: Pick<CookieOptions, "secure" | "sameSite" | "domain"> = {},
 ): string[] {
   const clearOptions: CookieOptions = {
     path: "/",
     maxAge: 0,
     ...(options.sameSite ? { sameSite: options.sameSite } : {}),
     ...(options.secure ? { secure: options.secure } : {}),
+    ...(options.domain ? { domain: options.domain } : {}),
   };
+  const base = sessionCookieBase();
   return existingNames
-    .filter((name) => name === SESSION_COOKIE || name.startsWith(`${SESSION_COOKIE}.`))
+    .filter((name) => name === base || name.startsWith(`${base}.`))
     .map((name) => serializeCookie(name, "", clearOptions));
 }

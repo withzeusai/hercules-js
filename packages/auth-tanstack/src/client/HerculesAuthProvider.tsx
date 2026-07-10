@@ -159,9 +159,16 @@ export function HerculesAuthProvider({
  * Access reactive auth state and actions. Must be used within a
  * {@link HerculesAuthProvider}.
  *
+ * With `{ ensureSignedIn: true }` the return type narrows: once `loading` is
+ * false, `user` is non-null — callers should gate on `loading` and redirect
+ * (or render a fallback) themselves when the fetch still resolves signed out.
+ *
  * @param options.ensureSignedIn When true, re-fetches auth if there is no user
  *   and nothing is in flight (does not itself redirect to sign-in).
  */
+export function useAuth(options: { ensureSignedIn: true }): AuthContextType &
+  ({ loading: true; user: User | null } | { loading: false; user: User });
+export function useAuth(options?: { ensureSignedIn?: boolean }): AuthContextType;
 export function useAuth(options: { ensureSignedIn?: boolean } = {}): AuthContextType {
   const { ensureSignedIn = false } = options;
   const context = useContext(AuthContext);
