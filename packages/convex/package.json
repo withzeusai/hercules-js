@@ -9,10 +9,6 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
-    "./iam-helpers": {
-      "types": "./dist/client/iam-helpers.d.ts",
-      "default": "./dist/client/iam-helpers.js"
-    },
     "./http": {
       "types": "./dist/client/http.d.ts",
       "default": "./dist/client/http.js"

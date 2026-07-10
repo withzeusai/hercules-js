@@ -1,27 +1,35 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// IAM projection mirror — v4 deployment-scoped storage.
+// IAM projection mirror - v5 ReBAC storage.
 //
-// The deployment-wide catalog (reusable roles, permissions, base role
-// permissions) and deployment-wide users are stored ONCE (never duplicated per
-// scope). Each scope owns its runtime state: principals, memberships, tenant
-// roles, per-scope role-permission overrides, role bindings, and permission
-// bindings. The old polymorphic `grants` table is split into `role_bindings`
-// (role membership) and `permission_bindings` (direct permission authority).
+// Thirteen tables mirror the control-plane projection (each carries the
+// `sourceVersion` it was last written at) plus two component-owned tables:
+//   • `resources` - the resource NODE graph the app writes (never projected);
+//     used to walk parent edges during a resource-scoped access check.
+//   • `sync_state` - single-row version/ack state for the signed sync channel.
+//
+// The model is allow-only: roles hold permissions (role_permissions), and
+// subjects hold roles tenant-wide ({user,group}_role_assignments) or per-resource
+// ({user,group}_resource_role_assignments) - split by subject type. There is no
+// deny, no wildcard, no override.
+//
+// Id convention: each owning table stores its own control-plane id as `id` (the
+// value projected from the backend PK; distinct from Convex `_id`), looked up by
+// its `by_<entity>_id` index (e.g. by_tenant_id). Columns that REFERENCE another table keep the
+// qualified name (tenantId, roleId, membershipId, groupId, …). Junction tables
+// (role_permissions, group_memberships) have no own id - their identity is the
+// FK pair.
 
-const effectValidator = v.union(v.literal("allow"), v.literal("deny"));
-const bindingAppliesToValidator = v.union(v.literal("self"), v.literal("self_and_descendants"));
-const wildcardValidator = v.union(v.literal("none"), v.literal("immutable"), v.literal("default"));
-const scopeKindValidator = v.union(v.literal("default"), v.literal("org"), v.literal("suite"));
-const scopeStatusValidator = v.union(v.literal("active"), v.literal("disabled"));
+const tenantStatusValidator = v.union(v.literal("active"), v.literal("archived"));
+const groupStatusValidator = v.union(v.literal("active"), v.literal("archived"));
 const accessModeValidator = v.union(
   v.literal("open"),
   v.literal("allowlisted_only"),
   v.literal("invite_only"),
   v.literal("approval_required"),
 );
-const principalStatusValidator = v.union(
+const membershipStatusValidator = v.union(
   v.literal("active"),
   v.literal("blocked"),
   v.literal("suspended"),
@@ -30,7 +38,7 @@ const principalStatusValidator = v.union(
 );
 
 export default defineSchema({
-  // Single-row version/ack state for the signed sync channel. PRESERVED from v2.
+  // Single-row version/ack state for the signed sync channel.
   sync_state: defineTable({
     sourceVersion: v.number(),
     expectedIssuer: v.string(),
@@ -39,223 +47,206 @@ export default defineSchema({
     lastError: v.optional(v.string()),
   }),
 
-  // Deployment-wide user identity/profile (ProjectionUser). Populated from the
-  // top-level `users[]` snapshot array / `users` event delta — NOT per scope.
+  tenants: defineTable({
+    id: v.string(),
+    name: v.string(),
+    isPrimaryTenant: v.boolean(),
+    status: tenantStatusValidator,
+    accessMode: accessModeValidator,
+    defaultRoleId: v.union(v.string(), v.null()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_tenant_id", ["id"])
+    .index("by_primary", ["isPrimaryTenant"]),
+
   users: defineTable({
-    herculesAuthUserId: v.string(),
+    id: v.string(),
     name: v.string(),
     email: v.string(),
     emailVerified: v.boolean(),
+    // The avatar URL. Stored as `image` because the sync protocol writes that
+    // field name; the read surface exposes it as `avatar` (see toUserRecord /
+    // memberUser in queries.ts). Do not rename either side independently.
     image: v.optional(v.string()),
     phone: v.optional(v.string()),
     phoneVerified: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
-  }).index("by_auth_user_id", ["herculesAuthUserId"]),
+  })
+    .index("by_user_id", ["id"])
+    .index("by_email", ["email"]),
 
-  scopes: defineTable({
-    accessScopeId: v.string(),
+  // A user's membership in a tenant.
+  tenant_memberships: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    // The end user's OIDC subject (their Hercules Auth user id).
+    userId: v.string(),
+    status: membershipStatusValidator,
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_membership_id", ["id"])
+    .index("by_tenant", ["tenantId"])
+    .index("by_tenant_status", ["tenantId", "status"])
+    .index("by_tenant_user", ["tenantId", "userId"])
+    .index("by_user", ["userId"]),
+
+  groups: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    description: v.optional(v.string()),
     name: v.string(),
-    kind: scopeKindValidator,
-    status: scopeStatusValidator,
-    accessMode: accessModeValidator,
-    defaultRoleId: v.string(),
+    status: groupStatusValidator,
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_scope_id", ["accessScopeId"])
-    .index("by_kind", ["kind"]),
+    .index("by_group_id", ["id"])
+    .index("by_tenant", ["tenantId"]),
 
-  // Product-facing organization rows derived from org/suite scopes.
-  organizations: defineTable({
-    accessScopeId: v.string(),
-    name: v.string(),
-    status: scopeStatusValidator,
-    accessMode: accessModeValidator,
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  }).index("by_scope_id", ["accessScopeId"]),
-
-  principals: defineTable({
-    accessScopeId: v.string(),
-    principalId: v.string(),
-    type: v.union(v.literal("user"), v.literal("group")),
-    herculesAuthUserId: v.optional(v.string()),
-    // Display name for a `group` principal. A user principal's display name
-    // comes from the deployment-wide `users` table, never from this row.
-    name: v.optional(v.string()),
-    // Derived from principal_memberships. User principals always store zero.
-    memberCount: v.number(),
-    status: principalStatusValidator,
-    joinedAt: v.number(),
+  // Identity is (groupId, membershipId).
+  group_memberships: defineTable({
+    groupId: v.string(),
+    membershipId: v.string(),
+    tenantId: v.string(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_principal_id", ["principalId"])
-    .index("by_scope", ["accessScopeId"])
-    .index("by_scope_auth_user", ["accessScopeId", "herculesAuthUserId"])
-    .index("by_auth_user", ["herculesAuthUserId"])
-    .index("by_auth_user_status", ["herculesAuthUserId", "status"])
-    .index("by_scope_type", ["accessScopeId", "type"])
-    .index("by_scope_status", ["accessScopeId", "status"])
-    .index("by_scope_status_type", ["accessScopeId", "status", "type"]),
+    .index("by_group", ["groupId"])
+    .index("by_membership", ["membershipId"])
+    .index("by_group_membership", ["groupId", "membershipId"]),
 
-  principal_memberships: defineTable({
-    accessScopeId: v.string(),
-    groupPrincipalId: v.string(),
-    memberPrincipalId: v.string(),
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  })
-    .index("by_scope", ["accessScopeId"])
-    .index("by_group", ["accessScopeId", "groupPrincipalId"])
-    .index("by_member", ["accessScopeId", "memberPrincipalId"])
-    .index("by_group_member", ["accessScopeId", "groupPrincipalId", "memberPrincipalId"]),
-
-  // Unified role table holding BOTH deployment-wide catalog roles (source
-  // system|iam, accessScopeId undefined) and per-scope tenant roles (source
-  // tenant, accessScopeId set). `baseWildcard` is the role's INTRINSIC wildcard
-  // mode (Owner=immutable, Admin=default, everything else=none). The EFFECTIVE
-  // wildcard is DERIVED per scope at evaluation time (base role-permissions
-  // UNION that scope's overrides) — never stored here.
   roles: defineTable({
-    roleId: v.string(),
+    id: v.string(),
     key: v.string(),
-    source: v.union(v.literal("system"), v.literal("iam"), v.literal("tenant")),
     name: v.string(),
     description: v.union(v.string(), v.null()),
-    baseWildcard: wildcardValidator,
-    // Undefined for catalog (reusable) roles; the owning org/suite scope for
-    // tenant roles. Catalog roles are NEVER per-scope duplicated.
-    accessScopeId: v.optional(v.string()),
+    // Role scope (read together with isAppScope):
+    //   • tenantId = <id> → TENANT-SCOPED: usable only in that tenant (a role
+    //     created at runtime inside a tenant).
+    //   • tenantId = null → not tenant-owned; isAppScope splits it:
+    //       - isAppScope = false → SHARED: usable in every tenant (catalog role).
+    //       - isAppScope = true  → APP-SCOPED: app-wide authority, grantable only
+    //                              to primary-tenant members.
+    tenantId: v.union(v.string(), v.null()),
+    isAppScope: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_role_id", ["roleId"])
-    .index("by_scope", ["accessScopeId"])
-    .index("by_scope_key", ["accessScopeId", "key"])
-    .index("by_source", ["source"]),
+    .index("by_role_id", ["id"])
+    .index("by_key", ["key"])
+    .index("by_tenant", ["tenantId"]),
 
-  // Deployment-owned permission catalog (ProjectionCatalogPermission). Lives at
-  // the top level (no per-scope duplication). `accessScopeId` is retained and
-  // pinned to the default scope id so the existing default-scope lookups
-  // (by_scope / by_scope_key) keep working without re-plumbing every reader.
+  // `key` (`resourceType:action`) is the identity used by checks; the parsed
+  // resourceType/action halves live in the control plane and are not mirrored.
+  // All permissions are app-defined - there are no pre-defined/system permissions.
   permissions: defineTable({
-    accessScopeId: v.string(),
-    permissionId: v.string(),
+    id: v.string(),
     key: v.string(),
-    resourceType: v.string(),
-    action: v.string(),
-    classification: v.union(v.literal("delegable"), v.literal("owner_only")),
-    // tenantAssignable=false hides this permission from org-admin role editors.
-    tenantAssignable: v.boolean(),
+    // App-scoped permission (vs tenant-scoped), mirroring the role-level scope.
+    isAppScope: v.boolean(),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_permission_id", ["permissionId"])
-    .index("by_scope", ["accessScopeId"])
-    .index("by_scope_key", ["accessScopeId", "key"])
-    .index("by_scope_resource_action", ["accessScopeId", "resourceType", "action"]),
+    .index("by_permission_id", ["id"])
+    .index("by_key", ["key"]),
 
-  // BASE role->permission map (deployment-wide; the catalog definition).
-  // Identity is (roleId, permissionId) — effect is MUTABLE and is NOT part of
-  // the identity (an allow<->deny flip is an upsert of the same row).
+  // Identity is (roleId, permissionId).
   role_permissions: defineTable({
     roleId: v.string(),
     permissionId: v.string(),
-    effect: effectValidator,
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
     .index("by_role", ["roleId"])
-    .index("by_permission", ["permissionId"])
     .index("by_role_permission", ["roleId", "permissionId"]),
 
-  // One scope's override of a reusable role's base mapping. Identity is
-  // (accessScopeId, roleId, permissionId); effect is mutable (not in identity).
-  // Layered over the base map during evaluation.
-  role_permission_overrides: defineTable({
-    accessScopeId: v.string(),
-    roleId: v.string(),
-    permissionId: v.string(),
-    effect: effectValidator,
+  resource_types: defineTable({
+    id: v.string(),
+    key: v.string(),
+    name: v.string(),
+    parentResourceTypeId: v.union(v.string(), v.null()),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_scope", ["accessScopeId"])
-    .index("by_scope_role", ["accessScopeId", "roleId"])
-    .index("by_permission", ["permissionId"])
-    .index("by_role", ["roleId"])
-    .index("by_scope_role_permission", ["accessScopeId", "roleId", "permissionId"]),
+    .index("by_resource_type_id", ["id"])
+    .index("by_key", ["key"]),
 
-  // Role assigned to a principal (the role half of the old `grants`). The
-  // (resourceType, resourceId) target tuple replaces the old object addressing:
-  //   (undefined, undefined) = the scope, (type, undefined) = every resource of
-  //   a type, (type, id) = one exact resource.
-  role_bindings: defineTable({
-    bindingId: v.string(),
-    subjectPrincipalId: v.string(),
+  // Component-owned resource NODE graph. NOT projected: the app writes these via
+  // resource.write and deletes them via resource.delete. `resourceTypeId` points
+  // at a resource_types row; `externalId` is the app's own id for the resource;
+  // `parentId` points at the parent resource node's `id`. The check walks parent
+  // edges upward (via parentId) to resolve ancestors.
+  resources: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    resourceTypeId: v.string(),
+    externalId: v.string(),
+    parentId: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_resource_id", ["id"])
+    .index("by_resource", ["tenantId", "resourceTypeId", "externalId"])
+    .index("by_parent", ["parentId"]),
+
+  // A tenant membership holds a role tenant-wide.
+  user_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    membershipId: v.string(),
     roleId: v.string(),
-    accessScopeId: v.string(),
-    resourceType: v.optional(v.string()),
-    resourceId: v.optional(v.string()),
-    appliesTo: bindingAppliesToValidator,
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_binding_id", ["bindingId"])
-    .index("by_scope", ["accessScopeId"])
-    // Scope-object role lookup (resourceType undefined): who has which role on a
-    // scope. Used by collectGrantContributions + collectPrincipalScopeRoles.
-    .index("by_subject_scope_resource", [
-      "subjectPrincipalId",
-      "accessScopeId",
-      "resourceType",
-      "resourceId",
-    ])
-    // Reverse: "who has a direct role binding on this resource" (membership UIs).
-    .index("by_scope_resource", ["accessScopeId", "resourceType", "resourceId"])
-    .index("by_role", ["roleId"])
-    .index("by_subject_principal", ["subjectPrincipalId"]),
+    .index("by_assignment_id", ["id"])
+    .index("by_membership", ["membershipId"])
+    .index("by_role_id", ["roleId"]),
 
-  // Direct permission authority (the direct-permission half of the old
-  // `grants`). Exactly one subject: subjectPrincipalId XOR subjectRoleId. Same
-  // nullable (resourceType, resourceId) target shape as role_bindings.
-  permission_bindings: defineTable({
-    bindingId: v.string(),
-    subjectPrincipalId: v.optional(v.string()),
-    subjectRoleId: v.optional(v.string()),
-    permissionId: v.string(),
-    effect: effectValidator,
-    accessScopeId: v.string(),
-    resourceType: v.optional(v.string()),
-    resourceId: v.optional(v.string()),
-    appliesTo: bindingAppliesToValidator,
+  // A group holds a role tenant-wide.
+  group_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    groupId: v.string(),
+    roleId: v.string(),
     expiresAt: v.optional(v.number()),
     updatedAt: v.number(),
     sourceVersion: v.number(),
   })
-    .index("by_binding_id", ["bindingId"])
-    .index("by_scope", ["accessScopeId"])
-    // Principal-subject scope/resource lookups.
-    .index("by_subject_principal_scope_resource", [
-      "subjectPrincipalId",
-      "accessScopeId",
-      "resourceType",
-      "resourceId",
-    ])
-    // Role-subject scope/resource lookups (a rule applying to every holder of a
-    // role).
-    .index("by_subject_role_scope_resource", [
-      "subjectRoleId",
-      "accessScopeId",
-      "resourceType",
-      "resourceId",
-    ])
-    // Reverse: "who has a direct permission binding on this resource".
-    .index("by_scope_resource", ["accessScopeId", "resourceType", "resourceId"])
-    .index("by_permission", ["permissionId"])
-    .index("by_subject_principal", ["subjectPrincipalId"])
-    .index("by_subject_role", ["subjectRoleId"]),
+    .index("by_assignment_id", ["id"])
+    .index("by_group", ["groupId"])
+    .index("by_role_id", ["roleId"]),
+
+  // A tenant membership holds a role on a specific resource.
+  user_resource_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    membershipId: v.string(),
+    roleId: v.string(),
+    resourceTypeId: v.string(),
+    // The target resource's app-supplied external id (NOT this row's own id).
+    externalId: v.string(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_assignment_id", ["id"])
+    .index("by_membership", ["membershipId"]),
+
+  // A group holds a role on a specific resource.
+  group_resource_role_assignments: defineTable({
+    id: v.string(),
+    tenantId: v.string(),
+    groupId: v.string(),
+    roleId: v.string(),
+    resourceTypeId: v.string(),
+    // The target resource's app-supplied external id (NOT this row's own id).
+    externalId: v.string(),
+    expiresAt: v.optional(v.number()),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  })
+    .index("by_assignment_id", ["id"])
+    .index("by_group", ["groupId"]),
 });

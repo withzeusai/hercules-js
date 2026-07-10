@@ -114,7 +114,7 @@ describe("useAuth", () => {
   });
 
   describe("signin", () => {
-    it("calls signinRedirect", async () => {
+    it("passes the current URL as returnTo state by default", async () => {
       mockSigninRedirect.mockResolvedValue(undefined);
 
       const { result } = renderHook(() => useAuth());
@@ -124,6 +124,26 @@ describe("useAuth", () => {
       });
 
       expect(mockSigninRedirect).toHaveBeenCalledOnce();
+      expect(mockSigninRedirect).toHaveBeenCalledWith({
+        state: {
+          returnTo: window.location.pathname + window.location.search + window.location.hash,
+        },
+      });
+    });
+
+    it("passes an explicit returnTo as state", async () => {
+      mockSigninRedirect.mockResolvedValue(undefined);
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await result.current.signin({ returnTo: "/projects/42?tab=members" });
+      });
+
+      expect(mockSigninRedirect).toHaveBeenCalledOnce();
+      expect(mockSigninRedirect).toHaveBeenCalledWith({
+        state: { returnTo: "/projects/42?tab=members" },
+      });
     });
   });
 

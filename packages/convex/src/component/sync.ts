@@ -1,48 +1,99 @@
 import {
+  actionGeneric,
   internalMutationGeneric,
   makeFunctionReference,
-  mutationGeneric,
+  type ActionBuilder,
   type DataModelFromSchemaDefinition,
+  type GenericMutationCtx,
   type MutationBuilder,
 } from "convex/server";
 import { v } from "convex/values";
+import { Webhook, WebhookVerificationError } from "standardwebhooks";
 import {
   accessProjectionSyncPayloadSchema,
   type AccessProjectionEvent,
   type AccessProjectionSnapshot,
-  type ProjectionCatalogDelta,
-  type ProjectionScopeDelta,
-  type ProjectionScopeMetadata,
-  type ProjectionUserDelta,
+  type AccessProjectionSyncPayload,
+  type ProjectionGroupResourceRoleAssignment,
+  type ProjectionGroupRoleAssignment,
+  type ProjectionUserResourceRoleAssignment,
+  type ProjectionUserRoleAssignment,
+  type SyncResponse,
 } from "../shared/sync";
 import schema from "./schema";
 
 type DataModel = DataModelFromSchemaDefinition<typeof schema>;
+type MutationCtx = GenericMutationCtx<DataModel>;
 const internalMutation = internalMutationGeneric as MutationBuilder<DataModel, "internal">;
-// applySync is the parent-facing entry point (the app's HTTP sync route calls
-// it via runMutation); it must be public-in-component to be exported to the
-// parent. The expiry mutations below stay internal: they are scheduled and run
-// entirely inside the component.
-const mutation = mutationGeneric as MutationBuilder<DataModel, "public">;
+// applySync (below) is the SINGLE public, parent-facing entry point for the
+// signed sync channel. The raw mirror apply (applyProjection) is an
+// internalMutation, so nothing the parent app can reach writes the mirror
+// without a verified control-plane signature.
+const action = actionGeneric as ActionBuilder<DataModel, "public">;
+
+// The signing secret is bound to THIS component (Convex isolates component env
+// vars from the app), so verification cannot be bypassed by a caller supplying
+// their own secret.
+const SYNC_SECRET_ENV_VAR = "HERCULES_SYNC_SECRET";
+
+type AssignmentSubject = "user" | "group";
+
+// Reference to the component-internal mirror apply. Only the verifying action
+// below invokes it; it is never exported in the component's public API.
+const applyProjectionReference = makeFunctionReference<
+  "mutation",
+  AccessProjectionSyncPayload,
+  SyncResponse
+>("sync:applyProjection");
 
 // Exact-identity expiry mutations: scheduled at expiresAt so the reactive query
-// is invalidated when a time-bound binding lapses. The runtime readers also
-// fail closed on the timestamp, so a delayed schedule never over-grants.
-const expireRoleBindingReference = makeFunctionReference<
+// is invalidated when a time-bound assignment lapses. The runtime check also
+// fails closed on the timestamp, so a delayed schedule never over-grants. The
+// `subject` selects which split table (user_* vs group_*) the id lives in.
+const expireRoleAssignmentReference = makeFunctionReference<
   "mutation",
-  { bindingId: string; expiresAt: number; updatedAt: number; sourceVersion: number }
->("sync:expireRoleBinding");
-const expirePermissionBindingReference = makeFunctionReference<
+  {
+    id: string;
+    subject: AssignmentSubject;
+    expiresAt: number;
+    updatedAt: number;
+    sourceVersion: number;
+  }
+>("sync:expireRoleAssignment");
+const expireResourceRoleAssignmentReference = makeFunctionReference<
   "mutation",
-  { bindingId: string; expiresAt: number; updatedAt: number; sourceVersion: number }
->("sync:expirePermissionBinding");
+  {
+    id: string;
+    subject: AssignmentSubject;
+    expiresAt: number;
+    updatedAt: number;
+    sourceVersion: number;
+  }
+>("sync:expireResourceRoleAssignment");
 
 // Convex transactions have document-count limits. Reject an oversized aggregate
 // with a clear payload failure rather than letting the mutation abort opaquely.
 const MAX_SNAPSHOT_DOCUMENTS = 16_000;
 
+const MIRROR_TABLES = [
+  "tenants",
+  "roles",
+  "permissions",
+  "role_permissions",
+  "resource_types",
+  "tenant_memberships",
+  "groups",
+  "group_memberships",
+  "user_role_assignments",
+  "group_role_assignments",
+  "user_resource_role_assignments",
+  "group_resource_role_assignments",
+  "users",
+] as const;
+type MirrorTable = (typeof MIRROR_TABLES)[number];
+
 // The args validator is intentionally loose (the producer ships either payload
-// kind); real validation is the zod parse below. Accept the v4 top-level shape.
+// kind); real validation is the zod parse below.
 const syncPayloadArgs = {
   type: v.union(v.literal("access.projection.snapshot"), v.literal("access.projection.event")),
   schemaVersion: v.number(),
@@ -50,35 +101,79 @@ const syncPayloadArgs = {
   sourceVersion: v.number(),
   mode: v.optional(v.union(v.literal("initialize"), v.literal("reset"))),
   expectedIssuer: v.optional(v.string()),
-  catalog: v.optional(v.any()),
-  users: v.optional(v.any()),
-  scopes: v.optional(v.array(v.any())),
+  changes: v.optional(v.array(v.any())),
+  tenants: v.optional(v.array(v.any())),
+  roles: v.optional(v.array(v.any())),
+  permissions: v.optional(v.array(v.any())),
+  rolePermissions: v.optional(v.array(v.any())),
+  resourceTypes: v.optional(v.array(v.any())),
+  memberships: v.optional(v.array(v.any())),
+  groups: v.optional(v.array(v.any())),
+  groupMemberships: v.optional(v.array(v.any())),
+  userRoleAssignments: v.optional(v.array(v.any())),
+  groupRoleAssignments: v.optional(v.array(v.any())),
+  userResourceRoleAssignments: v.optional(v.array(v.any())),
+  groupResourceRoleAssignments: v.optional(v.array(v.any())),
+  users: v.optional(v.array(v.any())),
 };
 
-export const applySync = mutation({
+// Verify the standardwebhooks signature, then translate the library outcome:
+// `ok` carries the parsed payload; a WebhookVerificationError is a clean
+// rejection; anything else (e.g. a crypto fault) propagates as a server error.
+function verifyWebhookPayload(secret: string, rawBody: string, headers: Record<string, string>) {
+  try {
+    return { ok: true as const, payload: new Webhook(secret).verify(rawBody, headers) };
+  } catch (error) {
+    if (error instanceof WebhookVerificationError) {
+      return { ok: false as const };
+    }
+    throw error;
+  }
+}
+
+// applySync - the ONLY public surface that can reach the mirror. The parent
+// app's thin HTTP route forwards the raw request body and the three
+// standardwebhooks headers here; this action verifies the signature against the
+// component-bound secret BEFORE running any mutation, then delegates to the
+// internal apply. A caller that has not presented a control-plane signature
+// over the exact body cannot install roles/permissions/memberships/assignments.
+export const applySync = action({
+  args: {
+    payload: v.string(),
+    webhookId: v.string(),
+    webhookTimestamp: v.string(),
+    webhookSignature: v.string(),
+  },
+  handler: async (ctx, args): Promise<SyncResponse> => {
+    const secret = process.env[SYNC_SECRET_ENV_VAR];
+    if (!secret) {
+      // The signing secret is not bound to the component. Fail closed: never
+      // write unverified data. Surfaces as a 500 at the HTTP route.
+      throw new Error(`${SYNC_SECRET_ENV_VAR} is not configured for the Hercules IAM component.`);
+    }
+    const verified = verifyWebhookPayload(secret, args.payload, {
+      "webhook-id": args.webhookId,
+      "webhook-timestamp": args.webhookTimestamp,
+      "webhook-signature": args.webhookSignature,
+    });
+    if (!verified.ok) {
+      return { ok: false as const, status: "invalid_signature" as const };
+    }
+    const parsed = accessProjectionSyncPayloadSchema.safeParse(verified.payload);
+    if (!parsed.success) {
+      return { ok: false as const, status: "invalid_payload" as const };
+    }
+    return await ctx.runMutation(applyProjectionReference, parsed.data);
+  },
+});
+
+// applyProjection - the raw mirror apply. internalMutation, so it is NOT in the
+// component's public API and is reachable only from the verifying action above.
+export const applyProjection = internalMutation({
   args: syncPayloadArgs,
   handler: async (ctx, rawArgs) => {
-    if (rawArgs.schemaVersion !== 4) {
+    if (rawArgs.schemaVersion !== 5) {
       return { ok: false as const, status: "unsupported_schema" as const };
-    }
-
-    // A bootstrap/reset aggregate must carry the default scope (the zod also
-    // checks default-first/exactly-one, but this returns a precise status the
-    // reconciler keys on before paying for a full parse).
-    if (
-      rawArgs.type === "access.projection.snapshot" &&
-      !(rawArgs.scopes ?? []).some(
-        (entry) =>
-          entry !== null &&
-          typeof entry === "object" &&
-          "scope" in entry &&
-          entry.scope !== null &&
-          typeof entry.scope === "object" &&
-          "kind" in entry.scope &&
-          entry.scope.kind === "default",
-      )
-    ) {
-      return { ok: false as const, status: "default_scope_required" as const };
     }
 
     const parsed = accessProjectionSyncPayloadSchema.safeParse(rawArgs);
@@ -87,7 +182,6 @@ export const applySync = mutation({
     }
 
     const payload = parsed.data;
-    const sourceVersion = payload.sourceVersion;
     const state = await ctx.db.query("sync_state").unique();
 
     // Idempotency: a re-delivered event/snapshot with the same eventId is a
@@ -105,13 +199,8 @@ export const applySync = mutation({
 
     if (payload.type === "access.projection.event") {
       if (!state) {
-        return {
-          ok: false as const,
-          status: "not_ready" as const,
-          currentVersion: 0,
-        };
+        return { ok: false as const, status: "not_ready" as const, currentVersion: 0 };
       }
-      // Contract point 1: events apply strictly at currentVersion + 1.
       const expectedVersion = state.sourceVersion + 1;
       if (payload.sourceVersion !== expectedVersion) {
         return {
@@ -123,7 +212,6 @@ export const applySync = mutation({
         };
       }
     } else {
-      // initialize requires a clean mirror; reset requires an existing one.
       if (payload.mode === "initialize" && state) {
         return {
           ok: false as const,
@@ -132,11 +220,7 @@ export const applySync = mutation({
         };
       }
       if (payload.mode === "reset" && !state) {
-        return {
-          ok: false as const,
-          status: "not_ready" as const,
-          currentVersion: 0,
-        };
+        return { ok: false as const, status: "not_ready" as const, currentVersion: 0 };
       }
       if (state && state.expectedIssuer !== payload.expectedIssuer) {
         return { ok: false as const, status: "issuer_mismatch" as const };
@@ -152,22 +236,20 @@ export const applySync = mutation({
       }
     }
 
+    const sourceVersion = payload.sourceVersion;
     const now = Date.now();
 
     if (payload.type === "access.projection.snapshot") {
       if (snapshotDocumentCount(payload) > MAX_SNAPSHOT_DOCUMENTS) {
         return { ok: false as const, status: "invalid_payload" as const };
       }
-      // Whole-aggregate atomic install. A Convex mutation is a single
-      // transaction, so no scope becomes visible until the entire snapshot
-      // commits (contract point 2).
-      await replaceProjection(payload, now);
+      await replaceProjection(ctx, payload, sourceVersion, now);
     } else {
-      await applyEvent(payload, now);
+      await applyEvent(ctx, payload, sourceVersion, now);
     }
 
     const nextState = {
-      sourceVersion: payload.sourceVersion,
+      sourceVersion,
       expectedIssuer:
         payload.type === "access.projection.snapshot"
           ? payload.expectedIssuer
@@ -184,1000 +266,788 @@ export const applySync = mutation({
     return {
       ok: true as const,
       status: "applied" as const,
-      acknowledgedVersion: payload.sourceVersion,
+      acknowledgedVersion: sourceVersion,
     };
-
-    // ── snapshot install ──────────────────────────────────────────────────
-    async function replaceProjection(snapshot: AccessProjectionSnapshot, now: number) {
-      // Clear children-before-parents is unnecessary (no DB FKs), so order only
-      // for clarity. Every table is wiped before re-install.
-      await clearTable("permission_bindings");
-      await clearTable("role_bindings");
-      await clearTable("role_permission_overrides");
-      await clearTable("role_permissions");
-      await clearTable("permissions");
-      await clearTable("roles");
-      await clearTable("principal_memberships");
-      await clearTable("principals");
-      await clearTable("organizations");
-      await clearTable("scopes");
-      await clearTable("users");
-
-      // Deployment-wide catalog (NEVER per-scope). Catalog roles carry no
-      // accessScopeId; permissions are pinned to the default scope id for
-      // lookup symmetry.
-      const defaultScopeId = snapshot.scopes[0]!.scope.accessScopeId;
-
-      for (const role of snapshot.catalog.roles) {
-        await ctx.db.insert("roles", {
-          roleId: role.roleId,
-          key: role.key,
-          source: role.source,
-          name: role.name,
-          description: role.description,
-          baseWildcard: role.baseWildcard,
-          updatedAt: role.updatedAt,
-          sourceVersion,
-        });
-      }
-      for (const permission of snapshot.catalog.permissions) {
-        await ctx.db.insert("permissions", {
-          accessScopeId: defaultScopeId,
-          permissionId: permission.permissionId,
-          key: permission.key,
-          resourceType: permission.resourceType,
-          action: permission.action,
-          classification: permission.classification,
-          tenantAssignable: permission.tenantAssignable,
-          updatedAt: permission.updatedAt,
-          sourceVersion,
-        });
-      }
-      for (const rolePermission of snapshot.catalog.rolePermissions) {
-        await ctx.db.insert("role_permissions", {
-          roleId: rolePermission.roleId,
-          permissionId: rolePermission.permissionId,
-          effect: rolePermission.effect,
-          updatedAt: rolePermission.updatedAt,
-          sourceVersion,
-        });
-      }
-
-      // Deployment-wide users.
-      for (const user of snapshot.users) {
-        await ctx.db.insert("users", { ...user, sourceVersion });
-      }
-
-      // Per-scope runtime state.
-      for (const scopeEntry of snapshot.scopes) {
-        await insertScope(scopeEntry.scope);
-
-        const groupMemberCounts = new Map<string, number>();
-        for (const membership of scopeEntry.principalMemberships) {
-          groupMemberCounts.set(
-            membership.groupPrincipalId,
-            (groupMemberCounts.get(membership.groupPrincipalId) ?? 0) + 1,
-          );
-        }
-        for (const principal of scopeEntry.principals) {
-          await ctx.db.insert("principals", {
-            accessScopeId: scopeEntry.scope.accessScopeId,
-            ...principal,
-            memberCount:
-              principal.type === "group" ? (groupMemberCounts.get(principal.principalId) ?? 0) : 0,
-            sourceVersion,
-          });
-        }
-        for (const membership of scopeEntry.principalMemberships) {
-          await ctx.db.insert("principal_memberships", {
-            accessScopeId: scopeEntry.scope.accessScopeId,
-            ...membership,
-            sourceVersion,
-          });
-        }
-        // E4 (cross-scope escalation fence): write every embedded row pinned to
-        // the ENCLOSING scope, never the nested accessScopeId the row carries.
-        // The zod parse already rejects a mismatched nested id, but pinning here
-        // is the second, in-depth layer so a scope-A block can never land a row
-        // in scope B even if the parse fence is bypassed.
-        const enclosingScopeId = scopeEntry.scope.accessScopeId;
-        for (const role of scopeEntry.roles) {
-          await ctx.db.insert("roles", {
-            roleId: role.roleId,
-            key: role.key,
-            source: role.source,
-            name: role.name,
-            description: role.description,
-            baseWildcard: role.baseWildcard,
-            accessScopeId: enclosingScopeId,
-            updatedAt: role.updatedAt,
-            sourceVersion,
-          });
-        }
-        for (const override of scopeEntry.rolePermissionOverrides) {
-          await ctx.db.insert("role_permission_overrides", {
-            ...override,
-            accessScopeId: enclosingScopeId,
-            sourceVersion,
-          });
-        }
-        for (const binding of scopeEntry.roleBindings) {
-          if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
-            continue;
-          }
-          await ctx.db.insert("role_bindings", {
-            ...binding,
-            accessScopeId: enclosingScopeId,
-            sourceVersion,
-          });
-          await scheduleRoleBindingExpiration(binding, sourceVersion);
-        }
-        for (const binding of scopeEntry.permissionBindings) {
-          if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
-            continue;
-          }
-          await ctx.db.insert("permission_bindings", {
-            ...binding,
-            accessScopeId: enclosingScopeId,
-            sourceVersion,
-          });
-          await schedulePermissionBindingExpiration(binding, sourceVersion);
-        }
-      }
-    }
-
-    // ── event application ─────────────────────────────────────────────────
-    async function applyEvent(event: AccessProjectionEvent, now: number) {
-      if (event.catalog) await applyCatalogDelta(event.catalog);
-      if (event.users) await applyUserDelta(event.users);
-      for (const scopeDelta of event.scopes ?? []) {
-        await applyScopeDelta(scopeDelta, now);
-      }
-    }
-
-    async function applyCatalogDelta(catalog: ProjectionCatalogDelta) {
-      const defaultScopeId = await getDefaultScopeId();
-      for (const change of catalog.changes) {
-        if (change.operation === "delete") {
-          switch (change.entityType) {
-            case "role":
-              await deleteCatalogRole(change.roleId);
-              break;
-            case "permission":
-              await deletePermission(change.permissionId);
-              break;
-            case "role_permission":
-              await deleteRolePermission(change.roleId, change.permissionId);
-              break;
-          }
-          continue;
-        }
-        switch (change.entityType) {
-          case "role": {
-            const role = catalog.roles.find((r) => r.roleId === change.roleId)!;
-            await upsertCatalogRole({
-              roleId: role.roleId,
-              key: role.key,
-              source: role.source,
-              name: role.name,
-              description: role.description,
-              baseWildcard: role.baseWildcard,
-              updatedAt: role.updatedAt,
-            });
-            break;
-          }
-          case "permission": {
-            const permission = catalog.permissions.find(
-              (p) => p.permissionId === change.permissionId,
-            )!;
-            await upsertPermission({
-              accessScopeId: defaultScopeId,
-              permissionId: permission.permissionId,
-              key: permission.key,
-              resourceType: permission.resourceType,
-              action: permission.action,
-              classification: permission.classification,
-              tenantAssignable: permission.tenantAssignable,
-              updatedAt: permission.updatedAt,
-            });
-            break;
-          }
-          case "role_permission": {
-            const rolePermission = catalog.rolePermissions.find(
-              (rp) => rp.roleId === change.roleId && rp.permissionId === change.permissionId,
-            )!;
-            await upsertRolePermission({
-              roleId: rolePermission.roleId,
-              permissionId: rolePermission.permissionId,
-              effect: rolePermission.effect,
-              updatedAt: rolePermission.updatedAt,
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    async function applyUserDelta(delta: ProjectionUserDelta) {
-      for (const change of delta.changes) {
-        if (change.operation === "delete") {
-          await deleteUser(change.herculesAuthUserId);
-          continue;
-        }
-        const user = delta.users.find((u) => u.herculesAuthUserId === change.herculesAuthUserId)!;
-        await upsertUser({ ...user });
-      }
-    }
-
-    async function applyScopeDelta(scope: ProjectionScopeDelta, now: number) {
-      const accessScopeId = scope.accessScopeId;
-      if (scope.scope) await upsertScope(scope.scope);
-
-      // Membership changes may precede their newly created principals in the
-      // event. Install principal rows first so group member counts stay exact.
-      for (const change of scope.changes) {
-        if (change.operation !== "upsert" || change.entityType !== "principal") continue;
-        const principal = scope.principals.find((p) => p.principalId === change.principalId)!;
-        await upsertPrincipal(accessScopeId, principal);
-      }
-
-      for (const change of scope.changes) {
-        if (change.operation === "upsert" && change.entityType === "principal") continue;
-        if (change.operation === "delete") {
-          switch (change.entityType) {
-            case "scope":
-              await deleteScope(change.accessScopeId);
-              break;
-            case "principal":
-              await deletePrincipal(accessScopeId, change.principalId);
-              break;
-            case "principal_membership":
-              await deleteMembership(
-                accessScopeId,
-                change.groupPrincipalId,
-                change.memberPrincipalId,
-              );
-              break;
-            case "role":
-              await deleteTenantRole(change.roleId);
-              break;
-            case "role_permission_override":
-              // E4: delete keyed on the ENCLOSING scope, never the change's own
-              // accessScopeId (which could name a foreign scope).
-              await deleteOverride(accessScopeId, change.roleId, change.permissionId);
-              break;
-            case "role_binding":
-              await deleteRoleBinding(change.bindingId);
-              break;
-            case "permission_binding":
-              await deletePermissionBinding(change.bindingId);
-              break;
-          }
-          continue;
-        }
-
-        switch (change.entityType) {
-          // A `scope` upsert change is satisfied by `scope.scope` above; the
-          // integrity rule guarantees the metadata row is present.
-          case "scope":
-            break;
-          case "principal":
-            break;
-          case "principal_membership": {
-            const membership = scope.principalMemberships.find(
-              (m) =>
-                m.groupPrincipalId === change.groupPrincipalId &&
-                m.memberPrincipalId === change.memberPrincipalId,
-            )!;
-            await upsertMembership(accessScopeId, membership);
-            break;
-          }
-          case "role": {
-            const role = scope.roles.find((r) => r.roleId === change.roleId)!;
-            await upsertTenantRole({
-              roleId: role.roleId,
-              key: role.key,
-              source: role.source,
-              name: role.name,
-              description: role.description,
-              baseWildcard: role.baseWildcard,
-              // E4: pin to the ENCLOSING scope, never the row's own
-              // accessScopeId.
-              accessScopeId,
-              updatedAt: role.updatedAt,
-            });
-            break;
-          }
-          case "role_permission_override": {
-            const override = scope.rolePermissionOverrides.find(
-              (o) =>
-                o.accessScopeId === change.accessScopeId &&
-                o.roleId === change.roleId &&
-                o.permissionId === change.permissionId,
-            )!;
-            // E4: write the override pinned to the ENCLOSING scope.
-            await upsertOverride({ ...override, accessScopeId });
-            break;
-          }
-          case "role_binding": {
-            const binding = scope.roleBindings.find((b) => b.bindingId === change.bindingId)!;
-            // E4: write the binding pinned to the ENCLOSING scope.
-            await upsertRoleBinding({ ...binding, accessScopeId }, now);
-            break;
-          }
-          case "permission_binding": {
-            const binding = scope.permissionBindings.find((b) => b.bindingId === change.bindingId)!;
-            // E4: write the binding pinned to the ENCLOSING scope.
-            await upsertPermissionBinding({ ...binding, accessScopeId }, now);
-            break;
-          }
-        }
-      }
-    }
-
-    // ── table helpers ─────────────────────────────────────────────────────
-    async function clearTable(
-      table:
-        | "users"
-        | "scopes"
-        | "organizations"
-        | "principals"
-        | "principal_memberships"
-        | "roles"
-        | "permissions"
-        | "role_permissions"
-        | "role_permission_overrides"
-        | "role_bindings"
-        | "permission_bindings",
-    ) {
-      for (const row of await ctx.db.query(table).collect()) {
-        await ctx.db.delete(row._id);
-      }
-    }
-
-    async function getDefaultScopeId(): Promise<string> {
-      const defaultScope = await ctx.db
-        .query("scopes")
-        .withIndex("by_kind", (q) => q.eq("kind", "default"))
-        .unique();
-      // The mirror always holds exactly one default scope (snapshot installs it
-      // before any event applies). Fall back to empty string defensively.
-      return defaultScope?.accessScopeId ?? "";
-    }
-
-    async function insertScope(scope: ProjectionScopeMetadata) {
-      await ctx.db.insert("scopes", { ...scope, sourceVersion });
-      if (scope.kind === "org" || scope.kind === "suite") {
-        await ctx.db.insert("organizations", organizationFromScope(scope, sourceVersion));
-      }
-    }
-
-    async function upsertScope(scope: ProjectionScopeMetadata) {
-      const existing = await ctx.db
-        .query("scopes")
-        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scope.accessScopeId))
-        .unique();
-      const scopeRow = { ...scope, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, scopeRow);
-      else await ctx.db.insert("scopes", scopeRow);
-
-      const organization = await ctx.db
-        .query("organizations")
-        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", scope.accessScopeId))
-        .unique();
-      if (scope.kind !== "org" && scope.kind !== "suite") {
-        if (organization) await ctx.db.delete(organization._id);
-        return;
-      }
-      const row = organizationFromScope(scope, sourceVersion);
-      if (organization) await ctx.db.replace(organization._id, row);
-      else await ctx.db.insert("organizations", row);
-    }
-
-    async function deleteScope(accessScopeId: string) {
-      for (const binding of await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      for (const binding of await ctx.db
-        .query("role_bindings")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      for (const override of await ctx.db
-        .query("role_permission_overrides")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
-        .collect()) {
-        await ctx.db.delete(override._id);
-      }
-      for (const membership of await ctx.db
-        .query("principal_memberships")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
-        .collect()) {
-        await ctx.db.delete(membership._id);
-      }
-      for (const principal of await ctx.db
-        .query("principals")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
-        .collect()) {
-        await ctx.db.delete(principal._id);
-      }
-      for (const role of await ctx.db
-        .query("roles")
-        .withIndex("by_scope", (q) => q.eq("accessScopeId", accessScopeId))
-        .collect()) {
-        await ctx.db.delete(role._id);
-      }
-      const scope = await ctx.db
-        .query("scopes")
-        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", accessScopeId))
-        .unique();
-      const organization = await ctx.db
-        .query("organizations")
-        .withIndex("by_scope_id", (q) => q.eq("accessScopeId", accessScopeId))
-        .unique();
-      if (organization) await ctx.db.delete(organization._id);
-      if (scope) await ctx.db.delete(scope._id);
-    }
-
-    async function upsertUser(user: {
-      herculesAuthUserId: string;
-      name: string;
-      email: string;
-      emailVerified: boolean;
-      image?: string;
-      phone?: string;
-      phoneVerified: boolean;
-      updatedAt: number;
-    }) {
-      const existing = await ctx.db
-        .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", user.herculesAuthUserId))
-        .unique();
-      if (existing && existing.updatedAt >= user.updatedAt) {
-        if (existing.sourceVersion !== sourceVersion) {
-          await ctx.db.patch(existing._id, { sourceVersion });
-        }
-        return;
-      }
-      const row = { ...user, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("users", row);
-    }
-
-    async function deleteUser(herculesAuthUserId: string) {
-      const user = await ctx.db
-        .query("users")
-        .withIndex("by_auth_user_id", (q) => q.eq("herculesAuthUserId", herculesAuthUserId))
-        .unique();
-      if (user) await ctx.db.delete(user._id);
-    }
-
-    async function upsertPrincipal(
-      accessScopeId: string,
-      principal: {
-        principalId: string;
-        type: "user" | "group";
-        herculesAuthUserId?: string;
-        // Group display name; absent for user principals (their name lives on
-        // the deployment-wide user row).
-        name?: string;
-        status: "active" | "blocked" | "suspended" | "pending_approval" | "removed";
-        joinedAt: number;
-        updatedAt: number;
-      },
-    ) {
-      const existing = await ctx.db
-        .query("principals")
-        .withIndex("by_principal_id", (q) => q.eq("principalId", principal.principalId))
-        .unique();
-      const row = {
-        accessScopeId,
-        ...principal,
-        memberCount:
-          principal.type === "group" && existing?.type === "group" ? existing.memberCount : 0,
-        sourceVersion,
-      };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("principals", row);
-    }
-
-    async function deletePrincipal(accessScopeId: string, principalId: string) {
-      const principal = await ctx.db
-        .query("principals")
-        .withIndex("by_principal_id", (q) => q.eq("principalId", principalId))
-        .unique();
-      if (!principal) return;
-
-      // Cascade: the principal's bindings (as subject) and memberships.
-      for (const binding of await ctx.db
-        .query("role_bindings")
-        .withIndex("by_subject_principal", (q) => q.eq("subjectPrincipalId", principalId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      for (const binding of await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_subject_principal", (q) => q.eq("subjectPrincipalId", principalId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      for (const membership of await ctx.db
-        .query("principal_memberships")
-        .withIndex("by_group", (q) =>
-          q.eq("accessScopeId", accessScopeId).eq("groupPrincipalId", principalId),
-        )
-        .collect()) {
-        await ctx.db.delete(membership._id);
-      }
-      for (const membership of await ctx.db
-        .query("principal_memberships")
-        .withIndex("by_member", (q) =>
-          q.eq("accessScopeId", accessScopeId).eq("memberPrincipalId", principalId),
-        )
-        .collect()) {
-        await ctx.db.delete(membership._id);
-        await adjustGroupMemberCount(accessScopeId, membership.groupPrincipalId, -1);
-      }
-      await ctx.db.delete(principal._id);
-    }
-
-    async function upsertMembership(
-      accessScopeId: string,
-      membership: {
-        groupPrincipalId: string;
-        memberPrincipalId: string;
-        updatedAt: number;
-      },
-    ) {
-      const existing = await ctx.db
-        .query("principal_memberships")
-        .withIndex("by_group_member", (q) =>
-          q
-            .eq("accessScopeId", accessScopeId)
-            .eq("groupPrincipalId", membership.groupPrincipalId)
-            .eq("memberPrincipalId", membership.memberPrincipalId),
-        )
-        .unique();
-      const row = { accessScopeId, ...membership, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else {
-        await ctx.db.insert("principal_memberships", row);
-        await adjustGroupMemberCount(accessScopeId, membership.groupPrincipalId, 1);
-      }
-    }
-
-    async function deleteMembership(
-      accessScopeId: string,
-      groupPrincipalId: string,
-      memberPrincipalId: string,
-    ) {
-      const membership = await ctx.db
-        .query("principal_memberships")
-        .withIndex("by_group_member", (q) =>
-          q
-            .eq("accessScopeId", accessScopeId)
-            .eq("groupPrincipalId", groupPrincipalId)
-            .eq("memberPrincipalId", memberPrincipalId),
-        )
-        .unique();
-      if (membership) {
-        await ctx.db.delete(membership._id);
-        await adjustGroupMemberCount(accessScopeId, groupPrincipalId, -1);
-      }
-    }
-
-    async function adjustGroupMemberCount(
-      accessScopeId: string,
-      groupPrincipalId: string,
-      delta: number,
-    ) {
-      const group = await ctx.db
-        .query("principals")
-        .withIndex("by_principal_id", (q) => q.eq("principalId", groupPrincipalId))
-        .unique();
-      if (
-        !group ||
-        group.type !== "group" ||
-        group.accessScopeId !== accessScopeId ||
-        delta === 0
-      ) {
-        return;
-      }
-      await ctx.db.patch(group._id, {
-        memberCount: Math.max(0, group.memberCount + delta),
-        sourceVersion,
-      });
-    }
-
-    async function upsertCatalogRole(role: {
-      roleId: string;
-      key: string;
-      source: "system" | "iam" | "tenant";
-      name: string;
-      description: string | null;
-      baseWildcard: "none" | "immutable" | "default";
-      updatedAt: number;
-    }) {
-      const existing = await ctx.db
-        .query("roles")
-        .withIndex("by_role_id", (q) => q.eq("roleId", role.roleId))
-        .unique();
-      // Catalog roles carry NO accessScopeId.
-      const row = { ...role, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("roles", row);
-    }
-
-    async function upsertTenantRole(role: {
-      roleId: string;
-      key: string;
-      source: "system" | "iam" | "tenant";
-      name: string;
-      description: string | null;
-      baseWildcard: "none" | "immutable" | "default";
-      accessScopeId: string;
-      updatedAt: number;
-    }) {
-      const existing = await ctx.db
-        .query("roles")
-        .withIndex("by_role_id", (q) => q.eq("roleId", role.roleId))
-        .unique();
-      const row = { ...role, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("roles", row);
-    }
-
-    async function deleteRoleEverywhere(roleId: string) {
-      const role = await ctx.db
-        .query("roles")
-        .withIndex("by_role_id", (q) => q.eq("roleId", roleId))
-        .unique();
-      if (!role) return;
-
-      // Cascade base mappings + per-scope overrides keyed on this role.
-      for (const row of await ctx.db
-        .query("role_permissions")
-        .withIndex("by_role", (q) => q.eq("roleId", roleId))
-        .collect()) {
-        await ctx.db.delete(row._id);
-      }
-      for (const row of await ctx.db
-        .query("role_permission_overrides")
-        .withIndex("by_role", (q) => q.eq("roleId", roleId))
-        .collect()) {
-        await ctx.db.delete(row._id);
-      }
-      // Cascade bindings: role bindings of this role, and permission bindings
-      // with this role as subject.
-      for (const binding of await ctx.db
-        .query("role_bindings")
-        .withIndex("by_role", (q) => q.eq("roleId", roleId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      for (const binding of await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_subject_role", (q) => q.eq("subjectRoleId", roleId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      await ctx.db.delete(role._id);
-    }
-
-    async function deleteCatalogRole(roleId: string) {
-      await deleteRoleEverywhere(roleId);
-    }
-
-    async function deleteTenantRole(roleId: string) {
-      await deleteRoleEverywhere(roleId);
-    }
-
-    async function upsertPermission(permission: {
-      accessScopeId: string;
-      permissionId: string;
-      key: string;
-      resourceType: string;
-      action: string;
-      classification: "delegable" | "owner_only";
-      tenantAssignable: boolean;
-      updatedAt: number;
-    }) {
-      const existing = await ctx.db
-        .query("permissions")
-        .withIndex("by_permission_id", (q) => q.eq("permissionId", permission.permissionId))
-        .unique();
-      const row = { ...permission, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("permissions", row);
-    }
-
-    async function deletePermission(permissionId: string) {
-      const permission = await ctx.db
-        .query("permissions")
-        .withIndex("by_permission_id", (q) => q.eq("permissionId", permissionId))
-        .unique();
-      if (!permission) return;
-
-      // Cascade base mappings, overrides, and permission bindings on this perm.
-      for (const row of await ctx.db
-        .query("role_permissions")
-        .withIndex("by_permission", (q) => q.eq("permissionId", permissionId))
-        .collect()) {
-        await ctx.db.delete(row._id);
-      }
-      for (const row of await ctx.db
-        .query("role_permission_overrides")
-        .withIndex("by_permission", (q) => q.eq("permissionId", permissionId))
-        .collect()) {
-        await ctx.db.delete(row._id);
-      }
-      for (const binding of await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_permission", (q) => q.eq("permissionId", permissionId))
-        .collect()) {
-        await ctx.db.delete(binding._id);
-      }
-      await ctx.db.delete(permission._id);
-    }
-
-    async function upsertRolePermission(rolePermission: {
-      roleId: string;
-      permissionId: string;
-      effect: "allow" | "deny";
-      updatedAt: number;
-    }) {
-      const existing = await ctx.db
-        .query("role_permissions")
-        .withIndex("by_role_permission", (q) =>
-          q.eq("roleId", rolePermission.roleId).eq("permissionId", rolePermission.permissionId),
-        )
-        .unique();
-      const row = { ...rolePermission, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("role_permissions", row);
-    }
-
-    async function deleteRolePermission(roleId: string, permissionId: string) {
-      const row = await ctx.db
-        .query("role_permissions")
-        .withIndex("by_role_permission", (q) =>
-          q.eq("roleId", roleId).eq("permissionId", permissionId),
-        )
-        .unique();
-      if (row) await ctx.db.delete(row._id);
-    }
-
-    async function upsertOverride(override: {
-      accessScopeId: string;
-      roleId: string;
-      permissionId: string;
-      effect: "allow" | "deny";
-      updatedAt: number;
-    }) {
-      const existing = await ctx.db
-        .query("role_permission_overrides")
-        .withIndex("by_scope_role_permission", (q) =>
-          q
-            .eq("accessScopeId", override.accessScopeId)
-            .eq("roleId", override.roleId)
-            .eq("permissionId", override.permissionId),
-        )
-        .unique();
-      const row = { ...override, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("role_permission_overrides", row);
-    }
-
-    async function deleteOverride(accessScopeId: string, roleId: string, permissionId: string) {
-      const row = await ctx.db
-        .query("role_permission_overrides")
-        .withIndex("by_scope_role_permission", (q) =>
-          q
-            .eq("accessScopeId", accessScopeId)
-            .eq("roleId", roleId)
-            .eq("permissionId", permissionId),
-        )
-        .unique();
-      if (row) await ctx.db.delete(row._id);
-    }
-
-    async function upsertRoleBinding(
-      binding: {
-        bindingId: string;
-        subjectPrincipalId: string;
-        roleId: string;
-        accessScopeId: string;
-        resourceType?: string;
-        resourceId?: string;
-        appliesTo: "self" | "self_and_descendants";
-        expiresAt?: number;
-        updatedAt: number;
-      },
-      now: number,
-    ) {
-      const existing = await ctx.db
-        .query("role_bindings")
-        .withIndex("by_binding_id", (q) => q.eq("bindingId", binding.bindingId))
-        .unique();
-      if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
-        if (existing) await ctx.db.delete(existing._id);
-        return;
-      }
-      const row = { ...binding, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("role_bindings", row);
-      await scheduleRoleBindingExpiration(binding, sourceVersion);
-    }
-
-    async function deleteRoleBinding(bindingId: string) {
-      const binding = await ctx.db
-        .query("role_bindings")
-        .withIndex("by_binding_id", (q) => q.eq("bindingId", bindingId))
-        .unique();
-      if (binding) await ctx.db.delete(binding._id);
-    }
-
-    async function upsertPermissionBinding(
-      binding: {
-        bindingId: string;
-        subjectPrincipalId?: string;
-        subjectRoleId?: string;
-        permissionId: string;
-        effect: "allow" | "deny";
-        accessScopeId: string;
-        resourceType?: string;
-        resourceId?: string;
-        appliesTo: "self" | "self_and_descendants";
-        expiresAt?: number;
-        updatedAt: number;
-      },
-      now: number,
-    ) {
-      const existing = await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_binding_id", (q) => q.eq("bindingId", binding.bindingId))
-        .unique();
-      if (binding.expiresAt !== undefined && binding.expiresAt <= now) {
-        if (existing) await ctx.db.delete(existing._id);
-        return;
-      }
-      const row = { ...binding, sourceVersion };
-      if (existing) await ctx.db.replace(existing._id, row);
-      else await ctx.db.insert("permission_bindings", row);
-      await schedulePermissionBindingExpiration(binding, sourceVersion);
-    }
-
-    async function deletePermissionBinding(bindingId: string) {
-      const binding = await ctx.db
-        .query("permission_bindings")
-        .withIndex("by_binding_id", (q) => q.eq("bindingId", bindingId))
-        .unique();
-      if (binding) await ctx.db.delete(binding._id);
-    }
-
-    async function scheduleRoleBindingExpiration(
-      binding: {
-        bindingId: string;
-        expiresAt?: number;
-        updatedAt: number;
-      },
-      bindingSourceVersion: number,
-    ) {
-      if (binding.expiresAt === undefined) return;
-      await ctx.scheduler.runAt(binding.expiresAt, expireRoleBindingReference, {
-        bindingId: binding.bindingId,
-        expiresAt: binding.expiresAt,
-        updatedAt: binding.updatedAt,
-        sourceVersion: bindingSourceVersion,
-      });
-    }
-
-    async function schedulePermissionBindingExpiration(
-      binding: {
-        bindingId: string;
-        expiresAt?: number;
-        updatedAt: number;
-      },
-      bindingSourceVersion: number,
-    ) {
-      if (binding.expiresAt === undefined) return;
-      await ctx.scheduler.runAt(binding.expiresAt, expirePermissionBindingReference, {
-        bindingId: binding.bindingId,
-        expiresAt: binding.expiresAt,
-        updatedAt: binding.updatedAt,
-        sourceVersion: bindingSourceVersion,
-      });
-    }
   },
 });
 
-export const expireRoleBinding = internalMutation({
-  args: {
-    bindingId: v.string(),
-    expiresAt: v.number(),
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const binding = await ctx.db
-      .query("role_bindings")
-      .withIndex("by_binding_id", (q) => q.eq("bindingId", args.bindingId))
-      .unique();
-    if (
-      !binding ||
-      binding.expiresAt !== args.expiresAt ||
-      binding.updatedAt !== args.updatedAt ||
-      binding.sourceVersion !== args.sourceVersion
-    ) {
-      return;
-    }
-    if (args.expiresAt > Date.now()) {
-      await ctx.scheduler.runAt(args.expiresAt, expireRoleBindingReference, args);
-      return;
-    }
-    await ctx.db.delete(binding._id);
-  },
-});
-
-export const expirePermissionBinding = internalMutation({
-  args: {
-    bindingId: v.string(),
-    expiresAt: v.number(),
-    updatedAt: v.number(),
-    sourceVersion: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const binding = await ctx.db
-      .query("permission_bindings")
-      .withIndex("by_binding_id", (q) => q.eq("bindingId", args.bindingId))
-      .unique();
-    if (
-      !binding ||
-      binding.expiresAt !== args.expiresAt ||
-      binding.updatedAt !== args.updatedAt ||
-      binding.sourceVersion !== args.sourceVersion
-    ) {
-      return;
-    }
-    if (args.expiresAt > Date.now()) {
-      await ctx.scheduler.runAt(args.expiresAt, expirePermissionBindingReference, args);
-      return;
-    }
-    await ctx.db.delete(binding._id);
-  },
-});
-
-function organizationFromScope(scope: ProjectionScopeMetadata, sourceVersion: number) {
+// ── wire-row → mirror-row mappers ─────────────────────────────────────────────
+// Owning-entity wire rows carry their control-plane PK under a qualified name
+// (tenantId/roleId/…); the mirror stores it as the self-id column `id`. These
+// mappers rename that field and stamp the sourceVersion. Reference columns keep
+// their qualified names, so they pass through unchanged.
+function mapTenant(row: AccessProjectionSnapshot["tenants"][number], sourceVersion: number) {
   return {
-    accessScopeId: scope.accessScopeId,
-    name: scope.name,
-    status: scope.status,
-    accessMode: scope.accessMode,
-    updatedAt: scope.updatedAt,
+    id: row.tenantId,
+    name: row.name,
+    isPrimaryTenant: row.isPrimaryTenant,
+    status: row.status,
+    accessMode: row.accessMode,
+    defaultRoleId: row.defaultRoleId,
+    updatedAt: row.updatedAt,
     sourceVersion,
   };
 }
 
-function snapshotDocumentCount(snapshot: AccessProjectionSnapshot): number {
-  let count =
-    snapshot.catalog.roles.length +
-    snapshot.catalog.permissions.length +
-    snapshot.catalog.rolePermissions.length +
-    snapshot.users.length;
-  for (const scope of snapshot.scopes) {
-    count +=
-      1 + // scope (+ possibly an organization row, counted generously below)
-      1 +
-      scope.principals.length +
-      scope.principalMemberships.length +
-      scope.roles.length +
-      scope.rolePermissionOverrides.length +
-      scope.roleBindings.length +
-      scope.permissionBindings.length;
-  }
-  return count;
+function mapRole(row: AccessProjectionSnapshot["roles"][number], sourceVersion: number) {
+  return {
+    id: row.roleId,
+    key: row.key,
+    name: row.name,
+    description: row.description,
+    tenantId: row.tenantId,
+    isAppScope: row.isAppScope,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
 }
+
+function mapPermission(
+  row: AccessProjectionSnapshot["permissions"][number],
+  sourceVersion: number,
+) {
+  return {
+    id: row.permissionId,
+    key: row.key,
+    isAppScope: row.isAppScope,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapResourceType(
+  row: AccessProjectionSnapshot["resourceTypes"][number],
+  sourceVersion: number,
+) {
+  return {
+    id: row.resourceTypeId,
+    key: row.key,
+    name: row.name,
+    parentResourceTypeId: row.parentResourceTypeId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapMembership(
+  row: AccessProjectionSnapshot["memberships"][number],
+  sourceVersion: number,
+) {
+  return {
+    id: row.membershipId,
+    tenantId: row.tenantId,
+    userId: row.userId,
+    status: row.status,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+  };
+}
+
+function mapGroup(row: AccessProjectionSnapshot["groups"][number], sourceVersion: number) {
+  return {
+    id: row.groupId,
+    tenantId: row.tenantId,
+    name: row.name,
+    status: row.status,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.description === undefined ? {} : { description: row.description }),
+  };
+}
+
+function mapUser(row: AccessProjectionSnapshot["users"][number], sourceVersion: number) {
+  return {
+    id: row.userId,
+    name: row.name,
+    email: row.email,
+    emailVerified: row.emailVerified,
+    phoneVerified: row.phoneVerified,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.image === undefined ? {} : { image: row.image }),
+    ...(row.phone === undefined ? {} : { phone: row.phone }),
+  };
+}
+
+function mapUserRoleAssignment(row: ProjectionUserRoleAssignment, sourceVersion: number) {
+  return {
+    id: row.userRoleAssignmentId,
+    tenantId: row.tenantId,
+    membershipId: row.membershipId,
+    roleId: row.roleId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+function mapGroupRoleAssignment(row: ProjectionGroupRoleAssignment, sourceVersion: number) {
+  return {
+    id: row.groupRoleAssignmentId,
+    tenantId: row.tenantId,
+    groupId: row.groupId,
+    roleId: row.roleId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+function mapUserResourceRoleAssignment(
+  row: ProjectionUserResourceRoleAssignment,
+  sourceVersion: number,
+) {
+  return {
+    id: row.userResourceRoleAssignmentId,
+    tenantId: row.tenantId,
+    membershipId: row.membershipId,
+    roleId: row.roleId,
+    resourceTypeId: row.resourceTypeId,
+    externalId: row.externalId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+function mapGroupResourceRoleAssignment(
+  row: ProjectionGroupResourceRoleAssignment,
+  sourceVersion: number,
+) {
+  return {
+    id: row.groupResourceRoleAssignmentId,
+    tenantId: row.tenantId,
+    groupId: row.groupId,
+    roleId: row.roleId,
+    resourceTypeId: row.resourceTypeId,
+    externalId: row.externalId,
+    updatedAt: row.updatedAt,
+    sourceVersion,
+    ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+  };
+}
+
+// ── snapshot install (whole-aggregate, atomic) ───────────────────────────────
+async function replaceProjection(
+  ctx: MutationCtx,
+  snapshot: AccessProjectionSnapshot,
+  sourceVersion: number,
+  now: number,
+): Promise<void> {
+  for (const table of MIRROR_TABLES) {
+    await clearTable(ctx, table);
+  }
+
+  for (const row of snapshot.tenants) await ctx.db.insert("tenants", mapTenant(row, sourceVersion));
+  for (const row of snapshot.roles) await ctx.db.insert("roles", mapRole(row, sourceVersion));
+  for (const row of snapshot.permissions)
+    await ctx.db.insert("permissions", mapPermission(row, sourceVersion));
+  for (const row of snapshot.rolePermissions)
+    await ctx.db.insert("role_permissions", { ...row, sourceVersion });
+  for (const row of snapshot.resourceTypes)
+    await ctx.db.insert("resource_types", mapResourceType(row, sourceVersion));
+  for (const row of snapshot.memberships)
+    await ctx.db.insert("tenant_memberships", mapMembership(row, sourceVersion));
+  for (const row of snapshot.groups) await ctx.db.insert("groups", mapGroup(row, sourceVersion));
+  for (const row of snapshot.groupMemberships)
+    await ctx.db.insert("group_memberships", { ...row, sourceVersion });
+  for (const row of snapshot.users) await ctx.db.insert("users", mapUser(row, sourceVersion));
+
+  for (const row of snapshot.userRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert("user_role_assignments", mapUserRoleAssignment(row, sourceVersion));
+    await scheduleRoleAssignmentExpiry(
+      ctx,
+      "user",
+      row.userRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
+  }
+  for (const row of snapshot.groupRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert("group_role_assignments", mapGroupRoleAssignment(row, sourceVersion));
+    await scheduleRoleAssignmentExpiry(
+      ctx,
+      "group",
+      row.groupRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
+  }
+  for (const row of snapshot.userResourceRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert(
+      "user_resource_role_assignments",
+      mapUserResourceRoleAssignment(row, sourceVersion),
+    );
+    await scheduleResourceRoleAssignmentExpiry(
+      ctx,
+      "user",
+      row.userResourceRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
+  }
+  for (const row of snapshot.groupResourceRoleAssignments) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) continue;
+    await ctx.db.insert(
+      "group_resource_role_assignments",
+      mapGroupResourceRoleAssignment(row, sourceVersion),
+    );
+    await scheduleResourceRoleAssignmentExpiry(
+      ctx,
+      "group",
+      row.groupResourceRoleAssignmentId,
+      row.expiresAt,
+      row.updatedAt,
+      sourceVersion,
+    );
+  }
+}
+
+// ── event application ────────────────────────────────────────────────────────
+async function applyEvent(
+  ctx: MutationCtx,
+  event: AccessProjectionEvent,
+  sourceVersion: number,
+  now: number,
+): Promise<void> {
+  for (const change of event.changes) {
+    if (change.operation === "delete") {
+      await applyDelete(ctx, change);
+      continue;
+    }
+    await applyUpsert(ctx, event, change, sourceVersion, now);
+  }
+}
+
+async function applyUpsert(
+  ctx: MutationCtx,
+  event: AccessProjectionEvent,
+  change: AccessProjectionEvent["changes"][number],
+  sourceVersion: number,
+  now: number,
+): Promise<void> {
+  switch (change.entityType) {
+    case "tenant": {
+      const row = event.tenants.find((r) => r.tenantId === change.tenantId);
+      if (row) await upsertByIndex(ctx, "tenants", "by_tenant_id", mapTenant(row, sourceVersion));
+      return;
+    }
+    case "role": {
+      const row = event.roles.find((r) => r.roleId === change.roleId);
+      if (row) await upsertByIndex(ctx, "roles", "by_role_id", mapRole(row, sourceVersion));
+      return;
+    }
+    case "permission": {
+      const row = event.permissions.find((r) => r.permissionId === change.permissionId);
+      if (row)
+        await upsertByIndex(
+          ctx,
+          "permissions",
+          "by_permission_id",
+          mapPermission(row, sourceVersion),
+        );
+      return;
+    }
+    case "role_permission": {
+      const row = event.rolePermissions.find(
+        (r) => r.roleId === change.roleId && r.permissionId === change.permissionId,
+      );
+      if (!row) return;
+      const existing = await ctx.db
+        .query("role_permissions")
+        .withIndex("by_role_permission", (q) =>
+          q.eq("roleId", row.roleId).eq("permissionId", row.permissionId),
+        )
+        .unique();
+      if (existing) await ctx.db.replace(existing._id, { ...row, sourceVersion });
+      else await ctx.db.insert("role_permissions", { ...row, sourceVersion });
+      return;
+    }
+    case "resource_type": {
+      const row = event.resourceTypes.find((r) => r.resourceTypeId === change.resourceTypeId);
+      if (row)
+        await upsertByIndex(
+          ctx,
+          "resource_types",
+          "by_resource_type_id",
+          mapResourceType(row, sourceVersion),
+        );
+      return;
+    }
+    case "membership": {
+      const row = event.memberships.find((r) => r.membershipId === change.membershipId);
+      if (row)
+        await upsertByIndex(
+          ctx,
+          "tenant_memberships",
+          "by_membership_id",
+          mapMembership(row, sourceVersion),
+        );
+      return;
+    }
+    case "group": {
+      const row = event.groups.find((r) => r.groupId === change.groupId);
+      if (row) await upsertByIndex(ctx, "groups", "by_group_id", mapGroup(row, sourceVersion));
+      return;
+    }
+    case "group_membership": {
+      const row = event.groupMemberships.find(
+        (r) => r.groupId === change.groupId && r.membershipId === change.membershipId,
+      );
+      if (!row) return;
+      const existing = await ctx.db
+        .query("group_memberships")
+        .withIndex("by_group_membership", (q) =>
+          q.eq("groupId", row.groupId).eq("membershipId", row.membershipId),
+        )
+        .unique();
+      if (existing) await ctx.db.replace(existing._id, { ...row, sourceVersion });
+      else await ctx.db.insert("group_memberships", { ...row, sourceVersion });
+      return;
+    }
+    case "user_role_assignment": {
+      const row = event.userRoleAssignments.find(
+        (r) => r.userRoleAssignmentId === change.userRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "user_role_assignments",
+          "role",
+          "user",
+          row.userRoleAssignmentId,
+          mapUserRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
+      return;
+    }
+    case "group_role_assignment": {
+      const row = event.groupRoleAssignments.find(
+        (r) => r.groupRoleAssignmentId === change.groupRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "group_role_assignments",
+          "role",
+          "group",
+          row.groupRoleAssignmentId,
+          mapGroupRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
+      return;
+    }
+    case "user_resource_role_assignment": {
+      const row = event.userResourceRoleAssignments.find(
+        (r) => r.userResourceRoleAssignmentId === change.userResourceRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "user_resource_role_assignments",
+          "resource",
+          "user",
+          row.userResourceRoleAssignmentId,
+          mapUserResourceRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
+      return;
+    }
+    case "group_resource_role_assignment": {
+      const row = event.groupResourceRoleAssignments.find(
+        (r) => r.groupResourceRoleAssignmentId === change.groupResourceRoleAssignmentId,
+      );
+      if (row)
+        await upsertAssignment(
+          ctx,
+          "group_resource_role_assignments",
+          "resource",
+          "group",
+          row.groupResourceRoleAssignmentId,
+          mapGroupResourceRoleAssignment(row, sourceVersion),
+          row.expiresAt,
+          row.updatedAt,
+          sourceVersion,
+          now,
+        );
+      return;
+    }
+    case "user": {
+      const row = event.users.find((r) => r.userId === change.userId);
+      if (row) await upsertByIndex(ctx, "users", "by_user_id", mapUser(row, sourceVersion));
+      return;
+    }
+  }
+}
+
+async function applyDelete(
+  ctx: MutationCtx,
+  change: AccessProjectionEvent["changes"][number],
+): Promise<void> {
+  switch (change.entityType) {
+    case "tenant":
+      return deleteTenant(ctx, change.tenantId);
+    case "role":
+      return deleteRole(ctx, change.roleId);
+    case "permission":
+      return deletePermission(ctx, change.permissionId);
+    case "role_permission":
+      return deleteRolePermission(ctx, change.roleId, change.permissionId);
+    case "resource_type":
+      return deleteResourceType(ctx, change.resourceTypeId);
+    case "membership":
+      return deleteMembership(ctx, change.membershipId);
+    case "group":
+      return deleteGroup(ctx, change.groupId);
+    case "group_membership":
+      return deleteGroupMembership(ctx, change.groupId, change.membershipId);
+    case "user_role_assignment":
+      return deleteByIndex(
+        ctx,
+        "user_role_assignments",
+        "by_assignment_id",
+        "id",
+        change.userRoleAssignmentId,
+      );
+    case "group_role_assignment":
+      return deleteByIndex(
+        ctx,
+        "group_role_assignments",
+        "by_assignment_id",
+        "id",
+        change.groupRoleAssignmentId,
+      );
+    case "user_resource_role_assignment":
+      return deleteByIndex(
+        ctx,
+        "user_resource_role_assignments",
+        "by_assignment_id",
+        "id",
+        change.userResourceRoleAssignmentId,
+      );
+    case "group_resource_role_assignment":
+      return deleteByIndex(
+        ctx,
+        "group_resource_role_assignments",
+        "by_assignment_id",
+        "id",
+        change.groupResourceRoleAssignmentId,
+      );
+    case "user":
+      return deleteByIndex(ctx, "users", "by_user_id", "id", change.userId);
+  }
+}
+
+// ── generic upsert/delete by a single-column identity index ───────────────────
+// Dynamic table/index access defeats the per-table union types, so these
+// plumbing helpers operate on a type-erased db handle. The zod parse upstream
+// and the mappers above guarantee the row shapes match each table validator.
+// Owning-entity self-id lives in the `id` column (index by_<entity>_id on
+// ["id"]), so the mapped row is queried by its own `id`.
+async function upsertByIndex(
+  ctx: MutationCtx,
+  table: MirrorTable,
+  index: string,
+  row: { id: string } & Record<string, unknown>,
+): Promise<void> {
+  const db = ctx.db as any;
+  const existing = await db
+    .query(table)
+    .withIndex(index, (q: any) => q.eq("id", row.id))
+    .unique();
+  if (existing) await db.replace(existing._id, row);
+  else await db.insert(table, row);
+}
+
+async function deleteByIndex(
+  ctx: MutationCtx,
+  table: MirrorTable,
+  index: string,
+  field: string,
+  value: string,
+): Promise<void> {
+  const db = ctx.db as any;
+  const existing = await db
+    .query(table)
+    .withIndex(index, (q: any) => q.eq(field, value))
+    .unique();
+  if (existing) await db.delete(existing._id);
+}
+
+// ── time-bound assignment upserts (with expiry scheduling) ────────────────────
+// Assignment tables are split by subject, so the target table is chosen 1:1 by
+// the change entityType; the mapped row already carries the self-id as `id`.
+async function upsertAssignment(
+  ctx: MutationCtx,
+  table: MirrorTable,
+  kind: "role" | "resource",
+  subject: AssignmentSubject,
+  id: string,
+  row: { id: string } & Record<string, unknown>,
+  expiresAt: number | undefined,
+  updatedAt: number,
+  sourceVersion: number,
+  now: number,
+): Promise<void> {
+  const db = ctx.db as any;
+  const existing = await db
+    .query(table)
+    .withIndex("by_assignment_id", (q: any) => q.eq("id", id))
+    .unique();
+  if (expiresAt !== undefined && expiresAt <= now) {
+    if (existing) await db.delete(existing._id);
+    return;
+  }
+  if (existing) await db.replace(existing._id, row);
+  else await db.insert(table, row);
+  if (kind === "role") {
+    await scheduleRoleAssignmentExpiry(ctx, subject, id, expiresAt, updatedAt, sourceVersion);
+  } else {
+    await scheduleResourceRoleAssignmentExpiry(
+      ctx,
+      subject,
+      id,
+      expiresAt,
+      updatedAt,
+      sourceVersion,
+    );
+  }
+}
+
+async function scheduleRoleAssignmentExpiry(
+  ctx: MutationCtx,
+  subject: AssignmentSubject,
+  id: string,
+  expiresAt: number | undefined,
+  updatedAt: number,
+  sourceVersion: number,
+): Promise<void> {
+  if (expiresAt === undefined) return;
+  await ctx.scheduler.runAt(expiresAt, expireRoleAssignmentReference, {
+    id,
+    subject,
+    expiresAt,
+    updatedAt,
+    sourceVersion,
+  });
+}
+
+async function scheduleResourceRoleAssignmentExpiry(
+  ctx: MutationCtx,
+  subject: AssignmentSubject,
+  id: string,
+  expiresAt: number | undefined,
+  updatedAt: number,
+  sourceVersion: number,
+): Promise<void> {
+  if (expiresAt === undefined) return;
+  await ctx.scheduler.runAt(expiresAt, expireResourceRoleAssignmentReference, {
+    id,
+    subject,
+    expiresAt,
+    updatedAt,
+    sourceVersion,
+  });
+}
+
+// ── cascade deletes ───────────────────────────────────────────────────────────
+// Only cascades backed by an index that EXISTS in the schema are performed here.
+// Child rows with no supporting index (role_permissions by permissionId,
+// resource-role assignments by roleId/resourceTypeId) are deleted by the control
+// plane emitting their own delete changes BEFORE the parent delete.
+async function deleteTenant(ctx: MutationCtx, tenantId: string): Promise<void> {
+  const memberships = await ctx.db
+    .query("tenant_memberships")
+    .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+    .collect();
+  for (const membership of memberships) await deleteMembership(ctx, membership.id);
+  const groups = await ctx.db
+    .query("groups")
+    .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+    .collect();
+  for (const group of groups) await deleteGroup(ctx, group.id);
+  await deleteByIndex(ctx, "tenants", "by_tenant_id", "id", tenantId);
+}
+
+async function deleteRole(ctx: MutationCtx, roleId: string): Promise<void> {
+  await deleteAllByIndex(ctx, "role_permissions", "by_role", (q) => q.eq("roleId", roleId));
+  await deleteAllByIndex(ctx, "user_role_assignments", "by_role_id", (q) => q.eq("roleId", roleId));
+  await deleteAllByIndex(ctx, "group_role_assignments", "by_role_id", (q) =>
+    q.eq("roleId", roleId),
+  );
+  await deleteByIndex(ctx, "roles", "by_role_id", "id", roleId);
+}
+
+async function deletePermission(ctx: MutationCtx, permissionId: string): Promise<void> {
+  await deleteByIndex(ctx, "permissions", "by_permission_id", "id", permissionId);
+}
+
+async function deleteResourceType(ctx: MutationCtx, resourceTypeId: string): Promise<void> {
+  await deleteByIndex(ctx, "resource_types", "by_resource_type_id", "id", resourceTypeId);
+}
+
+async function deleteMembership(ctx: MutationCtx, membershipId: string): Promise<void> {
+  await deleteAllByIndex(ctx, "group_memberships", "by_membership", (q) =>
+    q.eq("membershipId", membershipId),
+  );
+  await deleteAllByIndex(ctx, "user_role_assignments", "by_membership", (q) =>
+    q.eq("membershipId", membershipId),
+  );
+  await deleteAllByIndex(ctx, "user_resource_role_assignments", "by_membership", (q) =>
+    q.eq("membershipId", membershipId),
+  );
+  await deleteByIndex(ctx, "tenant_memberships", "by_membership_id", "id", membershipId);
+}
+
+async function deleteGroup(ctx: MutationCtx, groupId: string): Promise<void> {
+  await deleteAllByIndex(ctx, "group_memberships", "by_group", (q) => q.eq("groupId", groupId));
+  await deleteAllByIndex(ctx, "group_role_assignments", "by_group", (q) =>
+    q.eq("groupId", groupId),
+  );
+  await deleteAllByIndex(ctx, "group_resource_role_assignments", "by_group", (q) =>
+    q.eq("groupId", groupId),
+  );
+  await deleteByIndex(ctx, "groups", "by_group_id", "id", groupId);
+}
+
+async function deleteGroupMembership(
+  ctx: MutationCtx,
+  groupId: string,
+  membershipId: string,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("group_memberships")
+    .withIndex("by_group_membership", (q) =>
+      q.eq("groupId", groupId).eq("membershipId", membershipId),
+    )
+    .unique();
+  if (existing) await ctx.db.delete(existing._id);
+}
+
+async function deleteRolePermission(
+  ctx: MutationCtx,
+  roleId: string,
+  permissionId: string,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("role_permissions")
+    .withIndex("by_role_permission", (q) => q.eq("roleId", roleId).eq("permissionId", permissionId))
+    .unique();
+  if (existing) await ctx.db.delete(existing._id);
+}
+
+async function deleteAllByIndex(
+  ctx: MutationCtx,
+  table: MirrorTable,
+  index: string,
+  range: (q: any) => any,
+): Promise<void> {
+  const db = ctx.db as any;
+  for (const row of await db.query(table).withIndex(index, range).collect()) {
+    await db.delete(row._id);
+  }
+}
+
+async function clearTable(ctx: MutationCtx, table: MirrorTable): Promise<void> {
+  for (const row of await ctx.db.query(table).collect()) {
+    await ctx.db.delete(row._id);
+  }
+}
+
+function snapshotDocumentCount(snapshot: AccessProjectionSnapshot): number {
+  return (
+    snapshot.tenants.length +
+    snapshot.roles.length +
+    snapshot.permissions.length +
+    snapshot.rolePermissions.length +
+    snapshot.resourceTypes.length +
+    snapshot.memberships.length +
+    snapshot.groups.length +
+    snapshot.groupMemberships.length +
+    snapshot.userRoleAssignments.length +
+    snapshot.groupRoleAssignments.length +
+    snapshot.userResourceRoleAssignments.length +
+    snapshot.groupResourceRoleAssignments.length +
+    snapshot.users.length
+  );
+}
+
+export const expireRoleAssignment = internalMutation({
+  args: {
+    id: v.string(),
+    subject: v.union(v.literal("user"), v.literal("group")),
+    expiresAt: v.number(),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const table = args.subject === "user" ? "user_role_assignments" : "group_role_assignments";
+    const db = ctx.db as any;
+    const row = await db
+      .query(table)
+      .withIndex("by_assignment_id", (q: any) => q.eq("id", args.id))
+      .unique();
+    if (
+      !row ||
+      row.expiresAt !== args.expiresAt ||
+      row.updatedAt !== args.updatedAt ||
+      row.sourceVersion !== args.sourceVersion
+    ) {
+      return;
+    }
+    if (args.expiresAt > Date.now()) {
+      await ctx.scheduler.runAt(args.expiresAt, expireRoleAssignmentReference, args);
+      return;
+    }
+    await db.delete(row._id);
+  },
+});
+
+export const expireResourceRoleAssignment = internalMutation({
+  args: {
+    id: v.string(),
+    subject: v.union(v.literal("user"), v.literal("group")),
+    expiresAt: v.number(),
+    updatedAt: v.number(),
+    sourceVersion: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const table =
+      args.subject === "user"
+        ? "user_resource_role_assignments"
+        : "group_resource_role_assignments";
+    const db = ctx.db as any;
+    const row = await db
+      .query(table)
+      .withIndex("by_assignment_id", (q: any) => q.eq("id", args.id))
+      .unique();
+    if (
+      !row ||
+      row.expiresAt !== args.expiresAt ||
+      row.updatedAt !== args.updatedAt ||
+      row.sourceVersion !== args.sourceVersion
+    ) {
+      return;
+    }
+    if (args.expiresAt > Date.now()) {
+      await ctx.scheduler.runAt(args.expiresAt, expireResourceRoleAssignmentReference, args);
+      return;
+    }
+    await db.delete(row._id);
+  },
+});
