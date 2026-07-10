@@ -2,8 +2,6 @@
  * Type definitions for @usehercules/analytics
  */
 
-import type { HerculesEvent } from "./schema";
-
 export interface BrowserInfo {
   name: string;
   version: string;
@@ -34,8 +32,6 @@ export interface PerformanceMetrics {
   time_to_first_byte?: number;
   first_contentful_paint?: number;
   largest_contentful_paint?: number;
-  /** @deprecated FID is deprecated in favor of INP and is no longer collected */
-  first_input_delay?: number;
   cumulative_layout_shift?: number;
   interaction_to_next_paint?: number;
 }
@@ -44,16 +40,16 @@ export interface AnalyticsConfig {
   apiEndpoint?: string;
   debug?: boolean;
   enabled?: boolean;
+  /** Events per batch before an immediate flush */
   bufferSize?: number;
+  /** How long events buffer before a flush, in ms */
   flushInterval?: number;
-  trackClicks?: boolean;
+  /** Capture Core Web Vitals (default: true) */
   trackPerformance?: boolean;
+  /** Capture SPA pageviews via the history API (default: true) */
+  trackHistoryChanges?: boolean;
   cookieDomain?: string;
   cookiePath?: string;
-  sessionTimeout?: number; // in minutes
-}
-
-export interface AnalyticsProvider {
-  name: string;
-  send: (events: HerculesEvent[]) => Promise<void>;
+  /** Session idle timeout in minutes (default: 30) */
+  sessionTimeout?: number;
 }

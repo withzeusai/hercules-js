@@ -1,28 +1,28 @@
 # @usehercules/analytics
 
-A comprehensive, zero-dependency analytics library for Hercules applications with built-in support for Core Web Vitals, browser detection, UTM tracking, and more.
+Web analytics for Hercules applications — a "lite fork" of
+[posthog-js](https://github.com/PostHog/posthog-js): the module structure and
+behavioral decisions (session semantics, pageview linking, unload handling,
+retry backoff, bot filtering, user-agent detection) follow upstream, trimmed
+to the event surface Hercules needs. Vendored files carry a header citing
+their upstream path and revision.
 
 ## Features
 
-- 📊 **Comprehensive Event Tracking** - Pageviews, custom events, clicks, and user identification
-- 🚀 **Performance Metrics** - Built-in Core Web Vitals (LCP, FID, CLS) and timing metrics
-- 🔍 **Rich Context** - Automatic browser, OS, device type, and referrer detection
-- 🏷️ **UTM Support** - Automatic UTM parameter tracking
-- 🍪 **Smart Session Management** - Cookie-based visitor ID and session tracking
-- 📦 **Event Buffering** - Batched sending with configurable buffer size
-- 🔌 **Provider Pattern** - Extensible with custom providers
-- 📴 **Offline Support** - Uses `sendBeacon` for reliable event delivery
-- 🎯 **TypeScript First** - Full type safety and IntelliSense support
-- 🪶 **Zero Dependencies** - Lightweight and self-contained
+- 📊 **Pageviews, pageleaves, web vitals, custom events** with a flat, typed wire format
+- 🔗 **Pageview linking** - every event carries the pageview it happened on; pageview/pageleave events carry the previous pageview's duration and scroll depth, so per-page view duration and bounce rate are computable server-side
+- 🧭 **SPA support** - history API navigation (pushState/replaceState/popstate) captures pageviews automatically
+- ⏱️ **Real sessions** - 30-minute idle timeout refreshed on activity, 24-hour maximum length, shared across tabs via localStorage
+- 🚦 **Reliable delivery** - lazy batching, retry with jittered exponential backoff, offline awareness, sendBeacon + pagehide on unload
+- 🤖 **Bot filtering** - events from known crawler user agents are never sent
+- 🔍 **Rich context** - browser, OS, device type, language, timezone, screen/viewport, referrer, UTM parameters, and ad click IDs
+- 🚀 **Core Web Vitals** - LCP, CLS, INP, FCP, TTFB via the web-vitals library
+- 🎯 **TypeScript first** - the wire format is a zod schema shared with the ingest pipeline
 
 ## Installation
 
 ```bash
-npm install @usehercules/analytics
-# or
 pnpm add @usehercules/analytics
-# or
-yarn add @usehercules/analytics
 ```
 
 ## Quick Start
@@ -30,51 +30,41 @@ yarn add @usehercules/analytics
 ```typescript
 import { initAnalytics } from "@usehercules/analytics";
 
-// Initialize analytics
+// Initialize (auto-tracks the initial pageview and SPA navigations)
 const analytics = initAnalytics({
-  organizationId: "your-org-id",
-  websiteId: "your-website-id",
-  apiEndpoint: "https://your-api.com/analytics/ingest",
-  trackClicks: true,
-  trackPerformance: true,
+  apiEndpoint: "/_hercules/i",
 });
 
 // Track custom events
-analytics.track("button_clicked", {
-  button_id: "cta-hero",
-  page_section: "hero",
-});
+analytics.track("signup_clicked", { plan: "pro", seats: 3 });
 
 // Identify users
-analytics.identify("user_123", {
-  name: "John Doe",
-  email: "john@example.com",
-  plan: "premium",
-});
+analytics.identify("user_123");
 
-// Manual pageview tracking (automatic on init)
-analytics.trackPageview({
-  page_type: "product",
-  product_id: "123",
-});
+// Manual pageview tracking (only needed with trackHistoryChanges: false)
+analytics.trackPageview({ page_type: "product" });
+```
+
+Or embed as a script tag (served by the Hercules dispatcher at `/_hercules/i.js`):
+
+```html
+<script type="module" src="https://cdn.example.com/analytics.mjs?debug=false"></script>
 ```
 
 ## Configuration
 
 ```typescript
 interface AnalyticsConfig {
-  // Optional
   apiEndpoint?: string; // Analytics endpoint URL
   debug?: boolean; // Enable debug logging (default: false)
   enabled?: boolean; // Enable/disable tracking (default: true)
-  bufferSize?: number; // Events buffer size (default: 10)
-  flushInterval?: number; // Auto-flush interval in ms (default: 5000)
-  trackClicks?: boolean; // Auto-track clicks (default: false)
-  trackPerformance?: boolean; // Track performance metrics (default: true)
+  bufferSize?: number; // Events per batch before an immediate flush (default: 10)
+  flushInterval?: number; // How long events buffer before a flush, ms (default: 3000)
+  trackPerformance?: boolean; // Capture Core Web Vitals (default: true)
+  trackHistoryChanges?: boolean; // Capture SPA pageviews via history API (default: true)
   cookieDomain?: string; // Cookie domain for visitor ID
   cookiePath?: string; // Cookie path (default: '/')
-  sessionTimeout?: number; // Session timeout in minutes (default: 30)
-  beforeSend?: (events) => events; // Transform events before sending
+  sessionTimeout?: number; // Session idle timeout in minutes (default: 30)
 }
 ```
 
@@ -155,106 +145,29 @@ interface HerculesEvent {
 Events are posted in batches as `{ sent_at, events }`, where `sent_at` is the
 client clock at send time so the server can correct for clock skew.
 
-## Providers
+## Sessions
 
-Add custom providers to send events to multiple destinations:
+A session is created on the first event and rotates when it has been idle for
+`sessionTimeout` minutes (activity on any event resets the clock) or reaches
+24 hours of total length, matching posthog-js. Session state lives in
+localStorage, so a session spans tabs; the visitor ID lives in a two-year
+cookie (`_hrc_vid`).
 
-```typescript
-import { ConsoleProvider } from "@usehercules/analytics";
+## Delivery
 
-// Console provider for debugging
-analytics.addProvider(new ConsoleProvider());
-
-// Custom provider
-class CustomProvider {
-  name = "custom";
-
-  async send(events: HerculesEvent[]): Promise<void> {
-    // Send events to your custom destination
-    await fetch("https://custom-endpoint.com", {
-      method: "POST",
-      body: JSON.stringify(events),
-    });
-  }
-}
-
-analytics.addProvider(new CustomProvider());
-```
-
-## Helper Functions
-
-```typescript
-import { track, identify, trackPageview } from "@usehercules/analytics";
-
-// Direct function calls (requires initAnalytics to be called first)
-track("event_name", { property: "value" });
-identify("user_id", { trait: "value" });
-trackPageview({ page: "home" });
-```
-
-## Utility Functions
-
-```typescript
-import { utils } from "@usehercules/analytics";
-
-// Debounced tracking
-const trackScroll = utils.debounce(() => {
-  track("scroll", { depth: window.scrollY });
-}, 500);
-
-// Throttled tracking
-const trackMouseMove = utils.throttle((e) => {
-  track("mouse_move", { x: e.clientX, y: e.clientY });
-}, 1000);
-
-// Get browser information
-const browserInfo = utils.getBrowserInfo();
-
-// Check Do Not Track
-if (!utils.isDoNotTrackEnabled()) {
-  // Track events
-}
-
-// Safe JSON stringify (handles circular refs)
-const jsonString = utils.safeStringify(complexObject);
-```
+Events buffer and flush after `flushInterval` (or immediately at `bufferSize`
+events) via `fetch` with `keepalive`. Failed batches retry with jittered
+exponential backoff (6s · 2ⁿ, capped at 30 minutes, 10 attempts max) and wait
+out offline periods. On `pagehide` the client sends a final pageleave and
+drains all queues through `sendBeacon`. Retries can deliver a batch twice —
+the ingest side deduplicates on `event_id`.
 
 ## Core Web Vitals
 
-The library automatically tracks Core Web Vitals when `trackPerformance` is enabled:
-
-- **LCP (Largest Contentful Paint)** - Loading performance
-- **FID (First Input Delay)** - Interactivity
-- **CLS (Cumulative Layout Shift)** - Visual stability
-- **FCP (First Contentful Paint)** - First render
-- **TTFB (Time to First Byte)** - Server response time
-
-These metrics are automatically included in pageview events.
-
-## Click Tracking
-
-When `trackClicks` is enabled, the library automatically tracks clicks on:
-
-- All `<a>` links
-- All `<button>` elements
-- Any element with `data-track-click` attribute
-
-Each click event includes:
-
-- Element type (a, button, etc.)
-- Text content (first 100 chars)
-- Class names and ID
-- Href (for links)
-
-## Browser Support
-
-- Chrome 60+
-- Firefox 55+
-- Safari 12+
-- Edge 79+
-
-The library gracefully handles missing features in older browsers.
+With `trackPerformance` enabled, LCP, CLS, INP, FCP, and TTFB are buffered as
+they arrive and sent as one `web_vitals` event 5 seconds after the first
+metric, together with page-load timings from the Navigation Timing API.
 
 ## License
 
-MIT
+MIT — vendored files from posthog-js are Apache-2.0 and retain their notices.

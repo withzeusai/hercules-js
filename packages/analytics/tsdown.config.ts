@@ -31,7 +31,7 @@ export default defineConfig((options) => [
     define,
     ignoreWatch: [".turbo"],
     deps: {
-      alwaysBundle: ["ulid", "web-vitals", "bowser"],
+      alwaysBundle: ["ulid", "web-vitals"],
     },
   },
 ]);
