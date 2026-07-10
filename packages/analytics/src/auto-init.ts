@@ -19,9 +19,11 @@ function parseUrlConfig() {
     return {
       apiEndpoint: params.get("apiEndpoint") ?? undefined,
       debug: params.has("debug") ? params.get("debug") === "true" : undefined,
-      trackClicks: params.has("trackClicks") ? params.get("trackClicks") === "true" : undefined,
       trackPerformance: params.has("trackPerformance")
         ? params.get("trackPerformance") !== "false"
+        : undefined,
+      trackHistoryChanges: params.has("trackHistoryChanges")
+        ? params.get("trackHistoryChanges") !== "false"
         : undefined,
     };
   } catch {
@@ -41,8 +43,8 @@ function parseUrlConfig() {
  * Optional parameters:
  *   - apiEndpoint: Custom API endpoint
  *   - debug: Enable debug mode (default: false)
- *   - trackClicks: Track click events (default: false)
  *   - trackPerformance: Track web vitals (default: true)
+ *   - trackHistoryChanges: Track SPA pageviews via history API (default: true)
  */
 (function autoInit() {
   const g = globalThis ?? window;
@@ -54,8 +56,8 @@ function parseUrlConfig() {
   const instance = initAnalytics({
     apiEndpoint: config.apiEndpoint ?? "/_hercules/i",
     debug: config.debug ?? false,
-    trackClicks: config.trackClicks ?? false,
     trackPerformance: config.trackPerformance ?? true,
+    trackHistoryChanges: config.trackHistoryChanges ?? true,
   });
 
   // Expose instance globally for manual usage
