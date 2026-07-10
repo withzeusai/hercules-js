@@ -8,13 +8,14 @@ import { win } from "./globals";
 export class HistoryAutocapture {
   private lastPathname: string;
   private teardowns: (() => void)[] = [];
+  private stopped = false;
 
   constructor(private readonly onPageview: () => void) {
     this.lastPathname = win?.location?.pathname ?? "";
   }
 
   start(): void {
-    if (!win?.history || this.teardowns.length > 0) {
+    if (!win?.history || this.teardowns.length > 0 || this.stopped) {
       return;
     }
     this.patchHistoryMethod("pushState");
@@ -46,6 +47,11 @@ export class HistoryAutocapture {
   }
 
   private captureIfPathChanged(): void {
+    // The wrapper can outlive stop(): another instance patched over ours, so
+    // restoring is unsafe and the wrapper stays in the chain as a no-op.
+    if (this.stopped) {
+      return;
+    }
     const pathname = win?.location?.pathname ?? "";
     if (pathname !== this.lastPathname) {
       this.lastPathname = pathname;
@@ -54,6 +60,7 @@ export class HistoryAutocapture {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const teardown of this.teardowns) {
       teardown();
     }

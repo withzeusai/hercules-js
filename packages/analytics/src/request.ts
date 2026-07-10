@@ -24,11 +24,16 @@ export function request(options: RequestOptions): void {
   if (options.transport === "sendBeacon" && nav?.sendBeacon) {
     const blob = new Blob([body], { type: "application/json" });
     try {
-      // sendBeacon result only says the payload was queued; report it as
-      // success either way — there is nobody left to retry during unload.
-      nav.sendBeacon(url, blob);
-      callback?.({ statusCode: 200 });
-      return;
+      // A true result only says the payload was queued, but that is the best
+      // signal available during unload — report it as success. On false the
+      // batch was NOT queued (beacon quota / payload size), and the caller
+      // already dropped it from its buffer, so fall through to fetch with
+      // keepalive rather than losing it. (Upstream posthog-js ignores the
+      // return value; falling back is strictly better here.)
+      if (nav.sendBeacon(url, blob)) {
+        callback?.({ statusCode: 200 });
+        return;
+      }
     } catch {
       // fall through to fetch
     }

@@ -30,6 +30,7 @@ export class RetryQueue {
   private queue: QueuedBatch[] = [];
   private poller: ReturnType<typeof setInterval> | undefined;
   private teardown: (() => void) | undefined;
+  private stopped = false;
 
   constructor(private readonly send: RetrySend) {
     if (win) {
@@ -41,6 +42,11 @@ export class RetryQueue {
   }
 
   enqueue(events: HerculesEvent[], retriesPerformedSoFar: number): void {
+    // A request that fails after stop() (e.g. the final flush from destroy())
+    // must not revive the poller on a torn-down instance
+    if (this.stopped) {
+      return;
+    }
     const retries = retriesPerformedSoFar + 1;
     if (retries > MAX_RETRIES) {
       return;
@@ -106,6 +112,7 @@ export class RetryQueue {
   }
 
   stop(): void {
+    this.stopped = true;
     this.stopPoller();
     this.teardown?.();
     this.teardown = undefined;

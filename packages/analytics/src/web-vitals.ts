@@ -25,7 +25,13 @@ export class WebVitalsCapture {
   private flushed = false;
 
   constructor(private readonly onFlush: (metrics: WebVitalsMetrics) => void) {
-    if (!win || !doc || typeof PerformanceObserver === "undefined") {
+    if (!win || !doc) {
+      return;
+    }
+    if (typeof PerformanceObserver === "undefined") {
+      // No web vitals available, but Navigation Timing metrics (plt/di/ttfb)
+      // still are — arm the flush so they aren't lost on such browsers
+      this.flushTimeout = setTimeout(() => this.flush(), WEB_VITALS_FLUSH_MS);
       return;
     }
     const buffered = (key: keyof WebVitalsMetrics) => (metric: Metric) => {
@@ -56,14 +62,20 @@ export class WebVitalsCapture {
     }
     this.flushed = true;
 
-    // Fold in navigation-timing metrics, available by now in practice since
-    // the first web vital arrived at least 5 seconds ago
+    // Fold in navigation-timing metrics; they also backfill ttfb/fcp when the
+    // web-vitals callbacks never reported (or never ran)
     const navigationMetrics = getPerformanceMetrics();
     if (navigationMetrics.page_load_time !== undefined) {
       this.buffer.plt = navigationMetrics.page_load_time;
     }
     if (navigationMetrics.dom_interactive !== undefined) {
       this.buffer.di = navigationMetrics.dom_interactive;
+    }
+    if (this.buffer.ttfb === undefined && navigationMetrics.time_to_first_byte !== undefined) {
+      this.buffer.ttfb = navigationMetrics.time_to_first_byte;
+    }
+    if (this.buffer.fcp === undefined && navigationMetrics.first_contentful_paint !== undefined) {
+      this.buffer.fcp = navigationMetrics.first_contentful_paint;
     }
 
     if (Object.keys(this.buffer).length > 0) {

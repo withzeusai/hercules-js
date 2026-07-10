@@ -62,6 +62,27 @@ describe("HistoryAutocapture", () => {
     expect(onPageview).toHaveBeenCalledTimes(2);
   });
 
+  it("a stopped instance stays silent even when its wrapper cannot be unpatched", () => {
+    const onFirst = vi.fn();
+    const onSecond = vi.fn();
+    const first = new HistoryAutocapture(onFirst);
+    const second = new HistoryAutocapture(onSecond);
+    first.start();
+    second.start(); // second's wrapper now sits on top of first's
+
+    // First can't restore (it isn't top-of-stack); its wrapper must no-op
+    first.stop();
+    history.pushState(null, "", "/a");
+    expect(onFirst).not.toHaveBeenCalled();
+    expect(onSecond).toHaveBeenCalledTimes(1);
+
+    // After second stops, first's (dead) wrapper is back on top — still silent
+    second.stop();
+    history.pushState(null, "", "/b");
+    expect(onFirst).not.toHaveBeenCalled();
+    expect(onSecond).toHaveBeenCalledTimes(1);
+  });
+
   it("stop restores the patched methods", () => {
     const onPageview = vi.fn();
     capture = new HistoryAutocapture(onPageview);

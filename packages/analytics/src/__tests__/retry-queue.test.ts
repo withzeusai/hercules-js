@@ -48,6 +48,16 @@ describe("RetryQueue", () => {
     queue.stop();
   });
 
+  it("ignores enqueues after stop (a failed destroy-time flush must not revive the poller)", () => {
+    const send = vi.fn();
+    const queue = new RetryQueue(send);
+    queue.stop();
+    queue.enqueue(events, 0);
+    vi.advanceTimersByTime(60 * 60 * 1000);
+    expect(send).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("hands queued batches to sendBeacon on unload", () => {
     const send = vi.fn();
     const sendBeacon = vi.fn();

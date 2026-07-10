@@ -43,16 +43,13 @@ export function initAnalytics(config: AnalyticsConfig): Analytics {
   if (!defaultInstance) {
     defaultInstance = new Analytics(config);
 
-    // Auto-track the initial pageview; SPA navigations are captured by
-    // history autocapture from here on
+    // Auto-track the initial pageview immediately; SPA navigations are
+    // captured by history autocapture from here on. Deferring this (the old
+    // DOMContentLoaded behavior) double-counted apps that pushState during
+    // boot — the history capture fired for the new route and the deferred
+    // initial pageview fired again afterwards.
     if (typeof window !== "undefined") {
-      if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", () => {
-          defaultInstance?.trackPageview();
-        });
-      } else {
-        defaultInstance?.trackPageview();
-      }
+      defaultInstance.trackPageview();
     }
   }
   return defaultInstance;
