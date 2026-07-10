@@ -1,5 +1,15 @@
 # @usehercules/auth
 
+## 1.2.0
+
+### Minor Changes
+
+- [#87](https://github.com/withzeusai/hercules-js/pull/87) [`613443f`](https://github.com/withzeusai/hercules-js/commit/613443f5f091ad79e94cbcba03f8017309722ce5) Thanks [@karanthakkar1996](https://github.com/karanthakkar1996)! - Add `signin({ returnTo? })`: post-sign-in destination via OIDC state.
+
+  - **`signin(options?)`** now accepts an optional `returnTo` (in-app path such as `/projects/42`) and round-trips it through the OIDC `state` value, surfaced after the redirect on `auth.user.state` as `{ returnTo }` for the callback page to honor.
+  - When `returnTo` is omitted, it defaults to the current URL (path + query + hash), so signing in returns users to the page they started from instead of always landing on `/`.
+  - Backward compatible: existing bare `signin()` calls keep working, and callback pages that ignore `auth.user.state` keep their current behavior.
+
 ## 1.1.0
 
 ### Minor Changes
