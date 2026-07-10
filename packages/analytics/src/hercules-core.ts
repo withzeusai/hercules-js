@@ -281,9 +281,13 @@ export class Analytics {
       body,
       transport,
       callback: (response) => {
+        // A retriable status can only come from the fetch path — a batch the
+        // beacon queue accepted reports 200 — so retry regardless of the
+        // requested transport: a rejected hidden-tab beacon falls back to
+        // fetch, and if that fails too the page may well still be alive.
         const retriable =
           response.statusCode === 0 || response.statusCode >= 500 || response.statusCode === 429;
-        if (retriable && transport !== "sendBeacon") {
+        if (retriable) {
           this.retryQueue.enqueue(events, retriesPerformedSoFar);
         } else if (this.config.debug && response.statusCode !== 200) {
           console.error(`[Hercules Analytics] Endpoint returned ${response.statusCode}`);

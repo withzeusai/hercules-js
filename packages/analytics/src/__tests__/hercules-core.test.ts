@@ -141,6 +141,27 @@ describe("Analytics core", () => {
     });
   });
 
+  it("retries a hidden-tab flush whose beacon was rejected and fallback fetch failed", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const sendBeacon = vi.fn().mockReturnValue(false); // beacon queue rejects
+    Object.defineProperty(navigator, "sendBeacon", { value: sendBeacon, configurable: true });
+    fetchMock.mockResolvedValue({ status: 503 });
+
+    const instance = createAnalytics();
+    instance.trackPageview();
+    instance.flush("sendBeacon");
+
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the fallback fetch
+
+    // The failed fallback must enter the retry queue even though the
+    // requested transport was sendBeacon — the page is still alive
+    return vi.advanceTimersByTimeAsync(15_000).then(() => {
+      expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      delete (navigator as { sendBeacon?: unknown }).sendBeacon;
+    });
+  });
+
   it("destroy stops history tracking", () => {
     const instance = createAnalytics();
     instance.trackPageview();
