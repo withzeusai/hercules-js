@@ -1,6 +1,9 @@
 export const VISITOR_ID_COOKIE = "_hrc_vid";
 export const VISITOR_ID_COOKIE_DAYS = 365 * 2;
 
+/** localStorage key holding the identified user id (posthog persists distinct_id the same way) */
+export const USER_ID_STORAGE_KEY = "_hrc_uid";
+
 /** localStorage key holding [sessionId, lastActivityTimestamp, sessionStartTimestamp] */
 export const SESSION_STORAGE_KEY = "_hrc_ses";
 /** sessionStorage keys used by @usehercules/analytics < 2.0, read once for migration */

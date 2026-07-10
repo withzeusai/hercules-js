@@ -7,6 +7,7 @@ import {
   DEFAULT_BUFFER_SIZE,
   DEFAULT_FLUSH_INTERVAL_MS,
   DEFAULT_SESSION_IDLE_TIMEOUT_MINUTES,
+  USER_ID_STORAGE_KEY,
   VISITOR_ID_COOKIE,
   VISITOR_ID_COOKIE_DAYS,
 } from "./constants";
@@ -20,6 +21,7 @@ import { RetryQueue } from "./retry-queue";
 import type { HerculesEvent } from "./schema";
 import { ScrollManager } from "./scroll-manager";
 import { SessionIdManager } from "./sessionid";
+import { pickSessionStore, type PersistentStore } from "./storage";
 import type { AnalyticsConfig } from "./types";
 import {
   generateId,
@@ -37,6 +39,7 @@ export class Analytics {
   private config: Required<AnalyticsConfig>;
   private visitorId: string;
   private userId: string | undefined;
+  private readonly store: PersistentStore;
   private readonly isBot: boolean;
 
   readonly sessionManager: SessionIdManager;
@@ -66,6 +69,10 @@ export class Analytics {
     this.isBot = isBlockedUA(nav?.userAgent);
 
     this.visitorId = this.getOrCreateVisitorId();
+    // An identified user survives reloads (posthog persists distinct_id the
+    // same way); without this every visit is anonymous until identify() runs
+    this.store = pickSessionStore();
+    this.userId = this.store.get(USER_ID_STORAGE_KEY) ?? undefined;
 
     this.scrollManager = new ScrollManager();
     this.pageViewManager = new PageViewManager(this.scrollManager);
@@ -189,11 +196,29 @@ export class Analytics {
       properties_numeric: {},
     };
 
+    // The wire format is two flat maps (string / finite number); everything
+    // else is coerced so a boolean or object never fails ingest validation
     for (const [key, value] of Object.entries(properties || {})) {
+      if (value == null) {
+        continue;
+      }
       if (typeof value === "number") {
-        event.properties_numeric![key] = value;
-      } else {
+        if (Number.isFinite(value)) {
+          event.properties_numeric![key] = value;
+        }
+      } else if (typeof value === "string") {
         event.properties![key] = value;
+      } else if (typeof value === "boolean") {
+        event.properties![key] = String(value);
+      } else {
+        try {
+          const encoded = JSON.stringify(value);
+          if (typeof encoded === "string") {
+            event.properties![key] = encoded;
+          }
+        } catch {
+          // circular structure — drop the property
+        }
       }
     }
 
@@ -255,11 +280,20 @@ export class Analytics {
   }
 
   /**
-   * Identify the current user
+   * Identify the current user. The id persists across page loads until
+   * reset(); an `identify` event is only sent when the id actually changes
+   * (posthog-js sends $identify the same way).
    */
   identify(userId: string): void {
+    if (!userId) {
+      return;
+    }
+    const changed = userId !== this.userId;
     this.userId = userId;
-    this.capture("custom", "identify", { user_id: userId });
+    this.store.set(USER_ID_STORAGE_KEY, userId);
+    if (changed) {
+      this.capture("custom", "identify", { user_id: userId });
+    }
   }
 
   private send(
@@ -310,12 +344,26 @@ export class Analytics {
   }
 
   /**
-   * Reset visitor-independent state (session, user, pageview linking)
+   * Reset user-level state (session, user, pageview linking), e.g. on logout.
+   * Pass `resetVisitorId: true` to also rotate the visitor cookie so the next
+   * user on this device is not linked to the previous one — mirrors
+   * posthog-js `reset(reset_device_id)`.
    */
-  reset(): void {
+  reset(resetVisitorId = false): void {
     this.sessionManager.reset();
     this.pageViewManager.reset();
     this.userId = undefined;
+    this.store.remove(USER_ID_STORAGE_KEY);
+    if (resetVisitorId) {
+      this.visitorId = generateId();
+      setCookie(
+        VISITOR_ID_COOKIE,
+        this.visitorId,
+        VISITOR_ID_COOKIE_DAYS,
+        this.config.cookieDomain,
+        this.config.cookiePath,
+      );
+    }
   }
 
   /**

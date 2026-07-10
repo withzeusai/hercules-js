@@ -113,11 +113,42 @@ export function parseUserAgent(
   };
 }
 
+// Known referrer sources. posthog-js only classifies four search engines
+// client-side (event-utils.ts _getSearchEngine) and leaves channel typing to
+// the server; this broader map is a Hercules divergence. Patterns ending in
+// "." match a domain label with any TLD ("google." → google.com,
+// www.google.co.uk); other patterns match the registered domain or a
+// subdomain of it ("t.co" → t.co, www.t.co — not test.com).
+const REFERRER_SOURCE_MAP: Record<string, string[]> = {
+  google: ["google."],
+  facebook: ["facebook.", "fb."],
+  twitter: ["twitter.", "t.co", "x.com"],
+  linkedin: ["linkedin."],
+  instagram: ["instagram."],
+  youtube: ["youtube."],
+  reddit: ["reddit."],
+  pinterest: ["pinterest."],
+  bing: ["bing."],
+  yahoo: ["yahoo."],
+  duckduckgo: ["duckduckgo."],
+  baidu: ["baidu."],
+  yandex: ["yandex."],
+  tiktok: ["tiktok."],
+};
+
+function hostnameMatches(hostname: string, pattern: string): boolean {
+  if (pattern.endsWith(".")) {
+    return hostname.startsWith(pattern) || hostname.includes(`.${pattern}`);
+  }
+  return hostname === pattern || hostname.endsWith(`.${pattern}`);
+}
+
 /**
- * Get referrer information
+ * Get referrer information (pass a referrer explicitly to override
+ * `document.referrer`, e.g. in tests)
  */
-export function getReferrerInfo(): ReferrerInfo {
-  const referrer = doc?.referrer ?? "";
+export function getReferrerInfo(referrerOverride?: string): ReferrerInfo {
+  const referrer = referrerOverride ?? doc?.referrer ?? "";
   if (!referrer) {
     return {
       referrer: "",
@@ -131,26 +162,8 @@ export function getReferrerInfo(): ReferrerInfo {
     const domain = url.hostname;
     let source = "referral";
 
-    // Detect common sources
-    const sourceMap: Record<string, string[]> = {
-      google: ["google."],
-      facebook: ["facebook.", "fb."],
-      twitter: ["twitter.", "t.co", "x.com"],
-      linkedin: ["linkedin."],
-      instagram: ["instagram."],
-      youtube: ["youtube."],
-      reddit: ["reddit."],
-      pinterest: ["pinterest."],
-      bing: ["bing."],
-      yahoo: ["yahoo."],
-      duckduckgo: ["duckduckgo."],
-      baidu: ["baidu."],
-      yandex: ["yandex."],
-      tiktok: ["tiktok."],
-    };
-
-    for (const [key, domains] of Object.entries(sourceMap)) {
-      if (domains.some((d) => domain.includes(d))) {
+    for (const [key, domains] of Object.entries(REFERRER_SOURCE_MAP)) {
+      if (domains.some((d) => hostnameMatches(domain, d))) {
         source = key;
         break;
       }
