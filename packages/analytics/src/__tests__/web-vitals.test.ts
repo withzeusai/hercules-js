@@ -56,6 +56,29 @@ describe("WebVitalsCapture without PerformanceObserver", () => {
     expect(onFlush).not.toHaveBeenCalled();
   });
 
+  it("drops implausible Navigation Timing values (bfcache / clock skew)", () => {
+    const huge = 16 * 60 * 1000; // past the 15-min cap
+    vi.spyOn(performance, "getEntriesByType").mockImplementation((type: string) =>
+      type === "navigation"
+        ? [
+            {
+              fetchStart: 100,
+              responseStart: huge,
+              domInteractive: huge + 500,
+              loadEventEnd: huge + 1200,
+            } as unknown as PerformanceEntry,
+          ]
+        : [],
+    );
+
+    const onFlush = vi.fn();
+    capture = new WebVitalsCapture(onFlush);
+
+    vi.advanceTimersByTime(WEB_VITALS_FLUSH_MS);
+    // Every derived value (plt/di/ttfb) is past the cap, so nothing is emitted
+    expect(onFlush).not.toHaveBeenCalled();
+  });
+
   it("flushNow() emits immediately and only once, even before the timer fires", () => {
     vi.spyOn(performance, "getEntriesByType").mockImplementation((type: string) =>
       type === "navigation"
