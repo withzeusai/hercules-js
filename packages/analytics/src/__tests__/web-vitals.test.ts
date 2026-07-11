@@ -41,8 +41,9 @@ describe("WebVitalsCapture without PerformanceObserver", () => {
     expect(onFlush).toHaveBeenCalledWith({
       plt: 1100,
       di: 500,
-      // ttfb is responseStart - fetchStart (250 - 100), not responseStart - requestStart
-      ttfb: 150,
+      // ttfb matches web-vitals' onTTFB baseline: responseStart - activationStart
+      // (250 - 0), not the old responseStart - requestStart
+      ttfb: 250,
     });
   });
 
@@ -76,7 +77,7 @@ describe("WebVitalsCapture without PerformanceObserver", () => {
     // Bounce before the 5s timer: without flushNow() nothing would be sent
     capture.flushNow();
     expect(onFlush).toHaveBeenCalledTimes(1);
-    expect(onFlush).toHaveBeenCalledWith({ plt: 1100, di: 500, ttfb: 150 });
+    expect(onFlush).toHaveBeenCalledWith({ plt: 1100, di: 500, ttfb: 250 });
 
     // The pending timer must not double-send
     vi.advanceTimersByTime(WEB_VITALS_FLUSH_MS);

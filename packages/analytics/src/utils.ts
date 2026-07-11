@@ -264,10 +264,13 @@ export function getPerformanceMetrics(): PerformanceMetrics {
     if (navTiming) {
       const pageLoadTime = navTiming.loadEventEnd - navTiming.fetchStart;
       const domInteractive = navTiming.domInteractive - navTiming.fetchStart;
-      // TTFB is measured from the navigation start (fetchStart), not requestStart
-      // — the old formula captured only server think time and excluded
-      // DNS/TCP/TLS, undercounting it and disagreeing with web-vitals' onTTFB
-      const ttfb = navTiming.responseStart - navTiming.fetchStart;
+      // Match web-vitals' onTTFB baseline exactly (responseStart - activationStart,
+      // i.e. measured from navigation start / timeOrigin) so this fallback and the
+      // primary web-vitals value stay comparable — including redirect time. The old
+      // formula subtracted requestStart, capturing only server think time and
+      // excluding DNS/TCP/TLS. activationStart is 0 outside prerender.
+      const activationStart = (navTiming as { activationStart?: number }).activationStart ?? 0;
+      const ttfb = navTiming.responseStart - activationStart;
 
       if (pageLoadTime > 0 && isFinite(pageLoadTime)) {
         metrics.page_load_time = Math.round(pageLoadTime);
