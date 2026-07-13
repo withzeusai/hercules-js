@@ -1,6 +1,15 @@
 import { getAuthOptions } from "./auth-options";
-import { DEFAULT_CALLBACK_PATH } from "./config";
+import { DEFAULT_CALLBACK_PATH, REDIRECT_URI_ENV_VARS, readEnv } from "./config";
 import type { CookieOptions } from "./cookie-utils";
+
+/**
+ * The app-wide `redirect_uri`, when configured: the `herculesAuthMiddleware`
+ * option, then the `HERCULES_AUTH_REDIRECT_URI`/`AUTH_REDIRECT_URI` environment
+ * fallback (for apps that don't register the middleware).
+ */
+function configuredRedirectUri(): string | undefined {
+  return getAuthOptions().redirectUri ?? readEnv(REDIRECT_URI_ENV_VARS);
+}
 
 /**
  * Origin (scheme + host) to use when building absolute URLs and as the cookie
@@ -9,7 +18,7 @@ import type { CookieOptions } from "./cookie-utils";
  * the internal hop) and falls back to the request's own origin.
  */
 export function resolveOrigin(request: Request): string {
-  const { redirectUri } = getAuthOptions();
+  const redirectUri = configuredRedirectUri();
   if (redirectUri) {
     try {
       return new URL(redirectUri).origin;
@@ -26,9 +35,8 @@ export function resolveOrigin(request: Request): string {
  * path resolved against {@link resolveOrigin}. Absolute values are used as-is.
  */
 export function resolveRedirectUri(request: Request, override?: string): string {
-  const { redirectUri } = getAuthOptions();
   return new URL(
-    override ?? redirectUri ?? DEFAULT_CALLBACK_PATH,
+    override ?? configuredRedirectUri() ?? DEFAULT_CALLBACK_PATH,
     resolveOrigin(request),
   ).toString();
 }
@@ -83,11 +91,11 @@ export function cookieSecurity(request: Request): {
   secure: boolean;
   sameSite: "Lax" | "None";
 } {
-  const { redirectUri, cookieSameSite } = getAuthOptions();
+  const { cookieSameSite } = getAuthOptions();
 
   let secure: boolean;
   try {
-    secure = new URL(redirectUri ?? request.url).protocol === "https:";
+    secure = new URL(configuredRedirectUri() ?? request.url).protocol === "https:";
   } catch {
     secure = true; // Fail closed.
   }

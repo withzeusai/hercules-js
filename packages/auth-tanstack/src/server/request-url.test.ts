@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setAuthOptions } from "./auth-options";
 import {
   cookieSecurity,
@@ -15,6 +15,7 @@ function request(url: string): Request {
 afterEach(() => {
   // Reset the module-level middleware options between tests.
   setAuthOptions({});
+  vi.unstubAllEnvs();
 });
 
 describe("resolveOrigin", () => {
@@ -166,6 +167,34 @@ describe("cookieSecurity", () => {
   it("fails closed to Secure when neither redirectUri nor request URL parses", () => {
     setAuthOptions({ redirectUri: "not a url" });
     expect(cookieSecurity(request("http://localhost:3000/"))).toEqual({
+      secure: true,
+      sameSite: "None",
+    });
+  });
+});
+
+describe("redirectUri environment fallback", () => {
+  it("resolveOrigin falls back to HERCULES_AUTH_REDIRECT_URI when no middleware option is set", () => {
+    vi.stubEnv("HERCULES_AUTH_REDIRECT_URI", "https://app.example.com/auth/callback");
+    expect(resolveOrigin(request("http://internal:8080/x"))).toBe("https://app.example.com");
+  });
+
+  it("resolveRedirectUri falls back to the environment value", () => {
+    vi.stubEnv("HERCULES_AUTH_REDIRECT_URI", "https://app.example.com/auth/callback");
+    expect(resolveRedirectUri(request("http://internal:8080/auth/sign-in"))).toBe(
+      "https://app.example.com/auth/callback",
+    );
+  });
+
+  it("the middleware option wins over the environment", () => {
+    vi.stubEnv("HERCULES_AUTH_REDIRECT_URI", "https://env.example.com/cb");
+    setAuthOptions({ redirectUri: "https://opt.example.com/cb" });
+    expect(resolveRedirectUri(request("http://internal/x"))).toBe("https://opt.example.com/cb");
+  });
+
+  it("cookieSecurity derives the protocol from the environment value", () => {
+    vi.stubEnv("HERCULES_AUTH_REDIRECT_URI", "https://app.example.com/auth/callback");
+    expect(cookieSecurity(request("http://internal:8080/x"))).toEqual({
       secure: true,
       sameSite: "None",
     });

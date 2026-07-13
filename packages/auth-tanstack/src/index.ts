@@ -7,6 +7,7 @@ export type {
   CustomClaims,
   UserInfo,
   NoUserInfo,
+  ClientUserInfo,
 } from "./types";
 export {
   type HandleAuthSuccessData,
@@ -17,10 +18,23 @@ export {
 } from "./server/server";
 export {
   type GetAuthURLOptions,
+  type SignInUrlOptions,
+  type RecentAuthResult,
   getAuth,
   signOut,
   getAuthorizationUrl,
   getSignInUrl,
   getSignUpUrl,
+  checkRecentAuth,
 } from "./server/auth";
+export {
+  getAuthAction,
+  checkSessionAction,
+  getAccessTokenAction,
+  refreshAccessTokenAction,
+  getIdTokenAction,
+  refreshIdTokenAction,
+  refreshAuthAction,
+} from "./server/actions";
+export { OAuthStateMismatchError, PKCECookieMissingError } from "./server/errors";
 export { type HerculesAuthMiddlewareOptions, herculesAuthMiddleware } from "./server/middleware";

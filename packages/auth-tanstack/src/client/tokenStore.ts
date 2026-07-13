@@ -190,7 +190,12 @@ export class TokenStore {
           token = await this.refreshTokenAction();
         }
 
-        this.setState({ token, loading: false, error: null });
+        // A silent revalidation that returns the same token has nothing to
+        // publish — skip the notify so subscribed components don't re-render
+        // on an unchanged snapshot.
+        if (token !== previousToken || !silent) {
+          this.setState({ token, loading: false, error: null });
+        }
 
         const tokenData = this.parseToken(token);
         if (tokenData) this.scheduleRefresh(tokenData);

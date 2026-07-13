@@ -1,6 +1,6 @@
 import type { NoUserInfo, User, UserInfo } from "../types";
 import { fromBase64Url } from "./encoding";
-import type { SessionData } from "./session";
+import { type SessionData, isSessionExpired } from "./session";
 
 const textDecoder = new TextDecoder();
 
@@ -21,7 +21,7 @@ export function decodeJwtClaims(token: string): Record<string, unknown> | null {
  * claims (roles, org), the ID token carries identity; on overlap the ID token
  * wins. Opaque (non-JWT) access tokens simply contribute nothing.
  */
-function collectClaims(session: SessionData): Record<string, unknown> {
+export function collectClaims(session: SessionData): Record<string, unknown> {
   const fromAccess = decodeJwtClaims(session.accessToken) ?? {};
   const fromId = session.idToken ? (decodeJwtClaims(session.idToken) ?? {}) : {};
   return { ...fromAccess, ...fromId };
@@ -60,8 +60,7 @@ function userFromClaims(claims: Record<string, unknown>): User | null {
  * already expired, or that lacks a usable `sub`, resolves to {@link NoUserInfo}.
  */
 export function userInfoFromSession(session: SessionData): UserInfo | NoUserInfo {
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (session.expiresAt !== undefined && session.expiresAt <= nowSeconds) {
+  if (isSessionExpired(session)) {
     return { user: null };
   }
 

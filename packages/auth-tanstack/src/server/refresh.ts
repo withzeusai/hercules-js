@@ -1,19 +1,18 @@
 import * as client from "openid-client";
 import { getConfig } from "./config";
 import type { SessionData } from "./session";
-import { readSession, writeSession } from "./session-store";
 
 /**
- * Exchange the stored refresh token for fresh tokens, re-seal the session, and
- * write it back to the response. Returns the new session, or null when there is
- * no session / no refresh token / the grant fails.
+ * Exchange `session`'s refresh token for fresh tokens and return the resulting
+ * session data. Returns null when there is no refresh token or the grant fails.
+ * Pure with respect to cookies — persisting the result is the caller's job
+ * (see `session-context.ts`).
  *
  * Providers don't always re-issue an ID token or rotate the refresh token on
  * refresh, so those fall back to the prior session's values.
  */
-export async function refreshSession(): Promise<SessionData | null> {
-  const session = await readSession();
-  if (!session?.refreshToken) return null;
+export async function performRefreshGrant(session: SessionData): Promise<SessionData | null> {
+  if (!session.refreshToken) return null;
 
   let tokens: Awaited<ReturnType<typeof client.refreshTokenGrant>>;
   try {
@@ -33,15 +32,12 @@ export async function refreshSession(): Promise<SessionData | null> {
         ? claims.exp
         : undefined;
 
-  const next: SessionData = {
+  return {
     accessToken: tokens.access_token,
     idToken: tokens.id_token ?? session.idToken,
     refreshToken: tokens.refresh_token ?? session.refreshToken,
     expiresAt,
   };
-
-  await writeSession(next, tokens.expires_in);
-  return next;
 }
 
 /**
