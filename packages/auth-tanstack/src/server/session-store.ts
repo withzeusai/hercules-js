@@ -52,7 +52,7 @@ export async function writeSession(session: SessionData): Promise<void> {
   chunks.forEach((chunk, index) => setCookie(sessionChunkName(index), chunk, options));
 
   for (const name of staleSessionCookieNames(Object.keys(getCookies()), chunks.length)) {
-    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption, ...(domain ? { domain } : {}) });
+    expireCookie(name, { secure, sameSite: sameSiteOption, domain });
   }
 }
 
@@ -62,6 +62,25 @@ export function clearSession(): void {
   const sameSiteOption = toCookieSameSite(sameSite);
   const domain = sessionCookieDomain();
   for (const name of staleSessionCookieNames(Object.keys(getCookies()), 0)) {
-    deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption, ...(domain ? { domain } : {}) });
+    expireCookie(name, { secure, sameSite: sameSiteOption, domain });
   }
+}
+
+/**
+ * Delete one session cookie. When a domain is configured the cookie is deleted
+ * both domain-scoped and host-only: deletion matches on name/path/domain, so a
+ * host-only cookie set before the domain was configured needs its own delete.
+ * (h3 keys Set-Cookie dedup on name+domain+path, so both deletes survive.)
+ */
+function expireCookie(
+  name: string,
+  options: {
+    secure: boolean;
+    sameSite: ReturnType<typeof toCookieSameSite>;
+    domain: string | undefined;
+  },
+): void {
+  const { secure, sameSite, domain } = options;
+  if (domain) deleteCookie(name, { path: "/", secure, sameSite, domain });
+  deleteCookie(name, { path: "/", secure, sameSite });
 }

@@ -187,6 +187,33 @@ export function staleSessionCookieNames(
 }
 
 /**
+ * `Set-Cookie` strings expiring every cookie in `names`. When a `domain` is
+ * configured, each name is deleted twice — domain-scoped and host-only —
+ * because browsers match deletions on name/path/domain, and a host-only
+ * session cookie set before the domain was configured would otherwise
+ * survive and keep the user signed in.
+ */
+function expireCookieHeaders(
+  names: readonly string[],
+  options: Pick<CookieOptions, "secure" | "sameSite" | "domain" | "path">,
+): string[] {
+  const hostOnly: CookieOptions = {
+    path: options.path ?? "/",
+    maxAge: 0,
+    ...(options.sameSite ? { sameSite: options.sameSite } : {}),
+    ...(options.secure ? { secure: options.secure } : {}),
+  };
+  return names.flatMap((name) =>
+    options.domain
+      ? [
+          serializeCookie(name, "", { ...hostOnly, domain: options.domain }),
+          serializeCookie(name, "", hostOnly),
+        ]
+      : [serializeCookie(name, "", hostOnly)],
+  );
+}
+
+/**
  * Serialize a sealed session value into one or more `Set-Cookie` header strings,
  * splitting it across numbered chunks. Any `existingNames` that belonged to a
  * prior (longer) session — or a legacy single cookie — are expired so stale
@@ -204,16 +231,8 @@ export function serializeSessionCookies(
 
   // Expire stale chunks with the same SameSite/Secure as the fresh write so the
   // deletion is accepted in the same (possibly cross-site) context.
-  const clearOptions: CookieOptions = {
-    path: options.path ?? "/",
-    maxAge: 0,
-    ...(options.sameSite ? { sameSite: options.sameSite } : {}),
-    ...(options.secure ? { secure: options.secure } : {}),
-    ...(options.domain ? { domain: options.domain } : {}),
-  };
-  for (const name of staleSessionCookieNames(existingNames, chunks.length)) {
-    headers.push(serializeCookie(name, "", clearOptions));
-  }
+  const stale = staleSessionCookieNames(existingNames, chunks.length);
+  headers.push(...expireCookieHeaders(stale, options));
   return headers;
 }
 
@@ -237,21 +256,17 @@ export function deserializeSessionCookies(cookies: Record<string, string>): stri
  *
  * Pass the `secure`/`sameSite` the session was set with so the deletion is
  * honored in the same context — a `SameSite=None; Secure` cookie set for an
- * embedded (cross-site) app is only cleared by a matching delete cookie.
+ * embedded (cross-site) app is only cleared by a matching delete cookie. When
+ * a `domain` is configured, each cookie is deleted both domain-scoped and
+ * host-only (see {@link expireCookieHeaders}).
  */
 export function clearSessionCookies(
   existingNames: readonly string[],
   options: Pick<CookieOptions, "secure" | "sameSite" | "domain"> = {},
 ): string[] {
-  const clearOptions: CookieOptions = {
-    path: "/",
-    maxAge: 0,
-    ...(options.sameSite ? { sameSite: options.sameSite } : {}),
-    ...(options.secure ? { secure: options.secure } : {}),
-    ...(options.domain ? { domain: options.domain } : {}),
-  };
   const base = sessionCookieBase();
-  return existingNames
-    .filter((name) => name === base || name.startsWith(`${base}.`))
-    .map((name) => serializeCookie(name, "", clearOptions));
+  return expireCookieHeaders(
+    existingNames.filter((name) => name === base || name.startsWith(`${base}.`)),
+    options,
+  );
 }

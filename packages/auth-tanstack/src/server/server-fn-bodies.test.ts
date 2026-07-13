@@ -156,12 +156,14 @@ describe("signOutBody", () => {
     );
 
     const headers = signOutHeaders(thrown);
-    expect(headers).toHaveLength(1);
     // Deletion must carry the same Domain the session was set with, or the
-    // browser treats it as a different cookie and the session survives.
-    expect(headers[0]).toContain("hercules_session.0=;");
-    expect(headers[0]).toContain("Domain=.example.com");
-    expect(headers[0]).toContain("Max-Age=0");
+    // browser treats it as a different cookie and the session survives — and a
+    // host-only cookie from before the domain was configured needs its own
+    // host-only delete for the same reason.
+    expect(headers).toHaveLength(2);
+    expect(headers.every((h) => h.startsWith("hercules_session.0=;"))).toBe(true);
+    expect(headers.every((h) => h.includes("Max-Age=0"))).toBe(true);
+    expect(headers.filter((h) => h.includes("Domain=.example.com"))).toHaveLength(1);
   });
 
   it("clears session cookies without a Domain attribute when none is configured", async () => {

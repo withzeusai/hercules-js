@@ -159,18 +159,31 @@ describe("session cookie name override", () => {
 });
 
 describe("session cookie domain", () => {
-  it("stamps Domain on fresh chunks and on stale-chunk deletes", () => {
+  it("stamps Domain on fresh chunks and deletes stale chunks domain-scoped and host-only", () => {
     const headers = serializeSessionCookies("small", { path: "/", domain: ".example.com" }, [
       `${SESSION_COOKIE}.0`,
       `${SESSION_COOKIE}.1`,
     ]);
-    expect(headers.every((h) => h.includes("Domain=.example.com"))).toBe(true);
+    const [fresh, ...deletes] = headers;
+    expect(fresh).toContain("Domain=.example.com");
+    expect(fresh).not.toContain("Max-Age=0");
+    // The stale `.1` chunk is expired twice: once with Domain, once host-only
+    // (a leftover from before the domain was configured).
+    expect(deletes.map((h) => cookieFromHeader(h)[0])).toEqual([
+      `${SESSION_COOKIE}.1`,
+      `${SESSION_COOKIE}.1`,
+    ]);
+    expect(deletes.every((h) => h.includes("Max-Age=0"))).toBe(true);
+    expect(deletes.filter((h) => h.includes("Domain=.example.com"))).toHaveLength(1);
   });
 
-  it("stamps Domain on sign-out clears", () => {
+  it("clears each cookie domain-scoped and host-only on sign-out", () => {
     const cleared = clearSessionCookies([`${SESSION_COOKIE}.0`], { domain: ".example.com" });
-    expect(cleared).toHaveLength(1);
-    expect(cleared[0]).toContain("Domain=.example.com");
-    expect(cleared[0]).toContain("Max-Age=0");
+    // A domain-scoped delete can't remove a host-only cookie set before the
+    // domain was configured, so both variants must be expired.
+    expect(cleared).toHaveLength(2);
+    expect(cleared.every((h) => h.startsWith(`${SESSION_COOKIE}.0=;`))).toBe(true);
+    expect(cleared.every((h) => h.includes("Max-Age=0"))).toBe(true);
+    expect(cleared.filter((h) => h.includes("Domain=.example.com"))).toHaveLength(1);
   });
 });
