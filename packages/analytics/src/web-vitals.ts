@@ -1,10 +1,16 @@
-// Web vitals capture with posthog-js extensions/web-vitals semantics: metrics
-// buffer as they arrive and flush as one event 5 seconds after the first one.
-// Unlike posthog (which lazy-loads the collector from its CDN) the web-vitals
-// library is statically bundled — the artifact must stay self-contained.
+// Web vitals capture with posthog-js extensions/web-vitals semantics. Unlike
+// posthog (which lazy-loads the collector from its CDN) the web-vitals library
+// is statically bundled — the artifact must stay self-contained.
+//
+// Metrics buffer as they arrive and flush as a single event. LCP, CLS, and INP
+// only settle when the page is hidden, so the flush is driven by that page-hide
+// signal — flushNow(), called from the core's pagehide/visibilitychange
+// handlers — rather than a timer that would lock in partial values first. On
+// browsers without PerformanceObserver no web-vitals callback ever fires, so a
+// short timer flushes the Navigation Timing metrics (plt/di/ttfb) on their own.
 
 import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from "web-vitals";
-import { WEB_VITALS_FLUSH_MS } from "./constants";
+import { WEB_VITALS_FLUSH_MS, WEB_VITALS_MAX_VALUE_MS } from "./constants";
 import { doc, win } from "./globals";
 import { getPerformanceMetrics } from "./utils";
 
@@ -35,6 +41,11 @@ export class WebVitalsCapture {
       return;
     }
     const buffered = (key: keyof WebVitalsMetrics) => (metric: Metric) => {
+      // Drop implausible timing values (bfcache restores, clock skew). CLS is a
+      // small unitless decimal so this never trips it.
+      if (key !== "cls" && metric.value >= WEB_VITALS_MAX_VALUE_MS) {
+        return;
+      }
       // CLS is a small decimal; everything else is whole milliseconds
       this.addMetric(
         key,
@@ -52,8 +63,21 @@ export class WebVitalsCapture {
     if (this.flushed) {
       return;
     }
+    // Don't arm a timer here: LCP/CLS/INP report their terminal values as the
+    // page hides, and flushNow() (wired to pagehide/visibilitychange) sends the
+    // buffer then. Flushing on a timer would lock in FCP/TTFB and drop the
+    // Core Web Vitals that arrive later.
     this.buffer[key] = value;
-    this.flushTimeout ??= setTimeout(() => this.flush(), WEB_VITALS_FLUSH_MS);
+  }
+
+  /**
+   * Flush whatever has been collected right now, instead of waiting out the
+   * timer. Called when the page is hidden/unloading: web-vitals delivers the
+   * terminal LCP/CLS/INP values at exactly that moment, and a bounce shorter
+   * than the flush timer would otherwise send no web_vitals event at all.
+   */
+  flushNow(): void {
+    this.flush();
   }
 
   private flush(): void {
@@ -63,18 +87,23 @@ export class WebVitalsCapture {
     this.flushed = true;
 
     // Fold in navigation-timing metrics; they also backfill ttfb/fcp when the
-    // web-vitals callbacks never reported (or never ran)
+    // web-vitals callbacks never reported (or never ran). Apply the same
+    // implausible-value cap as the callback path — a prerender/bfcache/clock-skew
+    // navigation can put responseStart & friends past 15 min, and this fallback
+    // would otherwise ship those garbage values for the same wire fields.
     const navigationMetrics = getPerformanceMetrics();
-    if (navigationMetrics.page_load_time !== undefined) {
+    const plausible = (value: number | undefined): value is number =>
+      value !== undefined && value < WEB_VITALS_MAX_VALUE_MS;
+    if (plausible(navigationMetrics.page_load_time)) {
       this.buffer.plt = navigationMetrics.page_load_time;
     }
-    if (navigationMetrics.dom_interactive !== undefined) {
+    if (plausible(navigationMetrics.dom_interactive)) {
       this.buffer.di = navigationMetrics.dom_interactive;
     }
-    if (this.buffer.ttfb === undefined && navigationMetrics.time_to_first_byte !== undefined) {
+    if (this.buffer.ttfb === undefined && plausible(navigationMetrics.time_to_first_byte)) {
       this.buffer.ttfb = navigationMetrics.time_to_first_byte;
     }
-    if (this.buffer.fcp === undefined && navigationMetrics.first_contentful_paint !== undefined) {
+    if (this.buffer.fcp === undefined && plausible(navigationMetrics.first_contentful_paint)) {
       this.buffer.fcp = navigationMetrics.first_contentful_paint;
     }
 

@@ -38,8 +38,13 @@ const analytics = initAnalytics({
 // Track custom events
 analytics.track("signup_clicked", { plan: "pro", seats: 3 });
 
-// Identify users
+// Identify users — persists across page loads; an `identify` event is only
+// sent when the id changes
 analytics.identify("user_123");
+
+// On logout: clears user + session; pass true to also rotate the visitor id
+// so the next user on this device isn't linked to the previous one
+analytics.reset(true);
 
 // Manual pageview tracking (only needed with trackHistoryChanges: false)
 analytics.trackPageview({ page_type: "product" });
@@ -127,7 +132,10 @@ interface HerculesEvent {
   viewport_height: number;
   lib_version: string;
 
-  // Custom properties (ad click IDs like gclid/fbclid are captured here)
+  // Custom properties (ad click IDs like gclid/fbclid are captured here).
+  // track() values are coerced to this flat shape: finite numbers go to
+  // properties_numeric; booleans/objects are stringified; null/undefined/NaN
+  // are dropped
   properties: Record<string, string>;
   properties_numeric: Record<string, number>;
 
@@ -165,8 +173,13 @@ the ingest side deduplicates on `event_id`.
 ## Core Web Vitals
 
 With `trackPerformance` enabled, LCP, CLS, INP, FCP, and TTFB are buffered as
-they arrive and sent as one `web_vitals` event 5 seconds after the first
-metric, together with page-load timings from the Navigation Timing API.
+they arrive and sent as one `web_vitals` event, together with page-load timings
+from the Navigation Timing API. The event flushes 5 seconds after the first
+metric, or immediately when the page is hidden/unloading — whichever comes
+first. The page-hidden flush matters because LCP, CLS, and INP only settle at
+that moment, so a bounce shorter than 5 seconds would otherwise report no web
+vitals at all. Implausible timing values (≥ 15 minutes, from bfcache restores or
+clock skew) are dropped, matching posthog-js.
 
 ## License
 

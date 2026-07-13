@@ -125,6 +125,76 @@ describe("Analytics core", () => {
     expect(custom.properties_numeric).toMatchObject({ seats: 3 });
   });
 
+  it("coerces non-string, non-number property values to the flat wire format", () => {
+    createAnalytics().track("checkout", {
+      plan: "pro",
+      seats: 3,
+      newsletter: true,
+      items: ["a", "b"],
+      missing: null,
+      skipped: undefined,
+      broken: Number.NaN,
+    });
+    vi.advanceTimersByTime(1000);
+
+    const [event] = sentEvents();
+    expect(event!.properties).toMatchObject({
+      plan: "pro",
+      newsletter: "true",
+      items: '["a","b"]',
+    });
+    expect(event!.properties_numeric).toEqual({ seats: 3 });
+    expect(event!.properties).not.toHaveProperty("missing");
+    expect(event!.properties).not.toHaveProperty("skipped");
+    expect(event!.properties_numeric).not.toHaveProperty("broken");
+  });
+
+  it("persists the identified user across instances and only emits identify on change", () => {
+    const first = createAnalytics();
+    first.identify("user_123");
+    first.identify("user_123"); // no-op: id unchanged
+    vi.advanceTimersByTime(1000);
+
+    const identifies = sentEvents().filter((e) => e.event_name === "identify");
+    expect(identifies).toHaveLength(1);
+
+    first.destroy();
+    createAnalytics().track("after_reload");
+    vi.advanceTimersByTime(1000);
+
+    const afterReload = sentEvents().find((e) => e.event_name === "after_reload");
+    expect(afterReload!.user_id).toBe("user_123");
+  });
+
+  it("reset clears the identified user but keeps the visitor id", () => {
+    const instance = createAnalytics();
+    instance.identify("user_123");
+    instance.reset();
+    instance.track("post_reset");
+    vi.advanceTimersByTime(1000);
+
+    const events = sentEvents();
+    const identify = events.find((e) => e.event_name === "identify")!;
+    const postReset = events.find((e) => e.event_name === "post_reset")!;
+    expect(postReset.user_id).toBeUndefined();
+    expect(postReset.visitor_id).toBe(identify.visitor_id);
+    expect(postReset.session_id).not.toBe(identify.session_id);
+  });
+
+  it("reset(true) also rotates the visitor id", () => {
+    const instance = createAnalytics();
+    instance.track("before");
+    instance.reset(true);
+    instance.track("after");
+    vi.advanceTimersByTime(1000);
+
+    const events = sentEvents();
+    const before = events.find((e) => e.event_name === "before")!;
+    const after = events.find((e) => e.event_name === "after")!;
+    expect(after.visitor_id).not.toBe(before.visitor_id);
+    expect(document.cookie).toContain(`_hrc_vid=${after.visitor_id}`);
+  });
+
   it("retries a failed batch with backoff", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     fetchMock.mockResolvedValue({ status: 503 });

@@ -1,6 +1,9 @@
 export const VISITOR_ID_COOKIE = "_hrc_vid";
 export const VISITOR_ID_COOKIE_DAYS = 365 * 2;
 
+/** localStorage key holding the identified user id (posthog persists distinct_id the same way) */
+export const USER_ID_STORAGE_KEY = "_hrc_uid";
+
 /** localStorage key holding [sessionId, lastActivityTimestamp, sessionStartTimestamp] */
 export const SESSION_STORAGE_KEY = "_hrc_ses";
 /** sessionStorage keys used by @usehercules/analytics < 2.0, read once for migration */
@@ -20,3 +23,9 @@ export const MAX_RETRIES = 10;
 
 /** Flush web vitals this long after the first metric arrives (posthog-js web-vitals) */
 export const WEB_VITALS_FLUSH_MS = 5000;
+/**
+ * Ignore web-vitals values at or above this (15 min), matching posthog-js
+ * `_maxAllowedValue`. bfcache restores and clock skew can produce absurd LCP/INP
+ * readings that would otherwise wreck p75s.
+ */
+export const WEB_VITALS_MAX_VALUE_MS = 15 * 60 * 1000;
