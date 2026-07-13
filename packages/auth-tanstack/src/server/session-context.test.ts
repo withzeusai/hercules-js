@@ -15,7 +15,7 @@ vi.mock("openid-client", () => ({
   buildEndSessionUrl: vi.fn(),
 }));
 
-import { getCookies, getRequest, setCookie } from "@tanstack/react-start/server";
+import { deleteCookie, getCookies, getRequest, setCookie } from "@tanstack/react-start/server";
 import * as oidc from "openid-client";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
 
@@ -113,6 +113,30 @@ describe("getResolvedSession", () => {
     const session = await getResolvedSession();
     expect(session?.accessToken).toBe("stale");
     expect(oidc.refreshTokenGrant).not.toHaveBeenCalled();
+  });
+
+  it("expires host-only chunks shadowing a domain-scoped refresh write", async () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_DOMAIN", ".example.com");
+    try {
+      vi.mocked(oidc.refreshTokenGrant).mockResolvedValue(refreshedTokens());
+      await givenSession({ accessToken: "stale", refreshToken: "rt", expiresAt: NOW() - 10 });
+
+      await getResolvedSession();
+
+      // The rewritten `.0` chunk is domain-scoped; the pre-migration host-only
+      // `.0` from the request must get its own (domain-less) delete.
+      expect(setCookie).toHaveBeenCalledWith(
+        sessionChunkName(0),
+        expect.any(String),
+        expect.objectContaining({ domain: ".example.com" }),
+      );
+      expect(deleteCookie).toHaveBeenCalledWith(
+        sessionChunkName(0),
+        expect.not.objectContaining({ domain: expect.anything() }),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

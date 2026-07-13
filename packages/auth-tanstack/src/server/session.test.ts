@@ -167,14 +167,36 @@ describe("session cookie domain", () => {
     const [fresh, ...deletes] = headers;
     expect(fresh).toContain("Domain=.example.com");
     expect(fresh).not.toContain("Max-Age=0");
-    // The stale `.1` chunk is expired twice: once with Domain, once host-only
-    // (a leftover from before the domain was configured).
+    // The stale `.1` chunk is expired twice — domain-scoped and host-only —
+    // and the written `.0` gets a host-only delete for the pre-migration
+    // cookie that would otherwise shadow it.
     expect(deletes.map((h) => cookieFromHeader(h)[0])).toEqual([
       `${SESSION_COOKIE}.1`,
       `${SESSION_COOKIE}.1`,
+      `${SESSION_COOKIE}.0`,
     ]);
     expect(deletes.every((h) => h.includes("Max-Age=0"))).toBe(true);
     expect(deletes.filter((h) => h.includes("Domain=.example.com"))).toHaveLength(1);
+  });
+
+  it("expires host-only cookies shadowing the written chunk names", () => {
+    // Migration: the request still carries chunks set before the domain was
+    // configured. The written `.0` gets a host-only delete alongside the
+    // domain-scoped set, or the old host-only `.0` shadows it on reads.
+    const headers = serializeSessionCookies("small", { path: "/", domain: ".example.com" }, [
+      `${SESSION_COOKIE}.0`,
+    ]);
+    const hostOnlyDeletes = headers.filter(
+      (h) => h.includes("Max-Age=0") && !h.includes("Domain="),
+    );
+    expect(hostOnlyDeletes).toHaveLength(1);
+    expect(hostOnlyDeletes[0]).toContain(`${SESSION_COOKIE}.0=;`);
+  });
+
+  it("adds no shadow deletes when the request carries no session cookies", () => {
+    const headers = serializeSessionCookies("small", { path: "/", domain: ".example.com" }, []);
+    expect(headers).toHaveLength(1);
+    expect(headers[0]).not.toContain("Max-Age=0");
   });
 
   it("clears each cookie domain-scoped and host-only on sign-out", () => {

@@ -51,8 +51,23 @@ export async function writeSession(session: SessionData): Promise<void> {
 
   chunks.forEach((chunk, index) => setCookie(sessionChunkName(index), chunk, options));
 
-  for (const name of staleSessionCookieNames(Object.keys(getCookies()), chunks.length)) {
+  const existingNames = Object.keys(getCookies());
+  for (const name of staleSessionCookieNames(existingNames, chunks.length)) {
     expireCookie(name, { secure, sameSite: sameSiteOption, domain });
+  }
+
+  // When writing domain-scoped chunks, also expire host-only cookies carrying
+  // the just-written names (left from before the domain was configured) —
+  // browsers send the older host-only cookie first and it would shadow the
+  // fresh session on reads. Distinct from the domain-scoped set above in h3's
+  // Set-Cookie dedup (name+domain+path), so both headers survive.
+  if (domain) {
+    for (let index = 0; index < chunks.length; index++) {
+      const name = sessionChunkName(index);
+      if (existingNames.includes(name)) {
+        deleteCookie(name, { path: "/", secure, sameSite: sameSiteOption });
+      }
+    }
   }
 }
 

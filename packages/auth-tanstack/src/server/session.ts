@@ -233,6 +233,19 @@ export function serializeSessionCookies(
   // deletion is accepted in the same (possibly cross-site) context.
   const stale = staleSessionCookieNames(existingNames, chunks.length);
   headers.push(...expireCookieHeaders(stale, options));
+
+  // When writing domain-scoped chunks, also expire host-only cookies carrying
+  // the just-written names (left from before the domain was configured). The
+  // Cookie header can't distinguish the two, and browsers send the older
+  // host-only cookie first, so it would shadow the fresh session on reads.
+  if (options.domain) {
+    const existing = new Set(existingNames);
+    const shadowed = chunks
+      .map((_, index) => sessionChunkName(index))
+      .filter((name) => existing.has(name));
+    const { path, sameSite, secure } = options;
+    headers.push(...expireCookieHeaders(shadowed, { path, sameSite, secure }));
+  }
   return headers;
 }
 
