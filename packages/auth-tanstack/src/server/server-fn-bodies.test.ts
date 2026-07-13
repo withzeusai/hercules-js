@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionData } from "./session";
 
 vi.mock("./session-context", () => ({
@@ -6,8 +6,32 @@ vi.mock("./session-context", () => ({
   refreshResolvedSession: vi.fn(),
 }));
 
+vi.mock("@tanstack/react-start/server", () => ({
+  getRequest: vi.fn(),
+  getCookies: vi.fn(() => ({})),
+  setCookie: vi.fn(),
+  deleteCookie: vi.fn(),
+}));
+
+// `signOutBody` throws the redirect; return a marker object so the test can
+// catch it and inspect the options (headers) it was built with.
+vi.mock("@tanstack/react-router", () => ({
+  redirect: vi.fn((options: unknown) => ({ isRedirect: true, options })),
+}));
+
+vi.mock("openid-client", () => ({
+  discovery: vi.fn(async () => ({ serverMetadata: () => ({}) })),
+  None: vi.fn(() => undefined),
+  randomPKCECodeVerifier: vi.fn(() => "test-verifier"),
+  calculatePKCECodeChallenge: vi.fn(async () => "test-challenge"),
+  randomState: vi.fn(() => "test-state"),
+  buildAuthorizationUrl: vi.fn(),
+  buildEndSessionUrl: vi.fn(),
+}));
+
+import { getCookies, getRequest } from "@tanstack/react-start/server";
 import { getResolvedSession } from "./session-context";
-import { authorizationParameters, checkRecentAuthBody } from "./server-fn-bodies";
+import { authorizationParameters, checkRecentAuthBody, signOutBody } from "./server-fn-bodies";
 
 const FLOW = { redirectUri: "https://app.example.com/auth/callback", state: "s", codeChallenge: "c" };
 
@@ -23,8 +47,19 @@ function sessionWithAuthTime(authTime: unknown): SessionData {
   };
 }
 
+beforeAll(() => {
+  process.env.HERCULES_AUTH_ISSUER_URL = "https://issuer.example.com";
+  process.env.HERCULES_AUTH_CLIENT_ID = "test-client";
+  process.env.HERCULES_AUTH_COOKIE_PASSWORD = "test-password-at-least-32-characters-long";
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getCookies).mockReturnValue({});
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("authorizationParameters", () => {
@@ -101,5 +136,45 @@ describe("checkRecentAuthBody", () => {
       authenticatedAt: null,
       isStale: true,
     });
+  });
+});
+
+describe("signOutBody", () => {
+  function signOutHeaders(thrown: unknown): string[] {
+    const { options } = thrown as { options: { headers?: [string, string][] } };
+    return (options.headers ?? []).map(([, header]) => header);
+  }
+
+  it("clears session cookies with the configured cookie domain", async () => {
+    vi.stubEnv("HERCULES_AUTH_COOKIE_DOMAIN", ".example.com");
+    vi.mocked(getRequest).mockReturnValue(new Request("https://app.example.com/account"));
+    vi.mocked(getCookies).mockReturnValue({ "hercules_session.0": "sealed", other: "x" });
+
+    const thrown = await signOutBody().then(
+      () => expect.unreachable("signOutBody must throw a redirect"),
+      (error: unknown) => error,
+    );
+
+    const headers = signOutHeaders(thrown);
+    expect(headers).toHaveLength(1);
+    // Deletion must carry the same Domain the session was set with, or the
+    // browser treats it as a different cookie and the session survives.
+    expect(headers[0]).toContain("hercules_session.0=;");
+    expect(headers[0]).toContain("Domain=.example.com");
+    expect(headers[0]).toContain("Max-Age=0");
+  });
+
+  it("clears session cookies without a Domain attribute when none is configured", async () => {
+    vi.mocked(getRequest).mockReturnValue(new Request("https://app.example.com/account"));
+    vi.mocked(getCookies).mockReturnValue({ "hercules_session.0": "sealed" });
+
+    const thrown = await signOutBody().then(
+      () => expect.unreachable("signOutBody must throw a redirect"),
+      (error: unknown) => error,
+    );
+
+    const headers = signOutHeaders(thrown);
+    expect(headers).toHaveLength(1);
+    expect(headers[0]).not.toContain("Domain=");
   });
 });

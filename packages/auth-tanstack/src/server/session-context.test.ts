@@ -148,4 +148,27 @@ describe("refreshResolvedSession", () => {
     vi.mocked(getRequest).mockReturnValue(new Request("https://app.example.com/"));
     expect(await refreshResolvedSession()).toBeNull();
   });
+
+  it("performs a single grant when forcing a refresh of an already-expired session", async () => {
+    vi.mocked(oidc.refreshTokenGrant).mockResolvedValue(refreshedTokens());
+    await givenSession({ accessToken: "stale", refreshToken: "rt", expiresAt: NOW() - 10 });
+
+    // Resolving inside the forced refresh already refreshes the expired
+    // session; a second back-to-back grant would burn the rotated token.
+    const refreshed = await refreshResolvedSession();
+
+    expect(refreshed?.accessToken).toBe("new-access");
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a session auto-refreshed earlier in the request instead of granting again", async () => {
+    vi.mocked(oidc.refreshTokenGrant).mockResolvedValue(refreshedTokens());
+    await givenSession({ accessToken: "stale", refreshToken: "rt", expiresAt: NOW() - 10 });
+
+    const resolvedSession = await getResolvedSession();
+    const refreshed = await refreshResolvedSession();
+
+    expect(refreshed).toBe(resolvedSession);
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(1);
+  });
 });

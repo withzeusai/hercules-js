@@ -160,7 +160,7 @@ function ProfileButton() {
 }
 ```
 
-With `useAuth({ ensureSignedIn: true })` the hook re-fetches auth once when there is no user, and the return type narrows: when `loading` is false, `user` is non-null. It does not itself redirect — gate on `loading` and send signed-out users to sign-in yourself.
+With `useAuth({ ensureSignedIn: true })` the hook re-fetches auth once when there is no user. It does not itself redirect, so `user` stays nullable even after `loading` settles — gate on `loading` and send signed-out users to sign-in yourself.
 
 ### Call an API with the access token
 

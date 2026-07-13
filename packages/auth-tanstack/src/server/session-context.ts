@@ -11,7 +11,28 @@ import { readSession, writeSession } from "./session-store";
 //
 // The promise (not the value) is cached, so concurrent readers share a single
 // in-flight resolution rather than racing duplicate refresh grants.
-const resolved = new WeakMap<Request, Promise<SessionData | null>>();
+interface ResolvedSession {
+  session: SessionData | null;
+  /**
+   * Whether resolving performed a (successful) transparent refresh grant. A
+   * user-initiated refresh then returns this fresh session instead of running
+   * a second back-to-back grant — which would waste, and under strict rotation
+   * could invalidate, the just-issued refresh token.
+   */
+  autoRefreshed: boolean;
+}
+
+const resolved = new WeakMap<Request, Promise<ResolvedSession>>();
+
+function getResolved(): Promise<ResolvedSession> {
+  const request = getRequest();
+  let promise = resolved.get(request);
+  if (!promise) {
+    promise = resolveSession();
+    resolved.set(request, promise);
+  }
+  return promise;
+}
 
 /**
  * The current request's session, unsealed once and auto-refreshed when the
@@ -24,43 +45,42 @@ const resolved = new WeakMap<Request, Promise<SessionData | null>>();
  * mapping resolves it to `{ user: null }`); a failed refresh is not fatal here
  * so a transient provider outage doesn't sign users out.
  */
-export function getResolvedSession(): Promise<SessionData | null> {
-  const request = getRequest();
-  let promise = resolved.get(request);
-  if (!promise) {
-    promise = resolveSession();
-    resolved.set(request, promise);
-  }
-  return promise;
+export async function getResolvedSession(): Promise<SessionData | null> {
+  return (await getResolved()).session;
 }
 
-async function resolveSession(): Promise<SessionData | null> {
+async function resolveSession(): Promise<ResolvedSession> {
   const session = await readSession();
-  if (!session) return null;
-  if (!isSessionExpired(session) || !session.refreshToken) return session;
+  if (!session) return { session: null, autoRefreshed: false };
+  if (!isSessionExpired(session) || !session.refreshToken) {
+    return { session, autoRefreshed: false };
+  }
 
   const next = await performRefreshGrant(session);
-  if (!next) return session;
+  if (!next) return { session, autoRefreshed: false };
 
   await writeSession(next);
-  return next;
+  return { session: next, autoRefreshed: true };
 }
 
 /**
  * Force a refresh of the current request's session (user-initiated refresh),
  * re-seal it onto the response, and update the per-request cache so later
- * readers — including a second refresh — see the rotated tokens. Returns null
- * when there is no session/refresh token or the grant fails.
+ * readers — including a second refresh — see the rotated tokens. When resolving
+ * the session already refreshed it (expired access token), that fresh session
+ * is returned as-is rather than immediately spending a second grant. Returns
+ * null when there is no session/refresh token or the grant fails.
  */
 export async function refreshResolvedSession(): Promise<SessionData | null> {
   const request = getRequest();
-  const session = await getResolvedSession();
+  const { session, autoRefreshed } = await getResolved();
+  if (autoRefreshed && session) return session;
   if (!session?.refreshToken) return null;
 
   const next = await performRefreshGrant(session);
   if (!next) return null;
 
   await writeSession(next);
-  resolved.set(request, Promise.resolve(next));
+  resolved.set(request, Promise.resolve({ session: next, autoRefreshed: false }));
   return next;
 }

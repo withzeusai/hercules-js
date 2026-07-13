@@ -15,6 +15,7 @@ import {
   encodePkceState,
   getConfig,
   pkceCookieName,
+  sessionCookieDomain,
 } from "./config";
 import { resolveLogoutLocation } from "./refresh";
 import { cookieSecurity, resolveOrigin, resolveRedirectUri, toCookieSameSite } from "./request-url";
@@ -140,12 +141,15 @@ export async function signOutBody(returnTo?: string): Promise<never> {
   ).toString();
   const location = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
 
-  // Clear with the same SameSite/Secure used to set the session so the cookies
-  // are removed even when sign-out runs in a cross-site context.
+  // Clear with the same SameSite/Secure/Domain used to set the session so the
+  // cookies are removed even when sign-out runs in a cross-site context or the
+  // session cookie is domain-scoped (deletion matches on name/path/domain).
   const { secure, sameSite } = cookieSecurity(request);
-  const clearHeaders = clearSessionCookies(Object.keys(getCookies()), { secure, sameSite }).map(
-    (header) => ["Set-Cookie", header] as [string, string],
-  );
+  const clearHeaders = clearSessionCookies(Object.keys(getCookies()), {
+    secure,
+    sameSite,
+    domain: sessionCookieDomain(),
+  }).map((header) => ["Set-Cookie", header] as [string, string]);
 
   throw redirect({
     href: location,
