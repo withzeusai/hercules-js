@@ -24,16 +24,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@typescript-eslint/scope-manager": "^8.63.0",
-    "@typescript-eslint/type-utils": "^8.63.0",
-    "@typescript-eslint/utils": "^8.63.0"
+    "@typescript-eslint/scope-manager": "^8.64.0",
+    "@typescript-eslint/type-utils": "^8.64.0",
+    "@typescript-eslint/utils": "^8.64.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
-    "@typescript-eslint/eslint-plugin": "^8.63.0",
-    "@typescript-eslint/parser": "^8.63.0",
-    "@typescript-eslint/rule-tester": "^8.63.0",
-    "eslint": "^10.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "@typescript-eslint/rule-tester": "^8.64.0",
+    "eslint": "^10.7.0",
     "tsdown": "^0.22.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
