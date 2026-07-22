@@ -43,7 +43,7 @@
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.17",
-    "@tanstack/react-start": "^1.168.27",
+    "@tanstack/react-start": "^1.168.28",
     "oauth4webapi": "^3.8.6",
     "openid-client": "^6.8.4"
   }
