@@ -8,7 +8,8 @@ import { useAuth } from "react-oidc-context";
 import { withRefreshLock } from "../internal/refresh-lock";
 import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
-const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+// Must stay below the 1h id_token lifetime or the reuse fast paths below go dead.
+const REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
 
 function tokenExpiresWithin(token: string, ms: number): boolean {
   try {
@@ -53,7 +54,8 @@ function useUseAuthFromHercules() {
         try {
           const refreshed = await signinSilentRef.current();
           return refreshed?.id_token ?? null;
-        } catch {
+        } catch (error) {
+          console.error("Hercules Convex auth: silent token refresh failed", error);
           return null;
         }
       }).finally(() => {

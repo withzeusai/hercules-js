@@ -41,9 +41,8 @@ vi.mock("convex/react", () => ({
   },
 }));
 
-// Token expiring in 30 minutes (within the one-hour refresh threshold).
-const EXPIRING_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
-// Token expiring in two hours (outside the one-hour refresh threshold).
+const EXPIRING_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 2 * 60);
+const REUSABLE_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
 const LONG_LIVED_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 2 * 60 * 60);
 
 function setAuthState(overrides: Record<string, unknown>) {
@@ -109,7 +108,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(mockSigninSilent).not.toHaveBeenCalled();
   });
 
-  it("skips refresh when token expires more than one hour from now", async () => {
+  it("skips refresh when the token has more than the threshold of life left", async () => {
     setAuthState({ user: { id_token: LONG_LIVED_TOKEN } });
 
     const { result } = renderUseAuth();
@@ -120,6 +119,44 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
 
     expect(token).toBe(LONG_LIVED_TOKEN);
     expect(mockSigninSilent).not.toHaveBeenCalled();
+  });
+
+  it("reuses a ~30-minute token on forced refresh instead of rotating", async () => {
+    mockSigninSilent.mockResolvedValue({ id_token: "should-not-be-used" });
+    setAuthState({ user: { id_token: REUSABLE_TOKEN } });
+
+    const { result } = renderUseAuth();
+
+    const token = await result.current.fetchAccessToken({
+      forceRefreshToken: true,
+    });
+
+    expect(token).toBe(REUSABLE_TOKEN);
+    expect(mockSigninSilent).not.toHaveBeenCalled();
+  });
+
+  it("does not rotate a second time when the token is already fresh in-lock", async () => {
+    let signinCalls = 0;
+    mockSigninSilent.mockImplementation(() => {
+      signinCalls += 1;
+      return Promise.resolve({ id_token: "rotated-token" });
+    });
+    setAuthState({ user: { id_token: REUSABLE_TOKEN } });
+
+    const { result } = renderUseAuth();
+
+    await act(async () => {
+      const [a, b, c] = await Promise.all([
+        result.current.fetchAccessToken({ forceRefreshToken: true }),
+        result.current.fetchAccessToken({ forceRefreshToken: true }),
+        result.current.fetchAccessToken({ forceRefreshToken: true }),
+      ]);
+      expect(a).toBe(REUSABLE_TOKEN);
+      expect(b).toBe(REUSABLE_TOKEN);
+      expect(c).toBe(REUSABLE_TOKEN);
+    });
+
+    expect(signinCalls).toBe(0);
   });
 
   it("calls signinSilent and returns the refreshed token when forceRefreshToken is true", async () => {
@@ -138,7 +175,8 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(mockSigninSilent).toHaveBeenCalledOnce();
   });
 
-  it("returns null when signinSilent throws", async () => {
+  it("returns null and logs when signinSilent throws", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     mockSigninSilent.mockRejectedValue(new Error("refresh failed"));
 
     const { result } = renderUseAuth();
@@ -152,6 +190,8 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
 
     expect(token).toBeNull();
     expect(mockSigninSilent).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledOnce();
+    consoleError.mockRestore();
   });
 
   it("returns null when signinSilent resolves without a user", async () => {
