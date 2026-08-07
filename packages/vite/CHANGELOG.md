@@ -1,5 +1,18 @@
 # @usehercules/vite
 
+## 1.2.0
+
+### Minor Changes
+
+- [#120](https://github.com/withzeusai/hercules-js/pull/120) [`8fb36ce`](https://github.com/withzeusai/hercules-js/commit/8fb36ce902d6af7bfd94cce5471c4c2d9343a61b) Thanks [@grant0417](https://github.com/grant0417)! - Keep component tagging out of production builds
+
+  The component tagger and visual editor plugins are now `apply: "serve"`, so
+  they never run during `vite build`. Built output contains no `data-hercules-id`
+  / `data-hercules-name` attributes and no injected editor script, giving
+  published sites white-label markup. Previously the tagger ran in builds
+  unconditionally, and the editor's script tag could leak into built HTML when
+  `NODE_ENV` was unset during the build.
+
 ## 1.1.0
 
 ### Minor Changes
