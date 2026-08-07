@@ -3,8 +3,8 @@ import * as t from "@babel/types";
 import traverseModule from "@babel/traverse";
 import generateModule from "@babel/generator";
 import { readFile, writeFile } from "fs/promises";
-import path from "path";
 import { type ClassNameAnalysis, type TextContentAnalysis } from "./ast-analyzer";
+import { resolveComponentId } from "./component-id";
 
 // Extract the actual functions
 const traverse = (traverseModule as any).default || traverseModule;
@@ -17,6 +17,34 @@ export interface UpdateResult {
   analysis?: ClassNameAnalysis | TextContentAnalysis;
 }
 
+/** Characters that terminate a JSX text node or attribute value. */
+const JSX_UNSAFE = /["'<>{}]/;
+
+/**
+ * Build a JSX attribute value that survives `<`, `>`, `{`, `}` and quotes.
+ *
+ * A bare string literal is printed as `attr="value"`, so any of those
+ * characters produce source that no longer parses. Wrapping in an expression
+ * container (`attr={"value"}`) makes the generator escape the string properly.
+ */
+function jsxSafeAttributeValue(value: string): t.StringLiteral | t.JSXExpressionContainer {
+  return JSX_UNSAFE.test(value)
+    ? t.jsxExpressionContainer(t.stringLiteral(value))
+    : t.stringLiteral(value);
+}
+
+/**
+ * Build JSX children for a run of text, escaping the same way.
+ */
+function jsxSafeChildren(text: string): Array<t.JSXText | t.JSXExpressionContainer> {
+  if (text.trim() === "") {
+    return [];
+  }
+  return JSX_UNSAFE.test(text)
+    ? [t.jsxExpressionContainer(t.stringLiteral(text))]
+    : [t.jsxText(text)];
+}
+
 export async function updateComponentElement(
   componentId: string,
   updates: {
@@ -27,18 +55,12 @@ export async function updateComponentElement(
 ): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
-    const match = componentId.match(/^(.+):(\d+):(\d+)$/);
-    if (!match) {
-      return {
-        success: false,
-        error: `Invalid component ID format: ${componentId}`,
-      };
+    const resolved = await resolveComponentId(componentId, rootDir);
+    if (!resolved.ok) {
+      return { success: false, error: resolved.error };
     }
 
-    const [, relativePath, lineStr, colStr] = match;
-    const line = parseInt(lineStr!, 10);
-    const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
+    const { filePath, line, column: col } = resolved.value;
 
     let code: string;
     try {
@@ -88,8 +110,9 @@ export async function updateComponentElement(
           });
         }
 
-        // Check if this is the element we're looking for
-        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
+        // Check if this is the element we're looking for. Exact match: a fuzzy
+        // column window selects the enclosing element when two start on one line.
+        if (loc.start.line === line && loc.start.column === col) {
           // Update className if provided
           if (updates.className !== undefined) {
             const classNameAttr = openingElement.attributes.find(
@@ -104,11 +127,14 @@ export async function updateComponentElement(
             } else {
               if (classNameAttr) {
                 // Update existing className
-                classNameAttr.value = t.stringLiteral(updates.className);
+                classNameAttr.value = jsxSafeAttributeValue(updates.className);
               } else {
                 // Add new className attribute
                 openingElement.attributes.push(
-                  t.jsxAttribute(t.jsxIdentifier("className"), t.stringLiteral(updates.className)),
+                  t.jsxAttribute(
+                    t.jsxIdentifier("className"),
+                    jsxSafeAttributeValue(updates.className),
+                  ),
                 );
               }
             }
@@ -116,13 +142,9 @@ export async function updateComponentElement(
 
           // Update text content if provided
           if (updates.textContent !== undefined) {
-            // Clear existing children
-            path.node.children = [];
-
-            // Add new text content as a JSXText node
-            if (updates.textContent.trim() !== "") {
-              path.node.children.push(t.jsxText(updates.textContent));
-            }
+            // Replace children with the new text, escaped so that characters
+            // like `<` or `{` cannot terminate the element
+            path.node.children = jsxSafeChildren(updates.textContent);
           }
 
           modified = true;
@@ -175,18 +197,12 @@ export async function updateComponentElement(
 export async function deleteComponent(componentId: string, rootDir: string): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
-    const match = componentId.match(/^(.+):(\d+):(\d+)$/);
-    if (!match) {
-      return {
-        success: false,
-        error: `Invalid component ID format: ${componentId}`,
-      };
+    const resolved = await resolveComponentId(componentId, rootDir);
+    if (!resolved.ok) {
+      return { success: false, error: resolved.error };
     }
 
-    const [, relativePath, lineStr, colStr] = match;
-    const line = parseInt(lineStr!, 10);
-    const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
+    const { filePath, line, column: col } = resolved.value;
 
     let code: string;
     try {
@@ -236,8 +252,10 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
           });
         }
 
-        // Check if this is the element we're looking for
-        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
+        // Check if this is the element we're looking for. Exact match: deleting
+        // the wrong element is unrecoverable, and a ±5 column window resolves a
+        // nested element to its parent.
+        if (loc.start.line === line && loc.start.column === col) {
           // Remove the element from its parent
           path.remove();
 
@@ -252,7 +270,7 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
         foundElements++;
 
         // Check if this is the fragment we're looking for
-        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
+        if (loc.start.line === line && loc.start.column === col) {
           // Remove the fragment from its parent
           path.remove();
 

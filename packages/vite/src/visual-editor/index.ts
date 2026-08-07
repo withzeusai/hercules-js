@@ -1,8 +1,10 @@
-import type { Plugin, ViteDevServer } from "vite";
+import type { ServerResponse } from "http";
+import type { Connect, Plugin, ViteDevServer } from "vite";
 
 // Import from extracted modules
 import { analyzeElement } from "./ast-analyzer";
 import { updateComponentElement, deleteComponent } from "./ast-transformer";
+import { readJsonBody } from "./request-body";
 
 export interface VisualEditorOptions {
   /**
@@ -41,90 +43,72 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
         }
       });
 
-      // Handle unified element analysis requests
-      server.middlewares.use("/__hercules_analyze_element", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
+      const sendJson = (res: ServerResponse, status: number, payload: unknown) => {
+        res.statusCode = status;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(payload));
+      };
+
+      /**
+       * Wrap an editor endpoint: JSON body with a size cap, and errors reported
+       * without leaking a stack trace to the caller.
+       */
+      const editorEndpoint =
+        (label: string, handler: (body: any) => Promise<unknown>): Connect.NextHandleFunction =>
+        (req, res, next) => {
+          if (req.method !== "POST") {
+            next();
+            return;
+          }
+
+          void (async () => {
+            const body = await readJsonBody(req);
+            if (!body.ok) {
+              sendJson(res, body.rejection.status, {
+                success: false,
+                error: body.rejection.message,
+              });
+              return;
+            }
+
             try {
-              const { componentId } = JSON.parse(body);
-
-              const result = await analyzeElement(componentId, server.config.root);
-
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
+              sendJson(res, 200, await handler(body.value));
             } catch (error) {
               if (debug) {
-                console.error("[Visual Editor] Error analyzing element:", error);
+                console.error(`[Visual Editor] Error handling ${label}:`, error);
               }
-              res.statusCode = 500;
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ success: false, error: String(error) }));
+              sendJson(res, 500, { success: false, error: `Failed to ${label}` });
             }
-          });
-        } else {
-          next();
-        }
-      });
+          })();
+        };
+
+      // Handle unified element analysis requests
+      server.middlewares.use(
+        "/__hercules_analyze_element",
+        editorEndpoint("analyze element", ({ componentId }) =>
+          analyzeElement(componentId, server.config.root),
+        ),
+      );
 
       // Handle unified element update requests
-      server.middlewares.use("/__hercules_update_element", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const data = JSON.parse(body);
-              const { componentId, className, textContent } = data;
+      server.middlewares.use(
+        "/__hercules_update_element",
+        editorEndpoint("update element", ({ componentId, className, textContent }) => {
+          const updates: { className?: string; textContent?: string } = {};
+          if (className !== undefined) updates.className = className;
+          if (textContent !== undefined) updates.textContent = textContent;
 
-              const updates: { className?: string; textContent?: string } = {};
-              if (className !== undefined) updates.className = className;
-              if (textContent !== undefined) updates.textContent = textContent;
-
-              const result = await updateComponentElement(componentId, updates, server.config.root);
-
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error updating element:", error);
-              }
-              res.statusCode = 500;
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
+          return updateComponentElement(componentId, updates, server.config.root);
+        }),
+      );
 
       // Handle element deletion requests
-      server.middlewares.use("/__hercules_delete_element", async (req, res, next) => {
-        if (req.method === "POST") {
-          let body = "";
-          req.on("data", (chunk) => (body += chunk));
-          req.on("end", async () => {
-            try {
-              const data = JSON.parse(body);
-              const { componentId } = data;
-
-              const result = await deleteComponent(componentId, server.config.root);
-
-              res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              if (debug) {
-                console.error("[Visual Editor] Error deleting element:", error);
-              }
-              res.statusCode = 500;
-              res.end(JSON.stringify({ success: false, error: String(error) }));
-            }
-          });
-        } else {
-          next();
-        }
-      });
+      server.middlewares.use(
+        "/__hercules_delete_element",
+        editorEndpoint("delete element", ({ componentId }) =>
+          deleteComponent(componentId, server.config.root),
+        ),
+      );
     },
 
     transformIndexHtml(html) {

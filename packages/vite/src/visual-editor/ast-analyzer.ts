@@ -2,7 +2,7 @@ import { parse } from "@babel/parser";
 import * as t from "@babel/types";
 import traverseModule from "@babel/traverse";
 import { readFile } from "fs/promises";
-import path from "path";
+import { resolveComponentId } from "./component-id";
 
 // Extract the actual functions
 const traverse = (traverseModule as any).default || traverseModule;
@@ -75,12 +75,17 @@ export interface UnifiedElementAnalysis {
 
 // Helper to analyze if element can be safely deleted
 function analyzeElementDeletionSafety(path: any): ElementTypeAnalysis {
-  // Walk up the AST to check the element's context
-  let current = path.parent;
+  // Walk up the AST to check the element's context.
+  // Note: this walks `parentPath`, not `node.parent` — Babel nodes carry no
+  // parent pointer, so walking nodes stops dead after a single hop and reports
+  // everything as safe to delete.
+  let current = path.parentPath;
 
   while (current) {
+    const node = current.node;
+
     // Check if element is in a conditional expression (ternary)
-    if (t.isConditionalExpression(current)) {
+    if (t.isConditionalExpression(node)) {
       return {
         type: "dynamic",
         reason: "conditional-expression",
@@ -89,10 +94,10 @@ function analyzeElementDeletionSafety(path: any): ElementTypeAnalysis {
 
     // Check if element is in array map expressions
     if (
-      t.isCallExpression(current) &&
-      t.isMemberExpression(current.callee) &&
-      t.isIdentifier(current.callee.property) &&
-      current.callee.property.name === "map"
+      t.isCallExpression(node) &&
+      t.isMemberExpression(node.callee) &&
+      t.isIdentifier(node.callee.property) &&
+      node.callee.property.name === "map"
     ) {
       return {
         type: "dynamic",
@@ -101,23 +106,30 @@ function analyzeElementDeletionSafety(path: any): ElementTypeAnalysis {
     }
 
     // Check for other complex expressions that might make deletion unsafe
-    if (
-      t.isLogicalExpression(current) ||
-      t.isSequenceExpression(current) ||
-      t.isArrayExpression(current)
-    ) {
+    if (t.isLogicalExpression(node) || t.isSequenceExpression(node) || t.isArrayExpression(node)) {
       return {
         type: "dynamic",
         reason: "complex-parent",
       };
     }
 
-    // Stop checking at function/component boundaries
-    if (t.isFunction(current) || t.isArrowFunctionExpression(current) || t.isJSXElement(current)) {
+    // Stop checking at component boundaries, but walk through callbacks:
+    // in `items.map((i) => <li/>)` the arrow function is the callback, and the
+    // `.map()` that makes deletion unsafe sits directly above it.
+    if (t.isFunction(node)) {
+      const parentNode = current.parentPath?.node;
+      const isCallback =
+        parentNode &&
+        t.isCallExpression(parentNode) &&
+        parentNode.arguments.some((argument: any) => argument === node);
+      if (!isCallback) {
+        break;
+      }
+    } else if (t.isJSXElement(node)) {
       break;
     }
 
-    current = current.parent;
+    current = current.parentPath;
   }
 
   // If we didn't find any problematic parents, deletion should be safe
@@ -173,19 +185,12 @@ export async function analyzeElement(
 ): Promise<UnifiedElementAnalysis> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
-    const match = componentId.match(/^(.+):(\d+):(\d+)$/);
-    if (!match) {
-      return {
-        success: false,
-        componentId,
-        error: `Invalid component ID format: ${componentId}`,
-      };
+    const resolved = await resolveComponentId(componentId, rootDir);
+    if (!resolved.ok) {
+      return { success: false, componentId, error: resolved.error };
     }
 
-    const [, relativePath, lineStr, colStr] = match;
-    const line = parseInt(lineStr!, 10);
-    const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
+    const { filePath, line, column: col } = resolved.value;
 
     // Read file once
     let code: string;
@@ -227,8 +232,10 @@ export async function analyzeElement(
         const loc = openingElement.loc;
         if (!loc) return;
 
-        // Check if this is the element we're looking for
-        if (loc.start.line === line && Math.abs(loc.start.column - col) <= 5) {
+        // Check if this is the element we're looking for. The match is exact:
+        // the tagger derives the ID from this same Babel location, and a fuzzy
+        // column window selects the enclosing element when two start on one line.
+        if (loc.start.line === line && loc.start.column === col) {
           elementFound = true;
 
           // Analyze className from opening element
