@@ -25,6 +25,8 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
   return {
     name: "vite-plugin-hercules-visual-editor",
     enforce: "pre",
+    // Dev-server only: production builds must never ship the editor script tag
+    apply: "serve",
 
     configureServer(_server) {
       server = _server;
@@ -126,17 +128,13 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
     },
 
     transformIndexHtml(html) {
-      // Only inject in development mode
-      if (process.env.NODE_ENV !== "production") {
-        const editorScript = '<script type="module" src="/__hercules_visual_editor.js"></script>';
+      // `apply: "serve"` keeps this out of builds, so injection is dev-only
+      const editorScript = '<script type="module" src="/__hercules_visual_editor.js"></script>';
 
-        if (html.includes("</body>")) {
-          return html.replace("</body>", `${editorScript}\n</body>`);
-        } else {
-          return html + editorScript;
-        }
+      if (html.includes("</body>")) {
+        return html.replace("</body>", `${editorScript}\n</body>`);
       }
-      return html;
+      return html + editorScript;
     },
   };
 }

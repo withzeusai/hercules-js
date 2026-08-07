@@ -32,10 +32,23 @@ export default defineConfig({
 
 ## Options
 
-| Option    | Type      | Default                         | Description                            |
-| --------- | --------- | ------------------------------- | -------------------------------------- |
-| `debug`   | `boolean` | `false`                         | Enable debug logging to console        |
-| `message` | `string`  | `'Hercules plugin is running!'` | Custom message to display during build |
+| Option                    | Type      | Default                         | Description                                             |
+| ------------------------- | --------- | ------------------------------- | ------------------------------------------------------- |
+| `debug`                   | `boolean` | `false`                         | Enable debug logging to console                         |
+| `message`                 | `string`  | `'Hercules plugin is running!'` | Custom message to display during build                  |
+| `componentTagger.enabled` | `boolean` | `true`                          | Tag JSX elements with data attributes on the dev server |
+| `visualEditor.enabled`    | `boolean` | `true`                          | Enable the visual editor (dev server only)              |
+
+## Component tagging is dev-only
+
+During `vite dev`, the component tagger adds `data-hercules-id` and
+`data-hercules-name` attributes to JSX elements so the visual editor can map
+DOM nodes back to source.
+
+Both the tagger and the visual editor are `apply: "serve"` plugins, so they are
+dropped from the `vite build` pipeline entirely. Built output contains no
+tagging attributes and no injected editor script — published sites ship
+white-label markup regardless of how `NODE_ENV` is set.
 
 ## Features
 
