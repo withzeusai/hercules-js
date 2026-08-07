@@ -344,6 +344,9 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
   return {
     name: "vite-plugin-hercules-component-tagger",
     enforce: "pre",
+    // Dev-server only: tagging is editor tooling, and published sites must
+    // ship no Hercules identifiers in their markup
+    apply: "serve",
 
     async buildStart() {
       await tagger.handleTailwindConfig();

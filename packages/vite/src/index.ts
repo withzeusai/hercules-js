@@ -28,6 +28,10 @@ export interface HerculesPluginOptions {
 
   /**
    * Component tagger options
+   *
+   * Tagging attributes (`data-hercules-id` / `data-hercules-name`) are injected
+   * on the dev server only; `vite build` output never contains them.
+   *
    * @default { enabled: true }
    */
   componentTagger?: ComponentTaggerOptions & { enabled?: boolean };
@@ -92,8 +96,8 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     );
   }
 
-  // Add visual editor plugin if enabled (dev mode only)
-  if (visualEditor.enabled && process.env.NODE_ENV !== "production") {
+  // Add visual editor plugin if enabled (the plugin itself is `apply: "serve"`)
+  if (visualEditor.enabled) {
     plugins.push(
       visualEditorPlugin({
         debug,
