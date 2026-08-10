@@ -34,7 +34,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "test": "exit 0"
+    "test": "vitest --run"
   },
   "peerDependencies": {
     "vite": "^7.0.0 || ^8.0.0"
@@ -43,7 +43,8 @@
     "@types/node": "^24.13.2",
     "tsdown": "^0.22.8",
     "typescript": "^6.0.3",
-    "vite": "^8.1.3"
+    "vite": "^8.1.3",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@babel/generator": "^8.0.0",

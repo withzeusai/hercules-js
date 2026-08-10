@@ -50,6 +50,16 @@ dropped from the `vite build` pipeline entirely. Built output contains no
 tagging attributes and no injected editor script — published sites ship
 white-label markup regardless of how `NODE_ENV` is set.
 
+## Visual editor file access
+
+The editor's dev-server endpoints rewrite and delete files in your source tree,
+so a component ID must resolve to a `.jsx`/`.tsx` file inside the Vite root.
+Absolute paths and `../` traversal are refused, and request bodies are capped.
+
+> **Note:** these endpoints do not yet verify the *caller*. Any page loaded in
+> the developer's browser can reach them while the dev server is running.
+> Origin checking is tracked as follow-up work.
+
 ## Features
 
 Currently, this is a dummy plugin that:
