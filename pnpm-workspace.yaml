@@ -7,6 +7,8 @@ allowBuilds:
 minimumReleaseAge: 4320 # 3 days
 minimumReleaseAgeExclude:
   - "@usehercules/sdk"
+  # Release tooling only, never shipped to users.
+  - "@changesets/*"
 
 onlyBuiltDependencies:
   - esbuild
