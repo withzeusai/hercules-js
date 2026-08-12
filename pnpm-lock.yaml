@@ -169,8 +169,8 @@ importers:
         specifier: ^1.42.1
         version: 1.42.1(react@19.2.7)
       convex-test:
-        specifier: ^0.0.53
-        version: 0.0.53(convex@1.42.1(react@19.2.7))
+        specifier: ^0.0.55
+        version: 0.0.55(convex@1.42.1(react@19.2.7))
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
@@ -1680,10 +1680,10 @@ packages:
       zod:
         optional: true
 
-  convex-test@0.0.53:
-    resolution: {integrity: sha512-bouZQTnTvZi8IHljHL++yClj1vcV+/9ZxEcd8JZz7RDxOfPkRKrkMgkk/xlX4M1EAiwcEJPNiQE7VJFvDM3lCQ==}
+  convex-test@0.0.55:
+    resolution: {integrity: sha512-ablJ6vR3WUpyTaYrrRQf8yxInGrhHyqBEQsCFzloda3G0MDEu2RMKNGUkvlBXYWPiiEP0UIKPS7gZuLbqGnvQw==}
     peerDependencies:
-      convex: ^1.32.0
+      convex: ^1.43.0
 
   convex@1.42.1:
     resolution: {integrity: sha512-yFKp4xerVuBwQqpuTtvosOk9F/fX0twZs+Xti3oj/MlwPUU90QuhgCYo/I2wvFBAFwXsmx9tXpf2q8ekh1+3ug==}
@@ -4091,7 +4091,7 @@ snapshots:
       typescript: 6.0.3
       zod: 4.4.3
 
-  convex-test@0.0.53(convex@1.42.1(react@19.2.7)):
+  convex-test@0.0.55(convex@1.42.1(react@19.2.7)):
     dependencies:
       convex: 1.42.1(react@19.2.7)
 
