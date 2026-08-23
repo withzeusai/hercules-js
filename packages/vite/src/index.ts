@@ -111,6 +111,32 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   plugins.push({
     name: "vite-plugin-hercules",
     // Plugin hooks (Vite 7 / 8)
+    config(_config, env) {
+      // Seed the dependency optimizer from every source file, not just the
+      // deps reachable from the entry's static import graph. Large apps import
+      // most routes through `lazy(() => import(...))`; deps used only inside
+      // those lazy chunks are otherwise discovered when the route is first
+      // visited, which forces a mid-session re-optimize + full reload. During
+      // that reload some modules stay bound to the previous optimizer
+      // generation of React while react-dom loads the new one, so react-dom
+      // reads another React instance's internals (null) and crashes in
+      // useContext/useMemo. Crawling all of src at startup settles the
+      // optimizer once so it never re-bundles mid-session. Only src is scanned,
+      // so server-only deps (e.g. under convex/) are never pre-bundled.
+      if (env.command !== "serve") return;
+      return {
+        optimizeDeps: {
+          entries: [
+            "index.html",
+            "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
+            "!src/**/*.d.ts",
+            "!src/**/*.{test,spec,stories}.{js,jsx,ts,tsx}",
+            "!src/**/__tests__/**",
+            "!src/**/__mocks__/**",
+          ],
+        },
+      };
+    },
     configResolved(config) {
       // Check if we're in serve (dev) mode vs build mode
       isDev = config.command === "serve";
