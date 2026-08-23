@@ -1,6 +1,7 @@
 import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
+import { convexChunkingPlugin, type ConvexChunkingOptions } from "./convex-chunking";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
 import {
   dynamicComponentCreatorPlugin,
@@ -51,6 +52,15 @@ export interface HerculesPluginOptions {
   dynamicComponentCreator?: DynamicComponentCreatorOptions & {
     enabled?: boolean;
   };
+
+  /**
+   * Convex chunking options. Isolates the Convex client into its own chunk so
+   * its module-scoped bindings initialize once, before lazily-loaded route
+   * chunks reference them. This prevents a "Cannot access 'X' before
+   * initialization" crash in the minified production build.
+   * @default { enabled: true }
+   */
+  convexChunking?: ConvexChunkingOptions;
 }
 
 /**
@@ -65,6 +75,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     componentTagger = { enabled: true },
     visualEditor = { enabled: true },
     dynamicComponentCreator = { enabled: true },
+    convexChunking = { enabled: true },
   } = options;
 
   const plugins: Plugin[] = [];
@@ -103,6 +114,16 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
         debug,
         dataAttribute: "data-hercules-id",
         ...visualEditor,
+      }),
+    );
+  }
+
+  // Isolate the Convex client into its own production chunk if enabled
+  if (convexChunking.enabled) {
+    plugins.push(
+      convexChunkingPlugin({
+        debug,
+        ...convexChunking,
       }),
     );
   }
