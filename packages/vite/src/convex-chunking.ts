@@ -98,9 +98,16 @@ export function convexChunkingPlugin(options: ConvexChunkingOptions = {}): Plugi
       // Installing chunking config in any of those fails the build before
       // bundling. The multi-output (array) form is skipped too: merging a single
       // output object into it would append a stray output rather than compose.
+      //
+      // `env.isSsrBuild` only covers SSR builds started from the CLI (`--ssr`);
+      // when `build.ssr` is set in the config file, Vite has already computed
+      // `env` before loading it, so `env.isSsrBuild` is still false. A
+      // single-entry `ssr.target: "webworker"` build disables splitting, so
+      // treat any config-file `build.ssr` as SSR as well.
       const format = Array.isArray(output) ? undefined : output?.format;
       const codeSplits =
         !env.isSsrBuild &&
+        !userConfig.build?.ssr &&
         !userConfig.build?.lib &&
         !Array.isArray(output) &&
         output?.inlineDynamicImports !== true &&
@@ -122,11 +129,25 @@ export function convexChunkingPlugin(options: ConvexChunkingOptions = {}): Plugi
         // Object form: Rolldown ignores `manualChunks` here, so express the
         // isolation as a group. A near-maximal priority captures the convex
         // modules ahead of the app's own groups (higher priority wins and pulls
-        // those modules out of the others), so convex still lands in one chunk.
+        // those modules out of the others).
+        //
+        // Rolldown applies the top-level `minSize`/`maxSize`/`minShareCount` as
+        // fallbacks to any group that does not set them itself, so an app's
+        // global constraints would otherwise leak into this group: a large
+        // `minSize` makes the group be ignored (convex falls back to auto
+        // chunking) and a small `maxSize` splits it across several chunks —
+        // either way convex is no longer one isolated chunk and the TDZ fix
+        // fails. Pin the limits so the group is always emitted as exactly one
+        // chunk regardless of the global settings: `minSize: 0` never drops it,
+        // `maxSize: Infinity` never splits it, and `minShareCount: 1` captures
+        // convex however few entries reference it.
         const convexGroup: CodeSplittingGroup = {
           name: CONVEX_CHUNK_NAME,
           test: (id) => isConvexModule(id),
           priority: Number.MAX_SAFE_INTEGER,
+          minSize: 0,
+          maxSize: Infinity,
+          minShareCount: 1,
         };
         patch.build = {
           rollupOptions: {
