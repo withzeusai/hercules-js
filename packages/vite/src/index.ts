@@ -75,8 +75,12 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     componentTagger = { enabled: true },
     visualEditor = { enabled: true },
     dynamicComponentCreator = { enabled: true },
-    convexChunking = { enabled: true },
   } = options;
+
+  // Merge per-field so a partial option (e.g. `{ debug: true }`) keeps the
+  // documented `enabled: true` default; only an explicit `enabled: false`
+  // turns the convex isolation off.
+  const convexChunking = { enabled: true, ...options.convexChunking };
 
   const plugins: Plugin[] = [];
 
