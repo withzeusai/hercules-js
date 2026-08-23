@@ -10,6 +10,11 @@ export interface ConvexChunkingOptions {
 
 const CONVEX_CHUNK_NAME = "convex";
 
+// The callback form of `output.manualChunks`. Vite 8 re-exports Rolldown's
+// types through its `Rollup` namespace, which does not publish the callback
+// type under a stable name, so derive it from the field itself.
+type ManualChunksCallback = NonNullable<Rollup.OutputOptions["manualChunks"]>;
+
 // Matches the convex client package in both npm/yarn (`node_modules/convex/…`)
 // and pnpm (`node_modules/.pnpm/convex@x/node_modules/convex/…`) layouts. The
 // trailing separator keeps sibling packages such as `convex-helpers` and
@@ -51,11 +56,14 @@ function appDependsOnConvex(root: string): boolean {
  * without chunking). Forcing convex into a single chunk means it is
  * initialized once, before any route chunk that depends on it runs.
  *
- * The manual-chunk grouping only affects the client production build. SSR
- * builds inline dynamic imports, where `manualChunks` is invalid, so they are
- * skipped. `optimizeDeps.include` keeps the dev pre-bundler treating convex as
- * one unit too, and is only added when the app actually depends on convex so
- * apps without it are completely unaffected.
+ * The manual-chunk grouping only affects builds that actually code-split.
+ * Vite/Rolldown rejects a `manualChunks` callback whenever dynamic imports are
+ * inlined — SSR builds, library builds (`build.lib`), and any output with
+ * `inlineDynamicImports` — so those are skipped along with the multi-output
+ * (array) form. For an app that does not depend on convex, or a build that does
+ * not code-split, the plugin is a pure no-op: it touches neither `manualChunks`
+ * nor `optimizeDeps`. `optimizeDeps.include` otherwise keeps the dev
+ * pre-bundler treating convex as one unit.
  */
 export function convexChunkingPlugin(options: ConvexChunkingOptions = {}): Plugin {
   const { debug = false } = options;
@@ -63,35 +71,49 @@ export function convexChunkingPlugin(options: ConvexChunkingOptions = {}): Plugi
   return {
     name: "vite-plugin-hercules-convex-chunking",
     config(userConfig, env) {
-      const patch: UserConfig = {};
-
       const root = userConfig.root ? path.resolve(userConfig.root) : process.cwd();
-      if (appDependsOnConvex(root)) {
-        patch.optimizeDeps = { include: ["convex", "convex/react"] };
+      if (!appDependsOnConvex(root)) {
+        return {};
       }
 
       const output = userConfig.build?.rollupOptions?.output;
 
-      // Leave the multi-output (array) form untouched: merging a single output
+      // Only touch config where the output actually code-splits. A library
+      // build, an SSR build, or an explicit `inlineDynamicImports` inlines
+      // dynamic imports, and Vite/Rolldown rejects a `manualChunks` callback in
+      // that combination — installing one would fail the build before bundling.
+      // The multi-output (array) form is skipped too: merging a single output
       // object into it would append a stray output rather than compose.
-      if (!env.isSsrBuild && !Array.isArray(output)) {
-        const existing = output?.manualChunks;
+      const codeSplits =
+        !env.isSsrBuild &&
+        !userConfig.build?.lib &&
+        !Array.isArray(output) &&
+        output?.inlineDynamicImports !== true;
 
-        // Compose over an existing function, but never clobber an app that
-        // configured the object form of `manualChunks` itself.
-        if (existing === undefined || typeof existing === "function") {
-          const manualChunks: Rollup.GetManualChunk = (id, meta) => {
-            if (isConvexModule(id)) {
-              return CONVEX_CHUNK_NAME;
-            }
-            return typeof existing === "function" ? existing(id, meta) : undefined;
-          };
-          patch.build = { rollupOptions: { output: { manualChunks } } };
-        } else if (debug) {
-          console.log(
-            "[Hercules Plugin] Skipped convex chunk isolation: app sets manualChunks as an object.",
-          );
-        }
+      if (!codeSplits) {
+        return {};
+      }
+
+      const patch: UserConfig = {
+        optimizeDeps: { include: ["convex", "convex/react"] },
+      };
+
+      const existing = output?.manualChunks;
+
+      // Compose over an existing function, but never clobber an app that
+      // configured the object form of `manualChunks` itself.
+      if (existing === undefined || typeof existing === "function") {
+        const manualChunks: ManualChunksCallback = (id, meta) => {
+          if (isConvexModule(id)) {
+            return CONVEX_CHUNK_NAME;
+          }
+          return typeof existing === "function" ? existing(id, meta) : undefined;
+        };
+        patch.build = { rollupOptions: { output: { manualChunks } } };
+      } else if (debug) {
+        console.log(
+          "[Hercules Plugin] Skipped convex chunk isolation: app sets manualChunks as an object.",
+        );
       }
 
       return patch;
