@@ -69,7 +69,12 @@ function appDependsOnConvex(root: string): boolean {
   }
 
   try {
-    createRequire(path.join(root, "package.json")).resolve("convex/package.json");
+    // Resolve convex's main entry (its `.` export), not the `convex/package.json`
+    // subpath: current convex packages do not export `./package.json`, so
+    // resolving that subpath throws `ERR_PACKAGE_PATH_NOT_EXPORTED` even when
+    // convex itself is present, and the transitive-detection path never fires.
+    // The main entry is always exported whenever the package is resolvable.
+    createRequire(path.join(root, "package.json")).resolve("convex");
     return true;
   } catch {
     return false;
@@ -145,6 +150,14 @@ function convexOutputPatch(
   debug: boolean,
 ): OutputObject | undefined {
   const codeSplitting = output?.codeSplitting;
+  if (codeSplitting === true) {
+    // Explicit boolean form: Rolldown ignores `manualChunks` whenever
+    // `codeSplitting` is set explicitly, so the callback path would leave convex
+    // in a shared chunk and the TDZ fix would be ineffective. Convert it to the
+    // group form — code splitting stays enabled and convex is isolated as a
+    // group, exactly as in the object case.
+    return { codeSplitting: { groups: [makeConvexGroup()] } };
+  }
   if (typeof codeSplitting === "object" && codeSplitting !== null) {
     // Object form: Rolldown ignores `manualChunks` here, so add the group.
     if (hasConvexGroup(codeSplitting.groups)) {
@@ -214,9 +227,9 @@ function convexOutputPatch(
  * output with `inlineDynamicImports`, an explicit `output.codeSplitting: false`,
  * and the `iife`/`umd` output formats (which imply a single bundle). All of
  * those are skipped, along with the multi-output (array) form. When the app
- * drives splitting through the object form of `output.codeSplitting` (or the
- * deprecated `output.advancedChunks`), Rolldown ignores `manualChunks`, so the
- * isolation is added as a high-priority group there instead. For an app
+ * sets `output.codeSplitting` explicitly (boolean `true` or the object form) or
+ * uses the deprecated `output.advancedChunks`, Rolldown ignores `manualChunks`,
+ * so the isolation is added as a high-priority group there instead. For an app
  * that does not depend on convex, or a build that does not code-split, the
  * plugin is a pure no-op: it touches neither the split config nor
  * `optimizeDeps`. `optimizeDeps.include` otherwise keeps the dev pre-bundler
