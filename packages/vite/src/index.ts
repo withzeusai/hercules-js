@@ -130,6 +130,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             "index.html",
             "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
             "!src/**/*.d.ts",
+            "!src/**/*.d.mts",
             "!src/**/*.{test,spec,stories}.{js,jsx,ts,tsx,mjs,mts}",
             "!src/**/__tests__/**",
             "!src/**/__mocks__/**",
