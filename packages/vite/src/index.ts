@@ -111,6 +111,55 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   plugins.push({
     name: "vite-plugin-hercules",
     // Plugin hooks (Vite 7 / 8)
+    config(userConfig, env) {
+      // Seed the dependency optimizer from every source file, not just the
+      // deps reachable from the entry's static import graph. Large apps import
+      // most routes through `lazy(() => import(...))`; deps used only inside
+      // those lazy chunks are otherwise discovered when the route is first
+      // visited, which forces a mid-session re-optimize + full reload. During
+      // that reload some modules stay bound to the previous optimizer
+      // generation of React while react-dom loads the new one, so react-dom
+      // reads another React instance's internals (null) and crashes in
+      // useContext/useMemo. Crawling all of src at startup settles the
+      // optimizer once so it never re-bundles mid-session. Every project HTML
+      // entry is still discovered (Vite's default), so multi-page inputs are
+      // not dropped. Server-only code is kept out of the client optimizer: deps
+      // under convex/ are never reached, and server modules colocated in src
+      // (src/server/**, *.server.*) are excluded so their Node-only imports
+      // never become optimizer roots.
+      if (env.command !== "serve") return;
+      // Defining `optimizeDeps.entries` overrides Vite's default of deriving
+      // entries from `build.rollupOptions.input`, so a custom/library-mode app
+      // whose configured input lives outside `src` (e.g. `app/main.ts`) would
+      // lose dep discovery. Preserve any explicitly configured input by
+      // prepending it to our crawl. `input` may be a string, string[], or a
+      // Record of alias -> path; normalize all three to a flat string[].
+      const configuredInput = userConfig.build?.rollupOptions?.input;
+      const inputEntries =
+        typeof configuredInput === "string"
+          ? [configuredInput]
+          : Array.isArray(configuredInput)
+            ? configuredInput
+            : configuredInput
+              ? Object.values(configuredInput)
+              : [];
+      return {
+        optimizeDeps: {
+          entries: [
+            ...inputEntries,
+            "**/*.html",
+            "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
+            "!src/**/*.d.ts",
+            "!src/**/*.d.mts",
+            "!src/**/*.{test,spec,stories}.{js,jsx,ts,tsx,mjs,mts}",
+            "!src/**/*.server.{js,jsx,ts,tsx,mjs,mts}",
+            "!src/server/**",
+            "!src/**/__tests__/**",
+            "!src/**/__mocks__/**",
+          ],
+        },
+      };
+    },
     configResolved(config) {
       // Check if we're in serve (dev) mode vs build mode
       isDev = config.command === "serve";
