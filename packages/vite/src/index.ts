@@ -111,7 +111,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   plugins.push({
     name: "vite-plugin-hercules",
     // Plugin hooks (Vite 7 / 8)
-    config(_config, env) {
+    config(userConfig, env) {
       // Seed the dependency optimizer from every source file, not just the
       // deps reachable from the entry's static import graph. Large apps import
       // most routes through `lazy(() => import(...))`; deps used only inside
@@ -128,9 +128,25 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       // (src/server/**, *.server.*) are excluded so their Node-only imports
       // never become optimizer roots.
       if (env.command !== "serve") return;
+      // Defining `optimizeDeps.entries` overrides Vite's default of deriving
+      // entries from `build.rollupOptions.input`, so a custom/library-mode app
+      // whose configured input lives outside `src` (e.g. `app/main.ts`) would
+      // lose dep discovery. Preserve any explicitly configured input by
+      // prepending it to our crawl. `input` may be a string, string[], or a
+      // Record of alias -> path; normalize all three to a flat string[].
+      const configuredInput = userConfig.build?.rollupOptions?.input;
+      const inputEntries =
+        typeof configuredInput === "string"
+          ? [configuredInput]
+          : Array.isArray(configuredInput)
+            ? configuredInput
+            : configuredInput
+              ? Object.values(configuredInput)
+              : [];
       return {
         optimizeDeps: {
           entries: [
+            ...inputEntries,
             "**/*.html",
             "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
             "!src/**/*.d.ts",
