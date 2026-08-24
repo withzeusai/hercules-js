@@ -121,17 +121,23 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       // generation of React while react-dom loads the new one, so react-dom
       // reads another React instance's internals (null) and crashes in
       // useContext/useMemo. Crawling all of src at startup settles the
-      // optimizer once so it never re-bundles mid-session. Only src is scanned,
-      // so server-only deps (e.g. under convex/) are never pre-bundled.
+      // optimizer once so it never re-bundles mid-session. Every project HTML
+      // entry is still discovered (Vite's default), so multi-page inputs are
+      // not dropped. Server-only code is kept out of the client optimizer: deps
+      // under convex/ are never reached, and server modules colocated in src
+      // (src/server/**, *.server.*) are excluded so their Node-only imports
+      // never become optimizer roots.
       if (env.command !== "serve") return;
       return {
         optimizeDeps: {
           entries: [
-            "index.html",
+            "**/*.html",
             "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
             "!src/**/*.d.ts",
             "!src/**/*.d.mts",
             "!src/**/*.{test,spec,stories}.{js,jsx,ts,tsx,mjs,mts}",
+            "!src/**/*.server.{js,jsx,ts,tsx,mjs,mts}",
+            "!src/server/**",
             "!src/**/__tests__/**",
             "!src/**/__mocks__/**",
           ],
