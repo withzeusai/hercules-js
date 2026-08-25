@@ -73,10 +73,13 @@ export function userInfoFromSession(session: SessionData): UserInfo | NoUserInfo
     sessionId: stringClaim(claims, "sid") ?? "",
     organizationId: stringClaim(claims, "org_id"),
     role: stringClaim(claims, "role"),
-    roles: stringArrayClaim(claims, "roles") ?? stringArrayClaim(claims, "cognito:groups"),
-    permissions: stringArrayClaim(claims, "permissions"),
-    entitlements: stringArrayClaim(claims, "entitlements"),
-    featureFlags: stringArrayClaim(claims, "feature_flags"),
+    // Array claims are always arrays on UserInfo: `[]` when the IdP emits no
+    // such claim. stringArrayClaim stays undefined-based internally so an
+    // empty/absent `roles` still falls back to `cognito:groups`.
+    roles: stringArrayClaim(claims, "roles") ?? stringArrayClaim(claims, "cognito:groups") ?? [],
+    permissions: stringArrayClaim(claims, "permissions") ?? [],
+    entitlements: stringArrayClaim(claims, "entitlements") ?? [],
+    featureFlags: stringArrayClaim(claims, "feature_flags") ?? [],
     accessToken: session.accessToken,
   };
 }

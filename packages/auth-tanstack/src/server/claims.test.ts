@@ -81,6 +81,46 @@ describe("userInfoFromSession", () => {
     expect(userInfoFromSession(session)).toMatchObject({ roles: ["staff"] });
   });
 
+  it("still falls back to cognito:groups when the roles claim is empty", () => {
+    const session: SessionData = {
+      accessToken: makeJwt({ sub: "u1", roles: [], "cognito:groups": ["staff"] }),
+      expiresAt: future,
+    };
+    expect(userInfoFromSession(session)).toMatchObject({ roles: ["staff"] });
+  });
+
+  it("defaults array claims to empty arrays when absent", () => {
+    const session: SessionData = {
+      accessToken: makeJwt({ sub: "u1" }),
+      expiresAt: future,
+    };
+    expect(userInfoFromSession(session)).toMatchObject({
+      roles: [],
+      permissions: [],
+      entitlements: [],
+      featureFlags: [],
+    });
+  });
+
+  it("defaults array claims to empty arrays when malformed", () => {
+    const session: SessionData = {
+      accessToken: makeJwt({
+        sub: "u1",
+        roles: 42,
+        permissions: [1, true],
+        entitlements: {},
+        feature_flags: null,
+      }),
+      expiresAt: future,
+    };
+    expect(userInfoFromSession(session)).toMatchObject({
+      roles: [],
+      permissions: [],
+      entitlements: [],
+      featureFlags: [],
+    });
+  });
+
   it("returns no user when the access token has expired", () => {
     const session: SessionData = {
       accessToken: makeJwt({ sub: "u1" }),

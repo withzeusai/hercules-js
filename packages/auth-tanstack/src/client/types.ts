@@ -6,10 +6,14 @@ export interface AuthContextType {
   sessionId: string | undefined;
   organizationId: string | undefined;
   role: string | undefined;
-  roles: string[] | undefined;
-  permissions: string[] | undefined;
-  entitlements: string[] | undefined;
-  featureFlags: string[] | undefined;
+  /** Roles for the current user. `[]` when signed out or the claim is absent. */
+  roles: string[];
+  /** Permissions for the current user. `[]` when signed out or the claim is absent. */
+  permissions: string[];
+  /** Entitlements for the current user. `[]` when signed out or the claim is absent. */
+  entitlements: string[];
+  /** Feature flags for the current user. `[]` when signed out or the claim is absent. */
+  featureFlags: string[];
   impersonator: Impersonator | undefined;
   loading: boolean;
   /** Re-fetch auth state from the server. */
