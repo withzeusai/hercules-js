@@ -1,5 +1,15 @@
 # @usehercules/auth-tanstack
 
+## 0.5.0
+
+### Minor Changes
+
+- [#135](https://github.com/withzeusai/hercules-js/pull/135) [`c74a916`](https://github.com/withzeusai/hercules-js/commit/c74a9162a9250c7c956691e379e924a9c2967944) Thanks [@grant0417](https://github.com/grant0417)! - Always-array permission claims: `roles`, `permissions`, `entitlements`, and
+  `featureFlags` are now typed `string[]` (never `undefined`) on `UserInfo`,
+  `ClientUserInfo`, and the `useAuth()` context, defaulting to `[]` when the
+  claim is absent or the user is signed out. Scalar claims (`role`,
+  `organizationId`) and the raw JWT payload types are unchanged.
+
 ## 0.4.0
 
 ### Minor Changes
