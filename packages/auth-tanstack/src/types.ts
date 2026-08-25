@@ -42,10 +42,14 @@ export interface UserInfo {
   sessionId: string;
   organizationId?: string;
   role?: string;
-  roles?: string[];
-  permissions?: string[];
-  entitlements?: string[];
-  featureFlags?: string[];
+  /** Roles from the `roles` claim (or `cognito:groups`); `[]` when absent. */
+  roles: string[];
+  /** Permissions from the `permissions` claim; `[]` when absent. */
+  permissions: string[];
+  /** Entitlements from the `entitlements` claim; `[]` when absent. */
+  entitlements: string[];
+  /** Feature flags from the `feature_flags` claim; `[]` when absent. */
+  featureFlags: string[];
   impersonator?: Impersonator;
   accessToken: string;
 }

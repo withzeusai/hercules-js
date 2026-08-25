@@ -116,9 +116,11 @@ access token) and mapping standard OIDC claims:
 | `featureFlags`            | `feature_flags`                          |
 | `accessToken`             | the stored access token                  |
 
-Org/role/permission/entitlement/feature-flag fields are only populated when the
-IdP includes the corresponding (non-standard) claim. Standard providers won't
-emit them unless configured to.
+Org and role fields are only populated when the IdP includes the corresponding
+(non-standard) claim. The array-valued fields (`roles`, `permissions`,
+`entitlements`, `featureFlags`) are always arrays and default to `[]` when the
+claim is absent. Standard providers won't emit these claims unless configured
+to.
 
 ## Environment variables
 

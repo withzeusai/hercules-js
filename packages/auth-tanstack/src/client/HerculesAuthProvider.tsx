@@ -16,10 +16,13 @@ function getProps(auth: ClientUserInfo | NoUserInfo | undefined) {
     sessionId: auth && "sessionId" in auth ? auth.sessionId : undefined,
     organizationId: auth && "organizationId" in auth ? auth.organizationId : undefined,
     role: auth && "role" in auth ? auth.role : undefined,
-    roles: auth && "roles" in auth ? auth.roles : undefined,
-    permissions: auth && "permissions" in auth ? auth.permissions : undefined,
-    entitlements: auth && "entitlements" in auth ? auth.entitlements : undefined,
-    featureFlags: auth && "featureFlags" in auth ? auth.featureFlags : undefined,
+    // Array claims are always arrays in the context: `[]` when signed out or
+    // when the claim is absent. The `?? []` also guards non-conforming runtime
+    // data (e.g. a hand-built `initialAuth` deserialized from JSON).
+    roles: (auth && "roles" in auth ? auth.roles : undefined) ?? [],
+    permissions: (auth && "permissions" in auth ? auth.permissions : undefined) ?? [],
+    entitlements: (auth && "entitlements" in auth ? auth.entitlements : undefined) ?? [],
+    featureFlags: (auth && "featureFlags" in auth ? auth.featureFlags : undefined) ?? [],
     impersonator: auth && "impersonator" in auth ? auth.impersonator : undefined,
   };
 }
