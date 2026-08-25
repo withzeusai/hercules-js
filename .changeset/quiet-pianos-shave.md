@@ -27,3 +27,10 @@ so a single slow request on a flaky network ended the session on every device.
 - Clear the stored user on `invalid_grant`, so a dead refresh token is not
   replayed by every later renew. Without this a single bad renew produced an
   unbounded stream of identical errors until the user cleared site data.
+- Cover `automaticSilentRenew: true` as well. That setting hands renewal to
+  oidc-client-ts instead of the listener here, so neither of the two fixes
+  above reached it. Its own retry guard reads `maxSilentRenewTimeoutRetries`
+  off the settings and skips the check when the value is undefined, which
+  nothing set -- so it retried a timed-out renew every 5s forever, exactly the
+  loop this change exists to stop. The default now lives in the settings, and a
+  `silentRenewError` listener discards a dead token on that path too.

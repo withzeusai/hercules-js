@@ -9,7 +9,11 @@ import {
 import { UserManager, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
 import { clearSessionIfInvalidGrant } from "../internal/dead-session";
 import { withRefreshLock } from "../internal/refresh-lock";
-import { renewRetryDelayMs, resolveMaxTimeoutRetries } from "../internal/renew-retry";
+import {
+  DEFAULT_MAX_TIMEOUT_RETRIES,
+  renewRetryDelayMs,
+  resolveMaxTimeoutRetries,
+} from "../internal/renew-retry";
 import {
   clearHerculesImpersonationParamsFromUrl,
   getHerculesImpersonationStorageKey,
@@ -190,6 +194,15 @@ export function HerculesAuthProvider({
         // token-request budget above.
         requestTimeoutInSeconds:
           userManagerSettings?.requestTimeoutInSeconds ?? DISCOVERY_REQUEST_TIMEOUT_SECONDS,
+        // The default has to reach the settings, not just the renewal effect
+        // below. A consumer that sets `automaticSilentRenew` takes
+        // oidc-client-ts's own SilentRenewService instead of that effect, and
+        // its guard is `maxRetries !== undefined && count > maxRetries` -- so
+        // leaving this unset makes the guard unreachable and the service
+        // retries a timed-out renew every 5s forever, replaying the same
+        // token. That is the loop this whole change exists to stop.
+        maxSilentRenewTimeoutRetries:
+          userManagerSettings?.maxSilentRenewTimeoutRetries ?? DEFAULT_MAX_TIMEOUT_RETRIES,
       }),
       impersonationStorageKey: getHerculesImpersonationStorageKey(
         effectiveAuthority,
@@ -253,6 +266,20 @@ export function HerculesAuthProvider({
       userManager.events.removeAccessTokenExpiring(onExpiring);
       if (retryTimerId !== null) clearTimeout(retryTimerId);
     };
+  }, [userManager, automaticSilentRenewExplicit]);
+
+  useEffect(() => {
+    // The effect above owns renewal only while `automaticSilentRenew` is off.
+    // When a consumer turns it on, oidc-client-ts renews instead, and it has
+    // no notion of a refresh token the server will never accept again: it
+    // raises the error and leaves the dead token in storage for every later
+    // renew to replay. Clearing it is the point of `dead-session`, so it has
+    // to happen on this path too -- the retry bound alone does not help a
+    // failure that is permanent rather than timed out.
+    if (!automaticSilentRenewExplicit) return undefined;
+    return userManager.events.addSilentRenewError((err) => {
+      void clearSessionIfInvalidGrant(userManager, err);
+    });
   }, [userManager, automaticSilentRenewExplicit]);
 
   return (
