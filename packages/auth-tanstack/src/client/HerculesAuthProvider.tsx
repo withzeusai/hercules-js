@@ -6,26 +6,10 @@ import {
   refreshAuthAction,
 } from "../server/actions";
 import type { ClientUserInfo, Impersonator, NoUserInfo, User } from "../types";
+import { getProps } from "./auth-props";
 import type { AuthContextType, HerculesAuthProviderProps } from "./types";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-function getProps(auth: ClientUserInfo | NoUserInfo | undefined) {
-  return {
-    user: auth && "user" in auth ? auth.user : null,
-    sessionId: auth && "sessionId" in auth ? auth.sessionId : undefined,
-    organizationId: auth && "organizationId" in auth ? auth.organizationId : undefined,
-    role: auth && "role" in auth ? auth.role : undefined,
-    // Array claims are always arrays in the context: `[]` when signed out or
-    // when the claim is absent. The `?? []` also guards non-conforming runtime
-    // data (e.g. a hand-built `initialAuth` deserialized from JSON).
-    roles: (auth && "roles" in auth ? auth.roles : undefined) ?? [],
-    permissions: (auth && "permissions" in auth ? auth.permissions : undefined) ?? [],
-    entitlements: (auth && "entitlements" in auth ? auth.entitlements : undefined) ?? [],
-    featureFlags: (auth && "featureFlags" in auth ? auth.featureFlags : undefined) ?? [],
-    impersonator: auth && "impersonator" in auth ? auth.impersonator : undefined,
-  };
-}
 
 export function HerculesAuthProvider({
   children,
