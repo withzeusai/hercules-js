@@ -1,9 +1,8 @@
 import { getRequest } from "@tanstack/react-start/server";
 import type { ClientUserInfo, NoUserInfo, UserInfo } from "../types";
 import { userInfoFromSession } from "./claims";
-import { DEFAULT_REDIRECT } from "./config";
 import { resolveLogoutLocation } from "./refresh";
-import { resolveOrigin } from "./request-url";
+import { resolvePostLogoutRedirectUri } from "./request-url";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
 import { clearSession, readSession } from "./session-store";
 
@@ -73,8 +72,7 @@ export async function refreshAuthBody(): Promise<ClientUserInfo | NoUserInfo> {
  */
 export async function getSignOutUrlBody(returnTo?: string): Promise<{ url: string }> {
   const idTokenHint = (await readSession())?.idToken;
-  const origin = resolveOrigin(getRequest());
-  const postLogoutRedirectUri = new URL(returnTo ?? DEFAULT_REDIRECT, origin).toString();
+  const postLogoutRedirectUri = resolvePostLogoutRedirectUri(getRequest(), returnTo);
   const url = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
 
   // Clear the session on this response so the cookie is gone before the client

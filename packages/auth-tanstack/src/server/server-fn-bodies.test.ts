@@ -33,10 +33,13 @@ import { getCookies, getRequest } from "@tanstack/react-start/server";
 import { getResolvedSession } from "./session-context";
 import { authorizationParameters, checkRecentAuthBody, signOutBody } from "./server-fn-bodies";
 
-const FLOW = { redirectUri: "https://app.example.com/auth/callback", state: "s", codeChallenge: "c" };
+const FLOW = {
+  redirectUri: "https://app.example.com/auth/callback",
+  state: "s",
+  codeChallenge: "c",
+};
 
-const b64url = (value: object) =>
-  Buffer.from(JSON.stringify(value)).toString("base64url");
+const b64url = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const fakeJwt = (payload: object) => `${b64url({ alg: "none" })}.${b64url(payload)}.sig`;
 
 function sessionWithAuthTime(authTime: unknown): SessionData {
@@ -144,6 +147,31 @@ describe("signOutBody", () => {
     const { options } = thrown as { options: { headers?: [string, string][] } };
     return (options.headers ?? []).map(([, header]) => header);
   }
+
+  // openid-client reports no end_session_endpoint here, so the redirect target
+  // is the post_logout_redirect_uri itself: exactly what the provider compares
+  // against its registered list.
+  it("posts back to the bare origin by default", async () => {
+    vi.mocked(getRequest).mockReturnValue(new Request("https://app.example.com/account"));
+
+    const thrown = await signOutBody().then(
+      () => expect.unreachable("signOutBody must throw a redirect"),
+      (error: unknown) => error,
+    );
+
+    expect((thrown as { options: { href: string } }).options.href).toBe("https://app.example.com");
+  });
+
+  it("posts back to the bare origin for a root returnTo", async () => {
+    vi.mocked(getRequest).mockReturnValue(new Request("https://app.example.com/account"));
+
+    const thrown = await signOutBody("/").then(
+      () => expect.unreachable("signOutBody must throw a redirect"),
+      (error: unknown) => error,
+    );
+
+    expect((thrown as { options: { href: string } }).options.href).toBe("https://app.example.com");
+  });
 
   it("clears session cookies with the configured cookie domain", async () => {
     vi.stubEnv("HERCULES_AUTH_COOKIE_DOMAIN", ".example.com");

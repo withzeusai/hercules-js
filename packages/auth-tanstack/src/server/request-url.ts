@@ -1,5 +1,10 @@
 import { getAuthOptions } from "./auth-options";
-import { DEFAULT_CALLBACK_PATH, REDIRECT_URI_ENV_VARS, readEnv } from "./config";
+import {
+  DEFAULT_CALLBACK_PATH,
+  POST_LOGOUT_REDIRECT_URI_ENV_VARS,
+  REDIRECT_URI_ENV_VARS,
+  readEnv,
+} from "./config";
 import type { CookieOptions } from "./cookie-utils";
 
 /**
@@ -39,6 +44,66 @@ export function resolveRedirectUri(request: Request, override?: string): string 
     override ?? configuredRedirectUri() ?? DEFAULT_CALLBACK_PATH,
     resolveOrigin(request),
   ).toString();
+}
+
+/**
+ * Render a URL the way a registered URI is written: `URL.toString()` spells an
+ * empty path as a trailing slash, so `https://app.example.com` round-trips as
+ * `https://app.example.com/`. The two are the same URI under RFC 3986 §6.2.3,
+ * but providers compare registered values as plain strings, so the difference
+ * decides whether a redirect is honored.
+ */
+function registrableUri(url: URL): string {
+  return url.pathname === "/" && !url.search && !url.hash ? url.origin : url.toString();
+}
+
+/** Rebuild `target`'s path, query, and hash on `origin`, discarding its host. */
+function anchorToOrigin(origin: string, target: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(target, origin);
+  } catch {
+    return origin;
+  }
+  const url = new URL(origin);
+  url.pathname = parsed.pathname;
+  url.search = parsed.search;
+  url.hash = parsed.hash;
+  return registrableUri(url);
+}
+
+/**
+ * Resolve the `post_logout_redirect_uri` to send with a sign-out: `returnTo`
+ * when the caller supplied one, else the configured `postLogoutRedirectUri`,
+ * else the app's own origin.
+ *
+ * OIDC RP-Initiated Logout 1.0 §3 requires this value to *exactly* match one of
+ * the client's registered `post_logout_redirect_uris` (simple string
+ * comparison, no URL normalization), and the OP MUST NOT redirect when it
+ * doesn't, stranding the user on the provider's signed-out page. Providers
+ * register an app's root as its bare origin, so a root target must resolve to
+ * `https://app.example.com` and not `https://app.example.com/`.
+ *
+ * `returnTo` is anchored to this app's origin, like the post-callback redirect,
+ * so a user-supplied value can't turn sign-out into an off-site redirect on the
+ * paths that don't go through the provider (a provider with no end-session
+ * endpoint, or a failure to reach one). Returning to another host is a
+ * deployment decision: configure `postLogoutRedirectUri`.
+ */
+export function resolvePostLogoutRedirectUri(request: Request, returnTo?: string): string {
+  const origin = resolveOrigin(request);
+  if (returnTo !== undefined) return anchorToOrigin(origin, returnTo);
+
+  const configured =
+    getAuthOptions().postLogoutRedirectUri ?? readEnv(POST_LOGOUT_REDIRECT_URI_ENV_VARS);
+  if (configured === undefined) return origin;
+
+  try {
+    return registrableUri(new URL(configured, origin));
+  } catch {
+    console.warn(`[auth-tanstack] Ignoring malformed postLogoutRedirectUri: ${configured}`);
+    return origin;
+  }
 }
 
 /**

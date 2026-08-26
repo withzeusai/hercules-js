@@ -7,7 +7,6 @@ import type { NoUserInfo, UserInfo } from "../types";
 import type { GetAuthURLOptions, RecentAuthResult, SignInUrlOptions } from "./auth";
 import { collectClaims, userInfoFromSession } from "./claims";
 import {
-  DEFAULT_REDIRECT,
   DEFAULT_SCOPE,
   MAX_PENDING_SIGN_INS,
   PKCE_COOKIE_PREFIX,
@@ -18,7 +17,12 @@ import {
   sessionCookieDomain,
 } from "./config";
 import { resolveLogoutLocation } from "./refresh";
-import { cookieSecurity, resolveOrigin, resolveRedirectUri, toCookieSameSite } from "./request-url";
+import {
+  cookieSecurity,
+  resolvePostLogoutRedirectUri,
+  resolveRedirectUri,
+  toCookieSameSite,
+} from "./request-url";
 import { clearSessionCookies, isSessionExpired } from "./session";
 import { getResolvedSession } from "./session-context";
 import { readSession } from "./session-store";
@@ -135,10 +139,7 @@ export async function signOutBody(returnTo?: string): Promise<never> {
   const idTokenHint = (await readSession())?.idToken;
 
   const request = getRequest();
-  const postLogoutRedirectUri = new URL(
-    returnTo ?? DEFAULT_REDIRECT,
-    resolveOrigin(request),
-  ).toString();
+  const postLogoutRedirectUri = resolvePostLogoutRedirectUri(request, returnTo);
   const location = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
 
   // Clear with the same SameSite/Secure/Domain used to set the session so the

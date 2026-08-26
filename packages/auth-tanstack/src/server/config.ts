@@ -33,6 +33,15 @@ export const CLIENT_SECRET_ENV_VARS = [
  * `herculesAuthMiddleware({ redirectUri })` is not configured.
  */
 export const REDIRECT_URI_ENV_VARS = ["HERCULES_AUTH_REDIRECT_URI", "AUTH_REDIRECT_URI"] as const;
+/**
+ * Public URL the provider returns to after sign-out (`post_logout_redirect_uri`).
+ * Optional. The fallback when `herculesAuthMiddleware({ postLogoutRedirectUri })`
+ * is not configured. Defaults to the app's own origin.
+ */
+export const POST_LOGOUT_REDIRECT_URI_ENV_VARS = [
+  "HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI",
+  "AUTH_POST_LOGOUT_REDIRECT_URI",
+] as const;
 /** Session cookie lifetime in seconds. Optional — see {@link sessionCookieMaxAge}. */
 export const COOKIE_MAX_AGE_ENV_VARS = [
   "HERCULES_AUTH_COOKIE_MAX_AGE",
