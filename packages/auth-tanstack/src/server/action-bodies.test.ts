@@ -26,7 +26,7 @@ vi.mock("openid-client", () => ({
 import { getRequest } from "@tanstack/react-start/server";
 import * as client from "openid-client";
 import { getSignOutUrlBody } from "./action-bodies";
-import { clearSession } from "./session-store";
+import { clearSession, readSession } from "./session-store";
 
 beforeAll(() => {
   process.env.HERCULES_AUTH_ISSUER_URL = "https://issuer.example.com";
@@ -81,6 +81,33 @@ describe("getSignOutUrlBody", () => {
       Record<string, string>,
     ];
     expect(parameters.id_token_hint).toBe("id-token-jwt");
+  });
+
+  // Nothing to end, and a hintless end-session request only earns the OP's
+  // confirmation page, so a lapsed session must not be sent to the provider.
+  it("goes straight to the post-logout target when there is no session", async () => {
+    vi.mocked(readSession).mockResolvedValueOnce(undefined);
+
+    const { url } = await getSignOutUrlBody();
+
+    expect(url).toBe("https://app.example.com");
+    expect(client.buildEndSessionUrl).not.toHaveBeenCalled();
+  });
+
+  it("still clears cookies when there is no session", async () => {
+    vi.mocked(readSession).mockResolvedValueOnce(undefined);
+
+    await getSignOutUrlBody();
+
+    expect(clearSession).toHaveBeenCalledOnce();
+  });
+
+  it("honors returnTo when there is no session", async () => {
+    vi.mocked(readSession).mockResolvedValueOnce(undefined);
+
+    const { url } = await getSignOutUrlBody("/bye");
+
+    expect(url).toBe("https://app.example.com/bye");
   });
 
   it("returns the provider's end-session URL and clears the session", async () => {

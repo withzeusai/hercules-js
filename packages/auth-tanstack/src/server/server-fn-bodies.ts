@@ -134,13 +134,19 @@ export async function getAuthBody(): Promise<UserInfo | NoUserInfo> {
  * Backs `signOut`: clear the session cookies and redirect to the provider's
  * end-session URL (or `returnTo`). Reads the raw session (no auto-refresh) —
  * refreshing tokens just to discard them would be a wasted grant.
+ *
+ * With no session, skip the provider entirely: there is nothing to end, and a
+ * hintless end-session request only earns the OP's confirmation page. The
+ * cookie clear still runs, so a stale or unsealable cookie is swept up.
  */
 export async function signOutBody(returnTo?: string): Promise<never> {
-  const idTokenHint = (await readSession())?.idToken;
+  const session = await readSession();
 
   const request = getRequest();
   const postLogoutRedirectUri = resolvePostLogoutRedirectUri(request, returnTo);
-  const location = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
+  const location = session
+    ? await resolveLogoutLocation(postLogoutRedirectUri, session.idToken)
+    : postLogoutRedirectUri;
 
   // Clear with the same SameSite/Secure/Domain used to set the session so the
   // cookies are removed even when sign-out runs in a cross-site context or the

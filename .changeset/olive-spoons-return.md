@@ -26,3 +26,8 @@ error the app could see. `@usehercules/auth` was unaffected -- it sends
 - Anchor `returnTo` to the app's origin, as the post-callback redirect already
   is. An off-origin value used to pass straight through to the browser on the
   paths that skip the provider -- no end-session endpoint, or discovery failing.
+- Skip the provider when there is no session, matching WorkOS's AuthKit. There
+  is nothing to end, and an end-session request with no `id_token_hint` makes the
+  OP interrupt with its own confirmation page, so a user whose session had
+  already lapsed was asked to confirm signing out of nothing. The cookie clear
+  still runs.
