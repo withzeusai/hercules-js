@@ -105,10 +105,27 @@ describe("resolvePostLogoutRedirectUri", () => {
     );
   });
 
-  it("normalizes a configured root URI to the bare origin", () => {
+  // The configured value is the string the app registered, and the provider
+  // compares it character for character, so an app whose provider holds the
+  // trailing-slash spelling must be able to send it back.
+  it("sends a configured absolute URI verbatim, trailing slash and all", () => {
     setAuthOptions({ postLogoutRedirectUri: "https://marketing.example.com/" });
     expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
-      "https://marketing.example.com",
+      "https://marketing.example.com/",
+    );
+  });
+
+  it("sends a configured absolute URI from the environment verbatim", () => {
+    vi.stubEnv("HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI", "https://app.example.com/");
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com/",
+    );
+  });
+
+  it("renders a configured relative value like the default", () => {
+    setAuthOptions({ postLogoutRedirectUri: "/" });
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com",
     );
   });
 

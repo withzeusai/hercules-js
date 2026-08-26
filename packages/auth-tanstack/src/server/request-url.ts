@@ -89,6 +89,11 @@ function anchorToOrigin(origin: string, target: string): string {
  * paths that don't go through the provider (a provider with no end-session
  * endpoint, or a failure to reach one). Returning to another host is a
  * deployment decision: configure `postLogoutRedirectUri`.
+ *
+ * A configured value that is already absolute is sent exactly as written, since
+ * it *is* the string the app registered. An app whose provider holds
+ * `https://app.example.com/` needs that trailing slash back, and normalizing it
+ * away here would leave no way to spell the registered value.
  */
 export function resolvePostLogoutRedirectUri(request: Request, returnTo?: string): string {
   const origin = resolveOrigin(request);
@@ -97,7 +102,9 @@ export function resolvePostLogoutRedirectUri(request: Request, returnTo?: string
   const configured =
     getAuthOptions().postLogoutRedirectUri ?? readEnv(POST_LOGOUT_REDIRECT_URI_ENV_VARS);
   if (configured === undefined) return origin;
+  if (URL.canParse(configured)) return configured;
 
+  // Relative: the spelling is ours to choose, so render it like the default.
   try {
     return registrableUri(new URL(configured, origin));
   } catch {

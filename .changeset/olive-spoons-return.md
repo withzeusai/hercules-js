@@ -18,7 +18,8 @@ error the app could see. `@usehercules/auth` was unaffected -- it sends
   and the `getSignOutUrl` action behind the React `signOut()`.
 - Add a `postLogoutRedirectUri` middleware option (and
   `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI`) for apps whose registered URI is not
-  their own origin.
+  their own origin. An absolute value is sent verbatim, so an app whose provider
+  registered the trailing-slash form can still spell it.
 - Stop the client `signOut()` defaulting `returnTo` to `"/"`. An explicit value
   overrode the configured one, so the new option would never have applied to the
   hook.

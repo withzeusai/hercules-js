@@ -38,8 +38,11 @@ export interface HerculesAuthMiddlewareOptions {
    * The value must be registered with the provider *exactly* as written: OIDC
    * RP-Initiated Logout compares it by simple string comparison, so a stray
    * trailing slash is a different URI and the provider will refuse to send the
-   * user back. Set this only to return to a host other than the app's own;
-   * per-sign-out destinations belong in `signOut({ returnTo })`.
+   * user back. An absolute value is therefore sent verbatim, which is also how
+   * an app whose provider holds `https://app.example.com/` asks for that
+   * spelling; a relative one is resolved against the origin. Set this only to
+   * return to a host other than the app's own, or to override the default
+   * spelling; per-sign-out destinations belong in `signOut({ returnTo })`.
    */
   postLogoutRedirectUri?: string;
   /**

@@ -64,7 +64,7 @@ export const startInstance = createStart(() => ({
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `redirectUri`           | Public callback URL, e.g. `https://app.example.com/auth/callback`. Behind a TLS-terminating proxy, `request.url` only reflects the internal `http://` hop — so cookies would be written without `Secure` and `redirect_uri` built from the wrong origin. Setting this makes the SDK derive the real origin/protocol from it, and it becomes the default `redirect_uri` sent to the provider. Falls back to `request.url` when unset. |
 | `cookieSameSite`        | `SameSite` attribute for the PKCE verifier and session cookies: `"lax"` or `"none"`. Defaults to protocol-derived — `none` over HTTPS (so the cookies are set/sent when the app is embedded cross-site) and `lax` over HTTP (local dev). `"none"` always implies `Secure`.                                                                                                                                                           |
-| `postLogoutRedirectUri` | Where the provider returns the user after sign-out, sent as `post_logout_redirect_uri`. Wins over `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI`; defaults to the app's own origin. Set it only to return to a different host; per-sign-out destinations belong in `signOut({ returnTo })`.                                                                                                                                                |
+| `postLogoutRedirectUri` | Where the provider returns the user after sign-out, sent as `post_logout_redirect_uri`. Wins over `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI`; defaults to the app's own origin. An absolute value is sent verbatim, so it can also pin a spelling the provider registered (e.g. a trailing slash); per-sign-out destinations belong in `signOut({ returnTo })`.                                                                        |
 | `cookieMaxAge`          | Session cookie lifetime in seconds. Wins over `HERCULES_AUTH_COOKIE_MAX_AGE`; defaults to ~400 days.                                                                                                                                                                                                                                                                                                                                 |
 | `cookieDomain`          | `Domain` attribute for the session cookie. Wins over `HERCULES_AUTH_COOKIE_DOMAIN`; defaults to host-only.                                                                                                                                                                                                                                                                                                                           |
 
@@ -214,7 +214,8 @@ find it keeps the user on its own signed-out page instead of returning them.
 So `https://app.example.com` and `https://app.example.com/` are different URIs
 here, and any `returnTo` you pass must itself be registered. `returnTo` is
 resolved against the app's own origin; use `postLogoutRedirectUri` to land on a
-different host.
+different host, or to pin the exact spelling when your provider registered the
+trailing-slash form (an absolute value there is sent verbatim).
 
 ## API
 
