@@ -84,12 +84,15 @@ export function HerculesAuthProvider({
     }
   }, [apply]);
 
-  const signOut = useCallback(async ({ returnTo = "/" }: { returnTo?: string } = {}) => {
+  // No `returnTo` default: an explicit "/" would override the app's configured
+  // `postLogoutRedirectUri`. Omitting it lets the server resolve the value the
+  // provider actually has registered.
+  const signOut = useCallback(async ({ returnTo }: { returnTo?: string } = {}) => {
     try {
-      const { url } = await getSignOutUrl({ data: { returnTo } });
+      const { url } = await getSignOutUrl({ data: returnTo === undefined ? {} : { returnTo } });
       window.location.href = url;
     } catch {
-      window.location.href = returnTo;
+      window.location.href = returnTo ?? "/";
     }
   }, []);
 

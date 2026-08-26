@@ -12,16 +12,17 @@ Peer dependencies: `@tanstack/react-router`, `@tanstack/react-start`, and — on
 
 ## Environment variables
 
-| Variable                        | Required | Description                                                                                                                                                                                                          |
-| ------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HERCULES_AUTH_ISSUER_URL`      | yes      | OIDC issuer used for discovery (`{issuer}/.well-known/openid-configuration`). For Amazon Cognito this is the user-pool issuer (`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`), not the hosted-UI domain. |
-| `HERCULES_AUTH_CLIENT_ID`       | yes      | OAuth client ID.                                                                                                                                                                                                     |
-| `HERCULES_AUTH_CLIENT_SECRET`   | no       | OAuth client secret. Omit for a public (PKCE-only) client.                                                                                                                                                           |
-| `HERCULES_AUTH_COOKIE_PASSWORD` | yes      | Secret used to seal the session cookie (AES-256-GCM). Must be at least 32 characters.                                                                                                                                |
-| `HERCULES_AUTH_REDIRECT_URI`    | no       | Public callback URL. Environment fallback for the `herculesAuthMiddleware({ redirectUri })` option (the option wins).                                                                                                 |
-| `HERCULES_AUTH_COOKIE_MAX_AGE`  | no       | Session cookie lifetime in seconds. Defaults to ~400 days — the cookie deliberately outlives the access token so the sealed refresh token can sign an idle user back in.                                              |
-| `HERCULES_AUTH_COOKIE_NAME`     | no       | Base name of the session cookie (default `hercules_session`). Useful when two apps on one host need separate sessions.                                                                                                |
-| `HERCULES_AUTH_COOKIE_DOMAIN`   | no       | `Domain` attribute for the session cookie (e.g. `.example.com` to share it across subdomains). Default: host-only.                                                                                                    |
+| Variable                                 | Required | Description                                                                                                                                                                                                          |
+| ---------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HERCULES_AUTH_ISSUER_URL`               | yes      | OIDC issuer used for discovery (`{issuer}/.well-known/openid-configuration`). For Amazon Cognito this is the user-pool issuer (`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`), not the hosted-UI domain. |
+| `HERCULES_AUTH_CLIENT_ID`                | yes      | OAuth client ID.                                                                                                                                                                                                     |
+| `HERCULES_AUTH_CLIENT_SECRET`            | no       | OAuth client secret. Omit for a public (PKCE-only) client.                                                                                                                                                           |
+| `HERCULES_AUTH_COOKIE_PASSWORD`          | yes      | Secret used to seal the session cookie (AES-256-GCM). Must be at least 32 characters.                                                                                                                                |
+| `HERCULES_AUTH_REDIRECT_URI`             | no       | Public callback URL. Environment fallback for the `herculesAuthMiddleware({ redirectUri })` option (the option wins).                                                                                                |
+| `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI` | no       | Where the provider returns the user after sign-out. Environment fallback for the `herculesAuthMiddleware({ postLogoutRedirectUri })` option (the option wins). Defaults to the app's own origin.                     |
+| `HERCULES_AUTH_COOKIE_MAX_AGE`           | no       | Session cookie lifetime in seconds. Defaults to ~400 days — the cookie deliberately outlives the access token so the sealed refresh token can sign an idle user back in.                                             |
+| `HERCULES_AUTH_COOKIE_NAME`              | no       | Base name of the session cookie (default `hercules_session`). Useful when two apps on one host need separate sessions.                                                                                               |
+| `HERCULES_AUTH_COOKIE_DOMAIN`            | no       | `Domain` attribute for the session cookie (e.g. `.example.com` to share it across subdomains). Default: host-only.                                                                                                   |
 
 Each value also accepts alias names, tried in order: the canonical `HERCULES_AUTH_*` name, a standard OIDC alias where one applies (`HERCULES_OIDC_AUTHORITY` for the issuer, `HERCULES_OIDC_CLIENT_ID` for the client ID), then the unprefixed `AUTH_*` name.
 
@@ -59,12 +60,13 @@ export const startInstance = createStart(() => ({
 
 **Options**
 
-| Option           | Description                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `redirectUri`    | Public callback URL, e.g. `https://app.example.com/auth/callback`. Behind a TLS-terminating proxy, `request.url` only reflects the internal `http://` hop — so cookies would be written without `Secure` and `redirect_uri` built from the wrong origin. Setting this makes the SDK derive the real origin/protocol from it, and it becomes the default `redirect_uri` sent to the provider. Falls back to `request.url` when unset. |
-| `cookieSameSite` | `SameSite` attribute for the PKCE verifier and session cookies: `"lax"` or `"none"`. Defaults to protocol-derived — `none` over HTTPS (so the cookies are set/sent when the app is embedded cross-site) and `lax` over HTTP (local dev). `"none"` always implies `Secure`.                                                                                                                 |
-| `cookieMaxAge`   | Session cookie lifetime in seconds. Wins over `HERCULES_AUTH_COOKIE_MAX_AGE`; defaults to ~400 days.                                                                                                                                                                                                                                                                                       |
-| `cookieDomain`   | `Domain` attribute for the session cookie. Wins over `HERCULES_AUTH_COOKIE_DOMAIN`; defaults to host-only.                                                                                                                                                                                                                                                                                 |
+| Option                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `redirectUri`           | Public callback URL, e.g. `https://app.example.com/auth/callback`. Behind a TLS-terminating proxy, `request.url` only reflects the internal `http://` hop — so cookies would be written without `Secure` and `redirect_uri` built from the wrong origin. Setting this makes the SDK derive the real origin/protocol from it, and it becomes the default `redirect_uri` sent to the provider. Falls back to `request.url` when unset. |
+| `cookieSameSite`        | `SameSite` attribute for the PKCE verifier and session cookies: `"lax"` or `"none"`. Defaults to protocol-derived — `none` over HTTPS (so the cookies are set/sent when the app is embedded cross-site) and `lax` over HTTP (local dev). `"none"` always implies `Secure`.                                                                                                                                                           |
+| `postLogoutRedirectUri` | Where the provider returns the user after sign-out, sent as `post_logout_redirect_uri`. Wins over `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI`; defaults to the app's own origin. An absolute value is sent verbatim, so it can also pin a spelling the provider registered (e.g. a trailing slash); per-sign-out destinations belong in `signOut({ returnTo })`.                                                                        |
+| `cookieMaxAge`          | Session cookie lifetime in seconds. Wins over `HERCULES_AUTH_COOKIE_MAX_AGE`; defaults to ~400 days.                                                                                                                                                                                                                                                                                                                                 |
+| `cookieDomain`          | `Domain` attribute for the session cookie. Wins over `HERCULES_AUTH_COOKIE_DOMAIN`; defaults to host-only.                                                                                                                                                                                                                                                                                                                           |
 
 `redirectUri` is the app-wide default; an individual `handleSignInRoute({ redirectUri })` or `getSignInUrl({ redirectUri })` call can still override it per flow.
 
@@ -156,7 +158,7 @@ function ProfileButton() {
   const { user, loading, signOut } = useAuth();
   if (loading) return <span>Loading…</span>;
   if (!user) return <a href="/auth/sign-in">Sign in</a>;
-  return <button onClick={() => signOut({ returnTo: "/" })}>Sign out ({user.email})</button>;
+  return <button onClick={() => signOut()}>Sign out ({user.email})</button>;
 }
 ```
 
@@ -202,6 +204,18 @@ export const Route = createFileRoute("/logout")({
   },
 });
 ```
+
+**Where the user lands afterwards.** The SDK sends the app's origin as
+`post_logout_redirect_uri` (or `postLogoutRedirectUri` when configured, or
+`signOut({ returnTo })` when passed). OIDC RP-Initiated Logout requires that
+value to match one of the client's registered post-logout URIs _exactly_
+(simple string comparison, no URL normalization), and a provider that doesn't
+find it keeps the user on its own signed-out page instead of returning them.
+So `https://app.example.com` and `https://app.example.com/` are different URIs
+here, and any `returnTo` you pass must itself be registered. `returnTo` is
+resolved against the app's own origin; use `postLogoutRedirectUri` to land on a
+different host, or to pin the exact spelling when your provider registered the
+trailing-slash form (an absolute value there is sent verbatim).
 
 ## API
 

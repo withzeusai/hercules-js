@@ -7,7 +7,6 @@ import type { NoUserInfo, UserInfo } from "../types";
 import type { GetAuthURLOptions, RecentAuthResult, SignInUrlOptions } from "./auth";
 import { collectClaims, userInfoFromSession } from "./claims";
 import {
-  DEFAULT_REDIRECT,
   DEFAULT_SCOPE,
   MAX_PENDING_SIGN_INS,
   PKCE_COOKIE_PREFIX,
@@ -18,7 +17,12 @@ import {
   sessionCookieDomain,
 } from "./config";
 import { resolveLogoutLocation } from "./refresh";
-import { cookieSecurity, resolveOrigin, resolveRedirectUri, toCookieSameSite } from "./request-url";
+import {
+  cookieSecurity,
+  resolvePostLogoutRedirectUri,
+  resolveRedirectUri,
+  toCookieSameSite,
+} from "./request-url";
 import { clearSessionCookies, isSessionExpired } from "./session";
 import { getResolvedSession } from "./session-context";
 import { readSession } from "./session-store";
@@ -130,16 +134,19 @@ export async function getAuthBody(): Promise<UserInfo | NoUserInfo> {
  * Backs `signOut`: clear the session cookies and redirect to the provider's
  * end-session URL (or `returnTo`). Reads the raw session (no auto-refresh) —
  * refreshing tokens just to discard them would be a wasted grant.
+ *
+ * With no session, skip the provider entirely: there is nothing to end, and a
+ * hintless end-session request only earns the OP's confirmation page. The
+ * cookie clear still runs, so a stale or unsealable cookie is swept up.
  */
 export async function signOutBody(returnTo?: string): Promise<never> {
-  const idTokenHint = (await readSession())?.idToken;
+  const session = await readSession();
 
   const request = getRequest();
-  const postLogoutRedirectUri = new URL(
-    returnTo ?? DEFAULT_REDIRECT,
-    resolveOrigin(request),
-  ).toString();
-  const location = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
+  const postLogoutRedirectUri = resolvePostLogoutRedirectUri(request, returnTo);
+  const location = session
+    ? await resolveLogoutLocation(postLogoutRedirectUri, session.idToken)
+    : postLogoutRedirectUri;
 
   // Clear with the same SameSite/Secure/Domain used to set the session so the
   // cookies are removed even when sign-out runs in a cross-site context or the

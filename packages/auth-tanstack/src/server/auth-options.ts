@@ -30,6 +30,22 @@ export interface HerculesAuthMiddlewareOptions {
    */
   cookieSameSite?: "lax" | "none";
   /**
+   * Public URL the provider returns to after sign-out, sent as
+   * `post_logout_redirect_uri`. Defaults to
+   * `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI` (or `AUTH_POST_LOGOUT_REDIRECT_URI`),
+   * then the app's own origin.
+   *
+   * The value must be registered with the provider *exactly* as written: OIDC
+   * RP-Initiated Logout compares it by simple string comparison, so a stray
+   * trailing slash is a different URI and the provider will refuse to send the
+   * user back. An absolute value is therefore sent verbatim, which is also how
+   * an app whose provider holds `https://app.example.com/` asks for that
+   * spelling; a relative one is resolved against the origin. Set this only to
+   * return to a host other than the app's own, or to override the default
+   * spelling; per-sign-out destinations belong in `signOut({ returnTo })`.
+   */
+  postLogoutRedirectUri?: string;
+  /**
    * Lifetime (seconds) of the sealed session cookie. Defaults to
    * `HERCULES_AUTH_COOKIE_MAX_AGE` (or `AUTH_COOKIE_MAX_AGE`), then ~400 days.
    *

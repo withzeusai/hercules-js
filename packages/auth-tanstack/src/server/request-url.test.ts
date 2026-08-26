@@ -4,6 +4,7 @@ import {
   cookieSecurity,
   resolveCallbackUrl,
   resolveOrigin,
+  resolvePostLogoutRedirectUri,
   resolveRedirectUri,
   toCookieSameSite,
 } from "./request-url";
@@ -57,6 +58,96 @@ describe("resolveRedirectUri", () => {
     expect(
       resolveRedirectUri(request("http://internal/auth/sign-in"), "https://other.example.com/cb"),
     ).toBe("https://other.example.com/cb");
+  });
+});
+
+describe("resolvePostLogoutRedirectUri", () => {
+  // The provider compares this value to its registered list as a plain string,
+  // so a trailing slash the registration doesn't have means no redirect at all.
+  it("defaults to the bare origin, with no trailing slash", () => {
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("resolves a root returnTo to the bare origin", () => {
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"), "/")).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("keeps a non-root returnTo's path, query, and hash", () => {
+    expect(
+      resolvePostLogoutRedirectUri(request("https://app.example.com/account"), "/bye?a=1#x"),
+    ).toBe("https://app.example.com/bye?a=1#x");
+  });
+
+  it("anchors an off-origin returnTo to this app's origin", () => {
+    expect(
+      resolvePostLogoutRedirectUri(
+        request("https://app.example.com/account"),
+        "https://evil.test/x",
+      ),
+    ).toBe("https://app.example.com/x");
+  });
+
+  it("uses the configured origin behind a TLS-terminating proxy", () => {
+    setAuthOptions({ redirectUri: "https://app.example.com/auth/callback" });
+    expect(resolvePostLogoutRedirectUri(request("http://internal:8080/account"))).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("uses the configured postLogoutRedirectUri when no returnTo is given", () => {
+    setAuthOptions({ postLogoutRedirectUri: "https://marketing.example.com/farewell" });
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://marketing.example.com/farewell",
+    );
+  });
+
+  // The configured value is the string the app registered, and the provider
+  // compares it character for character, so an app whose provider holds the
+  // trailing-slash spelling must be able to send it back.
+  it("sends a configured absolute URI verbatim, trailing slash and all", () => {
+    setAuthOptions({ postLogoutRedirectUri: "https://marketing.example.com/" });
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://marketing.example.com/",
+    );
+  });
+
+  it("sends a configured absolute URI from the environment verbatim", () => {
+    vi.stubEnv("HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI", "https://app.example.com/");
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com/",
+    );
+  });
+
+  it("renders a configured relative value like the default", () => {
+    setAuthOptions({ postLogoutRedirectUri: "/" });
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com",
+    );
+  });
+
+  it("falls back to the environment when no option is configured", () => {
+    vi.stubEnv("HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI", "https://app.example.com/signed-out");
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com/signed-out",
+    );
+  });
+
+  it("lets returnTo win over the configured value", () => {
+    setAuthOptions({ postLogoutRedirectUri: "https://marketing.example.com/farewell" });
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"), "/bye")).toBe(
+      "https://app.example.com/bye",
+    );
+  });
+
+  it("falls back to the origin when the configured value is malformed", () => {
+    setAuthOptions({ postLogoutRedirectUri: "http://[" });
+    expect(resolvePostLogoutRedirectUri(request("https://app.example.com/account"))).toBe(
+      "https://app.example.com",
+    );
   });
 });
 

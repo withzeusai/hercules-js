@@ -1,9 +1,8 @@
 import { getRequest } from "@tanstack/react-start/server";
 import type { ClientUserInfo, NoUserInfo, UserInfo } from "../types";
 import { userInfoFromSession } from "./claims";
-import { DEFAULT_REDIRECT } from "./config";
 import { resolveLogoutLocation } from "./refresh";
-import { resolveOrigin } from "./request-url";
+import { resolvePostLogoutRedirectUri } from "./request-url";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
 import { clearSession, readSession } from "./session-store";
 
@@ -70,12 +69,19 @@ export async function refreshAuthBody(): Promise<ClientUserInfo | NoUserInfo> {
  *
  * Reads the raw session (no auto-refresh) — refreshing tokens just to discard
  * them would be a wasted grant.
+ *
+ * With no session there is nothing for the provider to end, and an end-session
+ * request carrying no `id_token_hint` makes the OP interrupt with its own
+ * confirmation page — so a user whose session already lapsed would be asked to
+ * confirm signing out of nothing. Go straight to the post-logout target
+ * instead, as WorkOS's AuthKit does.
  */
 export async function getSignOutUrlBody(returnTo?: string): Promise<{ url: string }> {
-  const idTokenHint = (await readSession())?.idToken;
-  const origin = resolveOrigin(getRequest());
-  const postLogoutRedirectUri = new URL(returnTo ?? DEFAULT_REDIRECT, origin).toString();
-  const url = await resolveLogoutLocation(postLogoutRedirectUri, idTokenHint);
+  const session = await readSession();
+  const postLogoutRedirectUri = resolvePostLogoutRedirectUri(getRequest(), returnTo);
+  const url = session
+    ? await resolveLogoutLocation(postLogoutRedirectUri, session.idToken)
+    : postLogoutRedirectUri;
 
   // Clear the session on this response so the cookie is gone before the client
   // navigates away to complete sign-out.
