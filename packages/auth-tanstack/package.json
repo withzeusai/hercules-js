@@ -7,6 +7,7 @@
   "exports": {
     ".": "./dist/index.mjs",
     "./client": "./dist/client/index.mjs",
+    "./convex": "./dist/convex/index.mjs",
     "./package.json": "./package.json"
   },
   "author": "Hercules Team",
@@ -31,14 +32,20 @@
     "test": "vitest --run"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "convex": "^1.42.1",
+    "jsdom": "^29.1.1",
     "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "tsdown": "^0.22.8",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   },
   "peerDependencies": {
+    "convex": "^1.29.0",
     "react": "^18.0.0 || ^19.0.0"
   },
   "dependencies": {
