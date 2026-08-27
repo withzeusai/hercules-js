@@ -39,6 +39,13 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
   onSigninCallback,
 };
 
+interface CachedUserManager {
+  userManager: UserManager;
+  impersonationStorageKey: string;
+}
+
+const userManagers = new Map<string, CachedUserManager>();
+
 interface HerculesAuthProviderContext {
   userManager: UserManager;
   impersonationStorageKey: string;
@@ -52,6 +59,44 @@ export function useHerculesAuthProvider() {
     throw new Error("HerculesAuthProviderContext not found");
   }
   return context;
+}
+
+function getUserManager(
+  userManagerSettings: Partial<UserManagerSettings> | undefined,
+  authority: string,
+  clientId: string,
+): CachedUserManager {
+  const effectiveAuthority = userManagerSettings?.authority ?? authority;
+  const effectiveClientId = userManagerSettings?.client_id ?? clientId;
+  const scope = userManagerSettings?.scope ?? "openid profile email offline_access";
+  const key = JSON.stringify([effectiveAuthority, effectiveClientId, scope]);
+  const cached = userManagers.get(key);
+  if (cached) return cached;
+
+  const userManager = {
+    userManager: new UserManager({
+      ...userManagerSettings,
+      authority: effectiveAuthority,
+      client_id: effectiveClientId,
+      prompt: userManagerSettings?.prompt ?? "select_account",
+      response_type: userManagerSettings?.response_type ?? "code",
+      scope,
+      redirect_uri: userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
+      post_logout_redirect_uri:
+        userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
+      userStore:
+        userManagerSettings?.userStore ?? new WebStorageStateStore({ store: window.localStorage }),
+      automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
+      silentRequestTimeoutInSeconds:
+        userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
+    }),
+    impersonationStorageKey: getHerculesImpersonationStorageKey(
+      effectiveAuthority,
+      effectiveClientId,
+    ),
+  };
+  userManagers.set(key, userManager);
+  return userManager;
 }
 
 function AuthRecoveryGate({
@@ -125,35 +170,9 @@ export function HerculesAuthProvider({
   ...props
 }: HerculesAuthProviderProps) {
   const automaticSilentRenewExplicit = userManagerSettings?.automaticSilentRenew === true;
-  const [{ userManager, impersonationStorageKey }] = useState(() => {
-    const effectiveAuthority = userManagerSettings?.authority ?? authority;
-    const effectiveClientId = userManagerSettings?.client_id ?? client_id;
-
-    return {
-      userManager: new UserManager({
-        ...userManagerSettings,
-        authority: effectiveAuthority,
-        client_id: effectiveClientId,
-        prompt: userManagerSettings?.prompt ?? "select_account",
-        response_type: userManagerSettings?.response_type ?? "code",
-        scope: userManagerSettings?.scope ?? "openid profile email offline_access",
-        redirect_uri:
-          userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
-        post_logout_redirect_uri:
-          userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
-        userStore:
-          userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
-        automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
-        silentRequestTimeoutInSeconds:
-          userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
-      }),
-      impersonationStorageKey: getHerculesImpersonationStorageKey(
-        effectiveAuthority,
-        effectiveClientId,
-      ),
-    };
-  });
+  const [{ userManager, impersonationStorageKey }] = useState(() =>
+    getUserManager(userManagerSettings, authority, client_id),
+  );
 
   useEffect(() => {
     if (automaticSilentRenewExplicit) return;
