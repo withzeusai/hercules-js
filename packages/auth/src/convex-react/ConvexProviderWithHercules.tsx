@@ -3,35 +3,65 @@
 import type { ReactNode } from "react";
 import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
 import { jwtDecode } from "jwt-decode";
-import { useCallback, useMemo, useRef } from "react";
+import { ErrorResponse, ErrorTimeout } from "oidc-client-ts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { withRefreshLock } from "../internal/refresh-lock";
-import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
+import { useHerculesAuthProvider, type HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
 const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
 function tokenExpiresWithin(token: string, ms: number): boolean {
   try {
     const payload = jwtDecode(token);
-    return payload.exp! * 1000 - Date.now() < ms;
+    return (
+      typeof payload.exp !== "number" ||
+      !Number.isFinite(payload.exp) ||
+      payload.exp * 1000 - Date.now() <= ms
+    );
   } catch {
     return true;
   }
 }
 
+function isTransientRefreshError(error: unknown): boolean {
+  if (error instanceof ErrorResponse) {
+    return error.error === "temporarily_unavailable" || error.error === "server_error";
+  }
+  return error instanceof ErrorTimeout || error instanceof TypeError;
+}
+
 function useUseAuthFromHercules() {
-  const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
+  const { isAuthenticated, user, isLoading } = useAuth();
+  const { userManager } = useHerculesAuthProvider();
   const idToken = user?.id_token;
   const issuer = user?.profile?.iss;
   const subject = user?.profile?.sub;
+  const identityRef = useRef({ issuer, subject });
+  identityRef.current = { issuer, subject };
 
   const idTokenRef = useRef(idToken);
   idTokenRef.current = idToken;
 
-  const signinSilentRef = useRef(signinSilent);
-  signinSilentRef.current = signinSilent;
+  const userManagerRef = useRef(userManager);
+  userManagerRef.current = userManager;
 
   const inFlightRefresh = useRef<Promise<string | null> | null>(null);
+  const failedRefreshToken = useRef<string | null | undefined>(undefined);
+  const [recoveryVersion, setRecoveryVersion] = useState(0);
+
+  useEffect(() => {
+    if (
+      failedRefreshToken.current !== undefined &&
+      idToken != null &&
+      idToken !== failedRefreshToken.current &&
+      !tokenExpiresWithin(idToken, 0)
+    ) {
+      // Convex stops refetching after a failed renewal, even if OIDC later recovers.
+      failedRefreshToken.current = undefined;
+      setRecoveryVersion((version) => version + 1);
+    }
+  }, [idToken]);
 
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
@@ -46,14 +76,32 @@ function useUseAuthFromHercules() {
         return inFlightRefresh.current;
       }
       const refresh = withRefreshLock(async () => {
+        const isCurrentIdentity = () =>
+          identityRef.current.issuer === issuer && identityRef.current.subject === subject;
+        if (!isCurrentIdentity()) return null;
         const tokenAfterLock = idTokenRef.current;
         if (tokenAfterLock != null && !tokenExpiresWithin(tokenAfterLock, REFRESH_THRESHOLD_MS)) {
           return tokenAfterLock;
         }
         try {
-          const refreshed = await signinSilentRef.current();
+          // react-oidc-context turns every renewal error into null, losing its cause.
+          const refreshed = await userManagerRef.current.signinSilent();
+          if (!isCurrentIdentity()) return null;
+          failedRefreshToken.current = refreshed?.id_token
+            ? undefined
+            : (idTokenRef.current ?? null);
           return refreshed?.id_token ?? null;
-        } catch {
+        } catch (error) {
+          if (!isCurrentIdentity()) return null;
+          failedRefreshToken.current = idTokenRef.current ?? null;
+          if (
+            isTransientRefreshError(error) &&
+            tokenAfterLock != null &&
+            tokenAfterLock === idTokenRef.current &&
+            !tokenExpiresWithin(tokenAfterLock, 0)
+          ) {
+            return tokenAfterLock;
+          }
           return null;
         }
       }).finally(() => {
@@ -62,7 +110,7 @@ function useUseAuthFromHercules() {
       inFlightRefresh.current = refresh;
       return refresh;
     },
-    [issuer, subject],
+    [issuer, subject, recoveryVersion],
   );
 
   return useMemo(

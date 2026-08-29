@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { renderHook, act, configure } from "@testing-library/react";
 import { ConvexProviderWithHerculesAuth } from "./ConvexProviderWithHercules.js";
 import React from "react";
+import { ErrorResponse, ErrorTimeout } from "oidc-client-ts";
 
 configure({ reactStrictMode: true });
 
@@ -18,6 +19,10 @@ let mockAuthState: Record<string, unknown> = {};
 
 vi.mock("react-oidc-context", () => ({
   useAuth: () => mockAuthState,
+}));
+
+vi.mock("../react/HerculesAuthProvider", () => ({
+  useHerculesAuthProvider: () => ({ userManager: { signinSilent: mockSigninSilent } }),
 }));
 
 type CapturedUseAuth = () => {
@@ -152,6 +157,105 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
 
     expect(token).toBeNull();
     expect(mockSigninSilent).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    new ErrorResponse({ error: "temporarily_unavailable" }),
+    new ErrorResponse({ error: "server_error" }),
+    new ErrorTimeout("Network timed out"),
+    new TypeError("Failed to fetch"),
+  ])("preserves an unexpired token after a transient refresh failure: %s", async (error) => {
+    mockSigninSilent.mockRejectedValue(error);
+    const { result } = renderUseAuth();
+
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBe(EXPIRING_TOKEN);
+  });
+
+  it.each(["invalid_grant", "login_required", "interaction_required", "invalid_client"])(
+    "does not reuse a cached token after %s",
+    async (error) => {
+      mockSigninSilent.mockRejectedValue(new ErrorResponse({ error }));
+      const { result } = renderUseAuth();
+
+      expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBeNull();
+    },
+  );
+
+  it.each([
+    makeJwt(Math.floor(Date.now() / 1000) - 1),
+    makeJwt(Math.floor(Date.now() / 1000)),
+    makeJwt(Number.NaN),
+    "malformed-token",
+  ])("does not reuse an expired or invalid cached token: %s", async (token) => {
+    setAuthState({ user: { id_token: token } });
+    mockSigninSilent.mockRejectedValue(new ErrorResponse({ error: "temporarily_unavailable" }));
+    const { result } = renderUseAuth();
+
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBeNull();
+  });
+
+  it("reconnects once when a failed refresh is followed by a new valid token", async () => {
+    mockSigninSilent.mockRejectedValue(new ErrorResponse({ error: "temporarily_unavailable" }));
+    const { result, rerender } = renderUseAuth();
+    const originalFetch = result.current.fetchAccessToken;
+
+    await act(async () => {
+      await originalFetch({ forceRefreshToken: true });
+    });
+    rerender();
+    expect(result.current.fetchAccessToken).toBe(originalFetch);
+    expect(mockSigninSilent).toHaveBeenCalledOnce();
+
+    setAuthState({ user: { id_token: LONG_LIVED_TOKEN } });
+    rerender();
+    const recoveredFetch = result.current.fetchAccessToken;
+    expect(recoveredFetch).not.toBe(originalFetch);
+    expect(await recoveredFetch({ forceRefreshToken: false })).toBe(LONG_LIVED_TOKEN);
+
+    setAuthState({ user: { id_token: makeJwt(Math.floor(Date.now() / 1000) + 3 * 60 * 60) } });
+    rerender();
+    expect(result.current.fetchAccessToken).toBe(recoveredFetch);
+    expect(mockSigninSilent).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse a token removed while refresh is in flight", async () => {
+    let rejectSilent!: (error: Error) => void;
+    mockSigninSilent.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectSilent = reject;
+        }),
+    );
+    const { result, rerender } = renderUseAuth();
+    const refresh = result.current.fetchAccessToken({ forceRefreshToken: true });
+
+    setAuthState({ user: null, isAuthenticated: false });
+    rerender();
+    rejectSilent(new ErrorResponse({ error: "temporarily_unavailable" }));
+
+    expect(await refresh).toBeNull();
+  });
+
+  it("does not return a previous account's successful in-flight refresh", async () => {
+    let resolveSilent!: (value: { id_token: string }) => void;
+    mockSigninSilent.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSilent = resolve;
+        }),
+    );
+    setAuthState({ user: { id_token: EXPIRING_TOKEN, profile: { sub: "alice" } } });
+    const { result, rerender } = renderUseAuth();
+    const refresh = result.current.fetchAccessToken({ forceRefreshToken: true });
+
+    setAuthState({ user: { id_token: LONG_LIVED_TOKEN, profile: { sub: "bob" } } });
+    rerender();
+    resolveSilent({ id_token: "alice-refreshed-token" });
+
+    expect(await refresh).toBeNull();
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(
+      LONG_LIVED_TOKEN,
+    );
   });
 
   it("returns null when signinSilent resolves without a user", async () => {
