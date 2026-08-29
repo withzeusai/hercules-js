@@ -14,6 +14,7 @@ function makeJwt(exp: number): string {
 }
 
 const mockSigninSilent = vi.fn();
+const mockRaiseSilentRenewError = vi.fn();
 
 let mockAuthState: Record<string, unknown> = {};
 
@@ -22,7 +23,12 @@ vi.mock("react-oidc-context", () => ({
 }));
 
 vi.mock("../react/HerculesAuthProvider", () => ({
-  useHerculesAuthProvider: () => ({ userManager: { signinSilent: mockSigninSilent } }),
+  useHerculesAuthProvider: () => ({
+    userManager: {
+      signinSilent: mockSigninSilent,
+      events: { _raiseSilentRenewError: mockRaiseSilentRenewError },
+    },
+  }),
 }));
 
 type CapturedUseAuth = () => {
@@ -34,6 +40,7 @@ type CapturedUseAuth = () => {
 let capturedUseAuth: CapturedUseAuth | null = null;
 
 vi.mock("convex/react", () => ({
+  useConvexAuth: () => ({ isAuthenticated: false }),
   ConvexProviderWithAuth: ({
     children,
     useAuth,
@@ -64,6 +71,7 @@ function setAuthState(overrides: Record<string, unknown>) {
 beforeEach(() => {
   setAuthState({});
   mockSigninSilent.mockReset();
+  mockRaiseSilentRenewError.mockReset().mockResolvedValue(undefined);
   capturedUseAuth = null;
 });
 
@@ -186,6 +194,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     makeJwt(Math.floor(Date.now() / 1000)),
     makeJwt(Number.NaN),
     "malformed-token",
+    `${btoa(JSON.stringify({ alg: "none" }))}.${btoa("{}")}.sig`,
   ])("does not reuse an expired or invalid cached token: %s", async (token) => {
     setAuthState({ user: { id_token: token } });
     mockSigninSilent.mockRejectedValue(new ErrorResponse({ error: "temporarily_unavailable" }));
@@ -256,6 +265,14 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(
       LONG_LIVED_TOKEN,
     );
+  });
+
+  it("still fails closed if a renewal error listener throws", async () => {
+    mockSigninSilent.mockRejectedValue(new ErrorResponse({ error: "invalid_grant" }));
+    mockRaiseSilentRenewError.mockRejectedValue(new Error("listener failed"));
+    const { result } = renderUseAuth();
+
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBeNull();
   });
 
   it("returns null when signinSilent resolves without a user", async () => {

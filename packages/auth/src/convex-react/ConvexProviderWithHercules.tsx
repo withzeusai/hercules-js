@@ -1,15 +1,24 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
+import type { ReactNode, RefObject } from "react";
+import { ConvexProviderWithAuth, useConvexAuth, type ConvexReactClient } from "convex/react";
 import { jwtDecode } from "jwt-decode";
 import { ErrorResponse, ErrorTimeout } from "oidc-client-ts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAuth } from "react-oidc-context";
 import { withRefreshLock } from "../internal/refresh-lock";
 import { useHerculesAuthProvider, type HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
 const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+const BackendAuthContext = createContext<RefObject<boolean> | null>(null);
 
 function tokenExpiresWithin(token: string, ms: number): boolean {
   try {
@@ -32,6 +41,7 @@ function isTransientRefreshError(error: unknown): boolean {
 }
 
 function useUseAuthFromHercules() {
+  const backendAuth = useContext(BackendAuthContext);
   const { isAuthenticated, user, isLoading } = useAuth();
   const { userManager } = useHerculesAuthProvider();
   const idToken = user?.id_token;
@@ -59,9 +69,9 @@ function useUseAuthFromHercules() {
     ) {
       // Convex stops refetching after a failed renewal, even if OIDC later recovers.
       failedRefreshToken.current = undefined;
-      setRecoveryVersion((version) => version + 1);
+      if (!backendAuth?.current) setRecoveryVersion((version) => version + 1);
     }
-  }, [idToken]);
+  }, [idToken, backendAuth]);
 
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
@@ -102,6 +112,9 @@ function useUseAuthFromHercules() {
           ) {
             return tokenAfterLock;
           }
+          await userManagerRef.current.events
+            ._raiseSilentRenewError(error instanceof Error ? error : new Error(String(error)))
+            .catch(() => undefined);
           return null;
         }
       }).finally(() => {
@@ -123,6 +136,14 @@ function useUseAuthFromHercules() {
   );
 }
 
+function BackendAuthObserver({ authState }: { authState: RefObject<boolean> }) {
+  const { isAuthenticated } = useConvexAuth();
+  useEffect(() => {
+    authState.current = isAuthenticated;
+  }, [authState, isAuthenticated]);
+  return null;
+}
+
 /**
  * A wrapper React component which provides a {@link ConvexReactClient}
  * authenticated with Hercules Auth.
@@ -138,9 +159,13 @@ export function ConvexProviderWithHerculesAuth({
   children: ReactNode;
   client: ConvexReactClient;
 }) {
+  const backendAuth = useRef(false);
   return (
-    <ConvexProviderWithAuth client={client} useAuth={useUseAuthFromHercules}>
-      {children}
-    </ConvexProviderWithAuth>
+    <BackendAuthContext.Provider value={backendAuth}>
+      <ConvexProviderWithAuth client={client} useAuth={useUseAuthFromHercules}>
+        <BackendAuthObserver authState={backendAuth} />
+        {children}
+      </ConvexProviderWithAuth>
+    </BackendAuthContext.Provider>
   );
 }

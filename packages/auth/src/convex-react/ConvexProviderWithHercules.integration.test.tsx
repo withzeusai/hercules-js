@@ -1,7 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { ConvexReactClient, useConvexAuth } from "convex/react";
+import { act, cleanup, fireEvent, renderHook, screen, waitFor } from "@testing-library/react";
+import { Authenticated, ConvexReactClient, useConvexAuth } from "convex/react";
 import { useAuth } from "react-oidc-context";
 import { User, UserManager, WebStorageStateStore } from "oidc-client-ts";
 import { HerculesAuthProvider, useHerculesAuthProvider } from "../react/HerculesAuthProvider";
@@ -92,6 +92,13 @@ class TestSocket {
   }
 }
 
+function DraftForm() {
+  const [draft, setDraft] = useState("");
+  return (
+    <input aria-label="draft" value={draft} onChange={(event) => setDraft(event.target.value)} />
+  );
+}
+
 let client: ConvexReactClient | undefined;
 let manager: UserManager | undefined;
 afterEach(async () => {
@@ -158,6 +165,9 @@ async function setup(expiresIn = 3600) {
         >
           <ConvexProviderWithHerculesAuth client={client!}>
             {children}
+            <Authenticated>
+              <DraftForm />
+            </Authenticated>
           </ConvexProviderWithHerculesAuth>
         </HerculesAuthProvider>
       ),
@@ -171,8 +181,8 @@ function transientFailure() {
 }
 
 describe("real Convex and OIDC refresh integration", () => {
-  it("keeps server-confirmed auth on a 503 and forwards a later successful renewal once", async () => {
-    const { result, refresh, setAuth } = await setup();
+  it("keeps an authenticated draft through a 503, later renewal, and old-token expiry", async () => {
+    const { result, refresh, setAuth } = await setup(30);
     refresh.mockResolvedValueOnce(transientFailure());
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     await act(async () => {});
@@ -181,19 +191,28 @@ describe("real Convex and OIDC refresh integration", () => {
     expect(result.current.convex.isAuthenticated).toBe(true);
     expect(TestSocket.messages.filter((message) => message.tokenType === "None")).toHaveLength(0);
 
+    fireEvent.change(screen.getByRole("textbox", { name: "draft" }), {
+      target: { value: "unsaved-phone-order" },
+    });
+    const draft = screen.getByRole("textbox", { name: "draft" });
     await act(async () => {
       await result.current.oidc.signinSilent();
     });
-    await waitFor(() => expect(setAuth).toHaveBeenCalledTimes(2));
+    expect(setAuth).toHaveBeenCalledOnce();
+    expect(result.current.convex.isAuthenticated).toBe(true);
+    expect(screen.getByRole("textbox", { name: "draft" })).toBe(draft);
+    expect((draft as HTMLInputElement).value).toBe("unsaved-phone-order");
+
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    await act(async () => {
+      TestSocket.instances.at(-1)!.reject();
+    });
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(result.current.convex.isAuthenticated).toBe(true));
-    expect(
-      TestSocket.messages.filter((message) => message.tokenType === "User").length,
-    ).toBeGreaterThan(1);
-    const calls = setAuth.mock.calls.length;
-    await act(async () => {
-      await result.current.oidc.signinSilent();
-    });
-    expect(setAuth).toHaveBeenCalledTimes(calls);
+    expect(setAuth).toHaveBeenCalledOnce();
+    expect(screen.getByRole("textbox", { name: "draft" })).toBe(draft);
+    expect((draft as HTMLInputElement).value).toBe("unsaved-phone-order");
+    expect(TestSocket.messages.filter((message) => message.tokenType === "None")).toHaveLength(0);
   });
 
   it("leaves backend rejection authoritative and recovers after a new valid OIDC token", async () => {
@@ -242,6 +261,15 @@ describe("real Convex and OIDC refresh integration", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     await waitFor(() => expect(result.current.convex.isAuthenticated).toBe(false));
     expect(TestSocket.messages.some((message) => message.tokenType === "None")).toBe(true);
+    expect(result.current.oidc.error?.message).toBe("invalid_grant");
+  });
+
+  it("reports invalid_grant immediately after an expired ID token is rejected", async () => {
+    const { result, refresh } = await setup(-1);
+    refresh.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
+    await waitFor(() => expect(result.current.oidc.error?.message).toBe("invalid_grant"));
+    expect(result.current.convex.isAuthenticated).toBe(false);
+    expect(screen.queryByRole("textbox", { name: "draft" })).toBeNull();
   });
 
   it("refreshes an expired ID token and awaits backend confirmation", async () => {
