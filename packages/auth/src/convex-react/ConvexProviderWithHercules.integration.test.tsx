@@ -264,6 +264,33 @@ describe("real Convex and OIDC refresh integration", () => {
     expect(result.current.oidc.error?.message).toBe("invalid_grant");
   });
 
+  it.each(["pending", "rejected"] as const)(
+    "fails closed when a renewal-error listener is %s",
+    async (listenerState) => {
+      const { result, refresh } = await setup();
+      let releaseListener!: () => void;
+      const listenerFinished = new Promise<void>((resolve) => {
+        releaseListener = resolve;
+      });
+      const listener = vi.fn(async () => {
+        if (listenerState === "rejected") throw new Error("listener failed");
+        await listenerFinished;
+      });
+      const removeListener = manager!.events.addSilentRenewError(listener);
+      refresh.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
+
+      try {
+        await waitFor(() => expect(listener).toHaveBeenCalledOnce());
+        await waitFor(() => expect(result.current.convex.isAuthenticated).toBe(false));
+        expect(TestSocket.messages.some((message) => message.tokenType === "None")).toBe(true);
+        expect(result.current.oidc.error?.message).toBe("invalid_grant");
+      } finally {
+        await act(async () => releaseListener());
+        removeListener();
+      }
+    },
+  );
+
   it("reports invalid_grant immediately after an expired ID token is rejected", async () => {
     const { result, refresh } = await setup(-1);
     refresh.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));

@@ -112,7 +112,8 @@ function useUseAuthFromHercules() {
           ) {
             return tokenAfterLock;
           }
-          await userManagerRef.current.events
+          // Error listeners must not delay failing closed or releasing the refresh lock.
+          void userManagerRef.current.events
             ._raiseSilentRenewError(error instanceof Error ? error : new Error(String(error)))
             .catch(() => undefined);
           return null;
