@@ -43,7 +43,7 @@ function isTransientRefreshError(error: unknown): boolean {
 function useUseAuthFromHercules() {
   const backendAuth = useContext(BackendAuthContext);
   const { isAuthenticated, user, isLoading } = useAuth();
-  const { userManager } = useHerculesAuthProvider();
+  const { userManager, reportSigninSilentError } = useHerculesAuthProvider();
   const idToken = user?.id_token;
   const issuer = user?.profile?.iss;
   const subject = user?.profile?.sub;
@@ -112,10 +112,8 @@ function useUseAuthFromHercules() {
           ) {
             return tokenAfterLock;
           }
-          // Error listeners must not delay failing closed or releasing the refresh lock.
-          void userManagerRef.current.events
-            ._raiseSilentRenewError(error instanceof Error ? error : new Error(String(error)))
-            .catch(() => undefined);
+          // Required error state must not depend on the manager's application observers.
+          reportSigninSilentError(error);
           return null;
         }
       }).finally(() => {
@@ -124,7 +122,7 @@ function useUseAuthFromHercules() {
       inFlightRefresh.current = refresh;
       return refresh;
     },
-    [issuer, subject, recoveryVersion],
+    [issuer, subject, recoveryVersion, reportSigninSilentError],
   );
 
   return useMemo(

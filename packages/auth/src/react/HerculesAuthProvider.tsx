@@ -1,13 +1,10 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  AuthProvider as ReactAuthProvider,
-  type AuthProviderUserManagerProps,
-  useAuth,
-} from "react-oidc-context";
+import { AuthContext, type AuthProviderUserManagerProps, useAuth } from "react-oidc-context";
 import { UserManager, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
 import { withRefreshLock } from "../internal/refresh-lock";
+import { useOidcAuthState } from "./oidc-auth-state";
 import {
   clearHerculesImpersonationParamsFromUrl,
   getHerculesImpersonationStorageKey,
@@ -42,6 +39,7 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
 interface HerculesAuthProviderContext {
   userManager: UserManager;
   impersonationStorageKey: string;
+  reportSigninSilentError: (error: unknown) => void;
 }
 
 const HerculesAuthProviderContext = createContext<HerculesAuthProviderContext | null>(null);
@@ -111,8 +109,7 @@ function AuthRecoveryGate({
 }
 
 /**
- * A wrapper React component which provides a {@link ReactAuthProvider}
- * configured with Hercules Auth.
+ * Provides OIDC authentication configured for Hercules Auth.
  *
  * @public
  */
@@ -153,6 +150,11 @@ export function HerculesAuthProvider({
         effectiveClientId,
       ),
     };
+  });
+
+  const { auth, reportSigninSilentError } = useOidcAuthState(userManager, {
+    ...DEFAULT_AUTH_CONFIG,
+    ...props,
   });
 
   useEffect(() => {
@@ -206,8 +208,10 @@ export function HerculesAuthProvider({
   }, [userManager, automaticSilentRenewExplicit]);
 
   return (
-    <HerculesAuthProviderContext.Provider value={{ userManager, impersonationStorageKey }}>
-      <ReactAuthProvider userManager={userManager} {...DEFAULT_AUTH_CONFIG} {...props}>
+    <HerculesAuthProviderContext.Provider
+      value={{ userManager, impersonationStorageKey, reportSigninSilentError }}
+    >
+      <AuthContext.Provider value={auth}>
         <HerculesImpersonationHandoff storageKey={impersonationStorageKey} />
         <AuthRecoveryGate
           loadingFallback={loadingFallback}
@@ -215,7 +219,7 @@ export function HerculesAuthProvider({
         >
           {children}
         </AuthRecoveryGate>
-      </ReactAuthProvider>
+      </AuthContext.Provider>
     </HerculesAuthProviderContext.Provider>
   );
 }

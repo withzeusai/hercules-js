@@ -14,7 +14,7 @@ function makeJwt(exp: number): string {
 }
 
 const mockSigninSilent = vi.fn();
-const mockRaiseSilentRenewError = vi.fn();
+const mockReportSigninSilentError = vi.fn();
 
 let mockAuthState: Record<string, unknown> = {};
 
@@ -26,8 +26,8 @@ vi.mock("../react/HerculesAuthProvider", () => ({
   useHerculesAuthProvider: () => ({
     userManager: {
       signinSilent: mockSigninSilent,
-      events: { _raiseSilentRenewError: mockRaiseSilentRenewError },
     },
+    reportSigninSilentError: mockReportSigninSilentError,
   }),
 }));
 
@@ -71,7 +71,7 @@ function setAuthState(overrides: Record<string, unknown>) {
 beforeEach(() => {
   setAuthState({});
   mockSigninSilent.mockReset();
-  mockRaiseSilentRenewError.mockReset().mockResolvedValue(undefined);
+  mockReportSigninSilentError.mockReset();
   capturedUseAuth = null;
 });
 
@@ -177,6 +177,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     const { result } = renderUseAuth();
 
     expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBe(EXPIRING_TOKEN);
+    expect(mockReportSigninSilentError).not.toHaveBeenCalled();
   });
 
   it.each(["invalid_grant", "login_required", "interaction_required", "invalid_client"])(
@@ -267,12 +268,13 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     );
   });
 
-  it("still fails closed if a renewal error listener throws", async () => {
-    mockSigninSilent.mockRejectedValue(new ErrorResponse({ error: "invalid_grant" }));
-    mockRaiseSilentRenewError.mockRejectedValue(new Error("listener failed"));
+  it("reports the original non-fallback error through the provider", async () => {
+    const error = new ErrorResponse({ error: "invalid_grant" });
+    mockSigninSilent.mockRejectedValue(error);
     const { result } = renderUseAuth();
 
     expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBeNull();
+    expect(mockReportSigninSilentError).toHaveBeenCalledExactlyOnceWith(error);
   });
 
   it("returns null when signinSilent resolves without a user", async () => {
