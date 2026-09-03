@@ -30,6 +30,7 @@ vi.mock("openid-client", () => ({
 }));
 
 import { getCookies, getRequest } from "@tanstack/react-start/server";
+import { setAuthOptions } from "./auth-options";
 import { getResolvedSession } from "./session-context";
 import { authorizationParameters, checkRecentAuthBody, signOutBody } from "./server-fn-bodies";
 
@@ -62,10 +63,27 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setAuthOptions({});
   vi.unstubAllEnvs();
 });
 
 describe("authorizationParameters", () => {
+  it("uses the middleware scope when the call passes none", () => {
+    setAuthOptions({ scope: "openid profile email offline_access" });
+    expect(authorizationParameters({}, FLOW).scope).toBe("openid profile email offline_access");
+  });
+
+  it("falls back to HERCULES_AUTH_SCOPE when no middleware scope is set", () => {
+    vi.stubEnv("HERCULES_AUTH_SCOPE", "openid offline_access");
+    expect(authorizationParameters({}, FLOW).scope).toBe("openid offline_access");
+  });
+
+  it("lets a per-call scope win over the middleware and environment defaults", () => {
+    setAuthOptions({ scope: "openid profile email offline_access" });
+    vi.stubEnv("HERCULES_AUTH_SCOPE", "openid offline_access");
+    expect(authorizationParameters({ scope: "openid" }, FLOW).scope).toBe("openid");
+  });
+
   it("builds the base PKCE parameters with the default scope", () => {
     expect(authorizationParameters({}, FLOW)).toEqual({
       redirect_uri: FLOW.redirectUri,

@@ -52,6 +52,11 @@ export const COOKIE_DOMAIN_ENV_VARS = [
   "HERCULES_AUTH_COOKIE_DOMAIN",
   "AUTH_COOKIE_DOMAIN",
 ] as const;
+/**
+ * Space-delimited OAuth scopes requested at sign-in when a call passes none.
+ * Optional — see {@link defaultScope}.
+ */
+export const SCOPE_ENV_VARS = ["HERCULES_AUTH_SCOPE", "AUTH_SCOPE"] as const;
 
 /** Where to send the user once the callback completes. */
 export const DEFAULT_REDIRECT = "/";
@@ -105,6 +110,20 @@ export function sessionCookieMaxAge(): number {
 /** Session cookie `Domain`: the middleware option, then the environment, then host-only. */
 export function sessionCookieDomain(): string | undefined {
   return getAuthOptions().cookieDomain ?? readEnv(COOKIE_DOMAIN_ENV_VARS);
+}
+
+/**
+ * Scopes requested when a sign-in call passes none: the middleware option, then
+ * the environment, then {@link DEFAULT_SCOPE}.
+ *
+ * {@link DEFAULT_SCOPE} deliberately omits `offline_access`: providers that
+ * don't support it reject the whole authorization request. Without it, though,
+ * most providers issue no refresh token, so the session cannot be renewed and
+ * the refresh actions can only hand back the current tokens. Apps whose
+ * provider supports it should add it here (Hercules Auth does).
+ */
+export function defaultScope(): string {
+  return getAuthOptions().scope ?? readEnv(SCOPE_ENV_VARS) ?? DEFAULT_SCOPE;
 }
 
 /** First non-empty value among `names`, or undefined when none are set. */

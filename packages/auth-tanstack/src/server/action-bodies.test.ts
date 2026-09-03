@@ -25,8 +25,28 @@ vi.mock("openid-client", () => ({
 
 import { getRequest } from "@tanstack/react-start/server";
 import * as client from "openid-client";
-import { getSignOutUrlBody } from "./action-bodies";
+import {
+  getSignOutUrlBody,
+  refreshAccessTokenBody,
+  refreshAuthBody,
+  refreshIdTokenBody,
+} from "./action-bodies";
+import type { SessionData } from "./session";
+import { getResolvedSession, refreshResolvedSession } from "./session-context";
 import { clearSession, readSession } from "./session-store";
+
+const b64url = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const fakeJwt = (payload: object) => `${b64url({ alg: "none" })}.${b64url(payload)}.sig`;
+
+/** A session whose tokens are still valid but that carries no refresh token. */
+function unrefreshableSession(overrides: Partial<SessionData> = {}): SessionData {
+  return {
+    accessToken: fakeJwt({ sub: "user-1", role: "admin" }),
+    idToken: fakeJwt({ sub: "user-1", email: "user@example.com" }),
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    ...overrides,
+  };
+}
 
 beforeAll(() => {
   process.env.HERCULES_AUTH_ISSUER_URL = "https://issuer.example.com";
@@ -114,5 +134,65 @@ describe("getSignOutUrlBody", () => {
     const { url } = await getSignOutUrlBody();
     expect(url).toBe("https://issuer.example.com/end-session?built=1");
     expect(clearSession).toHaveBeenCalledOnce();
+  });
+});
+
+// The provider issues a refresh token only when `offline_access` was granted,
+// and a grant can fail transiently. Neither means the user is signed out — the
+// current tokens may have hours left — but every caller treats an empty refresh
+// result as exactly that. Convex is the sharp edge: it forces a refresh right
+// after confirming the cached token, and an empty answer there latches the
+// client unauthenticated for the rest of the page.
+describe("refresh actions without a refresh token", () => {
+  beforeEach(() => {
+    vi.mocked(refreshResolvedSession).mockResolvedValue(null);
+  });
+
+  it("refreshIdTokenBody returns the current ID token when no refresh is possible", async () => {
+    const session = unrefreshableSession();
+    vi.mocked(getResolvedSession).mockResolvedValue(session);
+
+    await expect(refreshIdTokenBody()).resolves.toBe(session.idToken);
+  });
+
+  it("refreshAccessTokenBody returns the current access token when no refresh is possible", async () => {
+    const session = unrefreshableSession();
+    vi.mocked(getResolvedSession).mockResolvedValue(session);
+
+    await expect(refreshAccessTokenBody()).resolves.toBe(session.accessToken);
+  });
+
+  it("refreshAuthBody keeps the user signed in when no refresh is possible", async () => {
+    vi.mocked(getResolvedSession).mockResolvedValue(unrefreshableSession());
+
+    const auth = await refreshAuthBody();
+    expect(auth.user?.id).toBe("user-1");
+    expect(auth).not.toHaveProperty("accessToken");
+  });
+
+  it("still prefers the refreshed session when a grant did run", async () => {
+    const refreshed = unrefreshableSession({ idToken: fakeJwt({ sub: "user-1", fresh: true }) });
+    vi.mocked(refreshResolvedSession).mockResolvedValue(refreshed);
+    vi.mocked(getResolvedSession).mockResolvedValue(unrefreshableSession());
+
+    await expect(refreshIdTokenBody()).resolves.toBe(refreshed.idToken);
+    expect(getResolvedSession).not.toHaveBeenCalled();
+  });
+
+  it("returns nothing once the current session has expired", async () => {
+    vi.mocked(getResolvedSession).mockResolvedValue(
+      unrefreshableSession({ expiresAt: Math.floor(Date.now() / 1000) - 1 }),
+    );
+
+    await expect(refreshIdTokenBody()).resolves.toBeUndefined();
+    await expect(refreshAccessTokenBody()).resolves.toBeUndefined();
+    await expect(refreshAuthBody()).resolves.toEqual({ user: null });
+  });
+
+  it("returns nothing when there is no session at all", async () => {
+    vi.mocked(getResolvedSession).mockResolvedValue(null);
+
+    await expect(refreshIdTokenBody()).resolves.toBeUndefined();
+    await expect(refreshAuthBody()).resolves.toEqual({ user: null });
   });
 });

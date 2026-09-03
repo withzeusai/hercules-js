@@ -3,6 +3,7 @@ import type { ClientUserInfo, NoUserInfo, UserInfo } from "../types";
 import { userInfoFromSession } from "./claims";
 import { resolveLogoutLocation } from "./refresh";
 import { resolvePostLogoutRedirectUri } from "./request-url";
+import type { SessionData } from "./session";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
 import { clearSession, readSession } from "./session-store";
 
@@ -34,9 +35,33 @@ export async function getAccessTokenBody(): Promise<string | undefined> {
   return userInfoFromSession(session).user ? session.accessToken : undefined;
 }
 
-/** Backs `refreshAccessTokenAction`: refresh and return the new access token. */
+/**
+ * The session a refresh action should report: the refreshed session when a
+ * refresh grant ran, otherwise the current session if it is still valid.
+ *
+ * A refresh is impossible without a refresh token (the provider issues none
+ * unless `offline_access` was granted) and can fail transiently. Neither means
+ * the user is signed out — the current access/ID token may have hours left —
+ * yet callers treat an empty refresh result as exactly that. Convex is the
+ * concrete casualty: `ConvexProviderWithAuth` re-requests the token with
+ * `forceRefreshToken: true` right after confirming the cached one, and an empty
+ * answer there drops the client to "unauthenticated" for the rest of the page.
+ * So "refresh" means "the freshest tokens available", never "nothing".
+ */
+async function refreshedOrCurrentSession(): Promise<SessionData | null> {
+  const refreshed = await refreshResolvedSession();
+  if (refreshed) return refreshed;
+  const current = await getResolvedSession();
+  if (!current || !userInfoFromSession(current).user) return null;
+  return current;
+}
+
+/**
+ * Backs `refreshAccessTokenAction`: refresh and return the new access token, or
+ * the current one when no refresh is possible and it is still valid.
+ */
 export async function refreshAccessTokenBody(): Promise<string | undefined> {
-  const session = await refreshResolvedSession();
+  const session = await refreshedOrCurrentSession();
   return session?.accessToken;
 }
 
@@ -50,15 +75,22 @@ export async function getIdTokenBody(): Promise<string | undefined> {
   return userInfoFromSession(session).user ? session.idToken : undefined;
 }
 
-/** Backs `refreshIdTokenAction`: refresh and return the new ID token. */
+/**
+ * Backs `refreshIdTokenAction`: refresh and return the new ID token, or the
+ * current one when no refresh is possible and the session is still valid.
+ */
 export async function refreshIdTokenBody(): Promise<string | undefined> {
-  const session = await refreshResolvedSession();
+  const session = await refreshedOrCurrentSession();
   return session?.idToken;
 }
 
-/** Backs `refreshAuthAction`: refresh and return sanitized auth state. */
+/**
+ * Backs `refreshAuthAction`: refresh and return sanitized auth state. Falls back
+ * to the current session's state when no refresh is possible, so a provider
+ * that issued no refresh token does not sign the user out client-side.
+ */
 export async function refreshAuthBody(): Promise<ClientUserInfo | NoUserInfo> {
-  const session = await refreshResolvedSession();
+  const session = await refreshedOrCurrentSession();
   if (!session) return { user: null };
   return toClientUserInfo(userInfoFromSession(session));
 }

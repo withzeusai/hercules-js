@@ -27,7 +27,17 @@ function useUseAuthFromHercules() {
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
       try {
-        const token = forceRefreshToken ? await refresh() : await getIdToken();
+        if (forceRefreshToken) {
+          // Convex forces a refresh right after it confirms the cached token
+          // (and again ahead of expiry). An empty answer here is read as "the
+          // user is signed out" and latches the client unauthenticated for the
+          // rest of the page. A refresh can come back empty while the session
+          // is still perfectly valid — no refresh token was issued, or the
+          // grant failed transiently — so fall back to the current ID token.
+          const refreshed = await refresh().catch(() => undefined);
+          if (refreshed) return refreshed;
+        }
+        const token = await getIdToken();
         return token ?? null;
       } catch {
         // Resolve rather than reject: Convex treats a rejection as "no token"
