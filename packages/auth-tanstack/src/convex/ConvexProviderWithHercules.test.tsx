@@ -135,13 +135,12 @@ describe("ConvexProviderWithHerculesAuth", () => {
     });
   });
 
-  // Convex forces a refresh right after confirming the cached token. A refresh
-  // comes back empty when the provider issued no refresh token (no
-  // `offline_access`) or the grant failed transiently — while the session is
-  // still valid. Convex reads an empty answer as "signed out" and latches the
-  // client unauthenticated, so the bridge must hand back the current token.
-  it("falls back to the current ID token when a forced refresh returns nothing", async () => {
-    mockRefresh.mockResolvedValue(undefined);
+  // Like Convex's own WorkOS bridge, `forceRefreshToken` is ignored: the token
+  // store already refreshes ahead of expiry, and Convex forces a refetch right
+  // after confirming the cached token on every page load. Spending a refresh
+  // grant there is wasteful, and an empty answer would be read as "signed out"
+  // and latch the client unauthenticated for the rest of the page.
+  it("answers a forced refresh from the token store instead of a refresh grant", async () => {
     const { result } = renderBridge();
 
     await act(async () => {
@@ -149,23 +148,11 @@ describe("ConvexProviderWithHerculesAuth", () => {
         TOKEN,
       );
     });
-    expect(mockRefresh).toHaveBeenCalled();
     expect(mockGetIdToken).toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
-  it("falls back to the current ID token when a forced refresh rejects", async () => {
-    mockRefresh.mockRejectedValue(new Error("refresh grant failed"));
-    const { result } = renderBridge();
-
-    await act(async () => {
-      await expect(result.current?.fetchAccessToken({ forceRefreshToken: true })).resolves.toBe(
-        TOKEN,
-      );
-    });
-  });
-
-  it("resolves null when both the forced refresh and the current token are empty", async () => {
-    mockRefresh.mockResolvedValue(undefined);
+  it("resolves null when the token store has nothing", async () => {
     mockGetIdToken.mockResolvedValue(undefined);
     const { result } = renderBridge();
 
@@ -174,17 +161,5 @@ describe("ConvexProviderWithHerculesAuth", () => {
         result.current?.fetchAccessToken({ forceRefreshToken: true }),
       ).resolves.toBeNull();
     });
-  });
-
-  it("forces a refresh when Convex asks for one", async () => {
-    const { result } = renderBridge();
-
-    await act(async () => {
-      await expect(result.current?.fetchAccessToken({ forceRefreshToken: true })).resolves.toBe(
-        TOKEN,
-      );
-    });
-    expect(mockRefresh).toHaveBeenCalled();
-    expect(mockGetIdToken).not.toHaveBeenCalled();
   });
 });

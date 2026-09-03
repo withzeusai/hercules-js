@@ -17,9 +17,11 @@ threw, even though `useAuth().user` was set and the ID token was valid.
   now return the current session's tokens/state when no refresh grant is possible
   (no refresh token, or the grant failed) and the session is still valid. They
   still return nothing once the session has actually expired.
-- `ConvexProviderWithHerculesAuth` falls back to the current ID token when a
-  forced refresh resolves empty or rejects, so Convex never receives `null` for a
-  live session.
+- `ConvexProviderWithHerculesAuth` now mirrors Convex's own `@convex-dev/workos`
+  bridge: `fetchAccessToken` ignores `forceRefreshToken` and always answers from
+  the ID-token store (which refreshes on its own ahead of expiry), so Convex's
+  post-confirmation refetch costs no refresh grant and never receives `null` for
+  a live session.
 - The default sign-in scope is now `openid profile email offline_access`, so a
   refresh token is issued and sessions can actually be renewed. Providers that
   reject `offline_access` can narrow it with the new

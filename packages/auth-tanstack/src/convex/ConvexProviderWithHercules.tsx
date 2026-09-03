@@ -7,7 +7,8 @@ import { useAuth } from "../client/HerculesAuthProvider";
 import { useIdToken } from "../client/useIdToken";
 
 /**
- * Bridges Hercules auth into Convex's generic auth integration.
+ * Bridges Hercules auth into Convex's generic auth integration. Modeled on
+ * Convex's own `@convex-dev/workos` bridge for WorkOS AuthKit.
  *
  * `ConvexProviderWithAuth` calls `fetchAccessToken` when the object returned
  * here changes identity, and not otherwise. So `isAuthenticated` has to mean
@@ -17,37 +18,32 @@ import { useIdToken } from "../client/useIdToken";
  * authenticated at that point spends Convex's single request on a cold store,
  * and if it comes back empty the client stays unauthenticated for the life of
  * the page even once a valid token arrives.
+ *
+ * `fetchAccessToken` deliberately ignores Convex's `forceRefreshToken` flag,
+ * exactly like the WorkOS bridge: it always hands back the token store's
+ * current ID token, which the store refreshes on its own when the token is
+ * within its expiry buffer. Convex forces a refetch right after confirming the
+ * cached token and again ahead of expiry; answering both from the store means
+ * no refresh grant per page load, and never an empty answer for a live session
+ * -- Convex reads `null` as "signed out" and will not ask again.
  */
 function useUseAuthFromHercules() {
   const { user, loading } = useAuth();
-  const { idToken, loading: tokenLoading, getIdToken, refresh } = useIdToken();
+  const { idToken, loading: tokenLoading, getIdToken } = useIdToken();
 
   const isAuthenticated = user !== null && idToken != null;
 
-  const fetchAccessToken = useCallback(
-    async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
-      try {
-        if (forceRefreshToken) {
-          // Convex forces a refresh right after it confirms the cached token
-          // (and again ahead of expiry). An empty answer here is read as "the
-          // user is signed out" and latches the client unauthenticated for the
-          // rest of the page. A refresh can come back empty while the session
-          // is still perfectly valid — no refresh token was issued, or the
-          // grant failed transiently — so fall back to the current ID token.
-          const refreshed = await refresh().catch(() => undefined);
-          if (refreshed) return refreshed;
-        }
-        const token = await getIdToken();
-        return token ?? null;
-      } catch {
-        // Resolve rather than reject: Convex treats a rejection as "no token"
-        // and will not ask again until this hook's identity changes. The token
-        // store schedules its own retry and will re-render us when it lands.
-        return null;
-      }
-    },
-    [getIdToken, refresh],
-  );
+  const fetchAccessToken = useCallback(async () => {
+    try {
+      const token = await getIdToken();
+      return token ?? null;
+    } catch {
+      // Resolve rather than reject: Convex treats a rejection as "no token"
+      // and will not ask again until this hook's identity changes. The token
+      // store schedules its own retry and will re-render us when it lands.
+      return null;
+    }
+  }, [getIdToken]);
 
   return useMemo(
     () => ({
