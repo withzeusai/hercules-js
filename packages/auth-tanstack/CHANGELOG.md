@@ -1,5 +1,85 @@
 # @usehercules/auth-tanstack
 
+## 0.6.0
+
+### Minor Changes
+
+- [#138](https://github.com/withzeusai/hercules-js/pull/138) [`e4c8501`](https://github.com/withzeusai/hercules-js/commit/e4c85011cb1fa83841765a2550d7658ecf1f56ac) Thanks [@grant0417](https://github.com/grant0417)! - Add `@usehercules/auth-tanstack/convex`, a Convex auth bridge that waits for a
+  token before reporting authenticated.
+
+  `ConvexProviderWithAuth` requests a token when the object returned by its
+  `useAuth` prop changes identity, and not otherwise. Apps have been wiring this
+  up by hand with `isAuthenticated = user !== null`, which is true from the first
+  client render because the provider is seeded with `initialAuth` during SSR --
+  before the token store has fetched anything. Convex therefore spent its single
+  request on a cold store, and when that request came back empty the client
+  stayed unauthenticated for the life of the page, even once a valid token
+  arrived. `ctx.auth.getUserIdentity()` returned `null` for every query on that
+  connection while the ID token was provably valid.
+
+  `ConvexProviderWithHerculesAuth` derives `isAuthenticated` from the ID token
+  rather than the session, so the object's identity changes when the token lands
+  and Convex asks again. It also resolves `null` instead of rejecting when a
+  token fetch fails, since a rejection latches the same way.
+
+- [#144](https://github.com/withzeusai/hercules-js/pull/144) [`e79d600`](https://github.com/withzeusai/hercules-js/commit/e79d60063b2bb6044ad2571262e1b0e5da03d8db) Thanks [@grant0417](https://github.com/grant0417)! - Keep sessions authenticated when no refresh token was issued.
+
+  The default sign-in scope was `openid profile email`, which grants no refresh
+  token from Hercules Auth (that needs `offline_access`). Every refresh action
+  then resolved empty, and callers read empty as "signed out" while the current
+  tokens still had hours left. Convex hit this on every page: `ConvexProviderWithAuth`
+  re-requests the token with `forceRefreshToken: true` right after confirming the
+  cached one, got nothing back, and dropped to unauthenticated for the rest of the
+  page -- `useConvexAuth().isAuthenticated` stayed `false` and every private query
+  threw, even though `useAuth().user` was set and the ID token was valid.
+
+  - `refreshIdTokenAction`, `refreshAccessTokenAction`, and `refreshAuthAction`
+    now return the current session's tokens/state when no refresh grant is possible
+    (no refresh token, or the grant failed) and the session is still valid. They
+    still return nothing once the session has actually expired.
+  - `ConvexProviderWithHerculesAuth` now mirrors Convex's own `@convex-dev/workos`
+    bridge: `fetchAccessToken` ignores `forceRefreshToken` and always answers from
+    the ID-token store (which refreshes on its own ahead of expiry), so Convex's
+    post-confirmation refetch costs no refresh grant and never receives `null` for
+    a live session.
+  - The default sign-in scope is now `openid profile email offline_access`, so a
+    refresh token is issued and sessions can actually be renewed. Providers that
+    reject `offline_access` can narrow it with the new
+    `herculesAuthMiddleware({ scope })` option or its `HERCULES_AUTH_SCOPE` (or
+    `AUTH_SCOPE`) environment fallback.
+
+### Patch Changes
+
+- [#136](https://github.com/withzeusai/hercules-js/pull/136) [`f97c080`](https://github.com/withzeusai/hercules-js/commit/f97c080d647b4e4849efb1fc18628cd8d1b85458) Thanks [@grant0417](https://github.com/grant0417)! - Fix sign-out stranding users on the provider's signed-out page.
+
+  The post-sign-out target was built as `new URL(returnTo ?? "/", origin)`, which
+  renders the app root as `https://app.example.com/`. Providers register that root
+  as the bare origin, and OIDC RP-Initiated Logout 1.0 §3 has the OP compare
+  `post_logout_redirect_uri` to its registered list by simple string comparison
+  and refuse to redirect on a miss. The trailing slash was therefore enough to end
+  every sign-out on the provider's own page rather than back in the app, with no
+  error the app could see. `@usehercules/auth` was unaffected -- it sends
+  `window.location.origin`.
+
+  - Resolve the value through a single `resolvePostLogoutRedirectUri`, which spells
+    a root target as the bare origin and is shared by the `signOut` server function
+    and the `getSignOutUrl` action behind the React `signOut()`.
+  - Add a `postLogoutRedirectUri` middleware option (and
+    `HERCULES_AUTH_POST_LOGOUT_REDIRECT_URI`) for apps whose registered URI is not
+    their own origin. An absolute value is sent verbatim, so an app whose provider
+    registered the trailing-slash form can still spell it.
+  - Stop the client `signOut()` defaulting `returnTo` to `"/"`. An explicit value
+    overrode the configured one, so the new option would never have applied to the
+    hook.
+  - Anchor `returnTo` to the app's origin, as the post-callback redirect already
+    is. An off-origin value used to pass straight through to the browser on the
+    paths that skip the provider -- no end-session endpoint, or discovery failing.
+  - Skip the provider when there is no session, matching WorkOS's AuthKit. There
+    is nothing to end, and an end-session request with no `id_token_hint` makes the
+    OP interrupt with its own confirmation page, so a user whose session had
+    already lapsed was asked to confirm signing out of nothing. The cookie clear
+    still runs.
+
 ## 0.5.0
 
 ### Minor Changes
