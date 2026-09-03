@@ -54,7 +54,7 @@ jobs:
           git config user.email "hercules-bot@users.noreply.github.com"
 
       - name: Create release PR or publish
-        uses: changesets/action@22ccf9aa43179fe9e27dc62e575971d28cce197c # v2.0.0
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
           github-token: ${{ secrets.HERCULES_BOT_TOKEN }}
           publish-script: pnpm changeset:publish
