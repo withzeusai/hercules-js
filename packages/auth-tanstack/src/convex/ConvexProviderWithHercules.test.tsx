@@ -135,7 +135,12 @@ describe("ConvexProviderWithHerculesAuth", () => {
     });
   });
 
-  it("forces a refresh when Convex asks for one", async () => {
+  // Like Convex's own WorkOS bridge, `forceRefreshToken` is ignored: the token
+  // store already refreshes ahead of expiry, and Convex forces a refetch right
+  // after confirming the cached token on every page load. Spending a refresh
+  // grant there is wasteful, and an empty answer would be read as "signed out"
+  // and latch the client unauthenticated for the rest of the page.
+  it("answers a forced refresh from the token store instead of a refresh grant", async () => {
     const { result } = renderBridge();
 
     await act(async () => {
@@ -143,7 +148,18 @@ describe("ConvexProviderWithHerculesAuth", () => {
         TOKEN,
       );
     });
-    expect(mockRefresh).toHaveBeenCalled();
-    expect(mockGetIdToken).not.toHaveBeenCalled();
+    expect(mockGetIdToken).toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("resolves null when the token store has nothing", async () => {
+    mockGetIdToken.mockResolvedValue(undefined);
+    const { result } = renderBridge();
+
+    await act(async () => {
+      await expect(
+        result.current?.fetchAccessToken({ forceRefreshToken: true }),
+      ).resolves.toBeNull();
+    });
   });
 });

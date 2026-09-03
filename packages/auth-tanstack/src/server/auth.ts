@@ -20,7 +20,7 @@ export interface GetAuthURLOptions {
   returnPathname?: string;
   /** Override the default callback `redirect_uri`. */
   redirectUri?: string;
-  /** Space-delimited scopes; defaults to `openid profile email`. */
+  /** Space-delimited scopes; defaults to `openid profile email offline_access`. */
   scope?: string;
   /**
    * OIDC `max_age` (seconds): the provider forces re-authentication when the

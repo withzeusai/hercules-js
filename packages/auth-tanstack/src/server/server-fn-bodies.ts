@@ -7,10 +7,10 @@ import type { NoUserInfo, UserInfo } from "../types";
 import type { GetAuthURLOptions, RecentAuthResult, SignInUrlOptions } from "./auth";
 import { collectClaims, userInfoFromSession } from "./claims";
 import {
-  DEFAULT_SCOPE,
   MAX_PENDING_SIGN_INS,
   PKCE_COOKIE_PREFIX,
   SIGN_IN_COOKIE_MAX_AGE,
+  defaultScope,
   encodePkceState,
   getConfig,
   pkceCookieName,
@@ -42,7 +42,7 @@ export function authorizationParameters(
 ): Record<string, string> {
   const parameters: Record<string, string> = {
     redirect_uri: flow.redirectUri,
-    scope: options.scope ?? DEFAULT_SCOPE,
+    scope: options.scope ?? defaultScope(),
     state: flow.state,
     code_challenge: flow.codeChallenge,
     code_challenge_method: "S256",
