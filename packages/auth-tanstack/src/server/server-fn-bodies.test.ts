@@ -85,9 +85,11 @@ describe("authorizationParameters", () => {
   });
 
   it("builds the base PKCE parameters with the default scope", () => {
+    // offline_access is on by default so a refresh token is issued; without
+    // one the session can never be renewed.
     expect(authorizationParameters({}, FLOW)).toEqual({
       redirect_uri: FLOW.redirectUri,
-      scope: "openid profile email",
+      scope: "openid profile email offline_access",
       state: "s",
       code_challenge: "c",
       code_challenge_method: "S256",

@@ -20,8 +20,8 @@ threw, even though `useAuth().user` was set and the ID token was valid.
 - `ConvexProviderWithHerculesAuth` falls back to the current ID token when a
   forced refresh resolves empty or rejects, so Convex never receives `null` for a
   live session.
-- New `herculesAuthMiddleware({ scope })` option, with `HERCULES_AUTH_SCOPE` (or
-  `AUTH_SCOPE`) as its environment fallback, to change the scopes requested when
-  a sign-in call passes none. The built-in default is unchanged; apps on Hercules
-  Auth should set `"openid profile email offline_access"` so sessions can be
-  renewed.
+- The default sign-in scope is now `openid profile email offline_access`, so a
+  refresh token is issued and sessions can actually be renewed. Providers that
+  reject `offline_access` can narrow it with the new
+  `herculesAuthMiddleware({ scope })` option or its `HERCULES_AUTH_SCOPE` (or
+  `AUTH_SCOPE`) environment fallback.

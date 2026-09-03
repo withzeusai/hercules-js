@@ -62,8 +62,14 @@ export const SCOPE_ENV_VARS = ["HERCULES_AUTH_SCOPE", "AUTH_SCOPE"] as const;
 export const DEFAULT_REDIRECT = "/";
 /** Callback route the provider returns to, unless overridden. */
 export const DEFAULT_CALLBACK_PATH = "/auth/callback";
-/** OAuth scopes requested when none are configured. */
-export const DEFAULT_SCOPE = "openid profile email";
+/**
+ * OAuth scopes requested when none are configured. Includes `offline_access`
+ * so the provider issues a refresh token: without one the session can never be
+ * renewed, and the refresh actions can only hand back the current tokens.
+ * Providers that reject `offline_access` need a narrower scope via
+ * `herculesAuthMiddleware({ scope })` or `HERCULES_AUTH_SCOPE`.
+ */
+export const DEFAULT_SCOPE = "openid profile email offline_access";
 /** Lifetime (seconds) of a pending sign-in's PKCE cookie. */
 export const SIGN_IN_COOKIE_MAX_AGE = 600;
 /**
@@ -115,12 +121,6 @@ export function sessionCookieDomain(): string | undefined {
 /**
  * Scopes requested when a sign-in call passes none: the middleware option, then
  * the environment, then {@link DEFAULT_SCOPE}.
- *
- * {@link DEFAULT_SCOPE} deliberately omits `offline_access`: providers that
- * don't support it reject the whole authorization request. Without it, though,
- * most providers issue no refresh token, so the session cannot be renewed and
- * the refresh actions can only hand back the current tokens. Apps whose
- * provider supports it should add it here (Hercules Auth does).
  */
 export function defaultScope(): string {
   return getAuthOptions().scope ?? readEnv(SCOPE_ENV_VARS) ?? DEFAULT_SCOPE;

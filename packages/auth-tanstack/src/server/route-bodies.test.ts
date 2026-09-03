@@ -35,7 +35,7 @@ function tokenResponse(overrides: Record<string, unknown> = {}) {
     id_token: "id-token",
     refresh_token: "refresh-token",
     expires_in: 3600,
-    scope: "openid profile email",
+    scope: "openid profile email offline_access",
     claims: () => ({ sub: "user-1", exp: Math.floor(Date.now() / 1000) + 3600 }),
     ...overrides,
   };

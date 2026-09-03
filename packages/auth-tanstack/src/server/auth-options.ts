@@ -63,15 +63,13 @@ export interface HerculesAuthMiddlewareOptions {
   /**
    * Space-delimited OAuth scopes requested at sign-in when the call passes no
    * `scope` of its own. Defaults to `HERCULES_AUTH_SCOPE` (or `AUTH_SCOPE`),
-   * then `openid profile email`.
+   * then `openid profile email offline_access`.
    *
-   * The built-in default omits `offline_access` because providers that don't
-   * support it reject the whole authorization request. Without it, though, most
-   * providers issue no refresh token: the session cannot be renewed once the
-   * access token expires, and the refresh actions (`refreshAuth`,
-   * `refreshIdToken`, …) can only hand back the current tokens. Add it when
-   * your provider supports it — Hercules Auth does:
-   * `scope: "openid profile email offline_access"`.
+   * The default includes `offline_access` so the provider issues a refresh
+   * token; without one the session cannot be renewed once the access token
+   * expires, and the refresh actions (`refreshAuth`, `refreshIdToken`, …) can
+   * only hand back the current tokens. Set a narrower scope only for a
+   * provider that rejects `offline_access`.
    */
   scope?: string;
 }
