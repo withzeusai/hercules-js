@@ -13,7 +13,7 @@ export interface HandleSignInOptions {
   redirectUri?: string;
   /**
    * Space-delimited OAuth scopes to request. `openid` is required for an ID
-   * token to be returned. Defaults to `openid profile email`.
+   * token to be returned. Defaults to `openid profile email offline_access`.
    */
   scope?: string;
   /**

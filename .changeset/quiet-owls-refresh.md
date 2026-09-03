@@ -4,7 +4,7 @@
 
 Keep sessions authenticated when no refresh token was issued.
 
-The default sign-in scope is `openid profile email`, which grants no refresh
+The default sign-in scope was `openid profile email`, which grants no refresh
 token from Hercules Auth (that needs `offline_access`). Every refresh action
 then resolved empty, and callers read empty as "signed out" while the current
 tokens still had hours left. Convex hit this on every page: `ConvexProviderWithAuth`
