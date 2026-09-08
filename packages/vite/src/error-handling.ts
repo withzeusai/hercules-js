@@ -111,14 +111,35 @@ export function setupErrorHandling(server: ViteDevServer, debug: boolean) {
     };
   }
 
-  // Inject client-side script to handle error overlay suppression
+  // Serve the client-side error handler. SPA apps load it from the script
+  // tag injected into index.html; TanStack Start apps import it through the
+  // Vite client carrier (see `hercules()` in index.ts).
   server.middlewares.use("/__hercules_error_handler.js", (req, res) => {
     if (req.method === "GET") {
       res.setHeader("Content-Type", "application/javascript");
-      res.end(`
+      res.end(getErrorHandlerScript());
+    }
+  });
+
+  if (debug) {
+    console.log("[Hercules Plugin] Error handling setup complete");
+  }
+}
+
+/**
+ * Client-side error handler. Captures Vite overlay errors, runtime errors and
+ * unhandled rejections and logs them for the Hercules console forwarder.
+ */
+export function getErrorHandlerScript(): string {
+  return `
 // Hercules Error Handler - Client Side
 (function() {
   'use strict';
+
+  // Installed once per page: the SPA path (index.html tag) and the
+  // TanStack Start path (Vite client carrier) may both reach this file.
+  if (window.__herculesErrorHandlerInstalled) return;
+  window.__herculesErrorHandlerInstalled = true;
   
   // Track if we've already logged an error to prevent duplicates
   const loggedErrors = new WeakSet();
@@ -309,11 +330,5 @@ export function setupErrorHandling(server: ViteDevServer, debug: boolean) {
     }
   });
 })();
-      `);
-    }
-  });
-
-  if (debug) {
-    console.log("[Hercules Plugin] Error handling setup complete");
-  }
+`;
 }
