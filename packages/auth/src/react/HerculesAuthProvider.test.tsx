@@ -8,6 +8,8 @@ const mockSigninSilent = vi.fn();
 const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 let mockAuthState: Record<string, unknown> = {};
+let capturedSettings: Record<string, unknown> = {};
+let silentRenewErrorCallbacks: Array<(error: Error) => void> = [];
 const localStorageMock = createMemoryStorage();
 
 Object.defineProperty(window, "localStorage", {
@@ -22,12 +24,24 @@ vi.mock("react-oidc-context", () => ({
 
 vi.mock("oidc-client-ts", () => ({
   UserManager: class {
-    constructor() {}
+    settings: Record<string, unknown>;
+    constructor(settings: Record<string, unknown>) {
+      this.settings = settings;
+      capturedSettings = settings;
+    }
     events = {
       addAccessTokenExpiring: vi.fn(),
       removeAccessTokenExpiring: vi.fn(),
+      addSilentRenewError: (cb: (error: Error) => void) => {
+        silentRenewErrorCallbacks.push(cb);
+        return () => {
+          silentRenewErrorCallbacks = silentRenewErrorCallbacks.filter((c) => c !== cb);
+        };
+      },
+      removeSilentRenewError: vi.fn(),
     };
     signinSilent = vi.fn();
+    removeUser = mockRemoveUser;
   },
   WebStorageStateStore: class {
     constructor() {}
@@ -55,6 +69,8 @@ beforeEach(() => {
   mockSigninSilent.mockReset();
   mockSigninRedirect.mockReset();
   mockRemoveUser.mockReset();
+  capturedSettings = {};
+  silentRenewErrorCallbacks = [];
 });
 
 function renderProvider(
@@ -93,6 +109,86 @@ describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
       </HerculesAuthProvider>,
     );
     expect(screen.getByTestId("app")).toBeDefined();
+  });
+});
+
+describe("HerculesAuthProvider timeout retry cap", () => {
+  it("puts the default in the settings, where oidc-client-ts can read it", () => {
+    // The cap has to survive in the settings and not only in the renewal
+    // effect: oidc-client-ts guards on `maxRetries !== undefined`, so leaving
+    // it unset makes its own retry limit unreachable.
+    renderProvider();
+    expect(capturedSettings.maxSilentRenewTimeoutRetries).toBe(3);
+  });
+
+  it("still sets it when the consumer turns automaticSilentRenew on", () => {
+    // The configuration that bypasses our renewal effect entirely -- and so
+    // the one that depends on the settings value being present.
+    render(
+      <HerculesAuthProvider
+        authority="https://auth.example.com"
+        client_id="test-client"
+        userManagerSettings={{ automaticSilentRenew: true }}
+      >
+        <div data-testid="app">app</div>
+      </HerculesAuthProvider>,
+    );
+    expect(capturedSettings.maxSilentRenewTimeoutRetries).toBe(3);
+  });
+
+  it("does not override a cap the consumer set", () => {
+    render(
+      <HerculesAuthProvider
+        authority="https://auth.example.com"
+        client_id="test-client"
+        userManagerSettings={{ maxSilentRenewTimeoutRetries: 7 }}
+      >
+        <div data-testid="app">app</div>
+      </HerculesAuthProvider>,
+    );
+    expect(capturedSettings.maxSilentRenewTimeoutRetries).toBe(7);
+  });
+});
+
+describe("HerculesAuthProvider dead-session clearing under automaticSilentRenew", () => {
+  function renderWithAutomaticRenew() {
+    render(
+      <HerculesAuthProvider
+        authority="https://auth.example.com"
+        client_id="test-client"
+        userManagerSettings={{ automaticSilentRenew: true }}
+      >
+        <div data-testid="app">app</div>
+      </HerculesAuthProvider>,
+    );
+  }
+
+  it("discards the stored user when oidc-client-ts reports invalid_grant", async () => {
+    // Without this the dead token stays in storage and every later renew
+    // replays it, which is the unbounded error stream this change targets.
+    renderWithAutomaticRenew();
+    expect(silentRenewErrorCallbacks).toHaveLength(1);
+
+    await act(async () => {
+      silentRenewErrorCallbacks[0]?.(Object.assign(new Error("bad"), { error: "invalid_grant" }));
+    });
+
+    await waitFor(() => expect(mockRemoveUser).toHaveBeenCalledTimes(1));
+  });
+
+  it("leaves the session alone for any other renewal error", async () => {
+    renderWithAutomaticRenew();
+
+    await act(async () => {
+      silentRenewErrorCallbacks[0]?.(new Error("network down"));
+    });
+
+    expect(mockRemoveUser).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing on the default path, where the effect above handles it", () => {
+    renderProvider();
+    expect(silentRenewErrorCallbacks).toHaveLength(0);
   });
 });
 
