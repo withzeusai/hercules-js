@@ -39,6 +39,7 @@ Published packages live under `packages/`:
 - `@usehercules/auth`
 - `@usehercules/eslint-plugin`
 - `@usehercules/vite`
+- `@usehercules/vite-tanstack`
 
 ## Releasing
 
@@ -128,6 +129,7 @@ pnpm --filter @usehercules/auth build
 pnpm --filter @usehercules/eslint-plugin build
 pnpm --filter @usehercules/vite build
 pnpm --filter @usehercules/analytics build
+pnpm --filter @usehercules/vite-tanstack build
 ```
 
 ### Preview packages
