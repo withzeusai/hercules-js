@@ -1,4 +1,5 @@
 import type { Plugin, ViteDevServer } from "vite";
+import { appendClientImport, isClientTransform, isViteClientModule } from "../vite-client";
 
 // Import from extracted modules
 import { analyzeElement } from "./ast-analyzer";
@@ -17,6 +18,13 @@ export interface VisualEditorOptions {
    */
   dataAttribute?: string;
 }
+
+/**
+ * Virtual module carrying the editor UI script for server-rendered apps that
+ * never go through `transformIndexHtml` (see `transform` below).
+ */
+export const VISUAL_EDITOR_MODULE_ID = "virtual:hercules-visual-editor";
+const RESOLVED_VISUAL_EDITOR_MODULE_ID = `\0${VISUAL_EDITOR_MODULE_ID}`;
 
 export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
   const { debug = false, dataAttribute = "data-hercules-id" } = options;
@@ -136,12 +144,35 @@ export function visualEditorPlugin(options: VisualEditorOptions = {}): Plugin {
       }
       return html + editorScript;
     },
+
+    resolveId(id) {
+      if (id === VISUAL_EDITOR_MODULE_ID) return RESOLVED_VISUAL_EDITOR_MODULE_ID;
+      return null;
+    },
+
+    load(id) {
+      if (id === RESOLVED_VISUAL_EDITOR_MODULE_ID) return getVisualEditorScript(dataAttribute);
+      return null;
+    },
+
+    transform(code, id, options) {
+      // Server-rendered apps (TanStack Start) never call `transformIndexHtml`,
+      // so the editor is also imported from Vite's dev client. The script
+      // guards against running twice for SPA pages that get both.
+      if (!isClientTransform(this, options) || !isViteClientModule(id)) return null;
+      return appendClientImport(code, VISUAL_EDITOR_MODULE_ID);
+    },
   };
 }
 
 function getVisualEditorScript(dataAttribute: string): string {
   return `
 (function() {
+  // Installed once per page: the SPA path (index.html tag) and the
+  // TanStack Start path (Vite client carrier) may both reach this script.
+  if (window.__herculesVisualEditorInstalled) return;
+  window.__herculesVisualEditorInstalled = true;
+
   const EDITOR_VERSION = '1.0.0';
   let selectedElement = null;
   let editorPanel = null;

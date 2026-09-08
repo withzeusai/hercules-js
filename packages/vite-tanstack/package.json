@@ -1,0 +1,72 @@
+{
+  "name": "@usehercules/vite-tanstack",
+  "version": "0.0.0",
+  "description": "Shared Vite and Vitest configuration for Hercules TanStack Start applications",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./vitest": "./dist/vitest.mjs",
+    "./package.json": "./package.json"
+  },
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/vite-tanstack"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "tsconfig.json",
+    "tsdown.config.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@usehercules/vite": "workspace:^"
+  },
+  "peerDependencies": {
+    "@cloudflare/vite-plugin": ">=1.0.0",
+    "@tailwindcss/vite": ">=4.0.0",
+    "@tanstack/devtools-vite": ">=0.5.0",
+    "@tanstack/react-start": ">=1.160.0",
+    "@vitejs/plugin-react": ">=5.0.0",
+    "vite": "^7.0.0 || ^8.0.0",
+    "vitest": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/vite-plugin": {
+      "optional": true
+    },
+    "@tanstack/devtools-vite": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.52.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/devtools-vite": "^0.8.1",
+    "@tanstack/react-router": "^1.170.17",
+    "@tanstack/react-start": "^1.168.27",
+    "@types/node": "^24.13.2",
+    "@vitejs/plugin-react": "^6.0.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tsdown": "^0.22.8",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.3",
+    "vitest": "^4.1.10"
+  }
+}

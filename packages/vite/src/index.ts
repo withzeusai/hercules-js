@@ -1,5 +1,6 @@
 import type { Plugin } from "vite";
-import { setupErrorHandling } from "./error-handling";
+import { getErrorHandlerScript, setupErrorHandling } from "./error-handling";
+import { appendClientImport, isClientTransform, isViteClientModule } from "./vite-client";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
 import {
@@ -52,6 +53,14 @@ export interface HerculesPluginOptions {
     enabled?: boolean;
   };
 }
+
+/**
+ * Virtual module carrying the client-side error handler. TanStack Start
+ * apps have no index.html, so the script cannot be injected as a tag; it is
+ * imported from Vite's own dev client instead (see `transform` below).
+ */
+export const ERROR_HANDLER_MODULE_ID = "virtual:hercules-error-handler";
+const RESOLVED_ERROR_HANDLER_MODULE_ID = `\0${ERROR_HANDLER_MODULE_ID}`;
 
 /**
  * Hercules Vite plugin for development workspace integration
@@ -221,38 +230,24 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       return html;
     },
 
-    load(id) {
-      try {
-        // Let Vite handle loading normally
-        return null;
-      } catch (error: any) {
-        if (handleViteErrors) {
-          console.error("[Vite Load Error]", {
-            message: error.message,
-            stack: error.stack,
-            id: id,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        throw error;
-      }
+    resolveId(id) {
+      if (id === ERROR_HANDLER_MODULE_ID) return RESOLVED_ERROR_HANDLER_MODULE_ID;
+      return null;
     },
 
-    async transform(_code, id) {
-      try {
-        // Pass through unchanged - component tagging is handled by separate plugin
-        return null;
-      } catch (error: any) {
-        if (handleViteErrors) {
-          console.error("[Vite Transform Error]", {
-            message: error.message,
-            stack: error.stack,
-            id: id,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        throw error;
-      }
+    load(id) {
+      if (id === RESOLVED_ERROR_HANDLER_MODULE_ID) return getErrorHandlerScript();
+      return null;
+    },
+
+    transform(code, id, options) {
+      // Load the error handler from Vite's dev client so it reaches pages that
+      // are server-rendered (TanStack Start) as well as index.html pages. The
+      // script guards against running twice, so SPA apps that also get the
+      // index.html tag install it once.
+      if (!handleViteErrors || !isDev) return null;
+      if (!isClientTransform(this, options) || !isViteClientModule(id)) return null;
+      return appendClientImport(code, ERROR_HANDLER_MODULE_ID);
     },
 
     handleHotUpdate(ctx) {
@@ -275,24 +270,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     generateBundle(_options, bundle) {
       if (debug) {
         console.log("[Hercules Plugin] Bundle generated with", Object.keys(bundle).length, "files");
-      }
-    },
-
-    resolveId(id, importer) {
-      // Wrap in try-catch to capture resolution errors
-      try {
-        return null; // Let Vite handle resolution
-      } catch (error: any) {
-        if (handleViteErrors) {
-          console.error("[Vite Resolution Error]", {
-            message: error.message,
-            stack: error.stack,
-            id: id,
-            importer: importer,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        throw error;
       }
     },
   });
