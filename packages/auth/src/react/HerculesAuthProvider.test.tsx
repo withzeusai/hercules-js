@@ -7,6 +7,7 @@ configure({ reactStrictMode: false });
 const mockSigninSilent = vi.fn();
 const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
+const mockUserManagerConstructor = vi.fn();
 let mockAuthState: Record<string, unknown> = {};
 const localStorageMock = createMemoryStorage();
 
@@ -22,7 +23,9 @@ vi.mock("react-oidc-context", () => ({
 
 vi.mock("oidc-client-ts", () => ({
   UserManager: class {
-    constructor() {}
+    constructor() {
+      mockUserManagerConstructor();
+    }
     events = {
       addAccessTokenExpiring: vi.fn(),
       removeAccessTokenExpiring: vi.fn(),
@@ -55,6 +58,7 @@ beforeEach(() => {
   mockSigninSilent.mockReset();
   mockSigninRedirect.mockReset();
   mockRemoveUser.mockReset();
+  mockUserManagerConstructor.mockReset();
 });
 
 function renderProvider(
@@ -93,6 +97,17 @@ describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
       </HerculesAuthProvider>,
     );
     expect(screen.getByTestId("app")).toBeDefined();
+  });
+
+  it("creates one UserManager under React StrictMode", () => {
+    configure({ reactStrictMode: true });
+    render(
+      <HerculesAuthProvider authority="https://strict.example.com" client_id="test-client">
+        <div data-testid="app">app</div>
+      </HerculesAuthProvider>,
+    );
+    expect(mockUserManagerConstructor).toHaveBeenCalledTimes(1);
+    configure({ reactStrictMode: false });
   });
 });
 
