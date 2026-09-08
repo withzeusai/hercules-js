@@ -17,7 +17,15 @@ const SHORT_TOKEN_LIFETIME_SECONDS = 300;
 const SHORT_TOKEN_EXPIRY_BUFFER_SECONDS = 30;
 const MIN_REFRESH_DELAY_SECONDS = 15;
 const MAX_REFRESH_DELAY_SECONDS = 24 * 60 * 60;
-const RETRY_DELAY_SECONDS = 300;
+// Cadence for revalidating an opaque token, whose freshness cannot be checked
+// locally. This is a success path: nothing is wrong, there is just no local
+// expiry to schedule against.
+const OPAQUE_REVALIDATE_DELAY_SECONDS = 300;
+// Backoff after a *failed* fetch. Starts fast so a transient blip costs about a
+// second, and converges on the revalidate cadence so a persistently failing
+// token never generates more steady-state traffic than it does today.
+const ERROR_RETRY_BASE_SECONDS = 1;
+const ERROR_RETRY_MAX_SECONDS = 300;
 
 function getExpiryBuffer(totalTokenLifetime: number): number {
   return totalTokenLifetime <= SHORT_TOKEN_LIFETIME_SECONDS
@@ -46,6 +54,8 @@ export class TokenStore {
   private listeners = new Set<() => void>();
   private refreshPromise: Promise<string | undefined> | null = null;
   private refreshTimeout: ReturnType<typeof setTimeout> | undefined;
+  /** Consecutive failed fetches, driving {@link getErrorRetryDelay}. */
+  private errorRetryAttempt = 0;
 
   /**
    * @param fetchToken  Cheap GET of the current token (no refresh round-trip).
@@ -116,19 +126,45 @@ export class TokenStore {
     );
   }
 
-  private scheduleRefresh(tokenData?: ParsedToken): void {
+  /**
+   * Delay before retrying a failed fetch: exponential backoff with equal
+   * jitter, so tabs knocked out by the same network blip do not retry in
+   * lockstep. Reset by {@link scheduleRefresh} once a fetch succeeds.
+   */
+  private getErrorRetryDelay(): number {
+    const ceiling = Math.min(
+      ERROR_RETRY_BASE_SECONDS * 2 ** this.errorRetryAttempt,
+      ERROR_RETRY_MAX_SECONDS,
+    );
+    this.errorRetryAttempt += 1;
+    return (ceiling / 2 + Math.random() * (ceiling / 2)) * 1000;
+  }
+
+  private scheduleNext(delayMs: number): void {
     if (this.refreshTimeout) {
       clearTimeout(this.refreshTimeout);
       this.refreshTimeout = undefined;
     }
-    const delay =
-      tokenData === undefined ? RETRY_DELAY_SECONDS * 1000 : this.getRefreshDelay(tokenData);
     this.refreshTimeout = setTimeout(() => {
       void this.getTokenSilently().catch(() => {});
-    }, delay);
+    }, delayMs);
+  }
+
+  private scheduleRefresh(tokenData?: ParsedToken): void {
+    this.errorRetryAttempt = 0;
+    this.scheduleNext(
+      tokenData === undefined
+        ? OPAQUE_REVALIDATE_DELAY_SECONDS * 1000
+        : this.getRefreshDelay(tokenData),
+    );
+  }
+
+  private scheduleErrorRetry(): void {
+    this.scheduleNext(this.getErrorRetryDelay());
   }
 
   clearToken(): void {
+    this.errorRetryAttempt = 0;
     this.setState({ token: undefined, error: null, loading: false });
     if (this.refreshTimeout) {
       clearTimeout(this.refreshTimeout);
@@ -209,7 +245,7 @@ export class TokenStore {
           loading: false,
           error: error instanceof Error ? error : new Error(String(error)),
         });
-        this.scheduleRefresh();
+        this.scheduleErrorRetry();
         throw error;
       } finally {
         this.refreshPromise = null;
