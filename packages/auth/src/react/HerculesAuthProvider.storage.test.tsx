@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { webcrypto } from "node:crypto";
 import { OidcClient, UserManager, WebStorageStateStore } from "oidc-client-ts";
 import { HerculesAuthProvider, useHerculesAuthProvider } from "./HerculesAuthProvider";
@@ -124,13 +124,14 @@ describe("HerculesAuthProvider storage denial", () => {
 
   it("retains state, nonce and PKCE across a fresh OIDC client with normal storage", async () => {
     vi.stubGlobal("crypto", webcrypto);
-    renderProvider({
-      metadata: {
-        issuer: "https://auth.example.com",
-        authorization_endpoint: "https://auth.example.com/authorize",
-      },
+    await act(async () => {
+      renderProvider({
+        metadata: {
+          issuer: "https://auth.example.com",
+          authorization_endpoint: "https://auth.example.com/authorize",
+        },
+      });
     });
-    await waitFor(() => expect(manager).toBeDefined());
     const client = new OidcClient(manager!.settings);
     const request = await client.createSigninRequest({
       nonce: "test-nonce",
