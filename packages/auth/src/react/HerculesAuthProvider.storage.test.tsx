@@ -98,20 +98,38 @@ describe("HerculesAuthProvider storage denial", () => {
     expect(() => renderProvider()).toThrow(error);
   });
 
-  it("does not forward callback or impersonation credentials to the new tab", () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/auth/callback?code=secret&state=state&hercules_impersonation_token=secret#id_token=secret",
-    );
-    Object.defineProperty(window, "self", { configurable: true, value: {} });
-    denyStorage();
-    renderProvider();
-    const link = screen.getByRole("link", { name: "Open app in a new tab" });
-    expect(link.getAttribute("href")).toBe(window.location.origin);
-    expect(link.getAttribute("target")).toBe("_blank");
-    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
-  });
+  it.each([
+    [undefined, ""],
+    [`${window.location.origin}/console`, "/console"],
+    [
+      `${window.location.origin.replace("://", "://user:password@")}/console?code=secret&state=state&hercules_impersonation_token=secret#id_token=secret`,
+      "/console",
+    ],
+    ["https://other.example.com/console", ""],
+    ["not a URL", ""],
+    ["javascript:alert(1)", ""],
+    [`blob:${window.location.origin}/console`, ""],
+    [`${window.location.origin}//other.example.com/console`, "//other.example.com/console"],
+  ])(
+    "uses a credential-free same-origin entry for logout URL %s",
+    (post_logout_redirect_uri, path) => {
+      window.history.replaceState(
+        {},
+        "",
+        "/console/auth/callback?code=secret&state=state&hercules_impersonation_token=secret#id_token=secret",
+      );
+      Object.defineProperty(window, "self", { configurable: true, value: {} });
+      denyStorage();
+      renderProvider({
+        post_logout_redirect_uri,
+        redirect_uri: `${window.location.origin}/console/auth/callback`,
+      });
+      const link = screen.getByRole("link", { name: "Open app in a new tab" });
+      expect(link.getAttribute("href")).toBe(`${window.location.origin}${path}`);
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    },
+  );
 
   it("does not offer an invalid new-tab entry point for an opaque origin", () => {
     Object.defineProperty(window, "self", { configurable: true, value: {} });

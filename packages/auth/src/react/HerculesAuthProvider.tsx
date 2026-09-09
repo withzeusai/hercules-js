@@ -215,6 +215,18 @@ export function HerculesAuthProvider({
   }, [userManager, automaticSilentRenewExplicit]);
 
   if (!initialized || !userManager) {
+    let appEntryUrl = window.location.origin;
+    if (userManagerSettings?.post_logout_redirect_uri) {
+      try {
+        const logoutUrl = new URL(userManagerSettings.post_logout_redirect_uri);
+        if (logoutUrl.origin === window.location.origin && /^https?:$/.test(logoutUrl.protocol)) {
+          appEntryUrl += logoutUrl.pathname;
+        }
+      } catch {
+        // Keep the origin fallback when the configured logout URL is invalid.
+      }
+    }
+
     return (
       <div role="alert" style={{ padding: 24 }}>
         <h2 style={{ fontSize: "1.125rem", fontWeight: 600 }}>Browser storage is unavailable</h2>
@@ -237,7 +249,7 @@ export function HerculesAuthProvider({
         {window.self !== window.top && /^https?:$/.test(window.location.protocol) && (
           <p>
             <a
-              href={window.location.origin}
+              href={appEntryUrl}
               target="_blank"
               rel="noopener noreferrer"
               style={{ textDecoration: "underline" }}
