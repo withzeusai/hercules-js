@@ -125,38 +125,47 @@ export function HerculesAuthProvider({
   ...props
 }: HerculesAuthProviderProps) {
   const automaticSilentRenewExplicit = userManagerSettings?.automaticSilentRenew === true;
-  const [{ userManager, impersonationStorageKey }] = useState(() => {
+  const [initialized] = useState<HerculesAuthProviderContext | null>(() => {
     const effectiveAuthority = userManagerSettings?.authority ?? authority;
     const effectiveClientId = userManagerSettings?.client_id ?? client_id;
 
-    return {
-      userManager: new UserManager({
-        ...userManagerSettings,
-        authority: effectiveAuthority,
-        client_id: effectiveClientId,
-        prompt: userManagerSettings?.prompt ?? "select_account",
-        response_type: userManagerSettings?.response_type ?? "code",
-        scope: userManagerSettings?.scope ?? "openid profile email offline_access",
-        redirect_uri:
-          userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
-        post_logout_redirect_uri:
-          userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
-        userStore:
-          userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
-        automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
-        silentRequestTimeoutInSeconds:
-          userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
-      }),
-      impersonationStorageKey: getHerculesImpersonationStorageKey(
-        effectiveAuthority,
-        effectiveClientId,
-      ),
-    };
+    try {
+      return {
+        userManager: new UserManager({
+          ...userManagerSettings,
+          authority: effectiveAuthority,
+          client_id: effectiveClientId,
+          prompt: userManagerSettings?.prompt ?? "select_account",
+          response_type: userManagerSettings?.response_type ?? "code",
+          scope: userManagerSettings?.scope ?? "openid profile email offline_access",
+          redirect_uri:
+            userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
+          post_logout_redirect_uri:
+            userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
+          userStore:
+            userManagerSettings?.userStore ??
+            new WebStorageStateStore({ store: window.localStorage }),
+          automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
+          silentRequestTimeoutInSeconds:
+            userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
+        }),
+        impersonationStorageKey: getHerculesImpersonationStorageKey(
+          effectiveAuthority,
+          effectiveClientId,
+        ),
+      };
+    } catch (error) {
+      // Keep OIDC state and PKCE in their configured stores; a memory fallback
+      // would lose them when the browser leaves the app to sign in.
+      if (error instanceof DOMException && error.name === "SecurityError") return null;
+      throw error;
+    }
   });
 
+  const userManager = initialized?.userManager;
+
   useEffect(() => {
-    if (automaticSilentRenewExplicit) return;
+    if (!userManager || automaticSilentRenewExplicit) return;
     let retryTimerId: ReturnType<typeof setTimeout> | null = null;
     let timeoutRetryCount = 0;
     let stopped = false;
@@ -205,8 +214,45 @@ export function HerculesAuthProvider({
     };
   }, [userManager, automaticSilentRenewExplicit]);
 
+  if (!initialized || !userManager) {
+    return (
+      <div role="alert" style={{ padding: 24 }}>
+        <h2 style={{ fontSize: "1.125rem", fontWeight: 600 }}>Browser storage is unavailable</h2>
+        <p>
+          This app cannot start sign-in because your browser blocked access to its storage. Reload
+          to try again.
+        </p>
+        <button
+          type="button"
+          style={{
+            border: "1px solid currentColor",
+            borderRadius: 4,
+            padding: "8px 12px",
+            cursor: "pointer",
+          }}
+          onClick={() => window.location.reload()}
+        >
+          Reload
+        </button>
+        {window.self !== window.top && /^https?:$/.test(window.location.protocol) && (
+          <p>
+            <a
+              href={window.location.origin}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ textDecoration: "underline" }}
+            >
+              Open app in a new tab
+            </a>
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  const { impersonationStorageKey } = initialized;
   return (
-    <HerculesAuthProviderContext.Provider value={{ userManager, impersonationStorageKey }}>
+    <HerculesAuthProviderContext.Provider value={initialized}>
       <ReactAuthProvider userManager={userManager} {...DEFAULT_AUTH_CONFIG} {...props}>
         <HerculesImpersonationHandoff storageKey={impersonationStorageKey} />
         <AuthRecoveryGate
