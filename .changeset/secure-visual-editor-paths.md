@@ -2,4 +2,4 @@
 "@usehercules/vite": patch
 ---
 
-Keep visual editor reads and edits inside the project root, including when a component path follows a symlink.
+Keep visual editor reads/edits and automatic component creation inside the project root, including when a component path follows a symlink.
