@@ -3,7 +3,7 @@ import * as t from "@babel/types";
 import traverseModule from "@babel/traverse";
 import generateModule from "@babel/generator";
 import { readFile, writeFile } from "fs/promises";
-import path from "path";
+import { resolveComponentPath } from "./component-path";
 import { type ClassNameAnalysis, type TextContentAnalysis } from "./ast-analyzer";
 
 // Extract the actual functions
@@ -38,7 +38,7 @@ export async function updateComponentElement(
     const [, relativePath, lineStr, colStr] = match;
     const line = parseInt(lineStr!, 10);
     const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
+    const filePath = await resolveComponentPath(rootDir, relativePath!);
 
     let code: string;
     try {
@@ -186,7 +186,7 @@ export async function deleteComponent(componentId: string, rootDir: string): Pro
     const [, relativePath, lineStr, colStr] = match;
     const line = parseInt(lineStr!, 10);
     const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
+    const filePath = await resolveComponentPath(rootDir, relativePath!);
 
     let code: string;
     try {
