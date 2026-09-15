@@ -7,7 +7,13 @@ import {
   useAuth,
 } from "react-oidc-context";
 import { UserManager, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
+import { clearSessionIfInvalidGrant } from "../internal/dead-session";
 import { withRefreshLock } from "../internal/refresh-lock";
+import {
+  DEFAULT_MAX_TIMEOUT_RETRIES,
+  renewRetryDelayMs,
+  resolveMaxTimeoutRetries,
+} from "../internal/renew-retry";
 import {
   clearHerculesImpersonationParamsFromUrl,
   getHerculesImpersonationStorageKey,
@@ -16,8 +22,32 @@ import {
   rememberHerculesImpersonationSession,
 } from "./impersonation-core";
 
+/** How long the recovery gate blocks render before showing the app anyway. */
 const RECOVERY_TIMEOUT_MS = 10_000;
-const LOCK_GRACE_MS = 5_000;
+
+/**
+ * Budget for the token request itself.
+ *
+ * Deliberately generous. The server rotates the refresh token and revokes the
+ * old one before responding, so a client-side abort leaves us holding a token
+ * the server has already retired -- and replaying it is what triggers
+ * reuse detection. Giving up early is far more costly than waiting.
+ */
+const TOKEN_REQUEST_TIMEOUT_SECONDS = 30;
+
+/**
+ * Budget for discovery and JWKS fetches. These are separate from the token
+ * request and were previously unbounded, so `silentRequestTimeoutInSeconds`
+ * did not actually bound `signinSilent` end to end.
+ */
+const DISCOVERY_REQUEST_TIMEOUT_SECONDS = 10;
+
+/**
+ * Hard cap on holding the cross-tab refresh lock. Comfortably above the real
+ * worst case (discovery + token request) so it never fires in normal
+ * operation, but prevents one pathological hang from wedging every tab.
+ */
+const LOCK_MAX_HOLD_MS = 60_000;
 
 export type HerculesAuthProviderProps = Omit<AuthProviderUserManagerProps, "userManager"> & {
   userManagerSettings?: Partial<UserManagerSettings>;
@@ -63,11 +93,13 @@ function AuthRecoveryGate({
   loadingFallback: ReactNode;
   skipRecovery: boolean;
 }) {
-  const { user, isLoading, signinSilent } = useAuth();
+  const { user, isLoading, signinSilent, removeUser } = useAuth();
   const userExpired = user?.expired === true;
   const hasAttempted = useRef(false);
   const signinSilentRef = useRef(signinSilent);
   signinSilentRef.current = signinSilent;
+  const removeUserRef = useRef(removeUser);
+  removeUserRef.current = removeUser;
   const [recoveryDone, setRecoveryDone] = useState(false);
   const [recovering, setRecovering] = useState(false);
 
@@ -94,9 +126,19 @@ function AuthRecoveryGate({
     setTimeout(finish, RECOVERY_TIMEOUT_MS);
 
     void withRefreshLock(async () => {
+      // The lock must outlive the request, not the UI timeout. Releasing it
+      // early lets another tab start a second refresh while this one is still
+      // in flight -- two rotations of the same token. The UI is already
+      // unblocked independently by the `finish` timer above, so holding here
+      // costs nothing visible. The cap is only a wedge guard.
       await Promise.race([
-        signinSilentRef.current().catch(() => undefined),
-        new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_TIMEOUT_MS + LOCK_GRACE_MS)),
+        signinSilentRef.current().catch(async (err: unknown) => {
+          // Same dead-token problem as the expiry-timer path: without this the
+          // expired user stays in storage and every later renew replays it.
+          await clearSessionIfInvalidGrant({ removeUser: removeUserRef.current }, err);
+          return undefined;
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, LOCK_MAX_HOLD_MS)),
       ]);
     }).finally(finish);
   }, [isLoading, skipRecovery, userExpired]);
@@ -146,7 +188,21 @@ export function HerculesAuthProvider({
           new WebStorageStateStore({ store: window.localStorage }),
         automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
         silentRequestTimeoutInSeconds:
-          userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
+          userManagerSettings?.silentRequestTimeoutInSeconds ?? TOKEN_REQUEST_TIMEOUT_SECONDS,
+        // Without this, oidc-client-ts leaves discovery and JWKS fetches
+        // untimed, so signinSilent can hang indefinitely regardless of the
+        // token-request budget above.
+        requestTimeoutInSeconds:
+          userManagerSettings?.requestTimeoutInSeconds ?? DISCOVERY_REQUEST_TIMEOUT_SECONDS,
+        // The default has to reach the settings, not just the renewal effect
+        // below. A consumer that sets `automaticSilentRenew` takes
+        // oidc-client-ts's own SilentRenewService instead of that effect, and
+        // its guard is `maxRetries !== undefined && count > maxRetries` -- so
+        // leaving this unset makes the guard unreachable and the service
+        // retries a timed-out renew every 5s forever, replaying the same
+        // token. That is the loop this whole change exists to stop.
+        maxSilentRenewTimeoutRetries:
+          userManagerSettings?.maxSilentRenewTimeoutRetries ?? DEFAULT_MAX_TIMEOUT_RETRIES,
       }),
       impersonationStorageKey: getHerculesImpersonationStorageKey(
         effectiveAuthority,
@@ -175,12 +231,16 @@ export function HerculesAuthProvider({
           const isTimeout = err instanceof Error && err.name === "ErrorTimeout";
           if (isTimeout) {
             timeoutRetryCount++;
-            const maxRetries = (
-              userManager.settings as {
-                maxSilentRenewTimeoutRetries?: number;
-              }
-            ).maxSilentRenewTimeoutRetries;
-            if (maxRetries !== undefined && timeoutRetryCount > maxRetries) {
+            // A timed-out renew is the one case where the server may well have
+            // succeeded -- rotating and revoking our token -- and only the
+            // response was lost. Each retry replays that same token, and the
+            // server answers a replay by deleting every refresh token for this
+            // user, on every device. So retry a bounded number of times, with
+            // backoff, rather than every 5s forever.
+            const maxRetries = resolveMaxTimeoutRetries(
+              userManager.settings as { maxSilentRenewTimeoutRetries?: number },
+            );
+            if (timeoutRetryCount > maxRetries) {
               timeoutRetryCount = 0;
               events._raiseSilentRenewError?.(err as Error);
               return;
@@ -188,9 +248,12 @@ export function HerculesAuthProvider({
             retryTimerId = setTimeout(() => {
               retryTimerId = null;
               tryRenew();
-            }, 5000);
+            }, renewRetryDelayMs(timeoutRetryCount));
           } else {
             timeoutRetryCount = 0;
+            // A dead refresh token would otherwise stay in storage and be
+            // replayed by every later renew, so the error repeats forever.
+            await clearSessionIfInvalidGrant(userManager, err);
             events._raiseSilentRenewError?.(err as Error);
           }
         }
@@ -203,6 +266,20 @@ export function HerculesAuthProvider({
       userManager.events.removeAccessTokenExpiring(onExpiring);
       if (retryTimerId !== null) clearTimeout(retryTimerId);
     };
+  }, [userManager, automaticSilentRenewExplicit]);
+
+  useEffect(() => {
+    // The effect above owns renewal only while `automaticSilentRenew` is off.
+    // When a consumer turns it on, oidc-client-ts renews instead, and it has
+    // no notion of a refresh token the server will never accept again: it
+    // raises the error and leaves the dead token in storage for every later
+    // renew to replay. Clearing it is the point of `dead-session`, so it has
+    // to happen on this path too -- the retry bound alone does not help a
+    // failure that is permanent rather than timed out.
+    if (!automaticSilentRenewExplicit) return undefined;
+    return userManager.events.addSilentRenewError((err) => {
+      void clearSessionIfInvalidGrant(userManager, err);
+    });
   }, [userManager, automaticSilentRenewExplicit]);
 
   return (

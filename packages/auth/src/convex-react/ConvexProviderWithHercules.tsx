@@ -5,6 +5,7 @@ import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
 import { jwtDecode } from "jwt-decode";
 import { useCallback, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
+import { clearSessionIfInvalidGrant } from "../internal/dead-session";
 import { withRefreshLock } from "../internal/refresh-lock";
 import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
@@ -20,7 +21,7 @@ function tokenExpiresWithin(token: string, ms: number): boolean {
 }
 
 function useUseAuthFromHercules() {
-  const { isAuthenticated, user, isLoading, signinSilent } = useAuth();
+  const { isAuthenticated, user, isLoading, signinSilent, removeUser } = useAuth();
   const idToken = user?.id_token;
   const issuer = user?.profile?.iss;
   const subject = user?.profile?.sub;
@@ -30,6 +31,9 @@ function useUseAuthFromHercules() {
 
   const signinSilentRef = useRef(signinSilent);
   signinSilentRef.current = signinSilent;
+
+  const removeUserRef = useRef(removeUser);
+  removeUserRef.current = removeUser;
 
   const inFlightRefresh = useRef<Promise<string | null> | null>(null);
 
@@ -53,7 +57,12 @@ function useUseAuthFromHercules() {
         try {
           const refreshed = await signinSilentRef.current();
           return refreshed?.id_token ?? null;
-        } catch {
+        } catch (err) {
+          // Convex refreshes on every `setAuth` and on auth errors, so it is
+          // usually the first driver to meet a dead refresh token. Clear it
+          // here too, or the token survives in storage and each later driver
+          // replays it.
+          await clearSessionIfInvalidGrant({ removeUser: removeUserRef.current }, err);
           return null;
         }
       }).finally(() => {
