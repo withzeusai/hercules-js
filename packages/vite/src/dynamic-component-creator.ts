@@ -2,6 +2,7 @@ import type { Plugin } from "vite";
 import path from "path";
 import { writeFile, mkdir } from "fs/promises";
 import { constants } from "fs";
+import { resolveComponentCreationPath } from "./visual-editor/component-path";
 
 export interface DynamicComponentCreatorOptions {
   /**
@@ -58,6 +59,16 @@ export function dynamicComponentCreatorPlugin(
           } else {
             // Handle relative imports as before
             resolvedPath = path.resolve(path.dirname(importer), source);
+          }
+
+          try {
+            resolvedPath = await resolveComponentCreationPath(
+              projectRoot,
+              path.relative(projectRoot, resolvedPath),
+            );
+          } catch {
+            // Leave external imports to Vite; automatic creation is project-local only.
+            return null;
           }
 
           // Create parent directory recursively (no-ops if it exists)

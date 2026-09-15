@@ -34,7 +34,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "test": "exit 0"
+    "test": "tsdown src/visual-editor/component-path.test.ts --no-config --format esm --out-dir .test-dist && node --test .test-dist/component-path.test.mjs"
   },
   "peerDependencies": {
     "vite": "^7.0.0 || ^8.0.0"
