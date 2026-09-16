@@ -36,6 +36,24 @@ This repository follows the practices described in
 - Workflow files are linted by [zizmor](https://github.com/woodruffw/zizmor) on
   every PR.
 
+### Legacy trust exception
+
+pnpm `trustPolicy: no-downgrade` rejects registry releases with weaker publisher
+or provenance evidence than earlier-published versions. The pinned pnpm version
+also checks existing entries during frozen installs.
+
+The sole exception is exactly `semver@6.3.1`, required by the current Babel 7
+dependencies. This legacy maintenance release was published after the attested
+semver 7.5.4 release without equivalent provenance. The exception preserves the
+existing locked dependency; it does not apply to future semver versions.
+
+The exception matches a name and version, not an artifact digest or registry.
+Keep its reviewed lockfile integrity unchanged and investigate checksum failures
+rather than replacing the checksum. Remove the exception when the version leaves
+the dependency graph. Lockfile changes and any new exception require separate
+review. Trust-history checks do not establish that package code is safe or verify
+attestation signatures.
+
 ### Outstanding follow-ups
 
 - Migrate `HERCULES_BOT_TOKEN` to a GitHub App with
