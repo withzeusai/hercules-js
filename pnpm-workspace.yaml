@@ -4,7 +4,8 @@ packages:
 allowBuilds:
   esbuild: true
 
-minimumReleaseAge: 4320 # 3 days
+blockExoticSubdeps: true
+minimumReleaseAge: 10080 # 7 days
 minimumReleaseAgeExclude:
   - "@usehercules/sdk"
   # Release tooling only, never shipped to users.

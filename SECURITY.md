@@ -31,7 +31,7 @@ This repository follows the practices described in
 - npm publishes run in a `release` GitHub deployment environment with required
   reviewers; build caching is disabled during release.
 - npm provenance (`NPM_CONFIG_PROVENANCE=true`) is enabled for every publish.
-- pnpm `minimumReleaseAge` enforces a 3-day cooldown before new upstream
+- pnpm `minimumReleaseAge` enforces a 7-day cooldown before new upstream
   dependency releases can be installed.
 - Workflow files are linted by [zizmor](https://github.com/woodruffw/zizmor) on
   every PR.

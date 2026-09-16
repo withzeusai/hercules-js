@@ -6,8 +6,8 @@ This document covers the maintainer and contributor workflow for the
 ## Prerequisites
 
 - Node.js `>=24` (see `engines` in `package.json`)
-- pnpm `10.19.0` (managed via `packageManager` in `package.json` — Corepack will
-  pick it up automatically)
+- pnpm as pinned by `packageManager` in `package.json` (Corepack selects it
+  automatically)
 
 ## Getting started
 
@@ -142,7 +142,7 @@ against a downstream app before merging.
 - **Build failures** — re-run `pnpm install`; the lockfile is enforced with
   `--frozen-lockfile` in CI.
 - **`pnpm install` rejects a recently-published dep** — expected: the workspace
-  enforces a 3-day cooldown (`minimumReleaseAge` in `pnpm-workspace.yaml`) to
+  enforces a 7-day cooldown (`minimumReleaseAge` in `pnpm-workspace.yaml`) to
   reduce exposure to compromised npm releases. Wait, or add the package to
   `minimumReleaseAgeExclude` if absolutely needed.
 - **Release workflow paused** — the `release` environment requires reviewer
