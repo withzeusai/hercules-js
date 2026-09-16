@@ -12,3 +12,10 @@ minimumReleaseAgeExclude:
 
 onlyBuiltDependencies:
   - esbuild
+
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  # Babel 7 requires this legacy release, published without provenance after
+  # an attested semver 7 release. Preserve its reviewed lockfile integrity and
+  # remove this exact exception when no locked dependency needs the version.
+  - semver@6.3.1
