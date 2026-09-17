@@ -1,5 +1,11 @@
 # @usehercules/auth
 
+## 1.2.1
+
+### Patch Changes
+
+- [#159](https://github.com/withzeusai/hercules-js/pull/159) [`c6ea27f`](https://github.com/withzeusai/hercules-js/commit/c6ea27f3597462f8714b7d42d34cc33200127fe2) Thanks [@delbyte](https://github.com/delbyte)! - Use the hosted sign-out confirmation flow when a refreshed ID token no longer identifies a browser session. Preserve configured token revocation and normal session-bound sign-out.
+
 ## 1.2.0
 
 ### Minor Changes
