@@ -6,8 +6,9 @@ import {
   type AuthProviderUserManagerProps,
   useAuth,
 } from "react-oidc-context";
-import { UserManager, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
+import { WebStorageStateStore, type UserManager, type UserManagerSettings } from "oidc-client-ts";
 import { withRefreshLock } from "../internal/refresh-lock";
+import { HerculesUserManager } from "../internal/user-manager";
 import {
   clearHerculesImpersonationParamsFromUrl,
   getHerculesImpersonationStorageKey,
@@ -130,7 +131,7 @@ export function HerculesAuthProvider({
     const effectiveClientId = userManagerSettings?.client_id ?? client_id;
 
     return {
-      userManager: new UserManager({
+      userManager: new HerculesUserManager({
         ...userManagerSettings,
         authority: effectiveAuthority,
         client_id: effectiveClientId,
