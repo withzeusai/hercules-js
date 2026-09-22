@@ -127,6 +127,64 @@ describe("TokenStore", () => {
     expect(refreshAccessTokenAction).not.toHaveBeenCalled();
   });
 
+  describe("error backoff", () => {
+    // Pin the jitter so the scheduled delays are exact: with random() at 0 the
+    // equal-jitter formula yields half the ceiling, i.e. 500ms, 1s, 2s, ...
+    beforeEach(() => {
+      vi.spyOn(Math, "random").mockReturnValue(0);
+    });
+    afterEach(() => {
+      vi.mocked(Math.random).mockRestore();
+    });
+
+    it("retries seconds after a failed fetch, not minutes", async () => {
+      getAccessTokenAction.mockRejectedValueOnce(new Error("network"));
+
+      const store = new TokenStore();
+      await expect(store.getTokenSilently()).rejects.toThrow("network");
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(1);
+
+      // Before this fix the only retry cadence was the 300s opaque-revalidate
+      // delay, so one transient failure blacked the token out for five minutes.
+      getAccessTokenAction.mockResolvedValue(freshJwt());
+      await vi.advanceTimersByTimeAsync(500);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
+    });
+
+    it("backs off further on each consecutive failure", async () => {
+      getAccessTokenAction.mockRejectedValue(new Error("network"));
+
+      const store = new TokenStore();
+      await expect(store.getTokenSilently()).rejects.toThrow("network");
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
+
+      // Attempt 3 is scheduled 1s after attempt 2 failed, not another 500ms.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(3);
+    });
+
+    it("resets the backoff once a fetch succeeds", async () => {
+      getAccessTokenAction.mockRejectedValueOnce(new Error("network"));
+      getAccessTokenAction.mockResolvedValue("opaque-token");
+
+      const store = new TokenStore();
+      await expect(store.getTokenSilently()).rejects.toThrow("network");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
+
+      // Success puts the opaque token back on the 300s revalidate cadence
+      // rather than continuing to escalate the error backoff.
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(getAccessTokenAction).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it("revalidates an opaque token instead of caching it forever", async () => {
     getAccessTokenAction.mockResolvedValue("opaque-token");
 
