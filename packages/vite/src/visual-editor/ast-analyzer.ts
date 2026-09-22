@@ -2,7 +2,7 @@ import { parse } from "@babel/parser";
 import * as t from "@babel/types";
 import traverseModule from "@babel/traverse";
 import { readFile } from "fs/promises";
-import path from "path";
+import { resolveComponentPath } from "./component-path";
 
 // Extract the actual functions
 const traverse = (traverseModule as any).default || traverseModule;
@@ -185,7 +185,7 @@ export async function analyzeElement(
     const [, relativePath, lineStr, colStr] = match;
     const line = parseInt(lineStr!, 10);
     const col = parseInt(colStr!, 10);
-    const filePath = path.join(rootDir, relativePath!);
+    const filePath = await resolveComponentPath(rootDir, relativePath!);
 
     // Read file once
     let code: string;
