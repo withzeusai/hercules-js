@@ -55,6 +55,44 @@ export function useHerculesAuthProvider() {
   return context;
 }
 
+function DefaultLoadingFallback() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading"
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "grid",
+        placeItems: "center",
+        pointerEvents: "none",
+      }}
+    >
+      <svg
+        width="32"
+        height="32"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="10" opacity="0.25" />
+        <path d="M22 12a10 10 0 0 0-10-10" strokeLinecap="round">
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 12 12"
+            to="360 12 12"
+            dur="0.8s"
+            repeatCount="indefinite"
+          />
+        </path>
+      </svg>
+    </div>
+  );
+}
+
 function AuthRecoveryGate({
   children,
   loadingFallback,
@@ -122,7 +160,7 @@ export function HerculesAuthProvider({
   userManagerSettings,
   authority,
   client_id,
-  loadingFallback = null,
+  loadingFallback = <DefaultLoadingFallback />,
   ...props
 }: HerculesAuthProviderProps) {
   const automaticSilentRenewExplicit = userManagerSettings?.automaticSilentRenew === true;

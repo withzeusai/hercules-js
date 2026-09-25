@@ -291,6 +291,21 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
     });
   });
 
+  it("renders an accessible default loading status when no loadingFallback is passed", () => {
+    mockSigninSilent.mockImplementation(() => new Promise<void>(() => {}));
+    setAuthState({ user: { expired: true, id_token: "stale" } });
+    renderProvider();
+    expect(screen.getByRole("status", { name: "Loading" })).toBeDefined();
+    expect(screen.queryByTestId("app")).toBeNull();
+  });
+
+  it("renders nothing during recovery when loadingFallback is null", () => {
+    mockSigninSilent.mockImplementation(() => new Promise<void>(() => {}));
+    setAuthState({ user: { expired: true, id_token: "stale" } });
+    const { container } = renderProvider(null);
+    expect(container.innerHTML).toBe("");
+  });
+
   it("renders children after the recovery times out", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mockSigninSilent.mockImplementation(() => new Promise<void>(() => {}));
