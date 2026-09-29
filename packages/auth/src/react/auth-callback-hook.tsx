@@ -1,15 +1,36 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useAuth, hasAuthParams } from "react-oidc-context";
+import { useAuth, hasAuthParams, type ErrorContext } from "react-oidc-context";
 import { ConvexError } from "convex/values";
 import * as z from "zod";
 
 const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
+const MISSING_STATE_MESSAGE = "No matching state found in storage";
+const MISSING_STATE_RETRY_KEY = "hercules-auth:missing-state-retry";
 
 const convexErrorSchema = z.object({
   message: z.string(),
 });
+
+function claimMissingStateRetry(error: ErrorContext): boolean {
+  if (error.source !== "signinCallback" || error.message !== MISSING_STATE_MESSAGE) return false;
+
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("code")) return false;
+
+  try {
+    if (window.sessionStorage.getItem(MISSING_STATE_RETRY_KEY) !== null) return false;
+    window.sessionStorage.setItem(MISSING_STATE_RETRY_KEY, "1");
+  } catch {
+    return false;
+  }
+
+  url.searchParams.delete("code");
+  url.searchParams.delete("state");
+  window.history.replaceState({}, document.title, url.toString());
+  return true;
+}
 
 /**
  * Authentication callback status states
@@ -142,6 +163,7 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
   const hadAuthParams = useRef(hasAuthParams());
   // Track if we've already started sync to prevent double execution
   const syncStarted = useRef(false);
+  const missingStateRetryError = useRef<ErrorContext | null>(null);
 
   // Reset on mount, cleanup on unmount
   useEffect(() => {
@@ -173,6 +195,12 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
 
     // Handle OIDC errors
     if (oidcError) {
+      if (oidcError === missingStateRetryError.current) return;
+      if (claimMissingStateRetry(oidcError)) {
+        missingStateRetryError.current = oidcError;
+        void signinRedirect();
+        return;
+      }
       setStatus("error");
       setError(oidcError.message || "Authentication failed");
       return;
@@ -211,7 +239,7 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
     }
 
     return;
-  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, onNoAuthParams]);
+  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, onNoAuthParams, signinRedirect]);
 
   // Sync with backend once backend is authenticated
   useEffect(() => {
