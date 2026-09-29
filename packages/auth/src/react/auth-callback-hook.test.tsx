@@ -183,6 +183,78 @@ describe("useAuthCallback", () => {
     });
   });
 
+  describe("missing OIDC state", () => {
+    const missingStateError = () =>
+      Object.assign(new Error("No matching state found in storage"), {
+        source: "signinCallback",
+      });
+
+    beforeEach(() => {
+      window.sessionStorage.clear();
+      window.history.replaceState({}, "", "/auth/callback?code=orphan&state=dead");
+    });
+
+    it("strips the orphaned code and restarts sign-in once", () => {
+      setAuthState({ isLoading: false, error: missingStateError() });
+
+      const { result } = renderHook(() => useAuthCallback());
+
+      expect(mockSigninRedirect).toHaveBeenCalledOnce();
+      expect(window.location.search).toBe("");
+      expect(window.sessionStorage.getItem("hercules-auth:missing-state-retry")).toBe("1");
+      expect(result.current.status).toBe("processing-oauth");
+    });
+
+    it("shows the error when the restarted sign-in also misses state", () => {
+      window.sessionStorage.setItem("hercules-auth:missing-state-retry", "1");
+      setAuthState({ isLoading: false, error: missingStateError() });
+
+      const { result } = renderHook(() => useAuthCallback());
+
+      expect(mockSigninRedirect).not.toHaveBeenCalled();
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("No matching state found in storage");
+    });
+
+    it("shows the error when the restarted sign-in fails to start", () => {
+      setAuthState({ isLoading: false, error: missingStateError() });
+
+      const { result, rerender } = renderHook(() => useAuthCallback());
+
+      setAuthState({
+        error: Object.assign(new Error("Network down"), { source: "signinRedirect" }),
+      });
+      rerender();
+
+      expect(mockSigninRedirect).toHaveBeenCalledOnce();
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toBe("Network down");
+    });
+
+    it("does not restart sign-in without an authorization code", () => {
+      window.history.replaceState({}, "", "/auth/callback?error=access_denied&state=dead");
+      setAuthState({ isLoading: false, error: missingStateError() });
+
+      const { result } = renderHook(() => useAuthCallback());
+
+      expect(mockSigninRedirect).not.toHaveBeenCalled();
+      expect(result.current.status).toBe("error");
+    });
+
+    it("does not restart sign-in for other callback errors", () => {
+      setAuthState({
+        isLoading: false,
+        error: Object.assign(new Error("invalid_grant"), { source: "signinCallback" }),
+      });
+
+      const { result } = renderHook(() => useAuthCallback());
+
+      expect(mockSigninRedirect).not.toHaveBeenCalled();
+      expect(result.current.status).toBe("error");
+      expect(window.location.search).toBe("?code=orphan&state=dead");
+    });
+  });
+
   describe("no auth params", () => {
     it("calls onNoAuthParams when no auth params and not authenticated", () => {
       mockHasAuthParams = false;
