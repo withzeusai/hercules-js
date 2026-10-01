@@ -1,7 +1,7 @@
 import type { Plugin } from "vite";
 import path from "path";
-import { writeFile, mkdir, link, rm, access } from "fs/promises";
-import { constants } from "fs";
+import { writeFile, mkdir, link, unlink } from "fs/promises";
+import { constants, existsSync } from "fs";
 import { randomUUID } from "crypto";
 
 export interface DynamicComponentCreatorOptions {
@@ -25,6 +25,7 @@ export interface DynamicComponentCreatorOptions {
 }
 
 async function createFileExclusively(filePath: string, content: string): Promise<boolean> {
+  if (existsSync(filePath)) return false;
   const tempPath = path.join(
     path.dirname(filePath),
     `.${path.basename(filePath)}.${randomUUID()}.tmp`,
@@ -36,7 +37,7 @@ async function createFileExclusively(filePath: string, content: string): Promise
   } catch (error: any) {
     if (error?.code === "EEXIST") return false;
   } finally {
-    await rm(tempPath, { force: true }).catch(() => {});
+    await unlink(tempPath).catch(() => {});
   }
   try {
     await writeFile(filePath, content, {
@@ -104,18 +105,11 @@ export function dynamicComponentCreatorPlugin(
 
           const componentName = toComponentName(fileName);
 
-          const exists = await access(resolvedPath).then(
-            () => true,
-            () => false,
+          const created = await createFileExclusively(
+            resolvedPath,
+            `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
           );
-          if (
-            !exists &&
-            (await createFileExclusively(
-              resolvedPath,
-              `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
-            )) &&
-            debug
-          ) {
+          if (created && debug) {
             const importType = source.startsWith("@/") ? "@/ alias" : "relative";
             console.log(
               `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,
