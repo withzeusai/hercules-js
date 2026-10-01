@@ -368,7 +368,11 @@ describe("HerculesUserManager signoutRedirect inside a frame", () => {
     expect(url.origin + url.pathname).toBe(END_SESSION);
     expect(url.searchParams.get("id_token_hint")).toBe(idToken);
     expect(url.searchParams.get("post_logout_redirect_uri")).toBe(RETURN_URI);
-    expect(fetch).toHaveBeenCalledWith(url.toString(), { mode: "no-cors", credentials: "omit" });
+    expect(fetch).toHaveBeenCalledWith(url.toString(), {
+      mode: "no-cors",
+      credentials: "omit",
+      signal: expect.any(AbortSignal),
+    });
     expect(await manager.getUser()).toBeNull();
   });
 
@@ -445,6 +449,28 @@ describe("HerculesUserManager signoutRedirect inside a frame", () => {
     expect(close).not.toHaveBeenCalled();
     expect(events).toEqual(["unloaded"]);
     expect(await manager.getUser()).toBeNull();
+  });
+
+  it("stops waiting for a background request that hangs", async () => {
+    simulateFrame();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+    const { manager, events } = fixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: unknown, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            if (init?.signal?.aborted) reject(init.signal.reason);
+            init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+          }),
+      ),
+    );
+    await manager.storeUser(user(token({ sid: "session-id" })));
+
+    await expect(manager.signoutRedirect()).resolves.toBeUndefined();
+
+    expect(timeout).toHaveBeenCalledWith(5000);
+    expect(events).toEqual(["unloaded"]);
   });
 
   it("settles the React navigator action as signed out", async () => {

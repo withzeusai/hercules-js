@@ -28,6 +28,8 @@ function logoutRedirectUrl(requestUrl: string, clientId: string): string {
   return url.toString();
 }
 
+const END_SESSION_TIMEOUT_MS = 5000;
+
 function isFramed(): boolean {
   if (typeof window === "undefined") return false;
   try {
@@ -38,7 +40,11 @@ function isFramed(): boolean {
 }
 
 async function endSessionInBackground(url: string): Promise<NavigateResponse> {
-  await fetch(url, { mode: "no-cors", credentials: "omit" }).catch(() => undefined);
+  await fetch(url, {
+    mode: "no-cors",
+    credentials: "omit",
+    signal: AbortSignal.timeout(END_SESSION_TIMEOUT_MS),
+  }).catch(() => undefined);
   return { url };
 }
 
