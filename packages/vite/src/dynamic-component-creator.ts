@@ -1,7 +1,8 @@
 import type { Plugin } from "vite";
 import path from "path";
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, link, rm, access } from "fs/promises";
 import { constants } from "fs";
+import { randomUUID } from "crypto";
 
 export interface DynamicComponentCreatorOptions {
   /**
@@ -21,6 +22,34 @@ export interface DynamicComponentCreatorOptions {
    * @default 'src'
    */
   aliasBase?: string;
+}
+
+async function createFileExclusively(filePath: string, content: string): Promise<boolean> {
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${randomUUID()}.tmp`,
+  );
+  try {
+    await writeFile(tempPath, content, { flag: "wx" });
+    try {
+      await link(tempPath, filePath);
+      return true;
+    } catch (error: any) {
+      if (error?.code === "EEXIST") return false;
+      if (error?.code !== "EPERM" && error?.code !== "ENOTSUP") throw error;
+    }
+  } finally {
+    await rm(tempPath, { force: true });
+  }
+  try {
+    await writeFile(filePath, content, {
+      flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    });
+    return true;
+  } catch (error: any) {
+    if (error?.code === "EEXIST") return false;
+    throw error;
+  }
 }
 
 /**
@@ -78,24 +107,21 @@ export function dynamicComponentCreatorPlugin(
 
           const componentName = toComponentName(fileName);
 
-          try {
-            // wx flag: write exclusively — fails with EEXIST if file already exists
-            await writeFile(
+          const exists = await access(resolvedPath).then(
+            () => true,
+            () => false,
+          );
+          const created =
+            !exists &&
+            (await createFileExclusively(
               resolvedPath,
               `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
-              {
-                flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
-              },
+            ));
+          if (created && debug) {
+            const importType = source.startsWith("@/") ? "@/ alias" : "relative";
+            console.log(
+              `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,
             );
-            if (debug) {
-              const importType = source.startsWith("@/") ? "@/ alias" : "relative";
-              console.log(
-                `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,
-              );
-            }
-          } catch (error: any) {
-            // EEXIST means the file already exists — not an error, just skip
-            if (error?.code !== "EEXIST") throw error;
           }
         }
 
