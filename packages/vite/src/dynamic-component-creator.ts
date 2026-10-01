@@ -31,15 +31,12 @@ async function createFileExclusively(filePath: string, content: string): Promise
   );
   try {
     await writeFile(tempPath, content, { flag: "wx" });
-    try {
-      await link(tempPath, filePath);
-      return true;
-    } catch (error: any) {
-      if (error?.code === "EEXIST") return false;
-      if (error?.code !== "EPERM" && error?.code !== "ENOTSUP") throw error;
-    }
+    await link(tempPath, filePath);
+    return true;
+  } catch (error: any) {
+    if (error?.code === "EEXIST") return false;
   } finally {
-    await rm(tempPath, { force: true });
+    await rm(tempPath, { force: true }).catch(() => {});
   }
   try {
     await writeFile(filePath, content, {
@@ -111,13 +108,14 @@ export function dynamicComponentCreatorPlugin(
             () => true,
             () => false,
           );
-          const created =
+          if (
             !exists &&
             (await createFileExclusively(
               resolvedPath,
               `import React from "react";\n\nexport default function ${componentName}(_props: unknown) {\n  return <div></div>;\n}\n`,
-            ));
-          if (created && debug) {
+            )) &&
+            debug
+          ) {
             const importType = source.startsWith("@/") ? "@/ alias" : "relative";
             console.log(
               `[Dynamic Component Creator] Created component file from ${importType} import: ${source} -> ${resolvedPath}`,

@@ -1,17 +1,20 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
+import { link, mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const linkMock = vi.hoisted(() => vi.fn());
+import { dynamicComponentCreatorPlugin } from "../dynamic-component-creator";
+
+const { actualLink, linkMock } = vi.hoisted(() => ({
+  actualLink: { current: undefined as unknown as typeof link },
+  linkMock: vi.fn(),
+}));
 
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
-  linkMock.mockImplementation(actual.link);
+  actualLink.current = actual.link;
   return { ...actual, link: linkMock };
 });
-
-const { dynamicComponentCreatorPlugin } = await import("../dynamic-component-creator");
 
 const STUB = `import React from "react";\n\nexport default function Pane(_props: unknown) {\n  return <div></div>;\n}\n`;
 const REAL = `export default function Pane() {\n  return <section>real content</section>;\n}\n`;
@@ -28,11 +31,12 @@ async function resolve(source: string) {
 }
 
 beforeEach(async () => {
+  linkMock.mockReset();
+  linkMock.mockImplementation(actualLink.current);
   root = await mkdtemp(path.join(tmpdir(), "dynamic-component-creator-"));
 });
 
 afterEach(async () => {
-  vi.mocked(linkMock).mockClear();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -56,11 +60,10 @@ describe("dynamicComponentCreatorPlugin", () => {
     expect(await readdir(dir)).toEqual(["pane.tsx"]);
   });
 
-  it("preserves content written by another writer during stub creation", async () => {
-    const { link } = await vi.importActual<typeof import("fs/promises")>("fs/promises");
+  it("keeps content written by another writer before the stub is linked", async () => {
     linkMock.mockImplementationOnce(async (existingPath: string, newPath: string) => {
       await writeFile(newPath, REAL);
-      return link(existingPath, newPath);
+      return actualLink.current(existingPath, newPath);
     });
 
     await resolve("@/components/pane.tsx");
@@ -70,13 +73,17 @@ describe("dynamicComponentCreatorPlugin", () => {
     expect(await readdir(dir)).toEqual(["pane.tsx"]);
   });
 
-  it("falls back to an exclusive write when hard links are unsupported", async () => {
-    linkMock.mockRejectedValueOnce(Object.assign(new Error("not supported"), { code: "ENOTSUP" }));
+  it.each(["ENOTSUP", "EPERM", "ENOSYS", "EISDIR"])(
+    "falls back to an exclusive write when linking fails with %s",
+    async (code) => {
+      linkMock.mockRejectedValueOnce(Object.assign(new Error(code), { code }));
 
-    await resolve("./components/pane.tsx");
+      await resolve("./components/pane.tsx");
 
-    const dir = path.join(root, "src", "components");
-    expect(await readFile(path.join(dir, "pane.tsx"), "utf8")).toBe(STUB);
-    expect(await readdir(dir)).toEqual(["pane.tsx"]);
-  });
+      const dir = path.join(root, "src", "components");
+      expect(linkMock).toHaveBeenCalledTimes(1);
+      expect(await readFile(path.join(dir, "pane.tsx"), "utf8")).toBe(STUB);
+      expect(await readdir(dir)).toEqual(["pane.tsx"]);
+    },
+  );
 });
