@@ -353,8 +353,16 @@ describe("HerculesUserManager signoutRedirect inside a frame", () => {
     return new URL(String(call![0]));
   }
 
-  it("ends the session in the background instead of navigating the frame", async () => {
-    simulateFrame();
+  it.each([
+    { name: "a different top window", top: () => ({}) as Window },
+    {
+      name: "an inaccessible top window",
+      top: (): Window => {
+        throw new DOMException("Blocked a frame", "SecurityError");
+      },
+    },
+  ])("ends the session in the background under $name", async ({ top }) => {
+    vi.spyOn(window, "top", "get").mockImplementation(top);
     const { manager, navigate, events } = fixture();
     const fetch = stubEndSession(events);
     const idToken = token({ sid: "session-id" });
@@ -388,20 +396,6 @@ describe("HerculesUserManager signoutRedirect inside a frame", () => {
     const url = endSessionUrl(fetch);
     expect(url.searchParams.has("id_token_hint")).toBe(false);
     expect(url.searchParams.get("client_id")).toBe(CLIENT_ID);
-  });
-
-  it("treats an inaccessible top window as framed", async () => {
-    vi.spyOn(window, "top", "get").mockImplementation(() => {
-      throw new DOMException("Blocked a frame", "SecurityError");
-    });
-    const { manager, navigate, events } = fixture();
-    stubEndSession(events);
-    await manager.storeUser(user(token({ sid: "session-id" })));
-
-    await manager.signoutRedirect();
-
-    expect(navigate).not.toHaveBeenCalled();
-    expect(events).toEqual(["unloaded", "end-session"]);
   });
 
   it("keeps navigating when the app redirects its top window", async () => {
@@ -457,13 +451,10 @@ describe("HerculesUserManager signoutRedirect inside a frame", () => {
     const { manager, events } = fixture();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        (_input: unknown, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            if (init?.signal?.aborted) reject(init.signal.reason);
-            init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
-          }),
-      ),
+      vi.fn(async (_input: unknown, init?: RequestInit) => {
+        init?.signal?.throwIfAborted();
+        return new Promise<Response>(() => {});
+      }),
     );
     await manager.storeUser(user(token({ sid: "session-id" })));
 
