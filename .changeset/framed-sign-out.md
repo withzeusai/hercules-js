@@ -2,4 +2,4 @@
 "@usehercules/auth": patch
 ---
 
-Sign out locally when the app runs inside an iframe, such as the App Builder preview, instead of navigating the frame to the hosted sign-out page, which refuses to be framed. Token revocation configured with `revokeTokensOnSignout` still runs. Top-level sign-out is unchanged.
+Stop redirect sign-out from navigating an app that runs inside an iframe, such as the App Builder preview, to the hosted end-session page, which refuses to be framed. Framed apps now send the same end-session request in the background and sign out locally. Configured token revocation still runs first. Top-level sign-out and `redirectTarget: "top"` are unchanged.

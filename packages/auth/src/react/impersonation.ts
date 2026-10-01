@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth as useOidcAuth } from "react-oidc-context";
-import { signOut } from "../internal/sign-out";
 import { useHerculesAuthProvider } from "./HerculesAuthProvider";
 import {
   rememberHerculesImpersonationSession,
@@ -58,7 +57,13 @@ export function useHerculesImpersonation(): HerculesImpersonationState {
       window.localStorage.removeItem(impersonationStorageKey);
     }
     setStoredSessionId(null);
-    await signOut(userManager, auth);
+
+    const endpoint = await userManager.metadataService.getEndSessionEndpoint();
+    if (endpoint != null) {
+      await auth.signoutRedirect();
+    } else {
+      await auth.removeUser();
+    }
   }, [auth, impersonationStorageKey, userManager]);
 
   return useMemo(

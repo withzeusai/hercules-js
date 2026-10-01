@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, configure } from "@testing-library/react";
 import { useAuth } from "./use-auth.js";
 
@@ -10,14 +10,11 @@ const mockSignoutRedirect = vi.fn();
 const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 const mockGetEndSessionEndpoint = vi.fn();
-const mockRevokeTokens = vi.fn();
 
 const mockUserManager = {
   metadataService: {
     getEndSessionEndpoint: mockGetEndSessionEndpoint,
   },
-  settings: { revokeTokensOnSignout: false },
-  revokeTokens: mockRevokeTokens,
 };
 
 let mockAuthState: Record<string, unknown> = {};
@@ -51,17 +48,7 @@ beforeEach(() => {
   mockSigninRedirect.mockReset();
   mockRemoveUser.mockReset();
   mockGetEndSessionEndpoint.mockReset();
-  mockRevokeTokens.mockReset();
-  mockUserManager.settings.revokeTokensOnSignout = false;
 });
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-function simulateFrame() {
-  vi.spyOn(window, "top", "get").mockReturnValue({} as Window);
-}
 
 describe("useAuth", () => {
   it("returns the underlying auth state with a signout method", () => {
@@ -123,72 +110,6 @@ describe("useAuth", () => {
 
       expect(mockSignoutRedirect).not.toHaveBeenCalled();
       expect(mockRemoveUser).toHaveBeenCalledOnce();
-    });
-
-    it("removes the user locally instead of navigating when framed", async () => {
-      mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
-      simulateFrame();
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.signout();
-      });
-
-      expect(mockSignoutRedirect).not.toHaveBeenCalled();
-      expect(mockRevokeTokens).not.toHaveBeenCalled();
-      expect(mockRemoveUser).toHaveBeenCalledOnce();
-    });
-
-    it("treats an inaccessible top window as framed", async () => {
-      mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
-      vi.spyOn(window, "top", "get").mockImplementation(() => {
-        throw new DOMException("Blocked a frame", "SecurityError");
-      });
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.signout();
-      });
-
-      expect(mockSignoutRedirect).not.toHaveBeenCalled();
-      expect(mockRemoveUser).toHaveBeenCalledOnce();
-    });
-
-    it("revokes tokens before removing the user when framed and configured to revoke", async () => {
-      mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
-      mockUserManager.settings.revokeTokensOnSignout = true;
-      simulateFrame();
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.signout();
-      });
-
-      expect(mockSignoutRedirect).not.toHaveBeenCalled();
-      expect(mockRevokeTokens).toHaveBeenCalledOnce();
-      expect(mockRemoveUser).toHaveBeenCalledOnce();
-      expect(mockRevokeTokens.mock.invocationCallOrder[0]).toBeLessThan(
-        mockRemoveUser.mock.invocationCallOrder[0]!,
-      );
-    });
-
-    it("keeps redirect sign-out at the top level when configured to revoke", async () => {
-      mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
-      mockUserManager.settings.revokeTokensOnSignout = true;
-
-      const { result } = renderHook(() => useAuth());
-
-      await act(async () => {
-        await result.current.signout();
-      });
-
-      expect(mockSignoutRedirect).toHaveBeenCalledOnce();
-      expect(mockSignoutRedirect).toHaveBeenCalledWith();
-      expect(mockRevokeTokens).not.toHaveBeenCalled();
-      expect(mockRemoveUser).not.toHaveBeenCalled();
     });
   });
 

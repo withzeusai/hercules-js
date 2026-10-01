@@ -2,7 +2,6 @@ import {
   useAuth as useOidcAuth,
   type AuthContextProps as OidcAuthContextProps,
 } from "react-oidc-context";
-import { signOut } from "../internal/sign-out";
 import { useHerculesAuthProvider } from "./HerculesAuthProvider";
 import { useCallback, useMemo } from "react";
 
@@ -26,10 +25,14 @@ export function useAuth(): AuthContextProps {
   const auth = useOidcAuth();
 
   const { signoutRedirect, removeUser, signinRedirect } = auth;
-  const signout = useCallback(
-    () => signOut(userManager, { signoutRedirect, removeUser }),
-    [userManager, signoutRedirect, removeUser],
-  );
+  const signout = useCallback(async () => {
+    const endpoint = await userManager.metadataService.getEndSessionEndpoint();
+    if (endpoint != null) {
+      await signoutRedirect();
+    } else {
+      await removeUser();
+    }
+  }, [userManager, signoutRedirect, removeUser]);
 
   const signin = useCallback(
     async (options?: SigninOptions) => {

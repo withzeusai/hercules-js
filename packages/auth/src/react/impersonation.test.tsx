@@ -1,5 +1,5 @@
-import { act, renderHook, waitFor, configure } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook, waitFor, configure } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useHerculesImpersonation } from "./impersonation";
 import {
   getHerculesImpersonationStorageKey,
@@ -16,8 +16,6 @@ const mockUserManager = {
   metadataService: {
     getEndSessionEndpoint: mockGetEndSessionEndpoint,
   },
-  settings: { revokeTokensOnSignout: false },
-  revokeTokens: vi.fn(),
 };
 
 let mockAuthState: Record<string, unknown> = {};
@@ -52,10 +50,6 @@ beforeEach(() => {
       profile: {},
     },
   };
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
 });
 
 describe("useHerculesImpersonation", () => {
@@ -95,33 +89,6 @@ describe("useHerculesImpersonation", () => {
     await waitFor(() => {
       expect(window.localStorage.getItem(storageKey)).toBeNull();
     });
-  });
-
-  it("stops impersonating with a redirect sign-out at the top level", async () => {
-    mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
-
-    const { result } = renderHook(() => useHerculesImpersonation());
-
-    await act(async () => {
-      await result.current.stopImpersonating();
-    });
-
-    expect(mockSignoutRedirect).toHaveBeenCalledOnce();
-    expect(mockRemoveUser).not.toHaveBeenCalled();
-  });
-
-  it("stops impersonating without navigating when framed", async () => {
-    mockGetEndSessionEndpoint.mockResolvedValue("https://auth.example.com/logout");
-    vi.spyOn(window, "top", "get").mockReturnValue({} as Window);
-
-    const { result } = renderHook(() => useHerculesImpersonation());
-
-    await act(async () => {
-      await result.current.stopImpersonating();
-    });
-
-    expect(mockSignoutRedirect).not.toHaveBeenCalled();
-    expect(mockRemoveUser).toHaveBeenCalledOnce();
   });
 });
 

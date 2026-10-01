@@ -28,6 +28,20 @@ function logoutRedirectUrl(requestUrl: string, clientId: string): string {
   return url.toString();
 }
 
+function isFramed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
+async function endSessionInBackground(url: string): Promise<NavigateResponse> {
+  await fetch(url, { mode: "no-cors", credentials: "omit" }).catch(() => undefined);
+  return { url };
+}
+
 export class HerculesUserManager extends UserManager {
   // Transform after UserManager's revocation and single storage removal, inside its navigator action.
   protected override _signoutStart(
@@ -38,11 +52,13 @@ export class HerculesUserManager extends UserManager {
 
     return super._signoutStart(args, {
       close: () => handle.close(),
-      navigate: (params) =>
-        handle.navigate({
-          ...params,
-          url: logoutRedirectUrl(params.url, this.settings.client_id),
-        }),
+      navigate: (params) => {
+        const url = logoutRedirectUrl(params.url, this.settings.client_id);
+        if (this.settings.redirectTarget !== "top" && isFramed()) {
+          return endSessionInBackground(url);
+        }
+        return handle.navigate({ ...params, url });
+      },
     });
   }
 }
