@@ -1,5 +1,17 @@
 # @usehercules/auth
 
+## 1.2.1
+
+### Patch Changes
+
+- [#160](https://github.com/withzeusai/hercules-js/pull/160) [`3129b5c`](https://github.com/withzeusai/hercules-js/commit/3129b5cb96601121ae648248a614062acf0c7776) Thanks [@delbyte](https://github.com/delbyte)! - Show a minimal loading spinner while `HerculesAuthProvider` restores an expired session, instead of a blank page. Pass `loadingFallback` to render your own UI, or `loadingFallback={null}` to keep the previous behavior.
+
+- [#163](https://github.com/withzeusai/hercules-js/pull/163) [`8f4c5cb`](https://github.com/withzeusai/hercules-js/commit/8f4c5cb37a6a5fa0585ccbe8ce116ddcdeb46ed0) Thanks [@delbyte](https://github.com/delbyte)! - Stop redirect sign-out from navigating an app inside an iframe, such as the App Builder preview, to the hosted end-session page, which refuses to be framed. Framed apps now send the end-session request in the background and sign out locally. Top-level sign-out and `redirectTarget: "top"` are unchanged.
+
+- [#161](https://github.com/withzeusai/hercules-js/pull/161) [`d88e235`](https://github.com/withzeusai/hercules-js/commit/d88e23507858f22102199365385081bb14da5fd8) Thanks [@delbyte](https://github.com/delbyte)! - Restart sign-in once when `useAuthCallback` receives a callback whose OIDC state is missing from this browser, such as an email verification link opened in a different browser or in-app webview. The orphaned code is dropped from the URL and never redeemed. A second missing-state failure in the same tab shows the existing error screen.
+
+- [#159](https://github.com/withzeusai/hercules-js/pull/159) [`c6ea27f`](https://github.com/withzeusai/hercules-js/commit/c6ea27f3597462f8714b7d42d34cc33200127fe2) Thanks [@delbyte](https://github.com/delbyte)! - Use the hosted sign-out confirmation flow when a refreshed ID token no longer identifies a browser session. Preserve configured token revocation and normal session-bound sign-out.
+
 ## 1.2.0
 
 ### Minor Changes
