@@ -324,3 +324,164 @@ describe("HerculesUserManager signoutRedirect", () => {
     expect(await manager.getUser()).not.toBeNull();
   });
 });
+
+describe("HerculesUserManager signoutRedirect inside a frame", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function simulateFrame() {
+    vi.spyOn(window, "top", "get").mockReturnValue({} as Window);
+  }
+
+  function stubEndSession(events: string[]) {
+    const fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      if (init?.mode === "no-cors") {
+        events.push("end-session");
+      } else {
+        events.push(`revoke:${new URLSearchParams(String(init?.body)).get("token_type_hint")}`);
+      }
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  }
+
+  function endSessionUrl(fetch: ReturnType<typeof stubEndSession>): URL {
+    const call = fetch.mock.calls.find(([, init]) => init?.mode === "no-cors");
+    expect(call).toBeDefined();
+    return new URL(String(call![0]));
+  }
+
+  it.each([
+    { name: "a different top window", top: () => ({}) as Window },
+    {
+      name: "an inaccessible top window",
+      top: (): Window => {
+        throw new DOMException("Blocked a frame", "SecurityError");
+      },
+    },
+  ])("ends the session in the background under $name", async ({ top }) => {
+    vi.spyOn(window, "top", "get").mockImplementation(top);
+    const { manager, navigate, events } = fixture();
+    const fetch = stubEndSession(events);
+    const idToken = token({ sid: "session-id" });
+    await manager.storeUser(user(idToken));
+
+    await manager.signoutRedirect();
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(events).toEqual(["unloaded", "end-session"]);
+    const url = endSessionUrl(fetch);
+    expect(url.origin + url.pathname).toBe(END_SESSION);
+    expect(url.searchParams.get("id_token_hint")).toBe(idToken);
+    expect(url.searchParams.get("post_logout_redirect_uri")).toBe(RETURN_URI);
+    expect(fetch).toHaveBeenCalledWith(url.toString(), {
+      mode: "no-cors",
+      credentials: "omit",
+      signal: expect.any(AbortSignal),
+    });
+    expect(await manager.getUser()).toBeNull();
+  });
+
+  it("applies the sessionless hint transform to the background request", async () => {
+    simulateFrame();
+    const { manager, navigate, events } = fixture();
+    const fetch = stubEndSession(events);
+    await manager.storeUser(user(token({ sid: null })));
+
+    await manager.signoutRedirect();
+
+    expect(navigate).not.toHaveBeenCalled();
+    const url = endSessionUrl(fetch);
+    expect(url.searchParams.has("id_token_hint")).toBe(false);
+    expect(url.searchParams.get("client_id")).toBe(CLIENT_ID);
+  });
+
+  it("keeps navigating when the app redirects its top window", async () => {
+    simulateFrame();
+    const { manager, navigate, events } = fixture({ redirectTarget: "top" });
+    const fetch = stubEndSession(events);
+    await manager.storeUser(user(token({ sid: "session-id" })));
+
+    await manager.signoutRedirect();
+
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured revocation before the background request", async () => {
+    simulateFrame();
+    const { manager, navigate, events } = fixture({ revokeTokensOnSignout: true });
+    stubEndSession(events);
+    await manager.storeUser(user(token({ sid: "session-id" })));
+
+    await manager.signoutRedirect();
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      "revoke:access_token",
+      "revoke:refresh_token",
+      "unloaded",
+      "end-session",
+    ]);
+  });
+
+  it("signs out locally when the background request fails", async () => {
+    simulateFrame();
+    const { manager, close, events } = fixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    await manager.storeUser(user(token({ sid: "session-id" })));
+
+    await expect(manager.signoutRedirect()).resolves.toBeUndefined();
+
+    expect(close).not.toHaveBeenCalled();
+    expect(events).toEqual(["unloaded"]);
+    expect(await manager.getUser()).toBeNull();
+  });
+
+  it("stops waiting for a background request that hangs", async () => {
+    simulateFrame();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+    const { manager, events } = fixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: unknown, init?: RequestInit) => {
+        init?.signal?.throwIfAborted();
+        return new Promise<Response>(() => {});
+      }),
+    );
+    await manager.storeUser(user(token({ sid: "session-id" })));
+
+    await expect(manager.signoutRedirect()).resolves.toBeUndefined();
+
+    expect(timeout).toHaveBeenCalledWith(5000);
+    expect(events).toEqual(["unloaded"]);
+  });
+
+  it("settles the React navigator action as signed out", async () => {
+    simulateFrame();
+    const { manager, events } = fixture();
+    stubEndSession(events);
+    await manager.storeUser(user(token({ sid: "session-id" })));
+    const { result } = renderHook(() => useAuth(), {
+      wrapper: ({ children }: PropsWithChildren) => (
+        <AuthProvider userManager={manager}>{children}</AuthProvider>
+      ),
+    });
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+
+    await act(async () => {
+      await result.current.signoutRedirect();
+    });
+
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(result.current.activeNavigator).toBeUndefined();
+    expect(result.current.error).toBeUndefined();
+  });
+});
