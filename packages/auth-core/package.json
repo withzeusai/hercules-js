@@ -1,0 +1,38 @@
+{
+  "name": "@usehercules/auth-core",
+  "version": "0.0.0",
+  "description": "Framework-agnostic embedded sign-in client for Hercules applications",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/auth-core"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsdown.config.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "tsdown": "^0.22.8",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

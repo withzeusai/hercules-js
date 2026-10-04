@@ -30,6 +30,12 @@ export interface GetAuthURLOptions {
   maxAge?: number;
   /** OIDC `login_hint`: pre-fill the provider's login form (e.g. an email). */
   loginHint?: string;
+  /**
+   * OIDC `prompt`. `"create"` asks for the sign-up flavor of the sign-in page;
+   * `"none"` returns to the callback with `login_required` instead of showing
+   * a sign-in page when there is no session.
+   */
+  prompt?: "none" | "login" | "create" | "select_account";
 }
 
 /** Options accepted by {@link getSignInUrl}/{@link getSignUpUrl}. */
@@ -101,6 +107,30 @@ export const getSignUpUrl = createServerFn({ method: "GET" })
     const { getSignUpUrlBody } = await import("./server-fn-bodies");
     return getSignUpUrlBody(data);
   });
+
+/** Embedded sign-in settings, as {@link getEmbeddedSignIn} returns them. */
+export interface EmbeddedSignInSettings {
+  /** The OIDC issuer; the captcha bridge renders on its origin. */
+  issuer: string;
+  /** Better Auth base path on the app's own origin. */
+  authBasePath: string;
+  /** The app page signed-out visitors are sent to. */
+  signInPath: string;
+  /** The app page sign-up requests land on. */
+  signUpPath: string;
+}
+
+/**
+ * Whether the app renders its own sign-in UI (a Hercules dashboard setting,
+ * read from the provider's discovery document), and where. Null when users
+ * sign in on the hosted portal.
+ */
+export const getEmbeddedSignIn = createServerFn({ method: "GET" }).handler(
+  async (): Promise<EmbeddedSignInSettings | null> => {
+    const { getEmbeddedSignInBody } = await import("./server-fn-bodies");
+    return getEmbeddedSignInBody();
+  },
+);
 
 /**
  * Check whether the user's most recent authentication is older than `maxAge`

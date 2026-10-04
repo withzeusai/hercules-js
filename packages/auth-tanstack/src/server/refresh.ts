@@ -1,5 +1,6 @@
 import * as client from "openid-client";
 import { getConfig } from "./config";
+import { browserEndpoint } from "./embedded";
 import type { SessionData } from "./session";
 
 /**
@@ -56,7 +57,11 @@ export async function resolveLogoutLocation(
         post_logout_redirect_uri: postLogoutRedirectUri,
       };
       if (idTokenHint) parameters.id_token_hint = idTokenHint;
-      return client.buildEndSessionUrl(config, parameters).toString();
+      return browserEndpoint(
+        config,
+        client.buildEndSessionUrl(config, parameters),
+        new URL(postLogoutRedirectUri).origin,
+      ).toString();
     }
   } catch (error) {
     // Discovery/metadata failure shouldn't trap the user in a session — log and

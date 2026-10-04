@@ -31,6 +31,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@usehercules/auth-core": "workspace:^",
     "jwt-decode": "^4.0.0",
     "oidc-client-ts": "^3.5.0",
     "react-oidc-context": "^3.3.1",

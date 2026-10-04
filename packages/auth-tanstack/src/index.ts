@@ -26,6 +26,8 @@ export {
   getSignInUrl,
   getSignUpUrl,
   checkRecentAuth,
+  getEmbeddedSignIn,
+  type EmbeddedSignInSettings,
 } from "./server/auth";
 export {
   getAuthAction,

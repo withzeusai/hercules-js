@@ -1,6 +1,8 @@
+import { readEmbeddedSignInMetadata, toEmbeddedEndpoint } from "@usehercules/auth-core";
 import { jwtDecode } from "jwt-decode";
 import {
   UserManager,
+  type CreateSigninRequestArgs,
   type CreateSignoutRequestArgs,
   type IWindow,
   type NavigateResponse,
@@ -48,12 +50,59 @@ async function endSessionInBackground(url: string): Promise<NavigateResponse> {
   return { url };
 }
 
+/** Browser-facing endpoints that move to the app origin under embedded sign-in. */
+const EMBEDDED_ENDPOINTS = ["authorization_endpoint", "end_session_endpoint"] as const;
+
 export class HerculesUserManager extends UserManager {
+  /**
+   * When the tenant's discovery document advertises embedded sign-in (the app
+   * renders its own sign-in UI), point the authorize and end-session endpoints
+   * at the app's own origin, where the platform serves its auth API and keeps
+   * the embedded session cookie. The issuer, token, and JWKS endpoints are left
+   * alone. Rewrites the cached metadata in place, so every later request uses
+   * it; a no-op for any other provider.
+   */
+  async useEmbeddedEndpoints(): Promise<void> {
+    const metadata = await this.metadataService.getMetadata();
+    const embedded = readEmbeddedSignInMetadata(metadata as Record<string, unknown>);
+    if (!embedded) return;
+    const appOrigin = new URL(this.settings.redirect_uri).origin;
+    for (const key of EMBEDDED_ENDPOINTS) {
+      const value = metadata[key];
+      if (typeof value !== "string" || new URL(value).origin === appOrigin) continue;
+      metadata[key] = toEmbeddedEndpoint(new URL(value), appOrigin, embedded).toString();
+    }
+  }
+
+  /**
+   * Begin a redirect sign-in without navigating: store its state as
+   * `signinRedirect` would and return the authorize URL. The embedded sign-in
+   * client uses it to start a sign-in from any page.
+   */
+  async createAuthorizationUrl(options: { returnTo?: string; prompt?: string }): Promise<string> {
+    await this.useEmbeddedEndpoints();
+    const request = await this._client.createSigninRequest({
+      request_type: "si:r",
+      state: { returnTo: options.returnTo },
+      ...(options.prompt ? { prompt: options.prompt } : {}),
+    });
+    return request.url;
+  }
+
+  protected override async _signinStart(
+    args: CreateSigninRequestArgs,
+    handle: IWindow,
+  ): Promise<NavigateResponse> {
+    await this.useEmbeddedEndpoints();
+    return super._signinStart(args, handle);
+  }
+
   // Transform after UserManager's revocation and single storage removal, inside its navigator action.
-  protected override _signoutStart(
+  protected override async _signoutStart(
     args: CreateSignoutRequestArgs = {},
     handle: IWindow,
   ): Promise<NavigateResponse> {
+    await this.useEmbeddedEndpoints();
     if (args.request_type !== "so:r") return super._signoutStart(args, handle);
 
     return super._signoutStart(args, {
