@@ -12,8 +12,14 @@ import {
   sessionCookieMaxAge,
 } from "./config";
 import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
+import { browserEndpoint, embeddedSignIn } from "./embedded";
 import { OAuthStateMismatchError, PKCECookieMissingError } from "./errors";
-import { cookieSecurity, resolveCallbackUrl, resolveOrigin, resolveRedirectUri } from "./request-url";
+import {
+  cookieSecurity,
+  resolveCallbackUrl,
+  resolveOrigin,
+  resolveRedirectUri,
+} from "./request-url";
 import { authorizationParameters } from "./server-fn-bodies";
 import { type SessionData, sealSession, serializeSessionCookies } from "./session";
 import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
@@ -108,6 +114,37 @@ async function handleError(
 }
 
 /**
+ * The provider answered the callback with `error` instead of a code. Configured
+ * `onError`/`errorRedirectUrl` handling wins. Otherwise an app with embedded
+ * sign-in returns the visitor to its own sign-in page with the reason, so its
+ * UI can show it; any other app gets the JSON error.
+ */
+async function handleProviderError(
+  request: Request,
+  providerError: string,
+  options: HandleCallbackOptions | undefined,
+  clearCookieName: string | undefined,
+): Promise<Response> {
+  const message = `Sign-in failed: ${providerError}`;
+  if (!options?.onError && !options?.errorRedirectUrl) {
+    try {
+      const embedded = embeddedSignIn(await getConfig());
+      if (embedded) {
+        const location = new URL(embedded.signInPath, resolveOrigin(request));
+        location.searchParams.set("error", providerError);
+        console.error(`[auth-tanstack] ${message}`);
+        const headers = new Headers({ Location: location.toString() });
+        if (clearCookieName) deleteCookie(headers, clearCookieName);
+        return new Response(null, { status: 302, headers });
+      }
+    } catch {
+      // Discovery unavailable: fall through to the generic error response.
+    }
+  }
+  return handleError(request, 400, message, undefined, options, clearCookieName);
+}
+
+/**
  * Build the post-callback redirect, anchored to `origin`. Only the pathname,
  * query, and hash of `returnPathname` are used — an absolute URL (or a
  * protocol-relative `//host` one) cannot redirect off-origin, closing the open
@@ -137,9 +174,13 @@ export async function handleSignInInternal(
   let authorizationUrl: URL;
   try {
     const config = await getConfig();
-    authorizationUrl = client.buildAuthorizationUrl(
+    authorizationUrl = browserEndpoint(
       config,
-      authorizationParameters(options ?? {}, { redirectUri, state, codeChallenge }),
+      client.buildAuthorizationUrl(
+        config,
+        authorizationParameters(options ?? {}, { redirectUri, state, codeChallenge }),
+      ),
+      new URL(redirectUri).origin,
     );
   } catch (error) {
     // Almost always OIDC discovery failing in getConfig() (bad issuer URL,
@@ -223,6 +264,13 @@ export async function handleCallbackInternal(
   const clearName = verifierCookie ? verifierCookieName : undefined;
 
   const code = url.searchParams.get("code");
+  const providerError = url.searchParams.get("error");
+  if (!code && providerError) {
+    // The provider declined to issue a code (`login_required` after
+    // `prompt=none`, `access_denied`, ...). Report its reason rather than a
+    // generic missing-code error, and evict the dead flow's verifier.
+    return handleProviderError(request, providerError, options, clearName);
+  }
   if (!code) {
     // The flow is dead without a code — evict its verifier rather than leaving
     // it to linger until it times out.

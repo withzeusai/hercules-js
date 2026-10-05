@@ -11,6 +11,31 @@ export { useTokenClaims } from "./useTokenClaims";
 export { useRecentAuth } from "./useRecentAuth";
 
 export { getAuthAction } from "../server/actions";
+export { getEmbeddedSignIn, type EmbeddedSignInSettings } from "../server/auth";
+export {
+  createEmbeddedSignInClient,
+  AUTH_ERROR_CODES,
+  isAuthError,
+  mountTurnstileBridge,
+  readAuthError,
+  type AuthError,
+  type AuthErrorCode,
+  type AuthErrorField,
+  type AuthResult,
+  type DataResult,
+  type EmbeddedAuthClient,
+  type Identity,
+  type Passkey,
+  type Session,
+  type SignInConfig,
+  type SignInMethod,
+  type SocialProvider,
+  type StepResult,
+  type TurnstileBridge,
+  type TurnstileBridgeOptions,
+  type User,
+  type WorkOSProviderName,
+} from "./embedded";
 
 export type {
   AuthContextType,
@@ -19,3 +44,15 @@ export type {
   UseIdTokenReturn,
 } from "./types";
 export type { JWTPayload, TokenClaims } from "./jwt";
+export {
+  AuthWidgetsProvider,
+  DeleteAccount,
+  ResetPassword,
+  SignIn,
+  UserProfile,
+  UserSecurity,
+  UserSessions,
+  type SignInProps,
+  type WidgetClassNames,
+  type WidgetSlot,
+} from "./widgets";

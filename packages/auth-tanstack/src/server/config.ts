@@ -147,11 +147,20 @@ export function requireEnv(names: readonly [string, ...string[]]): string {
   return value;
 }
 
-// Discovery is a network round-trip and the resolved metadata is static for the
-// lifetime of the process, so resolve the Configuration once and reuse it.
+/**
+ * How long a discovered Configuration is reused. Discovery is a network round
+ * trip, so it is cached, but not for the life of the process: a Hercules
+ * tenant's document also carries dashboard settings (embedded sign-in) that
+ * should take effect without a redeploy.
+ */
+export const CONFIG_TTL_MS = 10 * 60 * 1000;
+
 let configPromise: Promise<client.Configuration> | undefined;
+let configExpiresAt = 0;
+let lastGoodConfig: client.Configuration | undefined;
 export function getConfig(): Promise<client.Configuration> {
-  if (!configPromise) {
+  if (!configPromise || Date.now() >= configExpiresAt) {
+    configExpiresAt = Date.now() + CONFIG_TTL_MS;
     const issuerUrl = new URL(requireEnv(ISSUER_URL_ENV_VARS));
     const clientId = requireEnv(CLIENT_ID_ENV_VARS);
     const clientSecret = readEnv(CLIENT_SECRET_ENV_VARS);
@@ -162,12 +171,20 @@ export function getConfig(): Promise<client.Configuration> {
       ? client.discovery(issuerUrl, clientId, clientSecret)
       : client.discovery(issuerUrl, clientId, undefined, client.None());
 
-    configPromise = discovered.catch((error) => {
-      // Don't cache a failed discovery — let the next request retry instead of
-      // permanently poisoning every sign-in and callback.
-      configPromise = undefined;
-      throw error;
-    });
+    configPromise = discovered.then(
+      (config) => {
+        lastGoodConfig = config;
+        return config;
+      },
+      (error: unknown) => {
+        // Don't cache a failed discovery — let the next request retry instead
+        // of permanently poisoning every sign-in and callback. A refresh that
+        // fails keeps serving the last good document meanwhile.
+        configPromise = undefined;
+        if (lastGoodConfig) return lastGoodConfig;
+        throw error;
+      },
+    );
   }
   return configPromise;
 }

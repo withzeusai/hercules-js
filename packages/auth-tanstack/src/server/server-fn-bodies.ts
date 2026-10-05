@@ -4,7 +4,12 @@ import * as client from "openid-client";
 
 import { evaluateRecentAuth } from "../internal/recent-auth";
 import type { NoUserInfo, UserInfo } from "../types";
-import type { GetAuthURLOptions, RecentAuthResult, SignInUrlOptions } from "./auth";
+import type {
+  EmbeddedSignInSettings,
+  GetAuthURLOptions,
+  RecentAuthResult,
+  SignInUrlOptions,
+} from "./auth";
 import { collectClaims, userInfoFromSession } from "./claims";
 import {
   MAX_PENDING_SIGN_INS,
@@ -16,6 +21,7 @@ import {
   pkceCookieName,
   sessionCookieDomain,
 } from "./config";
+import { browserEndpoint, embeddedSignIn } from "./embedded";
 import { resolveLogoutLocation } from "./refresh";
 import {
   cookieSecurity,
@@ -37,7 +43,7 @@ import { readSession } from "./session-store";
  * Pure so the option→parameter mapping can be unit-tested directly.
  */
 export function authorizationParameters(
-  options: Pick<GetAuthURLOptions, "screenHint" | "scope" | "maxAge" | "loginHint">,
+  options: Pick<GetAuthURLOptions, "screenHint" | "scope" | "maxAge" | "loginHint" | "prompt">,
   flow: { redirectUri: string; state: string; codeChallenge: string },
 ): Record<string, string> {
   const parameters: Record<string, string> = {
@@ -53,6 +59,7 @@ export function authorizationParameters(
     parameters.max_age = String(Math.floor(options.maxAge));
   }
   if (options.loginHint) parameters.login_hint = options.loginHint;
+  if (options.prompt) parameters.prompt = options.prompt;
   return parameters;
 }
 
@@ -76,9 +83,13 @@ async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promis
   const redirectUri = resolveRedirectUri(request, options.redirectUri);
 
   const config = await getConfig();
-  const authorizationUrl = client.buildAuthorizationUrl(
+  const authorizationUrl = browserEndpoint(
     config,
-    authorizationParameters(options, { redirectUri, state, codeChallenge }),
+    client.buildAuthorizationUrl(
+      config,
+      authorizationParameters(options, { redirectUri, state, codeChallenge }),
+    ),
+    new URL(redirectUri).origin,
   );
 
   // Over HTTPS default to SameSite=None; Secure so the cookie can be set even
@@ -180,6 +191,14 @@ export async function getSignInUrlBody(data?: string | SignInUrlOptions): Promis
 export async function getSignUpUrlBody(data?: string | SignInUrlOptions): Promise<string> {
   const options = typeof data === "string" ? { returnPathname: data } : (data ?? {});
   return generateAuthorizationUrl({ ...options, screenHint: "sign-up" });
+}
+
+/** Backs `getEmbeddedSignIn`. */
+export async function getEmbeddedSignInBody(): Promise<EmbeddedSignInSettings | null> {
+  const config = await getConfig();
+  const embedded = embeddedSignIn(config);
+  if (!embedded) return null;
+  return { issuer: config.serverMetadata().issuer, ...embedded };
 }
 
 /**

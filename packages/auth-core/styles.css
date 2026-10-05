@@ -1,0 +1,156 @@
+/*
+ * Optional default look for the @usehercules/auth-core/react widgets.
+ * Override the variables, or skip this file and style the
+ * [data-hercules-auth] attributes or `classNames` slots yourself.
+ */
+:where([data-hercules-auth="root"]) {
+  --hercules-auth-font: inherit;
+  --hercules-auth-text: #111827;
+  --hercules-auth-muted: #6b7280;
+  --hercules-auth-border: #e5e7eb;
+  --hercules-auth-background: #ffffff;
+  --hercules-auth-primary: #111827;
+  --hercules-auth-primary-text: #ffffff;
+  --hercules-auth-error: #b91c1c;
+  --hercules-auth-radius: 8px;
+
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 400px;
+  font-family: var(--hercules-auth-font);
+  color: var(--hercules-auth-text);
+}
+
+@media (prefers-color-scheme: dark) {
+  :where([data-hercules-auth="root"]) {
+    --hercules-auth-text: #f9fafb;
+    --hercules-auth-muted: #9ca3af;
+    --hercules-auth-border: #374151;
+    --hercules-auth-background: #111827;
+    --hercules-auth-primary: #f9fafb;
+    --hercules-auth-primary-text: #111827;
+    --hercules-auth-error: #f87171;
+  }
+}
+
+:where([data-hercules-auth="header"]) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+:where([data-hercules-auth="logo"]) {
+  max-height: 48px;
+  max-width: 200px;
+}
+
+:where([data-hercules-auth="title"]) {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+:where([data-hercules-auth="form"]) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+:where([data-hercules-auth="field"]) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.875rem;
+}
+
+:where([data-hercules-auth="input"]) {
+  padding: 10px 12px;
+  border: 1px solid var(--hercules-auth-border);
+  border-radius: var(--hercules-auth-radius);
+  background: var(--hercules-auth-background);
+  color: inherit;
+  font: inherit;
+}
+
+:where(
+  [data-hercules-auth="primaryButton"],
+  [data-hercules-auth="secondaryButton"],
+  [data-hercules-auth="socialButton"]
+) {
+  padding: 10px 12px;
+  border-radius: var(--hercules-auth-radius);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+:where([data-hercules-auth="primaryButton"]) {
+  border: none;
+  background: var(--hercules-auth-primary);
+  color: var(--hercules-auth-primary-text);
+}
+
+:where([data-hercules-auth="secondaryButton"], [data-hercules-auth="socialButton"]) {
+  border: 1px solid var(--hercules-auth-border);
+  background: var(--hercules-auth-background);
+  color: inherit;
+}
+
+:where([data-hercules-auth="link"]) {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--hercules-auth-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+:where([data-hercules-auth="divider"]) {
+  color: var(--hercules-auth-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+:where([data-hercules-auth="error"]) {
+  margin: 0;
+  color: var(--hercules-auth-error);
+  font-size: 0.875rem;
+}
+
+:where(
+  [data-hercules-auth="notice"],
+  [data-hercules-auth="callout"],
+  [data-hercules-auth="footer"]
+) {
+  margin: 0;
+  color: var(--hercules-auth-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+:where([data-hercules-auth="list"]) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+:where([data-hercules-auth="listItem"]) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+:where([data-hercules-auth] button:disabled) {
+  opacity: 0.6;
+  cursor: default;
+}
