@@ -44,3 +44,15 @@ export type {
   UseIdTokenReturn,
 } from "./types";
 export type { JWTPayload, TokenClaims } from "./jwt";
+export {
+  AuthWidgetsProvider,
+  DeleteAccount,
+  ResetPassword,
+  SignIn,
+  UserProfile,
+  UserSecurity,
+  UserSessions,
+  type SignInProps,
+  type WidgetClassNames,
+  type WidgetSlot,
+} from "./widgets";
