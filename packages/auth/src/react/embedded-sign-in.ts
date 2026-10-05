@@ -49,13 +49,16 @@ export function useEmbeddedSignIn(
   options: Omit<EmbeddedAuthClientOptions, "startAuthorization"> = {},
 ): EmbeddedAuthClient {
   const { userManager } = useHerculesAuthProvider();
-  const { basePath, fetch, location } = options;
+  const { basePath, fetch, location, captcha, captchaContainer, isFramed } = options;
   return useMemo(
     () =>
       createEmbeddedAuthClient({
         ...(basePath ? { basePath } : {}),
         ...(fetch ? { fetch } : {}),
         ...(location ? { location } : {}),
+        ...(captcha ? { captcha } : {}),
+        ...(captchaContainer ? { captchaContainer } : {}),
+        ...(isFramed ? { isFramed } : {}),
         startAuthorization: ({ returnTo, prompt }) => {
           if (!(userManager instanceof HerculesUserManager)) {
             throw new Error("useEmbeddedSignIn needs the HerculesAuthProvider user manager");
@@ -66,15 +69,21 @@ export function useEmbeddedSignIn(
           });
         },
       }),
-    [userManager, basePath, fetch, location],
+    [userManager, basePath, fetch, location, captcha, captchaContainer, isFramed],
   );
 }
 
 export {
   mountTurnstileBridge,
   readAuthError,
+  AUTH_ERROR_CODES,
+  isAuthError,
+  type ActiveSession,
   type AuthError,
+  type AuthErrorCode,
+  type AuthErrorField,
   type AuthResult,
+  type AuthStep,
   type DataResult,
   type EmbeddedAuthClient,
   type LinkedAccount,

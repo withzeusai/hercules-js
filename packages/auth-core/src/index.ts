@@ -3,8 +3,9 @@ export {
   DEFAULT_AUTH_BASE_PATH,
   readAuthError,
   readSignedQuery,
-  type AuthError,
+  type ActiveSession,
   type AuthResult,
+  type AuthStep,
   type DataResult,
   type EmbeddedAuthClient,
   type EmbeddedAuthClientOptions,
@@ -18,6 +19,14 @@ export {
   type StepResult,
 } from "./client";
 export { mountTurnstileBridge, type TurnstileBridge, type TurnstileBridgeOptions } from "./captcha";
+export {
+  AUTH_ERROR_CODES,
+  isAuthError,
+  type AuthError,
+  type AuthErrorCode,
+  type AuthErrorField,
+  type KnownAuthErrorCode,
+} from "./errors";
 export {
   EMBEDDED_SIGN_IN_METADATA,
   readEmbeddedSignInMetadata,

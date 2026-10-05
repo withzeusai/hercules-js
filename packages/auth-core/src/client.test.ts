@@ -121,6 +121,7 @@ describe("createEmbeddedAuthClient", () => {
         code: "INVALID_EMAIL_OR_PASSWORD",
         message: "Invalid email or password",
         status: 401,
+        field: "password",
       },
     });
   });
@@ -149,7 +150,7 @@ describe("createEmbeddedAuthClient", () => {
 
     const result = await client.signUpWithPassword({ email: "a@example.com", password: "pw" });
 
-    expect(result).toEqual({ ok: true, status: "verify-email" });
+    expect(result).toEqual({ ok: true, status: "next-step", step: { kind: "verify-email" } });
   });
 
   it("carries an auto-generated username through to the result", async () => {
@@ -171,6 +172,8 @@ describe("createEmbeddedAuthClient", () => {
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation() });
 
     expect(await client.getConfig()).toEqual({ ok: true, data: { appName: "Recipe Pro" } });
+    expect(await client.getConfig()).toEqual({ ok: true, data: { appName: "Recipe Pro" } });
+    expect(fetch).toHaveBeenCalledOnce();
     expect(fetch.mock.calls[0]![0]).toBe("/_hercules/auth/config");
   });
 

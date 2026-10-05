@@ -10,21 +10,24 @@ Use it through the framework packages, which supply the piece that starts an aut
 ```ts
 const auth = createEmbeddedSignInClient();
 const result = await auth.signInWithSocial({ provider: "google" });
-if (!result.ok) setError(result.error.message);
+if (!result.ok) setError(result.error); // { code, message, field? }
 else if (result.status === "redirect") auth.navigate(result);
+else showStep(result.step); // e.g. { kind: "verify-email" }
 ```
 
-| Feature | Methods |
-| --- | --- |
-| Settings | `getConfig()` (enabled methods, branding, sign-up options, issuer) |
-| Email code | `sendEmailOtp`, `signInWithEmailOtp` |
-| Email and password | `signInWithPassword`, `signUpWithPassword` (`verify-email` status), `requestPasswordReset`, `resetPassword` |
-| Username | `signInWithUsername`, `signUpWithUsername` (assigned `username` on the result) |
-| Phone | `sendPhoneOtp`, `signInWithPhoneOtp` |
-| Social | `signInWithSocial` (popup when framed) |
-| Passkeys | `signInWithPasskey({ autofill })`, `addPasskey`, `listPasskeys`, `deletePasskey` |
-| Access | `requestAccess` after `SIGN_IN_NOT_ALLOWLISTED` |
-| Account | `getSession`, `signOut`, `listAccounts`, `linkSocial`, `unlinkAccount`, `changePassword` |
-| Page | `hasPendingSignIn`, `isSignUpRequest`, `pageError`, `navigate` |
+| Feature            | Methods                                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Settings           | `getConfig()` (enabled methods, branding, sign-up options, issuer)                                          |
+| Email code         | `sendEmailOtp`, `signInWithEmailOtp`                                                                        |
+| Email and password | `signInWithPassword`, `signUpWithPassword` (`next-step` `verify-email`), `requestPasswordReset`, `resetPassword` |
+| Username           | `signInWithUsername`, `signUpWithUsername` (assigned `username` on the result)                              |
+| Phone              | `sendPhoneOtp`, `signInWithPhoneOtp`                                                                        |
+| Social             | `signInWithSocial` (popup when framed)                                                                      |
+| Passkeys           | `signInWithPasskey({ autofill })`, `addPasskey`, `listPasskeys`, `deletePasskey`                            |
+| Access             | `requestAccess` after `SIGN_IN_NOT_ALLOWLISTED`                                                             |
+| Account            | `getSession`, `signOut`, `listAccounts`, `linkSocial`, `unlinkAccount`, `changePassword`                    |
+| Page               | `hasPendingSignIn`, `isSignUpRequest`, `pageError`, `navigate`                                              |
 
-Email, password, username, and phone requests need a Cloudflare Turnstile token: render the widget with `mountTurnstileBridge({ issuer: config.issuer, container })`, pass `captchaToken: await bridge.getToken()`, and call `bridge.reset()` after each request.
+Results are `{ ok: true, status: "redirect" }`, `{ ok: true, status: "next-step", step }`, or `{ ok: false, error }`. Handle unknown `step.kind`s generically; new steps can appear without a breaking change. Errors carry a typed `code` (`AUTH_ERROR_CODES`, `isAuthError`) and, for form errors, the `field` to show it next to.
+
+Captcha is automatic: email, password, username, and phone requests render Cloudflare Turnstile into `<div id="hercules-captcha" />` (or a corner panel when the page has none) and attach the token. Call `auth.prepareCaptcha()` when such a form mounts so the token is ready by submit. Pass `captcha: "manual"` to handle it yourself with `mountTurnstileBridge` and `captchaToken`.

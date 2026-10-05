@@ -1,3 +1,5 @@
+import { mountTurnstileBridge, type TurnstileBridge } from "./captcha";
+import { type AuthError, authError } from "./errors";
 import {
   creationOptionsFromJSON,
   credentialToJSON,
@@ -83,6 +85,16 @@ export interface EmbeddedAuthClientOptions {
   /** Defaults to `window.location`. */
   location?: Pick<Location, "origin" | "search" | "pathname" | "href" | "assign">;
   /**
+   * Captcha handling. `"auto"` (the default) renders the Turnstile widget when
+   * a request needs a token, into the element with id `hercules-captcha` when
+   * the page has one, otherwise into a small panel in the corner, and resets
+   * it after each request. `"manual"` leaves it to the caller, who passes
+   * `captchaToken` from their own `mountTurnstileBridge`.
+   */
+  captcha?: "auto" | "manual";
+  /** Where `"auto"` captcha renders. Defaults to `#hercules-captcha`, then a corner panel. */
+  captchaContainer?: () => HTMLElement | null;
+  /**
    * Whether the app runs inside a frame (the dashboard preview). Social
    * sign-in then runs in a popup, since providers refuse to be framed.
    * Defaults to checking `window.top`.
@@ -90,22 +102,23 @@ export interface EmbeddedAuthClientOptions {
   isFramed?: () => boolean;
 }
 
-export interface AuthError {
-  /**
-   * Machine-readable code, e.g. `INVALID_EMAIL_OR_PASSWORD`,
-   * `SIGN_IN_NOT_ALLOWLISTED`, `EMAIL_NOT_VERIFIED`, `access_denied`.
-   */
-  code: string;
-  message: string;
-  status: number;
-  /** The address the allowlist turned away, when the server named it. */
-  rejectedEmail?: string;
-}
+/**
+ * A step the user must finish before the sign-in completes. Handle the kinds
+ * you know and treat any other as "show a generic message and offer to start
+ * over": new kinds (a second factor, a missing profile field) can appear
+ * without a breaking change.
+ */
+export type AuthStep =
+  /** A password sign-up must click the emailed link, which returns to this page. */
+  { kind: "verify-email" } | { kind: string & {} };
 
 /**
- * What a sign-in produced: somewhere to go next (the app callback with a code,
- * or a social provider's consent page), a sign-up that must verify its email
- * first, or a failure.
+ * What a sign-in produced:
+ *
+ * - `redirect`: navigate to `redirectTo` (the app callback with a code, which
+ *   starts the session, or a social provider's consent page).
+ * - `next-step`: the user has a step to finish first (see {@link AuthStep}).
+ * - `ok: false`: show `error.message`, next to `error.field` when set.
  */
 export type AuthResult =
   | {
@@ -115,7 +128,7 @@ export type AuthResult =
       /** The username an auto-generated username sign-up was assigned. */
       username?: string;
     }
-  | { ok: true; status: "verify-email" }
+  | { ok: true; status: "next-step"; step: AuthStep }
   | { ok: false; error: AuthError };
 
 /** The outcome of a step that does not sign anyone in, such as sending a code. */
@@ -143,6 +156,16 @@ export interface LinkedAccount {
   createdAt: string;
 }
 
+export interface ActiveSession {
+  id: string;
+  /** Pass to `revokeSession`. */
+  token: string;
+  createdAt: string;
+  expiresAt: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
 export interface Passkey {
   id: string;
   name?: string | null;
@@ -164,19 +187,47 @@ const SIGNATURE_PARAMS = ["sig", "exp", "ba_iat", "ba_param", "ba_pl"];
 const POPUP_TIMEOUT_MS = 5 * 60 * 1000;
 const POPUP_POLL_MS = 500;
 
-const NO_AUTHORIZATION: AuthError = {
-  code: "NO_AUTHORIZATION_REQUEST",
-  message:
-    "This page has no sign-in request to complete. Open it through the app's sign-in link, or pass startAuthorization.",
-  status: 0,
-};
+const NO_AUTHORIZATION: AuthError = authError(
+  "NO_AUTHORIZATION_REQUEST",
+  "This page has no sign-in request to complete. Open it through the app's sign-in link, or pass startAuthorization.",
+);
+
+/** Endpoints the tenant protects with Turnstile. */
+const CAPTCHA_PATHS = new Set([
+  "/sign-up/email",
+  "/sign-in/email",
+  "/sign-in/username",
+  "/sign-up/username",
+  "/email-otp/send-verification-otp",
+  "/request-password-reset",
+  "/phone-number/send-otp",
+  "/phone-number/verify",
+]);
+
+const CAPTCHA_ELEMENT_ID = "hercules-captcha";
+
+/** A small fixed panel for the widget when the page has no `#hercules-captcha`. */
+function cornerCaptchaContainer(): HTMLElement {
+  const panel = document.createElement("div");
+  panel.dataset.herculesCaptcha = "";
+  Object.assign(panel.style, {
+    position: "fixed",
+    right: "16px",
+    bottom: "16px",
+    width: "300px",
+    maxWidth: "calc(100vw - 32px)",
+    zIndex: "2147483647",
+  });
+  document.body.appendChild(panel);
+  return panel;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function failure(code: string, message: string, status = 0): { ok: false; error: AuthError } {
-  return { ok: false, error: { code, message, status } };
+  return { ok: false, error: authError(code, message, status) };
 }
 
 /**
@@ -198,12 +249,9 @@ export function readAuthError(search: string): AuthError | null {
   const code = params.get("error");
   if (!code) return null;
   const rejectedEmail = params.get("rejected_email");
-  return {
-    code,
-    message: params.get("error_description") ?? code,
-    status: 0,
+  return authError(code, params.get("error_description") ?? code, 0, {
     ...(rejectedEmail ? { rejectedEmail } : {}),
-  };
+  });
 }
 
 function defaultIsFramed(): boolean {
@@ -219,6 +267,61 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
   const doFetch = options.fetch ?? ((input, init) => fetch(input, init));
   const location = () => options.location ?? window.location;
   const isFramed = options.isFramed ?? defaultIsFramed;
+  const captchaMode = options.captcha ?? "auto";
+
+  let configPromise: Promise<DataResult<SignInConfig>> | null = null;
+  function loadConfig(): Promise<DataResult<SignInConfig>> {
+    configPromise ??= read<SignInConfig>("/config").then((result) => {
+      if (!result.ok) configPromise = null;
+      return result;
+    });
+    return configPromise;
+  }
+
+  let bridge: TurnstileBridge | null = null;
+  let bridgePromise: Promise<TurnstileBridge> | null = null;
+  function captchaBridge(): Promise<TurnstileBridge> {
+    // React may have unmounted the element the widget lived in; mount again.
+    if (bridge && !bridge.iframe.isConnected) {
+      bridge.destroy();
+      bridge = null;
+      bridgePromise = null;
+    }
+    bridgePromise ??= loadConfig()
+      .then((config) => {
+        if (!config.ok) throw new Error(config.error.message);
+        const container =
+          options.captchaContainer?.() ??
+          document.getElementById(CAPTCHA_ELEMENT_ID) ??
+          cornerCaptchaContainer();
+        bridge = mountTurnstileBridge({
+          issuer: config.data.issuer,
+          container,
+          language: config.data.language,
+        });
+        return bridge;
+      })
+      .catch((error: unknown) => {
+        bridgePromise = null;
+        throw error;
+      });
+    return bridgePromise;
+  }
+
+  /** A Turnstile token for `path`, when it needs one and the caller gave none. */
+  async function autoCaptchaToken(path: string): Promise<string | AuthError | undefined> {
+    if (captchaMode !== "auto" || !CAPTCHA_PATHS.has(path) || typeof document === "undefined") {
+      return undefined;
+    }
+    try {
+      return await (await captchaBridge()).getToken();
+    } catch (error) {
+      return authError(
+        "CAPTCHA_UNAVAILABLE",
+        error instanceof Error ? error.message : "Security verification is unavailable.",
+      );
+    }
+  }
 
   async function request(
     method: "GET" | "POST",
@@ -228,6 +331,15 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
   ): Promise<{ ok: true; body: unknown } | { ok: false; error: AuthError }> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (body) headers["content-type"] = "application/json";
+    let usedAutoCaptcha = false;
+    if (!captchaToken) {
+      const auto = await autoCaptchaToken(path);
+      if (typeof auto === "object") return { ok: false, error: auto };
+      if (auto) {
+        captchaToken = auto;
+        usedAutoCaptcha = true;
+      }
+    }
     if (captchaToken) headers["x-captcha-response"] = captchaToken;
     let response: Response;
     try {
@@ -239,6 +351,9 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       });
     } catch (error) {
       return failure("NETWORK_ERROR", error instanceof Error ? error.message : "Network error");
+    } finally {
+      // Turnstile tokens are single use.
+      if (usedAutoCaptcha) bridge?.reset();
     }
     const parsed: unknown = await response.json().catch(() => null);
     if (!response.ok) {
@@ -255,7 +370,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
           : typeof record.error_description === "string"
             ? record.error_description
             : response.statusText || code;
-      return { ok: false, error: { code, message, status: response.status } };
+      return { ok: false, error: authError(code, message, response.status) };
     }
     return { ok: true, body: parsed };
   }
@@ -339,7 +454,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
     if (!target) {
       // A password sign-up that must verify its email gets no session yet.
       if (isRecord(result.body) && result.body.token == null && isRecord(result.body.user)) {
-        return { ok: true, status: "verify-email" };
+        return { ok: true, status: "next-step", step: { kind: "verify-email" } };
       }
       return failure("NO_REDIRECT", "Sign-in succeeded but the server returned no redirect.", 200);
     }
@@ -453,9 +568,27 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       location().assign(result.redirectTo);
     },
 
-    /** The app's public sign-in settings: enabled methods, branding, sign-up options. */
+    /** The app's public sign-in settings: enabled methods, branding, sign-up options. Cached. */
     getConfig(): Promise<DataResult<SignInConfig>> {
-      return read<SignInConfig>("/config");
+      return loadConfig();
+    },
+
+    /**
+     * Render the captcha now rather than on the first request that needs it,
+     * so its token is ready by the time the user submits. Call when a form
+     * with email, password, username, or phone sign-in mounts.
+     */
+    async prepareCaptcha(): Promise<StepResult> {
+      if (captchaMode !== "auto") return { ok: true };
+      try {
+        await captchaBridge();
+        return { ok: true };
+      } catch (error) {
+        return failure(
+          "CAPTCHA_UNAVAILABLE",
+          error instanceof Error ? error.message : "Security verification is unavailable.",
+        );
+      }
     },
 
     // ------------------------------------------------------------ email code
@@ -743,6 +876,40 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
     /** Remove a passkey by id. */
     deletePasskey(input: { id: string }): Promise<StepResult> {
       return step("/passkey/delete-passkey", { id: input.id });
+    },
+
+    /** Update the profile name or picture. Usernames are changed by the app owner only. */
+    updateUser(input: { name?: string; image?: string | null }): Promise<StepResult> {
+      return step("/update-user", {
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.image === undefined ? {} : { image: input.image }),
+      });
+    },
+
+    /** The account's signed-in sessions (devices). */
+    listSessions(): Promise<DataResult<ActiveSession[]>> {
+      return read<ActiveSession[]>("/list-sessions");
+    },
+
+    /** Sign out one session by its `token`. */
+    revokeSession(input: { token: string }): Promise<StepResult> {
+      return step("/revoke-session", { token: input.token });
+    },
+
+    /** Sign out every session but this one. */
+    revokeOtherSessions(): Promise<StepResult> {
+      return step("/revoke-other-sessions", {});
+    },
+
+    /**
+     * Delete the account and everything Hercules Auth stores for it. Needs a
+     * recent sign-in, or the password of an account that has one; otherwise it
+     * fails with `SESSION_NOT_FRESH`. The app's own data about the user (for
+     * example its Convex `users` row) is the app's to delete. Then sign out
+     * with the app SDK.
+     */
+    deleteUser(input: { password?: string } = {}): Promise<StepResult> {
+      return step("/delete-user", input.password ? { password: input.password } : {});
     },
   };
 }
