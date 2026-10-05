@@ -12,3 +12,7 @@ minimumReleaseAgeExclude:
 
 onlyBuiltDependencies:
   - esbuild
+
+overrides:
+  # GHSA-rfgv-xxqx-mfg5 batch, fixed in 7.29.1.
+  "undici@7": "^7.29.1"
