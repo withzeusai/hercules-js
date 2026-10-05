@@ -48,13 +48,31 @@ Captcha is automatic: requests that need it render Cloudflare Turnstile into `<d
 
 Drop-in React components, like WorkOS Widgets, from `@usehercules/auth-tanstack/client` or `@usehercules/auth/react` (bound to the app, no setup) or `@usehercules/auth-core/react` (pass a `client` or wrap in `AuthWidgetsProvider`):
 
-| Widget | What it renders |
-| --- | --- |
-| `<SignIn />` | Sign-in and sign-up for every enabled method, verification codes, forgot password, request access, legal links, captcha |
-| `<ResetPassword />` | The new-password form behind a reset link |
-| `<UserProfile />` | The user's name |
-| `<UserSecurity />` | Password change, passkeys, linked sign-in methods |
-| `<UserSessions />` | Signed-in devices, with sign-out per device or for all others |
-| `<DeleteAccount onDeleted />` | Account deletion with confirmation |
+| Widget                        | What it renders                                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `<SignIn />`                  | Sign-in and sign-up for every enabled method, verification codes, forgot password, request access, legal links, captcha |
+| `<ResetPassword />`           | The new-password form behind a reset link                                                                               |
+| `<UserProfile />`             | The user's name                                                                                                         |
+| `<UserSecurity />`            | Password change, passkeys, linked sign-in methods                                                                       |
+| `<UserSessions />`            | Signed-in devices, with sign-out per device or for all others                                                           |
+| `<DeleteAccount onDeleted />` | Account deletion with confirmation                                                                                      |
 
 They are unstyled. Style them with `classNames={{ primaryButton: "..." }}` slots, the `[data-hercules-auth="<slot>"]` attributes, or import `@usehercules/auth-core/styles.css` and override its `--hercules-auth-*` variables.
+
+## Server-side sign-in (TanStack Start)
+
+Like WorkOS's Authentication API, `@usehercules/auth-tanstack` can sign users in from the app's server: credentials go from a server function to Hercules with the app's `HERCULES_AUTH_API_KEY` (set by Hercules), with no captcha and no redirect, and success sets the session cookie directly.
+
+```ts
+import { authenticateWithPassword, authenticateWithEmailVerification } from "@usehercules/auth-tanstack";
+
+const result = await authenticateWithPassword({ data: { email, password } });
+if (result.ok) await router.invalidate();
+else if (result.error.code === "email_verification_required") {
+  await authenticateWithEmailVerification({
+    data: { code, pendingAuthenticationToken: result.error.pendingAuthenticationToken! },
+  });
+}
+```
+
+Also: `createUser`, `sendMagicAuthCode` / `authenticateWithMagicAuth`, `sendVerificationCode`, `sendSmsCode` / `authenticateWithSmsCode`, `sendPasswordResetEmail` / `resetPassword`. Social sign-in and passkeys need the browser and stay on the client (`getAuthorizationUrl`, `authenticateWithPasskey`).

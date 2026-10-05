@@ -21,6 +21,7 @@ export {
 export { mountTurnstileBridge, type TurnstileBridge, type TurnstileBridgeOptions } from "./captcha";
 export {
   AUTH_ERROR_CODES,
+  authError,
   isAuthError,
   type AuthError,
   type AuthErrorCode,

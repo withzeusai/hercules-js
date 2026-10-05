@@ -40,3 +40,18 @@ export {
 } from "./server/actions";
 export { OAuthStateMismatchError, PKCECookieMissingError } from "./server/errors";
 export { type HerculesAuthMiddlewareOptions, herculesAuthMiddleware } from "./server/middleware";
+export {
+  authenticateWithEmailVerification,
+  authenticateWithMagicAuth,
+  authenticateWithPassword,
+  authenticateWithSmsCode,
+  createUser,
+  resetPassword,
+  sendMagicAuthCode,
+  sendPasswordResetEmail,
+  sendSmsCode,
+  sendVerificationCode,
+  type ServerAuthResult,
+  type ServerAuthUser,
+  type ServerStepResult,
+} from "./server/server-auth";

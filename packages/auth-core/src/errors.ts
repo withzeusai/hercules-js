@@ -84,6 +84,10 @@ const CODE_BY_SERVER_CODE: Record<string, KnownAuthErrorCode> = {
   account_not_linked: "account_not_linked",
   account_already_linked_to_different_user: "account_not_linked",
   invalid_signature: "invalid_request",
+  invalid_pending_authentication_token: "invalid_token",
+  unauthorized: "invalid_request",
+  invalid_request: "invalid_request",
+  server_error: "unknown_error",
   HTTP_429: "rate_limited",
 };
 
