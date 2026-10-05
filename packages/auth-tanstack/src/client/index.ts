@@ -14,27 +14,27 @@ export { getAuthAction } from "../server/actions";
 export { getEmbeddedSignIn, type EmbeddedSignInSettings } from "../server/auth";
 export {
   createEmbeddedSignInClient,
-  mountTurnstileBridge,
-  readAuthError,
   AUTH_ERROR_CODES,
   isAuthError,
-  type ActiveSession,
+  mountTurnstileBridge,
+  readAuthError,
   type AuthError,
   type AuthErrorCode,
   type AuthErrorField,
   type AuthResult,
-  type AuthStep,
   type DataResult,
   type EmbeddedAuthClient,
-  type LinkedAccount,
+  type Identity,
   type Passkey,
-  type SessionUser,
+  type Session,
   type SignInConfig,
   type SignInMethod,
   type SocialProvider,
   type StepResult,
   type TurnstileBridge,
   type TurnstileBridgeOptions,
+  type User,
+  type WorkOSProviderName,
 } from "./embedded";
 
 export type {

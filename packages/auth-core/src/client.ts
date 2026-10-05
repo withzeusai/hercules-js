@@ -1,5 +1,6 @@
 import { mountTurnstileBridge, type TurnstileBridge } from "./captcha";
 import { type AuthError, authError } from "./errors";
+import { fromBase64UrlString, toBase64UrlString } from "./encoding";
 import {
   creationOptionsFromJSON,
   credentialToJSON,
@@ -8,31 +9,50 @@ import {
 } from "./webauthn";
 
 /**
- * Embedded sign-in client.
+ * Embedded sign-in client, shaped after WorkOS's AuthKit Authentication API
+ * (`authenticateWithPassword`, `authenticateWithMagicAuth`,
+ * `getAuthorizationUrl`, `authenticateWithEmailVerification` with a
+ * `pendingAuthenticationToken`, ...), but running in the browser.
  *
  * When a Hercules app renders its own sign-in UI, the platform serves the app's
- * auth API on the app's own origin under {@link DEFAULT_AUTH_BASE_PATH}. This
- * client calls it. Every sign-in finishes the way the hosted portal's does: the
- * request carries the signed authorization query (`oauth_query`), the server
- * completes the OIDC authorize step in the same response, and the result is a
- * redirect to the app's `/auth/callback?code=...`. Navigating there lets the
- * app's existing SDK exchange the code and start its session, so nothing
- * downstream of sign-in changes.
+ * auth API on the app's own origin under {@link DEFAULT_AUTH_BASE_PATH}. Every
+ * `authenticateWith*` call finishes the way the hosted portal does: the request
+ * carries the signed authorization query (`oauth_query`), the server completes
+ * the OIDC authorize step in the same response, and the result is a redirect to
+ * the app's `/auth/callback?code=...`. Navigating there lets the app's SDK
+ * exchange the code and start its session, so nothing downstream changes.
  *
- * The signed query comes from one of two places:
- *
- * - The current URL, when the authorize endpoint sent the visitor to this page
- *   (a protected page, `SignInButton`, `/auth/sign-in`).
- * - A fresh authorization request, when the sign-in starts anywhere else, such
- *   as a "Continue with Google" button on a landing page. The framework adapter
- *   supplies `startAuthorization`, which begins a PKCE flow and returns the
- *   authorize URL; the client asks it for the signed query without navigating.
+ * The signed query comes from the current URL, when the authorize endpoint sent
+ * the visitor to this page, or from a fresh authorization request the framework
+ * adapter starts (`startAuthorization`), so sign-in also works from any page.
  */
 
 /** Where the platform serves the app's auth API on its own origin. */
 export const DEFAULT_AUTH_BASE_PATH = "/_hercules/auth";
 
 export type SocialProvider = "google" | "apple" | "microsoft" | "facebook" | "linkedin";
+
+/** WorkOS's provider names, accepted as aliases. */
+export type WorkOSProviderName =
+  | "GoogleOAuth"
+  | "AppleOAuth"
+  | "MicrosoftOAuth"
+  | "FacebookOAuth"
+  | "LinkedInOAuth";
+
+const PROVIDER_ALIASES: Record<WorkOSProviderName, SocialProvider> = {
+  GoogleOAuth: "google",
+  AppleOAuth: "apple",
+  MicrosoftOAuth: "microsoft",
+  FacebookOAuth: "facebook",
+  LinkedInOAuth: "linkedin",
+};
+
+function socialProvider(provider: SocialProvider | WorkOSProviderName): SocialProvider {
+  return (
+    (PROVIDER_ALIASES as Record<string, SocialProvider>)[provider] ?? (provider as SocialProvider)
+  );
+}
 
 export type SignInMethod =
   | SocialProvider
@@ -41,9 +61,9 @@ export type SignInMethod =
   | "phone_otp"
   | "username_password";
 
-/** The tenant's public sign-in settings, as `/config` returns them. */
+/** The tenant's public sign-in settings. */
 export interface SignInConfig {
-  /** The OIDC issuer; pass it to `mountTurnstileBridge`. */
+  /** The OIDC issuer; the captcha renders on its origin. */
   issuer: string;
   appName: string;
   logoUrl: string | null;
@@ -56,8 +76,10 @@ export interface SignInConfig {
   enabledProviders: Record<SignInMethod, boolean>;
   /** Username self sign-up, or null when username accounts are admin-created. */
   usernameSignUp: { mode: "user_chosen" | "auto_generated"; prefix: string } | null;
-  /** Whether a password sign-up must click an emailed link before signing in. */
+  /** Whether a password sign-up must verify its address before signing in. */
   requireEmailVerification: boolean;
+  /** `code`: typed into the app (`authenticateWithEmailVerification`); `link`: emailed. */
+  emailVerificationMethod: "code" | "link";
   /** Whether a visitor the allowlist turns away may request access. */
   accessRequestsEnabled: boolean;
   embedded: { signInPath: string; signUpPath: string } | null;
@@ -75,9 +97,8 @@ export interface EmbeddedAuthClientOptions {
   basePath?: string;
   /**
    * Begin an authorization request and return its authorize URL on this
-   * origin. Supplied by the framework adapter (`@usehercules/auth-tanstack`,
-   * `@usehercules/auth`); needed only to start a sign-in from a page the
-   * authorize endpoint did not send the visitor to.
+   * origin. Supplied by the framework adapter; needed only to start a sign-in
+   * from a page the authorize endpoint did not send the visitor to.
    */
   startAuthorization?: (options: StartAuthorizationOptions) => Promise<string>;
   /** Defaults to the global `fetch`. */
@@ -86,10 +107,9 @@ export interface EmbeddedAuthClientOptions {
   location?: Pick<Location, "origin" | "search" | "pathname" | "href" | "assign">;
   /**
    * Captcha handling. `"auto"` (the default) renders the Turnstile widget when
-   * a request needs a token, into the element with id `hercules-captcha` when
-   * the page has one, otherwise into a small panel in the corner, and resets
-   * it after each request. `"manual"` leaves it to the caller, who passes
-   * `captchaToken` from their own `mountTurnstileBridge`.
+   * a request needs a token, into `#hercules-captcha` when the page has one,
+   * otherwise a small corner panel, and resets it after each request.
+   * `"manual"` leaves it to the caller, who passes `captchaToken`.
    */
   captcha?: "auto" | "manual";
   /** Where `"auto"` captcha renders. Defaults to `#hercules-captcha`, then a corner panel. */
@@ -103,41 +123,28 @@ export interface EmbeddedAuthClientOptions {
 }
 
 /**
- * A step the user must finish before the sign-in completes. Handle the kinds
- * you know and treat any other as "show a generic message and offer to start
- * over": new kinds (a second factor, a missing profile field) can appear
- * without a breaking change.
- */
-export type AuthStep =
-  /** A password sign-up must click the emailed link, which returns to this page. */
-  { kind: "verify-email" } | { kind: string & {} };
-
-/**
- * What a sign-in produced:
- *
- * - `redirect`: navigate to `redirectTo` (the app callback with a code, which
- *   starts the session, or a social provider's consent page).
- * - `next-step`: the user has a step to finish first (see {@link AuthStep}).
- * - `ok: false`: show `error.message`, next to `error.field` when set.
+ * An `authenticateWith*` call either produced somewhere to go next (the app
+ * callback with a code, or a social provider's consent page), or failed.
+ * `email_verification_required` and future continuations arrive as errors that
+ * carry what the next call needs, as in WorkOS.
  */
 export type AuthResult =
   | {
       ok: true;
-      status: "redirect";
+      /** Navigate here (`auth.navigate(result)`). */
       redirectTo: string;
       /** The username an auto-generated username sign-up was assigned. */
       username?: string;
     }
-  | { ok: true; status: "next-step"; step: AuthStep }
   | { ok: false; error: AuthError };
 
-/** The outcome of a step that does not sign anyone in, such as sending a code. */
+/** The outcome of a call that signs nobody in, such as sending a code. */
 export type StepResult = { ok: true } | { ok: false; error: AuthError };
 
 /** The outcome of a read. */
 export type DataResult<T> = { ok: true; data: T } | { ok: false; error: AuthError };
 
-export interface SessionUser {
+export interface User {
   id: string;
   email: string;
   name: string;
@@ -145,36 +152,40 @@ export interface SessionUser {
   image?: string | null;
   username?: string | null;
   phoneNumber?: string | null;
-}
-
-export interface LinkedAccount {
-  /** Pass to `unlinkAccount`. */
-  id: string;
-  /** `credential` for a password, otherwise the provider (`google`, ...). */
-  providerId: string;
-  accountId: string;
   createdAt: string;
 }
 
-export interface ActiveSession {
+/** A sign-in method linked to the user (WorkOS: identity). */
+export interface Identity {
+  /** Pass to `unlinkIdentity`. */
   id: string;
+  /** `password` for a password, otherwise the social provider (`google`, ...). */
+  provider: SocialProvider | "password" | (string & {});
+  /** The user's id at the provider. */
+  providerUserId: string;
+  createdAt: string;
+}
+
+/** A signed-in device. */
+export interface Session {
   /** Pass to `revokeSession`. */
-  token: string;
+  id: string;
   createdAt: string;
   expiresAt: string;
-  ipAddress?: string | null;
-  userAgent?: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
 }
 
 export interface Passkey {
+  /** Pass to `deletePasskey`. */
   id: string;
-  name?: string | null;
+  name: string | null;
   createdAt: string;
   deviceType?: string;
 }
 
-interface SignInStartOptions extends StartAuthorizationOptions {
-  /** Cloudflare Turnstile token, for the endpoints that require one. */
+interface CaptchaOption {
+  /** Turnstile token when `captcha: "manual"`. */
   captchaToken?: string;
 }
 
@@ -186,11 +197,6 @@ const SIGNATURE_PARAMS = ["sig", "exp", "ba_iat", "ba_param", "ba_pl"];
 
 const POPUP_TIMEOUT_MS = 5 * 60 * 1000;
 const POPUP_POLL_MS = 500;
-
-const NO_AUTHORIZATION: AuthError = authError(
-  "NO_AUTHORIZATION_REQUEST",
-  "This page has no sign-in request to complete. Open it through the app's sign-in link, or pass startAuthorization.",
-);
 
 /** Endpoints the tenant protects with Turnstile. */
 const CAPTCHA_PATHS = new Set([
@@ -205,6 +211,19 @@ const CAPTCHA_PATHS = new Set([
 ]);
 
 const CAPTCHA_ELEMENT_ID = "hercules-captcha";
+
+const NO_AUTHORIZATION: AuthError = authError(
+  "invalid_request",
+  "This page has no sign-in request to complete. Open it through the app's sign-in link, or pass startAuthorization.",
+);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function failure(code: string, message: string, status = 0): { ok: false; error: AuthError } {
+  return { ok: false, error: authError(code, message, status) };
+}
 
 /** A small fixed panel for the widget when the page has no `#hercules-captcha`. */
 function cornerCaptchaContainer(): HTMLElement {
@@ -222,28 +241,34 @@ function cornerCaptchaContainer(): HTMLElement {
   return panel;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** What a `pendingAuthenticationToken` carries: the address being verified. */
+interface PendingAuthentication {
+  email: string;
 }
 
-function failure(code: string, message: string, status = 0): { ok: false; error: AuthError } {
-  return { ok: false, error: authError(code, message, status) };
+function encodePending(pending: PendingAuthentication): string {
+  return toBase64UrlString(JSON.stringify(pending));
+}
+
+function decodePending(token: string): PendingAuthentication | null {
+  try {
+    const value: unknown = JSON.parse(fromBase64UrlString(token));
+    return isRecord(value) && typeof value.email === "string" ? { email: value.email } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * The signed authorize query in `search`, or null when the page was not opened
- * by the authorize endpoint. Only the presence of `sig` is checked here; the
- * server verifies it.
+ * by the authorize endpoint. Only the presence of `sig` is checked here.
  */
 export function readSignedQuery(search: string): string | null {
   const query = search.startsWith("?") ? search.slice(1) : search;
   return new URLSearchParams(query).has("sig") ? query : null;
 }
 
-/**
- * The error the authorize endpoint or a social callback put on the page URL
- * (`?error=...`), so the sign-in page can show it.
- */
+/** The error the server put on the page URL (`?error=...`), so the page can show it. */
 export function readAuthError(search: string): AuthError | null {
   const params = new URLSearchParams(search);
   const code = params.get("error");
@@ -268,6 +293,8 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
   const location = () => options.location ?? window.location;
   const isFramed = options.isFramed ?? defaultIsFramed;
   const captchaMode = options.captcha ?? "auto";
+
+  // ------------------------------------------------------------- transport
 
   let configPromise: Promise<DataResult<SignInConfig>> | null = null;
   function loadConfig(): Promise<DataResult<SignInConfig>> {
@@ -317,7 +344,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       return await (await captchaBridge()).getToken();
     } catch (error) {
       return authError(
-        "CAPTCHA_UNAVAILABLE",
+        "captcha_failed",
         error instanceof Error ? error.message : "Security verification is unavailable.",
       );
     }
@@ -350,7 +377,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
         credentials: "same-origin",
       });
     } catch (error) {
-      return failure("NETWORK_ERROR", error instanceof Error ? error.message : "Network error");
+      return failure("network_error", error instanceof Error ? error.message : "Network error");
     } finally {
       // Turnstile tokens are single use.
       if (usedAutoCaptcha) bridge?.reset();
@@ -375,11 +402,27 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
     return { ok: true, body: parsed };
   }
 
+  async function step(
+    path: string,
+    body: Record<string, unknown>,
+    captchaToken?: string,
+  ): Promise<StepResult> {
+    const result = await request("POST", path, body, captchaToken);
+    return result.ok ? { ok: true } : result;
+  }
+
+  async function read<T>(path: string): Promise<DataResult<T>> {
+    const result = await request("GET", path);
+    return result.ok ? { ok: true, data: result.body as T } : result;
+  }
+
   /** The `url` of a `{ redirect: true, url }` body, resolved on this origin. */
   function redirectFrom(body: unknown): string | null {
     if (!isRecord(body) || typeof body.url !== "string") return null;
     return new URL(body.url, location().origin).toString();
   }
+
+  // ---------------------------------------------------------- authorization
 
   /**
    * The signed query for this sign-in: from the page URL, or from a fresh
@@ -395,8 +438,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       returnTo: start.returnTo ?? `${location().pathname}${location().search}`,
       ...(start.prompt ? { prompt: start.prompt } : {}),
     });
-    // A fetch (not a navigation) makes authorize answer `{ redirect, url }`
-    // instead of a 302, so the page can stay put.
+    // A fetch (not a navigation) makes authorize answer `{ redirect, url }`.
     const response = await doFetch(authorizeUrl, {
       headers: { accept: "application/json" },
       credentials: "same-origin",
@@ -409,14 +451,11 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
 
   /**
    * After a session was created, authorize can send the browser back to the
-   * sign-in page instead of the app: with `prompt=create` it lands on the
-   * sign-up page. `/oauth2/continue` acknowledges that step and returns the
-   * code redirect, as the hosted portal does.
+   * sign-in page instead of the app (with `prompt=create` it lands on sign-up).
+   * `/oauth2/continue` acknowledges that and returns the code redirect.
    */
   async function finishAuthorization(target: string, query: string): Promise<AuthResult> {
-    if (!readSignedQuery(new URL(target).search)) {
-      return { ok: true, status: "redirect", redirectTo: target };
-    }
+    if (!readSignedQuery(new URL(target).search)) return { ok: true, redirectTo: target };
     const prompt = new URLSearchParams(query).get("prompt") ?? "";
     const result = await request("POST", "/oauth2/continue", {
       ...(prompt.includes("create") ? { created: true } : { selected: true }),
@@ -425,19 +464,22 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
     if (!result.ok) return result;
     const redirectTo = redirectFrom(result.body);
     return redirectTo
-      ? { ok: true, status: "redirect", redirectTo }
-      : failure("NO_REDIRECT", "Sign-in succeeded but the server returned no redirect.", 200);
+      ? { ok: true, redirectTo }
+      : failure("unknown_error", "Sign-in succeeded but the server returned no redirect.", 200);
   }
 
-  /** Run a session-creating request with the signed query attached. */
-  async function signIn(
+  /**
+   * Run a session-creating request with the signed query attached. `email`
+   * names the address for an `email_verification_required` continuation.
+   */
+  async function authenticate(
     path: string,
     body: Record<string, unknown>,
-    start: SignInStartOptions,
+    start: StartAuthorizationOptions & CaptchaOption & { email?: string },
   ): Promise<AuthResult> {
     const signed = await signedQuery(start);
     if (!signed) return { ok: false, error: NO_AUTHORIZATION };
-    if ("signedIn" in signed) return { ok: true, status: "redirect", redirectTo: signed.signedIn };
+    if ("signedIn" in signed) return { ok: true, redirectTo: signed.signedIn };
 
     const result = await request(
       "POST",
@@ -445,37 +487,41 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       { ...body, oauth_query: signed.query },
       start.captchaToken,
     );
-    if (!result.ok) return result;
+    if (!result.ok) {
+      if (result.error.code === "email_verification_required" && start.email) {
+        return { ok: false, error: verificationRequired(start.email, result.error) };
+      }
+      return result;
+    }
     const target = redirectFrom(result.body);
     const username =
       isRecord(result.body) && typeof result.body.username === "string"
         ? result.body.username
         : undefined;
     if (!target) {
-      // A password sign-up that must verify its email gets no session yet.
+      // A password sign-up that must verify its address gets no session yet.
       if (isRecord(result.body) && result.body.token == null && isRecord(result.body.user)) {
-        return { ok: true, status: "next-step", step: { kind: "verify-email" } };
+        const email =
+          start.email ?? (typeof result.body.user.email === "string" ? result.body.user.email : "");
+        return { ok: false, error: verificationRequired(email) };
       }
-      return failure("NO_REDIRECT", "Sign-in succeeded but the server returned no redirect.", 200);
+      return failure(
+        "unknown_error",
+        "Sign-in succeeded but the server returned no redirect.",
+        200,
+      );
     }
     const finished = await finishAuthorization(target, signed.query);
-    return finished.ok && finished.status === "redirect" && username
-      ? { ...finished, username }
-      : finished;
+    return finished.ok && username ? { ...finished, username } : finished;
   }
 
-  async function step(
-    path: string,
-    body: Record<string, unknown>,
-    captchaToken?: string,
-  ): Promise<StepResult> {
-    const result = await request("POST", path, body, captchaToken);
-    return result.ok ? { ok: true } : result;
-  }
-
-  async function read<T>(path: string): Promise<DataResult<T>> {
-    const result = await request("GET", path);
-    return result.ok ? { ok: true, data: result.body as T } : result;
+  function verificationRequired(email: string, cause?: AuthError): AuthError {
+    return authError(
+      "email_verification_required",
+      cause?.message ?? "Check your email to verify your address.",
+      cause?.status ?? 200,
+      { email, pendingAuthenticationToken: encodePending({ email }) },
+    );
   }
 
   /**
@@ -489,7 +535,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
   ): Promise<AuthResult> {
     const popup = window.open("", "_blank", "popup,width=500,height=650");
     if (!popup) {
-      return failure("POPUP_BLOCKED", "Allow pop-ups for this site to sign in with this provider.");
+      return failure("popup_blocked", "Allow pop-ups for this site to sign in with this provider.");
     }
     const close = () => {
       if (!popup.closed) popup.close();
@@ -502,7 +548,7 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
     }
     if ("signedIn" in signed) {
       close();
-      return { ok: true, status: "redirect", redirectTo: signed.signedIn };
+      return { ok: true, redirectTo: signed.signedIn };
     }
     const authorize = new URL(`${basePath}/oauth2/authorize`, location().origin);
     authorize.search = signed.query;
@@ -532,27 +578,56 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
 
     const claimed = await request("POST", "/popup-session/claim", { requestId });
     if (!claimed.ok) {
-      if (claimed.error.status === 404) {
-        return failure("POPUP_CLOSED", "Sign-in was not completed.", 404);
-      }
-      return claimed;
+      return claimed.error.status === 404
+        ? failure("popup_closed", "Sign-in was not completed.", 404)
+        : claimed;
     }
     const body = claimed.body;
-    if (isRecord(body) && typeof body.redirectUrl === "string") {
-      return { ok: true, status: "redirect", redirectTo: body.redirectUrl };
-    }
-    return failure("NO_REDIRECT", "Sign-in succeeded but the server returned no redirect.", 200);
+    return isRecord(body) && typeof body.redirectUrl === "string"
+      ? { ok: true, redirectTo: body.redirectUrl }
+      : failure("unknown_error", "Sign-in succeeded but the server returned no redirect.", 200);
+  }
+
+  // Session tokens never leave this module; `revokeSession` takes the id.
+  const sessionTokens = new Map<string, string>();
+
+  async function listSessionRows(): Promise<DataResult<(Session & { token: string })[]>> {
+    const result = await read<(Session & { token: string })[]>("/list-sessions");
+    if (result.ok) for (const row of result.data) sessionTokens.set(row.id, row.token);
+    return result;
   }
 
   return {
     // ----------------------------------------------------------------- page
+
+    /** The app's public sign-in settings: enabled methods, branding, sign-up options. Cached. */
+    getConfig(): Promise<DataResult<SignInConfig>> {
+      return loadConfig();
+    },
+
+    /**
+     * Render the captcha now rather than on the first request that needs it,
+     * so its token is ready by the time the user submits.
+     */
+    async prepareCaptcha(): Promise<StepResult> {
+      if (captchaMode !== "auto") return { ok: true };
+      try {
+        await captchaBridge();
+        return { ok: true };
+      } catch (error) {
+        return failure(
+          "captcha_failed",
+          error instanceof Error ? error.message : "Security verification is unavailable.",
+        );
+      }
+    },
 
     /** Whether the authorize endpoint opened this page with a sign-in to complete. */
     hasPendingSignIn(): boolean {
       return readSignedQuery(location().search) !== null;
     },
 
-    /** Whether the authorize endpoint sent the visitor here to create an account. */
+    /** Whether the visitor was sent here to create an account. */
     isSignUpRequest(): boolean {
       const params = new URLSearchParams(location().search);
       return params.get("prompt") === "create" || params.get("screen_hint") === "sign-up";
@@ -563,136 +638,96 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       return readAuthError(location().search);
     },
 
-    /** Navigate to a redirect result. */
-    navigate(result: Extract<AuthResult, { status: "redirect" }>): void {
+    /** Navigate to a successful result's `redirectTo`. */
+    navigate(result: Extract<AuthResult, { ok: true }>): void {
       location().assign(result.redirectTo);
     },
 
-    /** The app's public sign-in settings: enabled methods, branding, sign-up options. Cached. */
-    getConfig(): Promise<DataResult<SignInConfig>> {
-      return loadConfig();
-    },
+    // ------------------------------------------------------- authentication
 
     /**
-     * Render the captcha now rather than on the first request that needs it,
-     * so its token is ready by the time the user submits. Call when a form
-     * with email, password, username, or phone sign-in mounts.
+     * Sign in with a social provider (WorkOS: `getAuthorizationUrl` plus the
+     * redirect). Top-level, `redirectTo` is the provider's consent page; inside
+     * a frame it runs in a popup and resolves to the app callback, so call it
+     * straight from the click handler. Errors come back to `errorPath`
+     * (default: this page) as `?error=...`.
      */
-    async prepareCaptcha(): Promise<StepResult> {
-      if (captchaMode !== "auto") return { ok: true };
-      try {
-        await captchaBridge();
-        return { ok: true };
-      } catch (error) {
-        return failure(
-          "CAPTCHA_UNAVAILABLE",
-          error instanceof Error ? error.message : "Security verification is unavailable.",
-        );
-      }
-    },
-
-    // ------------------------------------------------------------ email code
-
-    /** Email a one-time sign-in code. Requires a captcha token. */
-    sendEmailOtp(input: { email: string; captchaToken?: string }): Promise<StepResult> {
-      return step(
-        "/email-otp/send-verification-otp",
-        { email: input.email, type: "sign-in" },
-        input.captchaToken,
+    getAuthorizationUrl(
+      input: {
+        provider: SocialProvider | WorkOSProviderName;
+        errorPath?: string;
+      } & StartAuthorizationOptions,
+    ): Promise<AuthResult> {
+      const provider = socialProvider(input.provider);
+      if (isFramed()) return socialInPopup(provider, input);
+      const errorPath = input.errorPath ?? location().pathname;
+      return authenticate(
+        "/sign-in/social",
+        {
+          provider,
+          callbackURL: location().origin,
+          errorCallbackURL: new URL(errorPath, location().origin).toString(),
+        },
+        input,
       );
     },
 
-    /** Sign in (or sign up) with the emailed code. No captcha. */
-    signInWithEmailOtp(
-      input: { email: string; otp: string } & StartAuthorizationOptions,
+    /** Sign in with an email address or username, and a password. */
+    authenticateWithPassword(
+      input: ({ email: string; username?: never } | { username: string; email?: never }) & {
+        password: string;
+        rememberMe?: boolean;
+      } & StartAuthorizationOptions &
+        CaptchaOption,
     ): Promise<AuthResult> {
-      return signIn("/sign-in/email-otp", { email: input.email, otp: input.otp }, input);
-    },
-
-    // ------------------------------------------------------- email password
-
-    /** Sign in with an email address and password. Requires a captcha token. */
-    signInWithPassword(
-      input: { email: string; password: string; rememberMe?: boolean } & SignInStartOptions,
-    ): Promise<AuthResult> {
-      return signIn(
+      if (input.username !== undefined) {
+        return authenticate(
+          "/sign-in/username",
+          { username: input.username, password: input.password },
+          input,
+        );
+      }
+      return authenticate(
         "/sign-in/email",
         {
           email: input.email,
           password: input.password,
-          // Where the verification link returns when the email is unverified.
           callbackURL: location().href,
           ...(input.rememberMe === undefined ? {} : { rememberMe: input.rememberMe }),
         },
-        input,
+        { ...input, email: input.email },
       );
     },
 
     /**
-     * Create an account with an email address and password (8 to 128
-     * characters). Requires a captcha token. Resolves `verify-email` when the
-     * app requires email verification: the user signs in after clicking the
-     * emailed link, which returns to this page.
+     * Create an account and sign in. With `email`, a password account (8 to
+     * 128 characters); it fails with `email_verification_required` when the app
+     * requires verification. With `username` or neither (an `auto_generated`
+     * username, returned on the result), a username account, when
+     * `config.usernameSignUp` is set.
      */
-    signUpWithPassword(
-      input: { email: string; password: string; name?: string } & SignInStartOptions,
+    createUser(
+      input: {
+        email?: string;
+        username?: string;
+        password: string;
+        name?: string;
+      } & StartAuthorizationOptions &
+        CaptchaOption,
     ): Promise<AuthResult> {
-      return signIn(
-        "/sign-up/email",
-        {
-          email: input.email,
-          password: input.password,
-          name: input.name ?? "",
-          callbackURL: location().href,
-        },
-        input,
-      );
-    },
-
-    /** Email a password reset link that returns to `resetPath` with `?token=`. Requires a captcha token. */
-    requestPasswordReset(input: {
-      email: string;
-      resetPath: string;
-      captchaToken?: string;
-    }): Promise<StepResult> {
-      return step(
-        "/request-password-reset",
-        {
-          email: input.email,
-          redirectTo: new URL(input.resetPath, location().origin).toString(),
-        },
-        input.captchaToken,
-      );
-    },
-
-    /** Set a new password with the reset link's token. No captcha. */
-    resetPassword(input: { token: string; newPassword: string }): Promise<StepResult> {
-      return step("/reset-password", { token: input.token, newPassword: input.newPassword });
-    },
-
-    // --------------------------------------------------------------- username
-
-    /** Sign in with a username and password. Requires a captcha token. */
-    signInWithUsername(
-      input: { username: string; password: string } & SignInStartOptions,
-    ): Promise<AuthResult> {
-      return signIn(
-        "/sign-in/username",
-        { username: input.username, password: input.password },
-        input,
-      );
-    },
-
-    /**
-     * Create a username account (when `config.usernameSignUp` is set). Pass
-     * `username` only in `user_chosen` mode; in `auto_generated` mode the
-     * result carries the assigned `username` to show the user. Requires a
-     * captcha token.
-     */
-    signUpWithUsername(
-      input: { password: string; username?: string; name?: string } & SignInStartOptions,
-    ): Promise<AuthResult> {
-      return signIn(
+      if (input.email !== undefined) {
+        return authenticate(
+          "/sign-up/email",
+          {
+            email: input.email,
+            password: input.password,
+            name: input.name ?? "",
+            callbackURL: location().href,
+          },
+          { ...input, email: input.email },
+        );
+      }
+      return authenticate(
         "/sign-up/username",
         {
           password: input.password,
@@ -703,51 +738,66 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
       );
     },
 
-    // ------------------------------------------------------------------ phone
+    /** Email a one-time sign-in code (WorkOS: Magic Auth). */
+    sendMagicAuthCode(input: { email: string } & CaptchaOption): Promise<StepResult> {
+      return step(
+        "/email-otp/send-verification-otp",
+        { email: input.email, type: "sign-in" },
+        input.captchaToken,
+      );
+    },
 
-    /** Text a one-time code to a phone number (E.164). Requires a captcha token. */
-    sendPhoneOtp(input: { phoneNumber: string; captchaToken?: string }): Promise<StepResult> {
+    /** Sign in (or sign up) with the emailed code. */
+    authenticateWithMagicAuth(
+      input: { email: string; code: string } & StartAuthorizationOptions,
+    ): Promise<AuthResult> {
+      return authenticate("/sign-in/email-otp", { email: input.email, otp: input.code }, input);
+    },
+
+    /**
+     * Finish an `email_verification_required` sign-in or sign-up with the
+     * emailed code. Signs the user in.
+     */
+    authenticateWithEmailVerification(
+      input: { code: string; pendingAuthenticationToken: string } & StartAuthorizationOptions,
+    ): Promise<AuthResult> {
+      const pending = decodePending(input.pendingAuthenticationToken);
+      if (!pending) return Promise.resolve(failure("invalid_token", "Start signing in again."));
+      return authenticate(
+        "/email-otp/verify-email",
+        { email: pending.email, otp: input.code },
+        { ...input, email: pending.email },
+      );
+    },
+
+    /** Send a new verification code for an `email_verification_required` error. */
+    sendVerificationCode(
+      input: { pendingAuthenticationToken: string } & CaptchaOption,
+    ): Promise<StepResult> {
+      const pending = decodePending(input.pendingAuthenticationToken);
+      if (!pending) return Promise.resolve(failure("invalid_token", "Start signing in again."));
+      return step(
+        "/email-otp/send-verification-otp",
+        { email: pending.email, type: "email-verification" },
+        input.captchaToken,
+      );
+    },
+
+    /** Text a one-time code to a phone number (E.164). */
+    sendSmsCode(input: { phoneNumber: string } & CaptchaOption): Promise<StepResult> {
       return step("/phone-number/send-otp", { phoneNumber: input.phoneNumber }, input.captchaToken);
     },
 
-    /** Sign in with the texted code. Requires a captcha token. */
-    signInWithPhoneOtp(
-      input: { phoneNumber: string; code: string } & SignInStartOptions,
+    /** Sign in (or sign up) with the texted code. */
+    authenticateWithSmsCode(
+      input: { phoneNumber: string; code: string } & StartAuthorizationOptions & CaptchaOption,
     ): Promise<AuthResult> {
-      return signIn(
+      return authenticate(
         "/phone-number/verify",
         { phoneNumber: input.phoneNumber, code: input.code },
         input,
       );
     },
-
-    // ----------------------------------------------------------------- social
-
-    /**
-     * Sign in with a social provider. Top-level, the result's `redirectTo` is
-     * the provider's consent page; navigate there, and the provider returns
-     * through the platform to the app callback. Inside a frame it runs in a
-     * popup and resolves to the app callback; call it directly from the click
-     * handler so the popup is allowed. Errors come back to `errorPath`
-     * (default: this page) as `?error=...`.
-     */
-    signInWithSocial(
-      input: { provider: SocialProvider; errorPath?: string } & StartAuthorizationOptions,
-    ): Promise<AuthResult> {
-      if (isFramed()) return socialInPopup(input.provider, input);
-      const errorPath = input.errorPath ?? location().pathname;
-      return signIn(
-        "/sign-in/social",
-        {
-          provider: input.provider,
-          callbackURL: location().origin,
-          errorCallbackURL: new URL(errorPath, location().origin).toString(),
-        },
-        input,
-      );
-    },
-
-    // ---------------------------------------------------------------- passkey
 
     /** Whether this browser can use passkeys. */
     isPasskeyAvailable(): boolean {
@@ -757,10 +807,10 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
     /**
      * Sign in with a passkey. `autofill: true` runs conditional mediation, so
      * the browser offers passkeys in an input with `autocomplete="username
-     * webauthn"`; call it once when the page mounts. A dismissed prompt
-     * resolves `PASSKEY_CANCELLED`.
+     * webauthn"`; call it once when the page mounts. A dismissed prompt fails
+     * with `passkey_cancelled`.
      */
-    async signInWithPasskey(
+    async authenticateWithPasskey(
       input: { autofill?: boolean; signal?: AbortSignal } & StartAuthorizationOptions = {},
     ): Promise<AuthResult> {
       const optionsResult = await request("GET", "/passkey/generate-authenticate-options");
@@ -773,88 +823,146 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
           ...(input.signal ? { signal: input.signal } : {}),
         });
       } catch (error) {
-        return failure("PASSKEY_CANCELLED", error instanceof Error ? error.message : "Cancelled");
+        return failure("passkey_cancelled", error instanceof Error ? error.message : "Cancelled");
       }
-      if (!credential) return failure("PASSKEY_CANCELLED", "No passkey was chosen.");
-      return signIn(
+      if (!credential) return failure("passkey_cancelled", "No passkey was chosen.");
+      return authenticate(
         "/passkey/verify-authentication",
         { response: credentialToJSON(credential as PublicKeyCredential) },
         input,
       );
     },
 
-    // ----------------------------------------------------------------- access
+    /** Email a password reset link to `passwordResetUrl?token=...`. */
+    sendPasswordResetEmail(
+      input: { email: string; passwordResetUrl: string } & CaptchaOption,
+    ): Promise<StepResult> {
+      return step(
+        "/request-password-reset",
+        {
+          email: input.email,
+          redirectTo: new URL(input.passwordResetUrl, location().origin).toString(),
+        },
+        input.captchaToken,
+      );
+    },
+
+    /** Set a new password with the reset link's token. */
+    resetPassword(input: { token: string; newPassword: string }): Promise<StepResult> {
+      return step("/reset-password", { token: input.token, newPassword: input.newPassword });
+    },
 
     /**
-     * Ask the app owner to let an address in after the allowlist turned it
-     * away (`SIGN_IN_NOT_ALLOWLISTED`), when `config.accessRequestsEnabled`.
-     * Always succeeds, so it cannot be used to probe the allowlist.
+     * Ask the app owner to let an address in after `sign_in_not_allowed`, when
+     * `config.accessRequestsEnabled`. Always succeeds, so it cannot be used to
+     * probe who is allowed.
      */
     requestAccess(input: { email: string }): Promise<StepResult> {
       return step("/access-request", { email: input.email });
     },
 
-    // ---------------------------------------------------------------- account
+    // --------------------------------------------------------- user management
     //
-    // Account management reads the auth session on this origin, which every
-    // embedded sign-in sets. Pages that use these sit behind the app's own
-    // signed-in check.
+    // These read the auth session on this origin, which every sign-in here sets.
 
     /** The signed-in user, or null. */
-    async getSession(): Promise<DataResult<{ user: SessionUser } | null>> {
-      return read<{ user: SessionUser } | null>("/get-session");
+    async getUser(): Promise<DataResult<User | null>> {
+      const result = await read<{ user: User } | null>("/get-session");
+      return result.ok ? { ok: true, data: result.data?.user ?? null } : result;
     },
 
-    /** End the auth session on this origin. The app's SDK sign-out ends the app session. */
+    /**
+     * Update the profile, or the password (with `currentPassword`; signs out
+     * other sessions). Usernames and email addresses are changed by the app owner.
+     */
+    async updateUser(input: {
+      name?: string;
+      image?: string | null;
+      password?: string;
+      currentPassword?: string;
+    }): Promise<StepResult> {
+      if (input.password !== undefined) {
+        const changed = await step("/change-password", {
+          currentPassword: input.currentPassword ?? "",
+          newPassword: input.password,
+          revokeOtherSessions: true,
+        });
+        if (!changed.ok) return changed;
+      }
+      if (input.name === undefined && input.image === undefined) return { ok: true };
+      return step("/update-user", {
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.image === undefined ? {} : { image: input.image }),
+      });
+    },
+
+    /**
+     * Delete the account and everything Hercules Auth stores for it. Needs a
+     * recent sign-in, or the password; otherwise `reauthentication_required`.
+     * The app's own data about the user is the app's to delete. Then sign out
+     * with the app SDK.
+     */
+    deleteUser(input: { password?: string } = {}): Promise<StepResult> {
+      return step("/delete-user", input.password ? { password: input.password } : {});
+    },
+
+    /** End the auth session on this origin. The app SDK's sign-out ends the app session. */
     signOut(): Promise<StepResult> {
       return step("/sign-out", {});
     },
 
-    /** Sign-in methods linked to the account. */
-    listAccounts(): Promise<DataResult<LinkedAccount[]>> {
-      return read<LinkedAccount[]>("/list-accounts");
+    /** Sign-in methods linked to the user. */
+    async listIdentities(): Promise<DataResult<Identity[]>> {
+      const result =
+        await read<{ id: string; providerId: string; accountId: string; createdAt: string }[]>(
+          "/list-accounts",
+        );
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        data: result.data.map((row) => ({
+          id: row.id,
+          provider: row.providerId === "credential" ? "password" : row.providerId,
+          providerUserId: row.accountId,
+          createdAt: row.createdAt,
+        })),
+      };
     },
 
-    /** Link a social provider; navigate to the result's `redirectTo`. Returns to `returnPath`. */
-    async linkSocial(input: {
-      provider: SocialProvider;
-      returnPath?: string;
-    }): Promise<DataResult<{ redirectTo: string }>> {
+    /** Link a social provider; navigate to the result. Returns to `returnTo`. */
+    async linkIdentity(input: {
+      provider: SocialProvider | WorkOSProviderName;
+      returnTo?: string;
+    }): Promise<AuthResult> {
       const result = await request("POST", "/link-social", {
-        provider: input.provider,
-        callbackURL: new URL(input.returnPath ?? location().pathname, location().origin).toString(),
+        provider: socialProvider(input.provider),
+        callbackURL: new URL(input.returnTo ?? location().pathname, location().origin).toString(),
       });
       if (!result.ok) return result;
       const redirectTo = redirectFrom(result.body);
       return redirectTo
-        ? { ok: true, data: { redirectTo } }
-        : failure("NO_REDIRECT", "The server returned no redirect.", 200);
+        ? { ok: true, redirectTo }
+        : failure("unknown_error", "The server returned no redirect.", 200);
     },
 
-    /** Unlink a sign-in method by its `LinkedAccount.id`. */
-    unlinkAccount(input: { accountId: string }): Promise<StepResult> {
-      return step("/unlink-account", { accountId: input.accountId });
+    /** Unlink a sign-in method by its `Identity.id`. */
+    unlinkIdentity(input: { identityId: string }): Promise<StepResult> {
+      return step("/unlink-account", { accountId: input.identityId });
     },
 
-    /** Change the password of an account that has one. Signs out other sessions. */
-    changePassword(input: { currentPassword: string; newPassword: string }): Promise<StepResult> {
-      return step("/change-password", {
-        currentPassword: input.currentPassword,
-        newPassword: input.newPassword,
-        revokeOtherSessions: true,
-      });
+    /** The user's passkeys. */
+    async listPasskeys(): Promise<DataResult<Passkey[]>> {
+      const result = await read<Passkey[]>("/passkey/list-user-passkeys");
+      return result.ok
+        ? {
+            ok: true,
+            data: result.data.map((row) => ({ ...row, name: row.name ?? null })),
+          }
+        : result;
     },
 
-    /** The account's passkeys. */
-    listPasskeys(): Promise<DataResult<Passkey[]>> {
-      return read<Passkey[]>("/passkey/list-user-passkeys");
-    },
-
-    /**
-     * Add a passkey for this device. Needs a recent sign-in; an older session
-     * fails with `SESSION_NOT_FRESH`, and the user signs in again first.
-     */
-    async addPasskey(input: { name?: string } = {}): Promise<StepResult> {
+    /** Add a passkey for this device. Needs a recent sign-in (`reauthentication_required`). */
+    async createPasskey(input: { name?: string } = {}): Promise<StepResult> {
       const query = input.name ? `?name=${encodeURIComponent(input.name)}` : "";
       const optionsResult = await request("GET", `/passkey/generate-register-options${query}`);
       if (!optionsResult.ok) return optionsResult;
@@ -864,52 +972,52 @@ export function createEmbeddedAuthClient(options: EmbeddedAuthClientOptions = {}
           publicKey: creationOptionsFromJSON(optionsResult.body as Record<string, unknown>),
         });
       } catch (error) {
-        return failure("PASSKEY_CANCELLED", error instanceof Error ? error.message : "Cancelled");
+        return failure("passkey_cancelled", error instanceof Error ? error.message : "Cancelled");
       }
-      if (!credential) return failure("PASSKEY_CANCELLED", "No passkey was created.");
+      if (!credential) return failure("passkey_cancelled", "No passkey was created.");
       return step("/passkey/verify-registration", {
         response: credentialToJSON(credential as PublicKeyCredential),
         ...(input.name ? { name: input.name } : {}),
       });
     },
 
-    /** Remove a passkey by id. */
-    deletePasskey(input: { id: string }): Promise<StepResult> {
-      return step("/passkey/delete-passkey", { id: input.id });
+    /** Remove a passkey by `Passkey.id`. */
+    deletePasskey(input: { passkeyId: string }): Promise<StepResult> {
+      return step("/passkey/delete-passkey", { id: input.passkeyId });
     },
 
-    /** Update the profile name or picture. Usernames are changed by the app owner only. */
-    updateUser(input: { name?: string; image?: string | null }): Promise<StepResult> {
-      return step("/update-user", {
-        ...(input.name === undefined ? {} : { name: input.name }),
-        ...(input.image === undefined ? {} : { image: input.image }),
-      });
+    /** The user's signed-in devices. */
+    async listSessions(): Promise<DataResult<Session[]>> {
+      const result = await listSessionRows();
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        data: result.data.map(({ id, createdAt, expiresAt, ipAddress, userAgent }) => ({
+          id,
+          createdAt,
+          expiresAt,
+          ipAddress: ipAddress ?? null,
+          userAgent: userAgent ?? null,
+        })),
+      };
     },
 
-    /** The account's signed-in sessions (devices). */
-    listSessions(): Promise<DataResult<ActiveSession[]>> {
-      return read<ActiveSession[]>("/list-sessions");
+    /** Sign out one device by `Session.id`. */
+    async revokeSession(input: { sessionId: string }): Promise<StepResult> {
+      if (!sessionTokens.has(input.sessionId)) {
+        const listed = await listSessionRows();
+        if (!listed.ok) return listed;
+      }
+      const token = sessionTokens.get(input.sessionId);
+      if (!token) return failure("invalid_request", "That session no longer exists.");
+      const result = await step("/revoke-session", { token });
+      if (result.ok) sessionTokens.delete(input.sessionId);
+      return result;
     },
 
-    /** Sign out one session by its `token`. */
-    revokeSession(input: { token: string }): Promise<StepResult> {
-      return step("/revoke-session", { token: input.token });
-    },
-
-    /** Sign out every session but this one. */
+    /** Sign out every device but this one. */
     revokeOtherSessions(): Promise<StepResult> {
       return step("/revoke-other-sessions", {});
-    },
-
-    /**
-     * Delete the account and everything Hercules Auth stores for it. Needs a
-     * recent sign-in, or the password of an account that has one; otherwise it
-     * fails with `SESSION_NOT_FRESH`. The app's own data about the user (for
-     * example its Convex `users` row) is the app's to delete. Then sign out
-     * with the app SDK.
-     */
-    deleteUser(input: { password?: string } = {}): Promise<StepResult> {
-      return step("/delete-user", input.password ? { password: input.password } : {});
     },
   };
 }

@@ -29,13 +29,13 @@ describe("createEmbeddedAuthClient", () => {
     const fetch = vi.fn(async () => jsonResponse({ redirect: true, url: CALLBACK }));
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation(`?${SIGNED}`) });
 
-    const result = await client.signInWithPassword({
+    const result = await client.authenticateWithPassword({
       email: "a@example.com",
       password: "pw",
       captchaToken: "t",
     });
 
-    expect(result).toEqual({ ok: true, status: "redirect", redirectTo: CALLBACK });
+    expect(result).toEqual({ ok: true, redirectTo: CALLBACK });
     const [url, init] = fetch.mock.calls[0]! as unknown as [string, RequestInit];
     expect(url).toBe("/_hercules/auth/sign-in/email");
     expect(init.headers).toMatchObject({ "x-captcha-response": "t" });
@@ -62,13 +62,12 @@ describe("createEmbeddedAuthClient", () => {
       isFramed: () => false,
     });
 
-    const result = await client.signInWithSocial({ provider: "google" });
+    const result = await client.getAuthorizationUrl({ provider: "google" });
 
     expect(startAuthorization).toHaveBeenCalledWith({ returnTo: "/pricing" });
     expect(fetch.mock.calls[0]![1]).toMatchObject({ headers: { accept: "application/json" } });
     expect(result).toEqual({
       ok: true,
-      status: "redirect",
       redirectTo: "https://accounts.google.com/o/oauth2/auth?x",
     });
     expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({
@@ -88,9 +87,9 @@ describe("createEmbeddedAuthClient", () => {
       isFramed: () => false,
     });
 
-    const result = await client.signInWithSocial({ provider: "google" });
+    const result = await client.getAuthorizationUrl({ provider: "google" });
 
-    expect(result).toEqual({ ok: true, status: "redirect", redirectTo: CALLBACK });
+    expect(result).toEqual({ ok: true, redirectTo: CALLBACK });
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -98,9 +97,12 @@ describe("createEmbeddedAuthClient", () => {
     const fetch = vi.fn();
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation("") });
 
-    const result = await client.signInWithEmailOtp({ email: "a@example.com", otp: "123456" });
+    const result = await client.authenticateWithMagicAuth({
+      email: "a@example.com",
+      code: "123456",
+    });
 
-    expect(result).toMatchObject({ ok: false, error: { code: "NO_AUTHORIZATION_REQUEST" } });
+    expect(result).toMatchObject({ ok: false, error: { code: "invalid_request" } });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -113,14 +115,15 @@ describe("createEmbeddedAuthClient", () => {
     );
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation(`?${SIGNED}`) });
 
-    const result = await client.signInWithPassword({ email: "a@example.com", password: "x" });
+    const result = await client.authenticateWithPassword({ email: "a@example.com", password: "x" });
 
     expect(result).toEqual({
       ok: false,
       error: {
-        code: "INVALID_EMAIL_OR_PASSWORD",
+        code: "invalid_credentials",
         message: "Invalid email or password",
         status: 401,
+        rawCode: "INVALID_EMAIL_OR_PASSWORD",
         field: "password",
       },
     });
@@ -134,9 +137,9 @@ describe("createEmbeddedAuthClient", () => {
       .mockResolvedValueOnce(jsonResponse({ redirect: true, url: CALLBACK }));
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation(`?${signUpQuery}`) });
 
-    const result = await client.signUpWithPassword({ email: "a@example.com", password: "pw" });
+    const result = await client.createUser({ email: "a@example.com", password: "pw" });
 
-    expect(result).toEqual({ ok: true, status: "redirect", redirectTo: CALLBACK });
+    expect(result).toEqual({ ok: true, redirectTo: CALLBACK });
     expect(fetch.mock.calls[1]![0]).toBe("/_hercules/auth/oauth2/continue");
     expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({
       created: true,
@@ -148,9 +151,12 @@ describe("createEmbeddedAuthClient", () => {
     const fetch = vi.fn(async () => jsonResponse({ token: null, user: { id: "u1" } }));
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation(`?${SIGNED}`) });
 
-    const result = await client.signUpWithPassword({ email: "a@example.com", password: "pw" });
+    const result = await client.createUser({ email: "a@example.com", password: "pw" });
 
-    expect(result).toEqual({ ok: true, status: "next-step", step: { kind: "verify-email" } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "email_verification_required", email: "a@example.com" },
+    });
   });
 
   it("carries an auto-generated username through to the result", async () => {
@@ -159,9 +165,8 @@ describe("createEmbeddedAuthClient", () => {
     );
     const client = createEmbeddedAuthClient({ fetch, location: fakeLocation(`?${SIGNED}`) });
 
-    expect(await client.signUpWithUsername({ password: "pw" })).toEqual({
+    expect(await client.createUser({ password: "pw" })).toEqual({
       ok: true,
-      status: "redirect",
       redirectTo: CALLBACK,
       username: "member48213977",
     });
@@ -177,6 +182,65 @@ describe("createEmbeddedAuthClient", () => {
     expect(fetch.mock.calls[0]![0]).toBe("/_hercules/auth/config");
   });
 
+  it("continues an unverified sign-in with the emailed code", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ code: "EMAIL_NOT_VERIFIED", message: "Email not verified" }, 403),
+      )
+      .mockResolvedValueOnce(jsonResponse({ redirect: true, url: CALLBACK }));
+    const client = createEmbeddedAuthClient({ fetch, location: fakeLocation(`?${SIGNED}`) });
+
+    const first = await client.authenticateWithPassword({ email: "a@example.com", password: "pw" });
+    expect(first.ok).toBe(false);
+    const error = !first.ok ? first.error : null;
+    expect(error).toMatchObject({ code: "email_verification_required", field: "email" });
+
+    const second = await client.authenticateWithEmailVerification({
+      code: "123456",
+      pendingAuthenticationToken: error!.pendingAuthenticationToken!,
+    });
+
+    expect(second).toEqual({ ok: true, redirectTo: CALLBACK });
+    expect(fetch.mock.calls[1]![0]).toBe("/_hercules/auth/email-otp/verify-email");
+    expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({
+      email: "a@example.com",
+      otp: "123456",
+      oauth_query: SIGNED,
+    });
+  });
+
+  it("accepts WorkOS provider names", async () => {
+    const fetch = vi.fn(async () => jsonResponse({ url: "https://accounts.google.com/x" }));
+    const client = createEmbeddedAuthClient({
+      fetch,
+      location: fakeLocation(`?${SIGNED}`),
+      isFramed: () => false,
+    });
+
+    await client.getAuthorizationUrl({ provider: "GoogleOAuth" });
+
+    expect(JSON.parse(fetch.mock.calls[0]![1].body).provider).toBe("google");
+  });
+
+  it("revokes a session by id without exposing its token", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse([{ id: "s1", token: "secret", createdAt: "", expiresAt: "" }]),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: true }));
+    const client = createEmbeddedAuthClient({ fetch, location: fakeLocation() });
+
+    const sessions = await client.listSessions();
+    expect(sessions).toEqual({
+      ok: true,
+      data: [{ id: "s1", createdAt: "", expiresAt: "", ipAddress: null, userAgent: null }],
+    });
+    expect(await client.revokeSession({ sessionId: "s1" })).toEqual({ ok: true });
+    expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({ token: "secret" });
+  });
+
   it("reads sign-up requests and page errors from the URL", () => {
     const client = createEmbeddedAuthClient({
       location: fakeLocation(`?${SIGNED}&prompt=create&error=access_denied`),
@@ -184,7 +248,7 @@ describe("createEmbeddedAuthClient", () => {
 
     expect(client.hasPendingSignIn()).toBe(true);
     expect(client.isSignUpRequest()).toBe(true);
-    expect(client.pageError()).toMatchObject({ code: "access_denied" });
+    expect(client.pageError()).toMatchObject({ code: "oauth_failed", rawCode: "access_denied" });
   });
 });
 

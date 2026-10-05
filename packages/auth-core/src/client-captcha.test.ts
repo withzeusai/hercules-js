@@ -46,9 +46,12 @@ describe("automatic captcha", () => {
       .mockResolvedValueOnce(json({ redirect: true, url: "/auth/callback?code=x" }));
     const client = createEmbeddedAuthClient({ fetch, location: location() });
 
-    const result = await client.signInWithPassword({ email: "a@example.com", password: "pw" });
+    const result = await client.authenticateWithPassword({
+      email: "a@example.com",
+      password: "pw",
+    });
 
-    expect(result).toMatchObject({ ok: true, status: "redirect" });
+    expect(result).toMatchObject({ ok: true });
     expect(mount).toHaveBeenCalledWith({
       issuer: "https://tenant.hercules-auth.com",
       container: document.getElementById("hercules-captcha"),
@@ -65,7 +68,7 @@ describe("automatic captcha", () => {
       .mockResolvedValue(json({ status: true }));
     const client = createEmbeddedAuthClient({ fetch, location: location() });
 
-    await client.sendEmailOtp({ email: "a@example.com" });
+    await client.sendMagicAuthCode({ email: "a@example.com" });
     await client.revokeOtherSessions();
 
     expect(document.querySelector("[data-hercules-captcha]")).not.toBeNull();
@@ -77,7 +80,7 @@ describe("automatic captcha", () => {
     const fetch = vi.fn(async () => json({ redirect: true, url: "/auth/callback?code=x" }));
     const client = createEmbeddedAuthClient({ fetch, location: location(), captcha: "manual" });
 
-    await client.signInWithPassword({
+    await client.authenticateWithPassword({
       email: "a@example.com",
       password: "pw",
       captchaToken: "mine",
@@ -91,11 +94,11 @@ describe("automatic captcha", () => {
     const fetch = vi.fn(async () => json({ message: "Tenant not found" }, 404));
     const client = createEmbeddedAuthClient({ fetch, location: location() });
 
-    const result = await client.sendPhoneOtp({ phoneNumber: "+14155550123" });
+    const result = await client.sendSmsCode({ phoneNumber: "+14155550123" });
 
     expect(result).toMatchObject({
       ok: false,
-      error: { code: "CAPTCHA_UNAVAILABLE", field: "captcha" },
+      error: { code: "captcha_failed", field: "captcha" },
     });
     expect(fetch).toHaveBeenCalledOnce();
   });

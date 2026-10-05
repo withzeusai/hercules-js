@@ -9,25 +9,37 @@ Use it through the framework packages, which supply the piece that starts an aut
 
 ```ts
 const auth = createEmbeddedSignInClient();
-const result = await auth.signInWithSocial({ provider: "google" });
-if (!result.ok) setError(result.error); // { code, message, field? }
-else if (result.status === "redirect") auth.navigate(result);
-else showStep(result.step); // e.g. { kind: "verify-email" }
+
+// "Continue with Google" anywhere
+const result = await auth.getAuthorizationUrl({ provider: "GoogleOAuth" });
+if (result.ok) auth.navigate(result);
+
+// Password, with WorkOS-style continuation
+const signedIn = await auth.authenticateWithPassword({ email, password });
+if (!signedIn.ok && isAuthError(signedIn.error, "email_verification_required")) {
+  await auth.authenticateWithEmailVerification({
+    code,
+    pendingAuthenticationToken: signedIn.error.pendingAuthenticationToken!,
+  });
+}
 ```
 
-| Feature            | Methods                                                                                                     |
-| ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Settings           | `getConfig()` (enabled methods, branding, sign-up options, issuer)                                          |
-| Email code         | `sendEmailOtp`, `signInWithEmailOtp`                                                                        |
-| Email and password | `signInWithPassword`, `signUpWithPassword` (`next-step` `verify-email`), `requestPasswordReset`, `resetPassword` |
-| Username           | `signInWithUsername`, `signUpWithUsername` (assigned `username` on the result)                              |
-| Phone              | `sendPhoneOtp`, `signInWithPhoneOtp`                                                                        |
-| Social             | `signInWithSocial` (popup when framed)                                                                      |
-| Passkeys           | `signInWithPasskey({ autofill })`, `addPasskey`, `listPasskeys`, `deletePasskey`                            |
-| Access             | `requestAccess` after `SIGN_IN_NOT_ALLOWLISTED`                                                             |
-| Account            | `getSession`, `signOut`, `listAccounts`, `linkSocial`, `unlinkAccount`, `changePassword`                    |
-| Page               | `hasPendingSignIn`, `isSignUpRequest`, `pageError`, `navigate`                                              |
+The API follows WorkOS AuthKit's names and shapes, running in the browser against the app's own origin:
 
-Results are `{ ok: true, status: "redirect" }`, `{ ok: true, status: "next-step", step }`, or `{ ok: false, error }`. Handle unknown `step.kind`s generically; new steps can appear without a breaking change. Errors carry a typed `code` (`AUTH_ERROR_CODES`, `isAuthError`) and, for form errors, the `field` to show it next to.
+| WorkOS | Here |
+| --- | --- |
+| `getAuthorizationUrl({ provider })` | `getAuthorizationUrl({ provider })` (accepts `GoogleOAuth` or `google`); navigates or opens a popup when framed |
+| `authenticateWithPassword` | `authenticateWithPassword({ email \| username, password })` |
+| `createUser` | `createUser({ email \| username, password, name })` |
+| `sendMagicAuthCode` / `authenticateWithMagicAuth` | same |
+| `authenticateWithEmailVerification({ code, pendingAuthenticationToken })` | same; `sendVerificationCode` resends |
+| `sendPasswordResetEmail` / `resetPassword` | same |
+| `getUser` / `updateUser` / `deleteUser` | same (`updateUser({ password, currentPassword })` changes the password) |
+| `listSessions` / `revokeSession` | same, plus `revokeOtherSessions` |
+| identities | `listIdentities`, `linkIdentity`, `unlinkIdentity` |
+| passkeys | `authenticateWithPasskey({ autofill })`, `listPasskeys`, `createPasskey`, `deletePasskey` |
+| — | `sendSmsCode` / `authenticateWithSmsCode`, `requestAccess`, `getConfig` |
 
-Captcha is automatic: email, password, username, and phone requests render Cloudflare Turnstile into `<div id="hercules-captcha" />` (or a corner panel when the page has none) and attach the token. Call `auth.prepareCaptcha()` when such a form mounts so the token is ready by submit. Pass `captcha: "manual"` to handle it yourself with `mountTurnstileBridge` and `captchaToken`.
+Every `authenticateWith*` resolves `{ ok: true, redirectTo }` (pass to `auth.navigate`) or `{ ok: false, error }`. Errors use WorkOS-style codes (`invalid_credentials`, `email_verification_required`, `sign_in_not_allowed`, ..., see `AUTH_ERROR_CODES`), keep the server's code on `rawCode`, name the form `field`, and carry what the next call needs (`pendingAuthenticationToken`).
+
+Captcha is automatic: requests that need it render Cloudflare Turnstile into `<div id="hercules-captcha" />` (or a corner panel) and attach the token. Call `auth.prepareCaptcha()` when such a form mounts. Pass `captcha: "manual"` to handle it yourself with `mountTurnstileBridge` and `captchaToken`.
