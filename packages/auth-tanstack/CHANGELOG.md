@@ -1,5 +1,11 @@
 # @usehercules/auth-tanstack
 
+## 0.6.1
+
+### Patch Changes
+
+- [#150](https://github.com/withzeusai/hercules-js/pull/150) [`e1248f0`](https://github.com/withzeusai/hercules-js/commit/e1248f0fd21f3a63c77966bfbcabaee6a482b471) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Keep the sign-out error fallback on the current app origin. Reject executable schemes and external return targets when the sign-out request fails.
+
 ## 0.6.0
 
 ### Minor Changes
