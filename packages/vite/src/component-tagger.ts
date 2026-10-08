@@ -286,7 +286,8 @@ export class ComponentTagger {
 
             if (shouldTag) {
               // Only add the new data attributes (no legacy)
-              const endPosition = jsxNode.name.end ?? 0;
+              const insertAfter = jsxNode.typeArguments ?? jsxNode.typeParameters ?? jsxNode.name;
+              const endPosition = insertAfter.end ?? 0;
 
               // Build the attributes string
               let attributesString = ` ${dataAttribute}="${dataComponentId}" data-hercules-name="${elementName}"`;
