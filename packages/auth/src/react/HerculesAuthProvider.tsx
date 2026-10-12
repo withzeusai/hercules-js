@@ -6,7 +6,12 @@ import {
   type AuthProviderUserManagerProps,
   useAuth,
 } from "react-oidc-context";
-import { WebStorageStateStore, type UserManager, type UserManagerSettings } from "oidc-client-ts";
+import {
+  InMemoryWebStorage,
+  WebStorageStateStore,
+  type UserManager,
+  type UserManagerSettings,
+} from "oidc-client-ts";
 import { withRefreshLock } from "../internal/refresh-lock";
 import { HerculesUserManager } from "../internal/user-manager";
 import {
@@ -53,6 +58,26 @@ export function useHerculesAuthProvider() {
     throw new Error("HerculesAuthProviderContext not found");
   }
   return context;
+}
+
+/**
+ * Browsers that deny storage to a frame, such as a third-party iframe with
+ * third-party cookies blocked, throw `SecurityError` from the `localStorage`
+ * getter. Firefox still allows `sessionStorage` there, which keeps the OIDC
+ * state across the sign-in redirect. Memory is the last resort: the app
+ * renders, but a redirect sign-in cannot complete in that frame. The state
+ * store needs this too: the oidc-client-ts default reads `localStorage`.
+ */
+function getAuthStorage(): Storage {
+  try {
+    return window.localStorage;
+  } catch {
+    try {
+      return window.sessionStorage;
+    } catch {
+      return new InMemoryWebStorage();
+    }
+  }
 }
 
 function DefaultLoadingFallback() {
@@ -181,8 +206,9 @@ export function HerculesAuthProvider({
         post_logout_redirect_uri:
           userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
         userStore:
-          userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
+          userManagerSettings?.userStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
+        stateStore:
+          userManagerSettings?.stateStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
         automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
         silentRequestTimeoutInSeconds:
           userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
