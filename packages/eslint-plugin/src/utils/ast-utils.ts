@@ -4,9 +4,7 @@ import { Type, TypeChecker, TypeFlags } from "typescript";
 /**
  * Gets the name of a JSX element
  */
-export function getJSXElementName(
-  node: TSESTree.JSXOpeningElement,
-): string | null {
+export function getJSXElementName(node: TSESTree.JSXOpeningElement): string | null {
   if (node.name.type === "JSXIdentifier") {
     return node.name.name;
   }
@@ -21,9 +19,7 @@ export function getJSXElementName(
       if (current.property.type === "JSXIdentifier") {
         parts.unshift(current.property.name);
       }
-      current = current.object as
-        | TSESTree.JSXMemberExpression
-        | TSESTree.JSXIdentifier;
+      current = current.object as TSESTree.JSXMemberExpression | TSESTree.JSXIdentifier;
     }
 
     if (current.type === "JSXIdentifier") {
@@ -59,18 +55,12 @@ export function getJSXAttributeValue(
 /**
  * Checks if a function call matches a specific name
  */
-export function isFunctionCall(
-  node: TSESTree.CallExpression,
-  functionName: string,
-): boolean {
+export function isFunctionCall(node: TSESTree.CallExpression, functionName: string): boolean {
   if (node.callee.type === "Identifier") {
     return node.callee.name === functionName;
   }
 
-  if (
-    node.callee.type === "MemberExpression" &&
-    node.callee.property.type === "Identifier"
-  ) {
+  if (node.callee.type === "MemberExpression" && node.callee.property.type === "Identifier") {
     return node.callee.property.name === functionName;
   }
 
@@ -80,10 +70,7 @@ export function isFunctionCall(
 /**
  * Gets the type of a node using TypeScript type checker
  */
-export function getNodeType(
-  context: any,
-  node: TSESTree.Node,
-): Type | undefined {
+export function getNodeType(context: any, node: TSESTree.Node): Type | undefined {
   const parserServices = ESLintUtils.getParserServices(context);
   const checker = parserServices.program.getTypeChecker();
   const tsNode = parserServices.esTreeNodeToTSNodeMap.get(node);
@@ -98,10 +85,7 @@ export function getNodeType(
 /**
  * Checks if a type is a string literal type
  */
-export function isStringLiteralType(
-  type: Type,
-  _checker: TypeChecker,
-): boolean {
+export function isStringLiteralType(type: Type, _checker: TypeChecker): boolean {
   return !!(type.flags & TypeFlags.StringLiteral);
 }
 
@@ -119,11 +103,7 @@ export function getStringLiteralValue(type: Type): string | undefined {
  * Checks if a node is an empty string literal
  */
 export function isEmptyStringLiteral(node: TSESTree.Node): boolean {
-  return (
-    node.type === "Literal" &&
-    typeof node.value === "string" &&
-    node.value === ""
-  );
+  return node.type === "Literal" && typeof node.value === "string" && node.value === "";
 }
 
 /**
@@ -157,9 +137,7 @@ export function getFunctionParameters(
   return parameters.map((param, index) => {
     const paramType = checker.getTypeOfSymbolAtLocation(param, tsNode);
     const declarations = param.getDeclarations();
-    const isOptional =
-      declarations?.some((decl: any) => decl.questionToken !== undefined) ||
-      false;
+    const isOptional = declarations?.some((decl: any) => decl.questionToken !== undefined) || false;
 
     return {
       name: param.getName(),

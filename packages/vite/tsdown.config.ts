@@ -8,6 +8,7 @@ export default defineConfig((options) => [
     dts: true,
     sourcemap: true,
     exports: true,
+    outputOptions: { exports: "named" },
     ignoreWatch: [".turbo"],
   },
 ]);

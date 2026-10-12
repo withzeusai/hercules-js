@@ -1,5 +1,30 @@
 # @usehercules/vite
 
+## 1.2.1
+
+### Patch Changes
+
+- [#133](https://github.com/withzeusai/hercules-js/pull/133) [`8abc7b1`](https://github.com/withzeusai/hercules-js/commit/8abc7b1ed2bb03cca46c6084a3205dcaa8c1ef02) Thanks [@delbyte](https://github.com/delbyte)! - Seed the Vite dependency optimizer from every source file at dev-server startup so large apps with many lazy-loaded routes no longer trigger a mid-session re-optimize and full reload. The reload could leave react-dom bound to a previous optimizer generation of React, producing the recurring "Cannot read properties of null (reading 'useContext'/'useMemo')" crash. Only `src` is crawled, so server-only dependencies are never pre-bundled.
+
+## 1.2.0
+
+### Minor Changes
+
+- [#120](https://github.com/withzeusai/hercules-js/pull/120) [`8fb36ce`](https://github.com/withzeusai/hercules-js/commit/8fb36ce902d6af7bfd94cce5471c4c2d9343a61b) Thanks [@grant0417](https://github.com/grant0417)! - Keep component tagging out of production builds
+
+  The component tagger and visual editor plugins are now `apply: "serve"`, so
+  they never run during `vite build`. Built output contains no `data-hercules-id`
+  / `data-hercules-name` attributes and no injected editor script, giving
+  published sites white-label markup. Previously the tagger ran in builds
+  unconditionally, and the editor's script tag could leak into built HTML when
+  `NODE_ENV` was unset during the build.
+
+## 1.1.0
+
+### Minor Changes
+
+- [#80](https://github.com/withzeusai/hercules-js/pull/80) [`6acfa12`](https://github.com/withzeusai/hercules-js/commit/6acfa1291399848ca544b2f69a7922cebdbca23e) Thanks [@grant0417](https://github.com/grant0417)! - Add support for Vite 8. The `vite` peer dependency range is now `^7.0.0 || ^8.0.0`.
+
 ## 1.0.42
 
 ### Patch Changes

@@ -23,9 +23,7 @@ vi.mock("react-oidc-context", () => ({
 type CapturedUseAuth = () => {
   isLoading: boolean;
   isAuthenticated: boolean;
-  fetchAccessToken: (args: {
-    forceRefreshToken: boolean;
-  }) => Promise<string | null>;
+  fetchAccessToken: (args: { forceRefreshToken: boolean }) => Promise<string | null>;
 };
 
 let capturedUseAuth: CapturedUseAuth | null = null;
@@ -43,9 +41,9 @@ vi.mock("convex/react", () => ({
   },
 }));
 
-// Token expiring in 30 minutes (within the 1hr refresh threshold)
+// Token expiring in 30 minutes (within the one-hour refresh threshold).
 const EXPIRING_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 30 * 60);
-// Token expiring in 2 hours (outside the 1hr refresh threshold)
+// Token expiring in two hours (outside the one-hour refresh threshold).
 const LONG_LIVED_TOKEN = makeJwt(Math.floor(Date.now() / 1000) + 2 * 60 * 60);
 
 function setAuthState(overrides: Record<string, unknown>) {
@@ -111,7 +109,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     expect(mockSigninSilent).not.toHaveBeenCalled();
   });
 
-  it("skips refresh when token expires more than 1 hour from now", async () => {
+  it("skips refresh when token expires more than one hour from now", async () => {
     setAuthState({ user: { id_token: LONG_LIVED_TOKEN } });
 
     const { result } = renderUseAuth();
@@ -200,11 +198,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
 
       resolveSilent?.({ id_token: "fresh-token" });
 
-      [firstToken, secondToken, thirdToken] = await Promise.all([
-        first,
-        second,
-        third,
-      ]);
+      [firstToken, secondToken, thirdToken] = await Promise.all([first, second, third]);
     });
 
     expect(firstToken).toBe("fresh-token");
@@ -252,9 +246,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     const { result, rerender } = renderUseAuth();
     const firstFetch = result.current.fetchAccessToken;
 
-    expect(
-      await result.current.fetchAccessToken({ forceRefreshToken: false }),
-    ).toBe(FIRST_TOKEN);
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(FIRST_TOKEN);
 
     setAuthState({
       user: {
@@ -265,9 +257,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     rerender();
 
     expect(result.current.fetchAccessToken).toBe(firstFetch);
-    expect(
-      await result.current.fetchAccessToken({ forceRefreshToken: false }),
-    ).toBe(SECOND_TOKEN);
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(SECOND_TOKEN);
   });
 
   it("re-identifies fetchAccessToken when the subject changes", async () => {
@@ -285,9 +275,7 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     });
     rerender();
 
-    expect(
-      await result.current.fetchAccessToken({ forceRefreshToken: false }),
-    ).toBe(BOB_TOKEN);
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(BOB_TOKEN);
     expect(result.current.fetchAccessToken).not.toBe(aliceFetch);
   });
 
@@ -313,8 +301,6 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
     rerender();
 
     expect(result.current.fetchAccessToken).not.toBe(firstFetch);
-    expect(
-      await result.current.fetchAccessToken({ forceRefreshToken: false }),
-    ).toBe(SECOND_TOKEN);
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(SECOND_TOKEN);
   });
 });

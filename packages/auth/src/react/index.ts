@@ -1,5 +1,6 @@
 export * from "./auth-callback-hook";
 export * from "./HerculesAuthProvider";
+export * from "./impersonation";
 export * from "./use-user";
 export * from "./use-auth";
 

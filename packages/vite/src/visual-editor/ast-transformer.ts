@@ -4,10 +4,7 @@ import traverseModule from "@babel/traverse";
 import generateModule from "@babel/generator";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
-import {
-  type ClassNameAnalysis,
-  type TextContentAnalysis,
-} from "./ast-analyzer";
+import { type ClassNameAnalysis, type TextContentAnalysis } from "./ast-analyzer";
 
 // Extract the actual functions
 const traverse = (traverseModule as any).default || traverseModule;
@@ -70,8 +67,7 @@ export async function updateComponentElement(
 
     let modified = false;
     let foundElements = 0;
-    const nearbyElements: Array<{ line: number; col: number; tag: string }> =
-      [];
+    const nearbyElements: Array<{ line: number; col: number; tag: string }> = [];
 
     // Traverse the AST to find and update the JSX element
     traverse(ast, {
@@ -112,10 +108,7 @@ export async function updateComponentElement(
               } else {
                 // Add new className attribute
                 openingElement.attributes.push(
-                  t.jsxAttribute(
-                    t.jsxIdentifier("className"),
-                    t.stringLiteral(updates.className),
-                  ),
+                  t.jsxAttribute(t.jsxIdentifier("className"), t.stringLiteral(updates.className)),
                 );
               }
             }
@@ -179,10 +172,7 @@ export async function updateComponentElement(
   }
 }
 
-export async function deleteComponent(
-  componentId: string,
-  rootDir: string,
-): Promise<UpdateResult> {
+export async function deleteComponent(componentId: string, rootDir: string): Promise<UpdateResult> {
   try {
     // Parse component ID format: "path/to/file.tsx:line:col"
     const match = componentId.match(/^(.+):(\d+):(\d+)$/);
@@ -225,8 +215,7 @@ export async function deleteComponent(
 
     let modified = false;
     let foundElements = 0;
-    const nearbyElements: Array<{ line: number; col: number; tag: string }> =
-      [];
+    const nearbyElements: Array<{ line: number; col: number; tag: string }> = [];
 
     // Traverse the AST to find and delete the JSX element
     traverse(ast, {

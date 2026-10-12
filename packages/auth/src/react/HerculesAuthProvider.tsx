@@ -1,24 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AuthProvider as ReactAuthProvider,
   type AuthProviderUserManagerProps,
+  useAuth,
 } from "react-oidc-context";
+import { WebStorageStateStore, type UserManager, type UserManagerSettings } from "oidc-client-ts";
+import { withRefreshLock } from "../internal/refresh-lock";
+import { HerculesUserManager } from "../internal/user-manager";
 import {
-  UserManager,
-  WebStorageStateStore,
-  type UserManagerSettings,
-} from "oidc-client-ts";
-import { createContext, useContext } from "react";
+  clearHerculesImpersonationParamsFromUrl,
+  getHerculesImpersonationStorageKey,
+  HERCULES_IMPERSONATION_SESSION_ID_PARAM,
+  HERCULES_IMPERSONATION_TOKEN_PARAM,
+  rememberHerculesImpersonationSession,
+} from "./impersonation-core";
 
-export type HerculesAuthProviderProps = Omit<
-  AuthProviderUserManagerProps,
-  "userManager"
-> & {
+const RECOVERY_TIMEOUT_MS = 10_000;
+const LOCK_GRACE_MS = 5_000;
+
+export type HerculesAuthProviderProps = Omit<AuthProviderUserManagerProps, "userManager"> & {
   userManagerSettings?: Partial<UserManagerSettings>;
   authority: string;
   client_id: string;
+  loadingFallback?: ReactNode;
 };
 
 function onSigninCallback() {
@@ -36,10 +42,10 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
 
 interface HerculesAuthProviderContext {
   userManager: UserManager;
+  impersonationStorageKey: string;
 }
 
-const HerculesAuthProviderContext =
-  createContext<HerculesAuthProviderContext | null>(null);
+const HerculesAuthProviderContext = createContext<HerculesAuthProviderContext | null>(null);
 
 export function useHerculesAuthProvider() {
   const context = useContext(HerculesAuthProviderContext);
@@ -47,6 +53,100 @@ export function useHerculesAuthProvider() {
     throw new Error("HerculesAuthProviderContext not found");
   }
   return context;
+}
+
+function DefaultLoadingFallback() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading"
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "grid",
+        placeItems: "center",
+        pointerEvents: "none",
+      }}
+    >
+      <svg
+        width="32"
+        height="32"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="10" opacity="0.25" />
+        <path d="M22 12a10 10 0 0 0-10-10" strokeLinecap="round">
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 12 12"
+            to="360 12 12"
+            dur="0.8s"
+            repeatCount="indefinite"
+          />
+        </path>
+      </svg>
+    </div>
+  );
+}
+
+function AuthRecoveryGate({
+  children,
+  loadingFallback,
+  skipRecovery,
+}: {
+  children: ReactNode;
+  loadingFallback: ReactNode;
+  skipRecovery: boolean;
+}) {
+  const { user, isLoading, signinSilent } = useAuth();
+  const userExpired = user?.expired === true;
+  const hasAttempted = useRef(false);
+  const signinSilentRef = useRef(signinSilent);
+  signinSilentRef.current = signinSilent;
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+
+  useEffect(() => {
+    if (skipRecovery) {
+      hasAttempted.current = true;
+      setRecoveryDone(true);
+      return;
+    }
+    if (isLoading) return;
+    if (hasAttempted.current) return;
+    hasAttempted.current = true;
+
+    if (!user || !userExpired) {
+      setRecoveryDone(true);
+      return;
+    }
+
+    setRecovering(true);
+    const finish = () => {
+      setRecovering(false);
+      setRecoveryDone(true);
+    };
+    setTimeout(finish, RECOVERY_TIMEOUT_MS);
+
+    void withRefreshLock(async () => {
+      await Promise.race([
+        signinSilentRef.current().catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_TIMEOUT_MS + LOCK_GRACE_MS)),
+      ]);
+    }).finally(finish);
+  }, [isLoading, skipRecovery, userExpired]);
+
+  const shouldBlock = !skipRecovery && (recovering || (!recoveryDone && !isLoading && userExpired));
+
+  if (shouldBlock) {
+    return <>{loadingFallback}</>;
+  }
+
+  return <>{children}</>;
 }
 
 /**
@@ -60,39 +160,157 @@ export function HerculesAuthProvider({
   userManagerSettings,
   authority,
   client_id,
+  loadingFallback = <DefaultLoadingFallback />,
   ...props
 }: HerculesAuthProviderProps) {
-  const [userManager] = useState(
-    () =>
-      new UserManager({
+  const automaticSilentRenewExplicit = userManagerSettings?.automaticSilentRenew === true;
+  const [{ userManager, impersonationStorageKey }] = useState(() => {
+    const effectiveAuthority = userManagerSettings?.authority ?? authority;
+    const effectiveClientId = userManagerSettings?.client_id ?? client_id;
+
+    return {
+      userManager: new HerculesUserManager({
         ...userManagerSettings,
-        authority: userManagerSettings?.authority ?? authority,
-        client_id: userManagerSettings?.client_id ?? client_id,
+        authority: effectiveAuthority,
+        client_id: effectiveClientId,
         prompt: userManagerSettings?.prompt ?? "select_account",
         response_type: userManagerSettings?.response_type ?? "code",
-        scope:
-          userManagerSettings?.scope ?? "openid profile email offline_access",
+        scope: userManagerSettings?.scope ?? "openid profile email offline_access",
         redirect_uri:
-          userManagerSettings?.redirect_uri ??
-          `${window.location.origin}/auth/callback`,
+          userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
         post_logout_redirect_uri:
-          userManagerSettings?.post_logout_redirect_uri ??
-          window.location.origin,
+          userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
         userStore:
           userManagerSettings?.userStore ??
           new WebStorageStateStore({ store: window.localStorage }),
+        automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
+        silentRequestTimeoutInSeconds:
+          userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
       }),
-  );
+      impersonationStorageKey: getHerculesImpersonationStorageKey(
+        effectiveAuthority,
+        effectiveClientId,
+      ),
+    };
+  });
+
+  useEffect(() => {
+    if (automaticSilentRenewExplicit) return;
+    let retryTimerId: ReturnType<typeof setTimeout> | null = null;
+    let timeoutRetryCount = 0;
+    let stopped = false;
+    const events = userManager.events as unknown as {
+      _raiseSilentRenewError?: (e: Error) => void;
+    };
+    const tryRenew = () => {
+      if (stopped) return;
+      void withRefreshLock(async () => {
+        if (stopped) return;
+        try {
+          await userManager.signinSilent();
+          timeoutRetryCount = 0;
+        } catch (err) {
+          if (stopped) return;
+          const isTimeout = err instanceof Error && err.name === "ErrorTimeout";
+          if (isTimeout) {
+            timeoutRetryCount++;
+            const maxRetries = (
+              userManager.settings as {
+                maxSilentRenewTimeoutRetries?: number;
+              }
+            ).maxSilentRenewTimeoutRetries;
+            if (maxRetries !== undefined && timeoutRetryCount > maxRetries) {
+              timeoutRetryCount = 0;
+              events._raiseSilentRenewError?.(err as Error);
+              return;
+            }
+            retryTimerId = setTimeout(() => {
+              retryTimerId = null;
+              tryRenew();
+            }, 5000);
+          } else {
+            timeoutRetryCount = 0;
+            events._raiseSilentRenewError?.(err as Error);
+          }
+        }
+      });
+    };
+    const onExpiring = () => tryRenew();
+    userManager.events.addAccessTokenExpiring(onExpiring);
+    return () => {
+      stopped = true;
+      userManager.events.removeAccessTokenExpiring(onExpiring);
+      if (retryTimerId !== null) clearTimeout(retryTimerId);
+    };
+  }, [userManager, automaticSilentRenewExplicit]);
 
   return (
-    <HerculesAuthProviderContext.Provider value={{ userManager }}>
-      <ReactAuthProvider
-        userManager={userManager}
-        {...DEFAULT_AUTH_CONFIG}
-        {...props}
-      >
-        {children}
+    <HerculesAuthProviderContext.Provider value={{ userManager, impersonationStorageKey }}>
+      <ReactAuthProvider userManager={userManager} {...DEFAULT_AUTH_CONFIG} {...props}>
+        <HerculesImpersonationHandoff storageKey={impersonationStorageKey} />
+        <AuthRecoveryGate
+          loadingFallback={loadingFallback}
+          skipRecovery={hasCompleteImpersonationHandoff()}
+        >
+          {children}
+        </AuthRecoveryGate>
       </ReactAuthProvider>
     </HerculesAuthProviderContext.Provider>
+  );
+}
+
+function HerculesImpersonationHandoff({ storageKey }: { storageKey: string }) {
+  const auth = useAuth();
+  const hasStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasStartedRef.current || typeof window === "undefined") return;
+
+    const url = new URL(window.location.href);
+    const impersonationSessionId = url.searchParams.get(HERCULES_IMPERSONATION_SESSION_ID_PARAM);
+    const impersonationToken = url.searchParams.get(HERCULES_IMPERSONATION_TOKEN_PARAM);
+    if (!impersonationSessionId && !impersonationToken) return;
+    if (!impersonationSessionId || !impersonationToken) {
+      window.history.replaceState(
+        {},
+        document.title,
+        clearHerculesImpersonationParamsFromUrl(url).toString(),
+      );
+      return;
+    }
+    if (auth.isLoading) return;
+
+    hasStartedRef.current = true;
+    rememberHerculesImpersonationSession(storageKey, impersonationSessionId);
+    window.history.replaceState(
+      {},
+      document.title,
+      clearHerculesImpersonationParamsFromUrl(url).toString(),
+    );
+
+    void (async () => {
+      if (auth.isAuthenticated) {
+        await auth.removeUser();
+      }
+
+      await auth.signinRedirect({
+        extraQueryParams: {
+          [HERCULES_IMPERSONATION_SESSION_ID_PARAM]: impersonationSessionId,
+          [HERCULES_IMPERSONATION_TOKEN_PARAM]: impersonationToken,
+        },
+      });
+    })();
+  }, [auth, storageKey]);
+
+  return null;
+}
+
+function hasCompleteImpersonationHandoff(): boolean {
+  if (typeof window === "undefined") return false;
+
+  const params = new URL(window.location.href).searchParams;
+  return (
+    params.has(HERCULES_IMPERSONATION_SESSION_ID_PARAM) &&
+    params.has(HERCULES_IMPERSONATION_TOKEN_PARAM)
   );
 }

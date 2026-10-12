@@ -8,9 +8,11 @@ export default defineConfig({
   minify: false,
   exports: true,
   sourcemap: true,
-  external: [
-    "@typescript-eslint/utils",
-    "@typescript-eslint/scope-manager",
-    "@typescript-eslint/type-utils",
-  ],
+  deps: {
+    neverBundle: [
+      "@typescript-eslint/utils",
+      "@typescript-eslint/scope-manager",
+      "@typescript-eslint/type-utils",
+    ],
+  },
 });

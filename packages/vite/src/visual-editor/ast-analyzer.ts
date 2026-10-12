@@ -113,11 +113,7 @@ function analyzeElementDeletionSafety(path: any): ElementTypeAnalysis {
     }
 
     // Stop checking at function/component boundaries
-    if (
-      t.isFunction(current) ||
-      t.isArrowFunctionExpression(current) ||
-      t.isJSXElement(current)
-    ) {
+    if (t.isFunction(current) || t.isArrowFunctionExpression(current) || t.isJSXElement(current)) {
       break;
     }
 
@@ -147,8 +143,7 @@ function extractTextContent(children: any[]): TextContentAnalysis {
   const allStatic = children.every(
     (child) =>
       t.isJSXText(child) ||
-      (t.isJSXExpressionContainer(child) &&
-        t.isStringLiteral(child.expression)),
+      (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression)),
   );
 
   if (allStatic) {
@@ -156,10 +151,7 @@ function extractTextContent(children: any[]): TextContentAnalysis {
       .map((child) => {
         if (t.isJSXText(child)) {
           return child.value;
-        } else if (
-          t.isJSXExpressionContainer(child) &&
-          t.isStringLiteral(child.expression)
-        ) {
+        } else if (t.isJSXExpressionContainer(child) && t.isStringLiteral(child.expression)) {
           return child.expression.value;
         }
         return "";

@@ -38,4 +38,3 @@ export default script;
 writeFileSync(join(distBrowserDir, "script-content.d.mts"), dtsContent);
 
 console.log("✓ Generated script-content.mjs and script-content.d.mts");
-

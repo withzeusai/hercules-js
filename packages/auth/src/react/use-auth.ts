@@ -5,9 +5,19 @@ import {
 import { useHerculesAuthProvider } from "./HerculesAuthProvider";
 import { useCallback, useMemo } from "react";
 
+export interface SigninOptions {
+  /**
+   * In-app path to land on after sign-in (e.g. "/projects/42"). Round-tripped
+   * through the OIDC `state` value and surfaced on `auth.user.state` as
+   * `{ returnTo }` for the callback page to honor. Defaults to the current
+   * URL (path + query + hash) so sign-in returns users to where they were.
+   */
+  returnTo?: string;
+}
+
 export interface AuthContextProps extends OidcAuthContextProps {
   signout: () => Promise<void>;
-  signin: () => Promise<void>;
+  signin: (options?: SigninOptions) => Promise<void>;
 }
 
 export function useAuth(): AuthContextProps {
@@ -24,9 +34,15 @@ export function useAuth(): AuthContextProps {
     }
   }, [userManager, signoutRedirect, removeUser]);
 
-  const signin = useCallback(async () => {
-    await signinRedirect();
-  }, [signinRedirect]);
+  const signin = useCallback(
+    async (options?: SigninOptions) => {
+      const returnTo =
+        options?.returnTo ??
+        window.location.pathname + window.location.search + window.location.hash;
+      await signinRedirect({ state: { returnTo } });
+    },
+    [signinRedirect],
+  );
 
   return useMemo(() => {
     return {

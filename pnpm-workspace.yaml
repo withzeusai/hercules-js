@@ -1,9 +1,18 @@
 packages:
   - packages/*
 
+allowBuilds:
+  esbuild: true
+
 minimumReleaseAge: 4320 # 3 days
-# minimumReleaseAgeExclude:
-#   - excluded package name
+minimumReleaseAgeExclude:
+  - "@usehercules/sdk"
+  # Release tooling only, never shipped to users.
+  - "@changesets/*"
 
 onlyBuiltDependencies:
   - esbuild
+
+overrides:
+  # GHSA-rfgv-xxqx-mfg5 batch, fixed in 7.29.1.
+  "undici@7": "^7.29.1"

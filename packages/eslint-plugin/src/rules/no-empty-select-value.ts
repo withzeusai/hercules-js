@@ -1,9 +1,5 @@
 import { TSESTree } from "@typescript-eslint/utils";
-import {
-  getJSXElementName,
-  getJSXAttributeValue,
-  isEmptyStringLiteral,
-} from "../utils/ast-utils";
+import { getJSXElementName, getJSXAttributeValue, isEmptyStringLiteral } from "../utils/ast-utils";
 import { createRule } from "./_helpers";
 
 type Options = [];
