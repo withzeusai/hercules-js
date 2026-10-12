@@ -33,11 +33,19 @@ import { readSession } from "./session-store";
 // root barrel — the client bundle must never pull this graph in.
 
 /**
+ * OIDC `prompt` sent when the caller passes none. The provider keeps its own
+ * single-sign-on session, so without it a sign-in silently reuses whichever
+ * account last signed in there, even in another app. `login` makes the user
+ * sign in explicitly every time.
+ */
+const DEFAULT_PROMPT = "login";
+
+/**
  * Map {@link GetAuthURLOptions} onto OIDC authorization-request parameters.
  * Pure so the option→parameter mapping can be unit-tested directly.
  */
 export function authorizationParameters(
-  options: Pick<GetAuthURLOptions, "screenHint" | "scope" | "maxAge" | "loginHint">,
+  options: Pick<GetAuthURLOptions, "screenHint" | "scope" | "maxAge" | "loginHint" | "prompt">,
   flow: { redirectUri: string; state: string; codeChallenge: string },
 ): Record<string, string> {
   const parameters: Record<string, string> = {
@@ -47,6 +55,9 @@ export function authorizationParameters(
     code_challenge: flow.codeChallenge,
     code_challenge_method: "S256",
   };
+  // An explicit empty string opts out of `prompt` entirely.
+  const prompt = options.prompt ?? DEFAULT_PROMPT;
+  if (prompt) parameters.prompt = prompt;
   if (options.screenHint) parameters.screen_hint = options.screenHint;
   // `max_age=0` is meaningful (always force reauthentication), so gate on type.
   if (typeof options.maxAge === "number" && options.maxAge >= 0) {

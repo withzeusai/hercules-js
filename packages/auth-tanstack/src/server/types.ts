@@ -1,5 +1,11 @@
 import type { IDToken } from "openid-client";
 
+/**
+ * OIDC `prompt` values. Space-delimited combinations (e.g. `login consent`)
+ * are also accepted.
+ */
+export type AuthPrompt = "login" | "none" | "consent" | "select_account" | (string & {});
+
 export interface HandleSignInOptions {
   /**
    * Callback URL the provider redirects back to after authentication. Accepts
@@ -29,6 +35,12 @@ export interface HandleSignInOptions {
   maxAge?: number;
   /** OIDC `login_hint`: pre-fill the provider's login form (e.g. an email). */
   loginHint?: string;
+  /**
+   * OIDC `prompt`. Defaults to `login`, so the user signs in explicitly instead
+   * of silently reusing the provider's existing session. Pass `select_account`,
+   * `consent`, or `none` to change that, or an empty string to send no `prompt`.
+   */
+  prompt?: AuthPrompt;
 }
 
 export interface HandleCallbackOptions {
