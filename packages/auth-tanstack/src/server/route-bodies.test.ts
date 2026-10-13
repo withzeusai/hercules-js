@@ -221,4 +221,18 @@ describe("handleSignInInternal", () => {
     const setCookies = response.headers.getSetCookie();
     expect(setCookies.some((h) => h.startsWith(pkceCookieName("fresh-state")))).toBe(true);
   });
+
+  it("sends prompt=login by default and honors a caller override", async () => {
+    const promptOf = async (options?: { prompt?: string }) => {
+      const response = await handleSignInInternal(
+        new Request("https://app.example.com/auth/sign-in"),
+        options,
+      );
+      return new URL(response.headers.get("Location")!).searchParams.get("prompt");
+    };
+
+    expect(await promptOf()).toBe("login");
+    expect(await promptOf({ prompt: "select_account" })).toBe("select_account");
+    expect(await promptOf({ prompt: "" })).toBeNull();
+  });
 });

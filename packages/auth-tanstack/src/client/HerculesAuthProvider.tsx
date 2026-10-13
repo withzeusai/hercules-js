@@ -7,7 +7,7 @@ import {
 } from "../server/actions";
 import type { ClientUserInfo, Impersonator, NoUserInfo, User } from "../types";
 import type { AuthContextType, HerculesAuthProviderProps } from "./types";
-import { signOutFallback } from "./sign-out-redirect";
+import { resolveSignOutNavigation, signOutFallback } from "./sign-out-redirect";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -91,7 +91,7 @@ export function HerculesAuthProvider({
   const signOut = useCallback(async ({ returnTo }: { returnTo?: string } = {}) => {
     try {
       const { url } = await getSignOutUrl({ data: returnTo === undefined ? {} : { returnTo } });
-      window.location.href = url;
+      window.location.href = await resolveSignOutNavigation(url, window.location.origin);
     } catch {
       window.location.href = signOutFallback(returnTo, window.location.origin);
     }

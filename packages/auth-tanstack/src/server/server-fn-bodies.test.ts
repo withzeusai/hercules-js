@@ -93,7 +93,28 @@ describe("authorizationParameters", () => {
       state: "s",
       code_challenge: "c",
       code_challenge_method: "S256",
+      prompt: "login",
     });
+  });
+
+  it("requires an explicit sign-in by default", () => {
+    // The provider's single-sign-on session must not silently pick the account.
+    expect(authorizationParameters({}, FLOW).prompt).toBe("login");
+    expect(authorizationParameters({ maxAge: 300 }, FLOW)).toMatchObject({
+      prompt: "login",
+      max_age: "300",
+    });
+  });
+
+  it.each(["none", "select_account", "consent", "login consent"])(
+    "lets the caller override prompt with %j",
+    (prompt) => {
+      expect(authorizationParameters({ prompt }, FLOW).prompt).toBe(prompt);
+    },
+  );
+
+  it("omits prompt when the caller passes an empty string", () => {
+    expect(authorizationParameters({ prompt: "" }, FLOW)).not.toHaveProperty("prompt");
   });
 
   it("maps screenHint, maxAge, and loginHint onto their OIDC parameters", () => {
