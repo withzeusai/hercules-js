@@ -1,5 +1,18 @@
 # @usehercules/auth-tanstack
 
+## 0.7.0
+
+### Minor Changes
+
+- [#169](https://github.com/withzeusai/hercules-js/pull/169) [`9fbb9e6`](https://github.com/withzeusai/hercules-js/commit/9fbb9e66763a897c4598a156f8d6151aafd81667) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Require an explicit sign-in and stop framed sign-out from breaking the app.
+
+  - Every authorization request now sends OIDC `prompt=login`. The provider keeps its own single-sign-on session, so a sign-in previously returned whichever account was already signed in there without asking. `getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`, and `handleSignInRoute` accept a new `prompt` option to override it (`select_account`, `consent`, `none`), or an empty string to send no `prompt`. `maxAge` is unchanged and can be combined with it.
+  - `useAuth().signOut()` inside an iframe, such as the App Builder preview, no longer navigates the frame to the hosted end-session page, which refuses to be framed. Framed apps send the end-session request in the background and navigate to their own post-logout destination. Top-level sign-out is unchanged.
+
+### Patch Changes
+
+- [#150](https://github.com/withzeusai/hercules-js/pull/150) [`e1248f0`](https://github.com/withzeusai/hercules-js/commit/e1248f0fd21f3a63c77966bfbcabaee6a482b471) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Keep the sign-out error fallback on the current app origin. Reject executable schemes and external return targets when the sign-out request fails.
+
 ## 0.6.0
 
 ### Minor Changes
