@@ -188,6 +188,31 @@ function shouldTagElement(
 const validExtensions = new Set([".jsx", ".tsx"]);
 const isSandbox = process.env.HERCULES_DEV_SERVER === "true";
 
+// TanStack Router's code splitter loads each route component from a virtual
+// module, `routes/index.tsx?tsr-split=component`, and the module-level bindings
+// the pieces share from `routes/index.tsx?tsr-shared=1`. Both carry the route
+// file's own source, so they are tagged as that file.
+const routeSplitParams = new Set(["tsr-split", "tsr-shared"]);
+
+/**
+ * The source file a module id is tagged as, or null when the id is not a JSX
+ * source file. Ids with any other query (`?raw`, `?url`) are left alone.
+ */
+export function taggableFilePath(id: string): string | null {
+  const queryStart = id.indexOf("?");
+  const filePath = queryStart === -1 ? id : id.slice(0, queryStart);
+  if (queryStart !== -1) {
+    const params = [...new URLSearchParams(id.slice(queryStart + 1)).keys()];
+    if (params.length === 0 || !params.every((param) => routeSplitParams.has(param))) {
+      return null;
+    }
+  }
+  if (!validExtensions.has(path.extname(filePath)) || filePath.includes("node_modules")) {
+    return null;
+  }
+  return filePath;
+}
+
 export class ComponentTagger {
   private stats: ComponentTaggerStats = {
     totalFiles: 0,
@@ -202,12 +227,13 @@ export class ComponentTagger {
   }
 
   async transformCode(code: string, id: string): Promise<{ code: string; map: any } | null> {
-    if (!validExtensions.has(path.extname(id)) || id.includes("node_modules")) {
+    const filePath = taggableFilePath(id);
+    if (!filePath) {
       return null;
     }
 
     this.stats.totalFiles++;
-    const relativePath = path.relative(this.cwd, id) || id;
+    const relativePath = path.relative(this.cwd, filePath) || filePath;
 
     try {
       const parserOptions = {
