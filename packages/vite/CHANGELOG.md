@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 1.2.2
+
+### Patch Changes
+
+- [#171](https://github.com/withzeusai/hercules-js/pull/171) [`c807772`](https://github.com/withzeusai/hercules-js/commit/c8077720e8c034aa9eca807fbf78ceedca6bab73) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Tag JSX in TanStack Router route components. The code splitter loads them from `?tsr-split` and `?tsr-shared` virtual modules, which the component tagger skipped, so the visual editor could not select anything on a TanStack Start page.
+
 ## 1.2.1
 
 ### Patch Changes
