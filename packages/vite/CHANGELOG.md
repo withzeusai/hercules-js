@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 1.2.5
+
+### Patch Changes
+
+- [#175](https://github.com/withzeusai/hercules-js/pull/175) [`37506e2`](https://github.com/withzeusai/hercules-js/commit/37506e20bfeee55651a3df389f1c91f9bfd450da) Thanks [@delbyte](https://github.com/delbyte)! - Stop tagging components in files that import from `@react-three/*`, except those imported from `@react-three/fiber` such as `<Canvas>`. A wrapper like `function Tag(props) { return <Html {...props} /> }` forwarded `data-hercules-name` into the React Three Fiber reconciler, which threw `R3F: Cannot set "data-hercules-name"` and blanked the canvas in the dev preview. DOM elements in those files are still tagged.
+
 ## 1.2.4
 
 ### Patch Changes
