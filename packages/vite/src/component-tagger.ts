@@ -167,20 +167,18 @@ const threeFiberElems = new Set([
 // Keep: Check if element should be tagged
 function shouldTagElement(
   elementName: string,
-  threeDreiImportedElements: Set<string>,
-  threeDreiNamespaces: Set<string>,
+  importsReactThree: boolean,
+  fiberImports: Set<string>,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
     return false;
   }
-  if (threeDreiImportedElements.has(elementName)) {
-    return false;
-  }
-  if (elementName.includes(".")) {
-    const namespace = elementName.split(".")[0];
-    if (namespace && threeDreiNamespaces.has(namespace)) {
-      return false;
-    }
+  // In a file that imports @react-three/*, any component (a name that is not a
+  // lowercase intrinsic, such as drei or a wrapper spreading props into <mesh>)
+  // may render into the R3F reconciler, which throws on data-* props. Only
+  // fiber's own Canvas renders DOM.
+  if (importsReactThree && !/^[a-z][^.]*$/.test(elementName)) {
+    return fiberImports.has(elementName.split(".")[0]!);
   }
   return true;
 }
@@ -317,33 +315,22 @@ export class ComponentTagger {
       let elementIndex = 0;
       const magicString = new MagicString(code);
       let changedElementsCount = 0;
-      const threeDreiImportedElements = new Set<string>();
-      const threeDreiNamespaces = new Set<string>();
+      let importsReactThree = false;
+      const fiberImports = new Set<string>();
 
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
 
-      // First pass: collect @react-three/* companion-package imports (drei,
-      // postprocessing, cannon, rapier, xr). Their named exports render into
-      // the R3F reconciler, which trips on injected data-hercules-name.
-      // @react-three/fiber's <Canvas> is excluded since it renders a real
-      // DOM canvas where data-* attributes are valid.
+      // First pass: find @react-three/* imports
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
             const source = node.source?.value;
-            if (
-              typeof source === "string" &&
-              source.startsWith("@react-three/") &&
-              source !== "@react-three/fiber"
-            ) {
-              node.specifiers.forEach((spec: any) => {
-                if (spec.type === "ImportSpecifier") {
-                  threeDreiImportedElements.add(spec.local.name);
-                } else if (spec.type === "ImportNamespaceSpecifier") {
-                  threeDreiNamespaces.add(spec.local.name);
-                }
-              });
+            if (typeof source === "string" && source.startsWith("@react-three/")) {
+              importsReactThree = true;
+              if (source === "@react-three/fiber") {
+                node.specifiers.forEach((spec) => fiberImports.add(spec.local.name));
+              }
             }
           }
         },
@@ -373,11 +360,7 @@ export class ComponentTagger {
             const col = position?.col ?? jsxNode.loc?.start?.column ?? 0;
             const dataComponentId = `${relativePath}:${line}:${col}`;
 
-            const shouldTag = shouldTagElement(
-              elementName,
-              threeDreiImportedElements,
-              threeDreiNamespaces,
-            );
+            const shouldTag = shouldTagElement(elementName, importsReactThree, fiberImports);
 
             if (shouldTag) {
               // Only add the new data attributes (no legacy)
