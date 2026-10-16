@@ -214,6 +214,67 @@ export function taggableFilePath(id: string): string | null {
   return filePath;
 }
 
+function openingElementName(node: any): string | null {
+  if (node.name.type === "JSXIdentifier") {
+    return node.name.name;
+  }
+  if (node.name.type === "JSXMemberExpression") {
+    return `${node.name.object.name}.${node.name.property.name}`;
+  }
+  return null;
+}
+
+interface ElementPosition {
+  name: string | null;
+  line: number;
+  col: number;
+}
+
+/**
+ * The name and start of every JSX opening element in `code`, in walk order.
+ */
+async function openingElementPositions(code: string): Promise<ElementPosition[]> {
+  const ast = parse(code, { sourceType: "module", plugins: ["jsx", "typescript"] });
+  const { walk } = await import("estree-walker");
+  const positions: ElementPosition[] = [];
+  walk(ast as any, {
+    enter(node: any) {
+      if (node.type === "JSXOpeningElement") {
+        positions.push({
+          name: openingElementName(node),
+          line: node.loc?.start?.line ?? 0,
+          col: node.loc?.start?.column ?? 0,
+        });
+      }
+    },
+  });
+  return positions;
+}
+
+/**
+ * Element positions taken from the source file when `code` has the same JSX
+ * elements in the same order, or null when it does not. A plugin that runs
+ * before this one can insert text into the file's code: TanStack devtools adds
+ * a `data-tsd-source` attribute to every opening tag, which moves each later
+ * element on the same line to the right. The editor looks elements up in the
+ * file on disk, so their ids must carry the file's columns.
+ */
+async function sourcePositions(code: string, source: string): Promise<ElementPosition[] | null> {
+  const [fromCode, fromSource] = await Promise.all([
+    openingElementPositions(code),
+    openingElementPositions(source),
+  ]);
+  if (fromCode.length !== fromSource.length) {
+    return null;
+  }
+  for (let i = 0; i < fromCode.length; i++) {
+    if (fromCode[i]!.name !== fromSource[i]!.name) {
+      return null;
+    }
+  }
+  return fromSource;
+}
+
 export class ComponentTagger {
   private stats: ComponentTaggerStats = {
     totalFiles: 0,
@@ -227,7 +288,15 @@ export class ComponentTagger {
     this.dataAttribute = options.dataAttribute || "data-component-id";
   }
 
-  async transformCode(code: string, id: string): Promise<{ code: string; map: any } | null> {
+  /**
+   * Tags the JSX elements of `code`. When `source` is given (the file on disk),
+   * ids carry its line and column instead of those of `code`.
+   */
+  async transformCode(
+    code: string,
+    id: string,
+    source?: string,
+  ): Promise<{ code: string; map: any } | null> {
     const filePath = taggableFilePath(id);
     if (!filePath) {
       return null;
@@ -243,6 +312,9 @@ export class ComponentTagger {
       };
 
       const ast = parse(code, parserOptions);
+      const positions =
+        source === undefined || source === code ? null : await sourcePositions(code, source);
+      let elementIndex = 0;
       const magicString = new MagicString(code);
       let changedElementsCount = 0;
       const threeDreiImportedElements = new Set<string>();
@@ -285,14 +357,10 @@ export class ComponentTagger {
         enter(node: any) {
           if (node.type === "JSXOpeningElement") {
             const jsxNode = node;
-            let elementName: string;
-
-            if (jsxNode.name.type === "JSXIdentifier") {
-              elementName = jsxNode.name.name;
-            } else if (jsxNode.name.type === "JSXMemberExpression") {
-              const memberExpr = jsxNode.name;
-              elementName = `${memberExpr.object.name}.${memberExpr.property.name}`;
-            } else {
+            const position = positions?.[elementIndex];
+            elementIndex++;
+            const elementName = openingElementName(jsxNode);
+            if (elementName === null) {
               return;
             }
 
@@ -301,8 +369,8 @@ export class ComponentTagger {
               return;
             }
 
-            const line = jsxNode.loc?.start?.line ?? 0;
-            const col = jsxNode.loc?.start?.column ?? 0;
+            const line = position?.line ?? jsxNode.loc?.start?.line ?? 0;
+            const col = position?.col ?? jsxNode.loc?.start?.column ?? 0;
             const dataComponentId = `${relativePath}:${line}:${col}`;
 
             const shouldTag = shouldTagElement(
@@ -405,12 +473,15 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
       return tagger.transformCode(await readFile(filePath, "utf8"), id);
     },
 
+    // Plugins listed earlier may have changed the code already (TanStack
+    // devtools adds an attribute to every element), so ids take their line and
+    // column from the file on disk.
     async transform(code, id) {
       if (taggableFilePath(id) !== id) {
         return null;
       }
-      const result = await tagger.transformCode(code, id);
-      return result;
+      const source = await readFile(id, "utf8").catch(() => undefined);
+      return tagger.transformCode(code, id, source);
     },
   };
 }
