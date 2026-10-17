@@ -1,5 +1,13 @@
 # @usehercules/vite
 
+## 1.2.5
+
+### Patch Changes
+
+- [#179](https://github.com/withzeusai/hercules-js/pull/179) [`3266cf4`](https://github.com/withzeusai/hercules-js/commit/3266cf42ff3ff6fa0776792fbc8d6c32c8b6a77b) Thanks [@delbyte](https://github.com/delbyte)! - Tag JSX elements after their type arguments. An element with explicit type arguments, such as `<Select<Option> value={value} />`, got its `data-hercules-id` and `data-hercules-name` attributes between the tag name and the type arguments, which is a syntax error, so the dev preview failed to load.
+
+- [#175](https://github.com/withzeusai/hercules-js/pull/175) [`37506e2`](https://github.com/withzeusai/hercules-js/commit/37506e20bfeee55651a3df389f1c91f9bfd450da) Thanks [@delbyte](https://github.com/delbyte)! - Stop tagging components in files that import from `@react-three/*`, except those imported from `@react-three/fiber` such as `<Canvas>`. A wrapper like `function Tag(props) { return <Html {...props} /> }` forwarded `data-hercules-name` into the React Three Fiber reconciler, which threw `R3F: Cannot set "data-hercules-name"` and blanked the canvas in the dev preview. DOM elements in those files are still tagged.
+
 ## 1.2.4
 
 ### Patch Changes
