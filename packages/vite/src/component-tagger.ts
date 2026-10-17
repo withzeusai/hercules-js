@@ -363,8 +363,9 @@ export class ComponentTagger {
             const shouldTag = shouldTagElement(elementName, importsReactThree, fiberImports);
 
             if (shouldTag) {
-              // Only add the new data attributes (no legacy)
-              const endPosition = jsxNode.name.end ?? 0;
+              // Insert after the tag name, or after its type arguments in
+              // `<Foo<Bar>>`: an attribute between them is a syntax error
+              const endPosition = (jsxNode.typeArguments ?? jsxNode.name).end ?? 0;
 
               // Build the attributes string
               let attributesString = ` ${dataAttribute}="${dataComponentId}" data-hercules-name="${elementName}"`;
