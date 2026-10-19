@@ -13,9 +13,18 @@ import type { PluginConfig as CloudflarePluginConfig } from "@cloudflare/vite-pl
 import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
 import type { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { herculesAliases } from "./aliases";
+import { holdPagesDuringReload } from "./hold-pages-during-reload";
+import {
+  onlyDeclared,
+  PREBUNDLED_PACKAGES,
+  readDeclaredDependencies,
+  SSR_PREBUNDLED_PACKAGES,
+} from "./prebundle";
 
 export type { Alias } from "vite";
 export { herculesAliases, type AliasDirs } from "./aliases";
+export { holdPagesDuringReload } from "./hold-pages-during-reload";
+export { PREBUNDLED_PACKAGES, SSR_PREBUNDLED_PACKAGES } from "./prebundle";
 
 /** Options accepted by `tanstackStart()` from `@tanstack/react-start/plugin/vite`. */
 export type TanStackStartPluginOptions = NonNullable<Parameters<typeof tanstackStart>[0]>;
@@ -57,14 +66,6 @@ export const DEDUPE: readonly string[] = [
   "@tanstack/react-router",
 ];
 
-const OPTIMIZE_DEPS_INCLUDE: readonly string[] = [
-  "react",
-  "react-dom",
-  "react-dom/client",
-  "react/jsx-runtime",
-  "react/jsx-dev-runtime",
-];
-
 export interface HerculesTanStackConfigOptions {
   /** Extra Vite plugins, appended after the Hercules plugin stack. */
   plugins?: PluginOption[];
@@ -74,6 +75,21 @@ export interface HerculesTanStackConfigOptions {
    * over the defaults, so this is the escape hatch for one-off tweaks.
    */
   vite?: UserConfig;
+
+  /**
+   * Packages to bundle up front in the browser and on the server, on top of
+   * {@link PREBUNDLED_PACKAGES}. Use it for a package the app adds, so the
+   * first page that imports it does not trigger a re-optimization and a full
+   * reload of the preview.
+   */
+  prebundle?: string[];
+
+  /**
+   * Hold page requests while the dev server reloads the Worker, so the first
+   * render after a full reload does not fail. See {@link holdPagesDuringReload}.
+   * @default true
+   */
+  holdPagesDuringReload?: boolean;
 
   /**
    * Application source directory, relative to the Vite root. Mapped to `@`.
@@ -108,7 +124,12 @@ export interface HerculesTanStackConfigOptions {
    */
   hercules?: HerculesPluginOptions | false;
 
-  /** Options forwarded to `@tanstack/devtools-vite`. Pass `false` to skip it. */
+  /**
+   * Options forwarded to `@tanstack/devtools-vite`. Console piping and
+   * enhanced logs are off unless set here: server logs already reach the
+   * terminal, and piping them into the browser prints each line twice.
+   * Pass `false` to skip it.
+   */
   devtools?: TanStackDevtoolsViteConfig | false;
 
   /**
@@ -120,6 +141,8 @@ export interface HerculesTanStackConfigOptions {
 
 const OPTION_KEYS: ReadonlySet<string> = new Set<keyof HerculesTanStackConfigOptions>([
   "vite",
+  "prebundle",
+  "holdPagesDuringReload",
   "srcDir",
   "convexDir",
   "react",
@@ -187,13 +210,23 @@ async function normalizeOptions(
 async function buildPlugins(options: HerculesTanStackConfigOptions): Promise<PluginOption[]> {
   const plugins: PluginOption[] = [];
 
+  if (options.holdPagesDuringReload !== false) plugins.push(holdPagesDuringReload());
+
   if (options.devtools !== false) {
     const mod = await importOptional(
       "@tanstack/devtools-vite",
       () => import("@tanstack/devtools-vite"),
       options.devtools !== undefined,
     );
-    if (mod) plugins.push(mod.devtools(options.devtools));
+    if (mod) {
+      plugins.push(
+        mod.devtools({
+          consolePiping: { enabled: false },
+          enhancedLogs: { enabled: false },
+          ...options.devtools,
+        }),
+      );
+    }
   }
 
   if (options.tailwind !== false) {
@@ -237,14 +270,29 @@ export function herculesBaseConfig(
 ): UserConfig {
   const root = path.resolve(options.vite?.root ?? process.cwd());
   const { srcDir = "src", convexDir = "convex" } = options;
+  const declared = readDeclaredDependencies(root);
+  const prebundled = [...onlyDeclared(PREBUNDLED_PACKAGES, declared), ...(options.prebundle ?? [])];
 
   return {
     resolve: {
       alias: herculesAliases({ root, srcDir, convexDir }),
       dedupe: [...DEDUPE],
     },
+    // The browser bundle gets the same list as the server: without it each
+    // package the app starts using triggers a re-bundle and a full reload of
+    // the preview.
     optimizeDeps: {
-      include: [...OPTIMIZE_DEPS_INCLUDE],
+      include: prebundled,
+    },
+    environments: {
+      // "ssr" is the Worker environment (see `viteEnvironment` in
+      // `buildPlugins`). TanStack Start already includes React here and must
+      // keep its router packages out.
+      ssr: {
+        optimizeDeps: {
+          include: [...prebundled, ...onlyDeclared(SSR_PREBUNDLED_PACKAGES, declared)],
+        },
+      },
     },
     build: {
       chunkSizeWarningLimit: 1000,

@@ -32,19 +32,20 @@ export default defineVitestConfig();
 
 Plugins, in order:
 
-1. `@tanstack/devtools-vite`
-2. `@tailwindcss/vite`
-3. `@usehercules/vite` (component tagger, visual editor, error forwarding; dev server only)
-4. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
-5. `@tanstack/react-start`
-6. `@vitejs/plugin-react`
-7. Any plugins you pass
+1. `hercules:hold-pages-during-reload` (dev server only): after a change that reloads the Worker, page requests wait until file changes go quiet, the first one warms the Worker alone, and the rest follow. Without it the first render after a reload can fail with "Invalid hook call". A request is never held longer than 3 seconds.
+2. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
+3. `@tailwindcss/vite`
+4. `@usehercules/vite` (component tagger, visual editor, error forwarding; dev server only)
+5. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
+6. `@tanstack/react-start`
+7. `@vitejs/plugin-react`
+8. Any plugins you pass
 
 Base config:
 
 - `@` maps to `src/` and `@/convex` maps to `convex/`, matching the `paths` block in the app's `tsconfig.json`.
 - React, React DOM, TanStack Query and TanStack Router are deduped so only one copy ever loads.
-- React is pre-bundled by the dependency optimizer.
+- The template packages (`PREBUNDLED_PACKAGES`: TanStack Query, Convex, the Hercules auth SDK, Radix, `motion`, `recharts`, and the rest of the starter's UI packages) are pre-bundled in both the browser and the `ssr` environment, so Vite never re-optimizes them mid-session. A server-side re-optimization loads a second React copy and breaks SSR until a restart. Packages the app's `package.json` does not declare are skipped.
 - Dev server: host `0.0.0.0`, port `5173`, all hosts allowed, HMR overlay off. This is the shape the Hercules preview expects.
 
 When `HERCULES_DEV_SERVER=true` (set on the Hercules dev machine) the config also:
@@ -76,6 +77,8 @@ export default defineConfig({
 | Option          | Default    | Description                                                                        |
 | --------------- | ---------- | ---------------------------------------------------------------------------------- |
 | `plugins`       | `[]`       | Extra Vite plugins, appended after the Hercules stack.                             |
+| `prebundle`     | `[]`       | Extra packages to pre-bundle in the browser and the `ssr` environment.             |
+| `holdPagesDuringReload` | `true` | `false` lets page requests through while the dev server reloads the Worker. |
 | `vite`          |            | Vite options merged over the generated config. Anything set here wins.             |
 | `srcDir`        | `"src"`    | Application source directory, mapped to `@`.                                       |
 | `convexDir`     | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex. |
