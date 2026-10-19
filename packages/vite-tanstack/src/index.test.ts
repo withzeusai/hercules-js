@@ -1,14 +1,21 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Alias, ConfigEnv, Plugin, PluginOption } from "vite";
 import {
   DEDUPE,
   HERCULES_DEV_SERVER_ENV,
+  PREBUNDLED_PACKAGES,
   TOOL_MANAGED_WATCH_IGNORES,
   defineConfig,
   herculesBaseConfig,
   isHerculesDevServer,
 } from "./index";
+import { onlyDeclared, packageNameOf } from "./prebundle";
+
+const devtools = vi.hoisted(() => vi.fn((_options?: unknown) => ({ name: "devtools-stub" })));
+vi.mock("@tanstack/devtools-vite", () => ({ devtools }));
 
 const serve: ConfigEnv = { command: "serve", mode: "development" };
 
@@ -31,12 +38,49 @@ function pluginNames(plugins: PluginOption[] | undefined): string[] {
   return names;
 }
 
+/** A project root whose package.json declares `dependencies`. */
+function appRoot(dependencies: Record<string, string>): string {
+  const root = mkdtempSync(path.join(tmpdir(), "vite-tanstack-"));
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies }));
+  return root;
+}
+
+const templateDependencies = Object.fromEntries(
+  PREBUNDLED_PACKAGES.map((entry) => [packageNameOf(entry), "*"]),
+);
+
 function aliasEntries(alias: unknown): Alias[] {
   return alias as Alias[];
 }
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  devtools.mockClear();
+});
+
+describe("packageNameOf", () => {
+  it.each([
+    ["clsx", "clsx"],
+    ["convex/react", "convex"],
+    ["motion/react", "motion"],
+    ["@hookform/resolvers/zod", "@hookform/resolvers"],
+    ["@tanstack/react-router > @tanstack/react-store", "@tanstack/react-router"],
+  ])("maps %s to %s", (entry, name) => {
+    expect(packageNameOf(entry)).toBe(name);
+  });
+});
+
+describe("onlyDeclared", () => {
+  it("keeps every entry when package.json cannot be read", () => {
+    expect(onlyDeclared(["clsx", "zod"], undefined)).toEqual(["clsx", "zod"]);
+  });
+
+  it("drops entries whose package the app does not declare", () => {
+    expect(onlyDeclared(["clsx", "convex/react", "zod"], new Set(["convex", "zod"]))).toEqual([
+      "convex/react",
+      "zod",
+    ]);
+  });
 });
 
 describe("isHerculesDevServer", () => {
@@ -69,6 +113,23 @@ describe("herculesBaseConfig", () => {
   it("dedupes React and TanStack", () => {
     const config = herculesBaseConfig({}, { sandbox: false });
     expect(config.resolve?.dedupe).toEqual(DEDUPE);
+  });
+
+  it("prebundles the template packages in the browser and the Worker", () => {
+    const root = appRoot(templateDependencies);
+    const config = herculesBaseConfig({ vite: { root } }, { sandbox: false });
+    expect(config.optimizeDeps?.include).toEqual(PREBUNDLED_PACKAGES);
+    expect(config.environments?.ssr?.optimizeDeps?.include).toEqual([
+      ...PREBUNDLED_PACKAGES,
+      "convex/browser",
+    ]);
+  });
+
+  it("prebundles only declared packages, plus the extra ones", () => {
+    const root = appRoot({ clsx: "*", three: "*" });
+    const config = herculesBaseConfig({ vite: { root }, prebundle: ["three"] }, { sandbox: false });
+    expect(config.optimizeDeps?.include).toEqual(["clsx", "three"]);
+    expect(config.environments?.ssr?.optimizeDeps?.include).toEqual(["clsx", "three"]);
   });
 
   it("uses the Hercules dev-server shape everywhere", () => {
@@ -105,6 +166,30 @@ describe("defineConfig", () => {
     const names = pluginNames(config.plugins);
     expect(names.some((n) => n.includes("tanstack"))).toBe(true);
     expect(names.some((n) => n.startsWith("vite:react"))).toBe(true);
+  });
+
+  it("holds page requests during reloads unless turned off", async () => {
+    const on = pluginNames((await defineConfig(bare)(serve)).plugins);
+    expect(on[0]).toBe("hercules:hold-pages-during-reload");
+
+    const off = pluginNames(
+      (await defineConfig({ ...bare, holdPagesDuringReload: false })(serve)).plugins,
+    );
+    expect(off).not.toContain("hercules:hold-pages-during-reload");
+  });
+
+  it("turns devtools console piping off unless the app sets it", async () => {
+    await defineConfig({ ...bare, devtools: undefined })(serve);
+    expect(devtools).toHaveBeenLastCalledWith({
+      consolePiping: { enabled: false },
+      enhancedLogs: { enabled: false },
+    });
+
+    await defineConfig({ ...bare, devtools: { consolePiping: { enabled: true } } })(serve);
+    expect(devtools).toHaveBeenLastCalledWith({
+      consolePiping: { enabled: true },
+      enhancedLogs: { enabled: false },
+    });
   });
 
   it("appends user plugins after the Hercules stack", async () => {
