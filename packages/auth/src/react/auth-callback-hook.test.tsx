@@ -137,6 +137,90 @@ describe("useAuthCallback", () => {
       }
     });
 
+    it("keeps waiting when the backend confirms the saved tokens after 30 seconds", async () => {
+      vi.useFakeTimers();
+
+      try {
+        const onSync = vi.fn().mockResolvedValue(undefined);
+        setAuthState({ isLoading: false, isAuthenticated: true });
+
+        const { result, rerender } = renderHook(
+          ({ backendAuth }: { backendAuth: boolean }) =>
+            useAuthCallback({ isBackendAuthenticated: backendAuth, onSync, timeoutMs: 5000 }),
+          { initialProps: { backendAuth: false } },
+        );
+
+        act(() => {
+          vi.advanceTimersByTime(30_000);
+        });
+
+        expect(result.current.status).toBe("waiting-backend");
+
+        rerender({ backendAuth: true });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(result.current.status).toBe("success");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still times out when the backend never confirms the saved tokens", () => {
+      vi.useFakeTimers();
+
+      try {
+        setAuthState({ isLoading: false, isAuthenticated: true });
+
+        const { result } = renderHook(() =>
+          useAuthCallback({ isBackendAuthenticated: false, timeoutMs: 5000 }),
+        );
+
+        act(() => {
+          vi.advanceTimersByTime(59_999);
+        });
+
+        expect(result.current.status).toBe("waiting-backend");
+
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+
+        expect(result.current.status).toBe("error");
+        expect(result.current.error).toBe("Authentication timed out. Please try again.");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not show a timeout while a sync takes 30 seconds", async () => {
+      vi.useFakeTimers();
+
+      try {
+        const onSync = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 30_000)));
+        setAuthState({ isLoading: false, isAuthenticated: true });
+
+        const { result } = renderHook(() =>
+          useAuthCallback({ isBackendAuthenticated: true, onSync, timeoutMs: 5000 }),
+        );
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(29_999);
+        });
+
+        expect(result.current.status).toBe("syncing");
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+
+        expect(result.current.status).toBe("success");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not timeout after reaching success", async () => {
       vi.useFakeTimers();
 
