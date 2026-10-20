@@ -50,6 +50,17 @@ dropped from the `vite build` pipeline entirely. Built output contains no
 tagging attributes and no injected editor script — published sites ship
 white-label markup regardless of how `NODE_ENV` is set.
 
+## Server rendering error page (dev only)
+
+When a TanStack Start page throws something other than a `Response` during
+server rendering, Start answers with a raw JSON 500
+(`{"status":500,"unhandled":true,...}`). On `vite dev`, page loads that get
+this response see a short HTML error page instead, with the same status. The
+page loads the Vite client so the next file change reloads it, and it polls its
+own URL with the `x-hercules-error-probe` header, reloading once the page
+answers below 500. API calls, assets, and every other response, including the
+app's own HTML error pages, are passed through unchanged.
+
 ## Features
 
 Currently, this is a dummy plugin that:

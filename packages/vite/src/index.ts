@@ -1,5 +1,6 @@
 import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
+import { ssrErrorPagePlugin } from "./ssr-error-page";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
 import {
@@ -106,6 +107,10 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       }),
     );
   }
+
+  // Dev server only: turns TanStack Start's raw JSON 500 on a page load into an
+  // HTML page that reloads itself once the page renders again.
+  plugins.push(ssrErrorPagePlugin());
 
   // Main Hercules plugin
   plugins.push({
