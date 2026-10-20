@@ -164,6 +164,10 @@ const threeFiberElems = new Set([
   "colorShiftMaterial",
 ]);
 
+// R3F intrinsics that share their name with a DOM or SVG element. Outside an
+// R3F file they are DOM elements and keep their tags.
+const threeFiberDomNamedElems = new Set(["line", "path", "audio", "source"]);
+
 // Keep: Check if element should be tagged
 function shouldTagElement(
   elementName: string,
@@ -171,6 +175,9 @@ function shouldTagElement(
   fiberImports: Set<string>,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
+    return false;
+  }
+  if (importsReactThree && threeFiberDomNamedElems.has(elementName)) {
     return false;
   }
   // In a file that imports @react-three/*, any component (a name that is not a
