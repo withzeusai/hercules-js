@@ -28,11 +28,12 @@ const el = (
     <path />
     <audio />
     <source />
+    <clippingGroup />
   </Canvas>
 );`);
 
     expect(output).toContain('data-hercules-name="Canvas"');
-    expect(output).not.toMatch(/data-hercules-name="(line|path|audio|source)"/);
+    expect(output).not.toMatch(/data-hercules-name="(line|path|audio|source|clippingGroup)"/);
   });
 
   it("tags DOM elements with those names outside R3F files", async () => {

@@ -162,6 +162,7 @@ const threeFiberElems = new Set([
   "fogExp2",
   "shape",
   "colorShiftMaterial",
+  "clippingGroup",
 ]);
 
 // R3F intrinsics that share their name with a DOM or SVG element. Outside an
