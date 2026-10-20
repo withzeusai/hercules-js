@@ -193,28 +193,31 @@ export function HerculesAuthProvider({
     const effectiveAuthority = userManagerSettings?.authority ?? authority;
     const effectiveClientId = userManagerSettings?.client_id ?? client_id;
 
+    const userManager = new HerculesUserManager({
+      ...userManagerSettings,
+      authority: effectiveAuthority,
+      client_id: effectiveClientId,
+      prompt: userManagerSettings?.prompt ?? "select_account",
+      response_type: userManagerSettings?.response_type ?? "code",
+      scope: userManagerSettings?.scope ?? "openid profile email offline_access",
+      redirect_uri: userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
+      post_logout_redirect_uri:
+        userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
+      userStore:
+        userManagerSettings?.userStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
+      stateStore:
+        userManagerSettings?.stateStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
+      // Started in the effect below, so a manager that React creates and
+      // discards (Strict Mode runs this initializer twice) never renews.
+      automaticSilentRenew: false,
+      silentRequestTimeoutInSeconds:
+        userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
+    });
+    // Only the constructor reads this, so report the caller's value afterward.
+    Object.assign(userManager.settings, { automaticSilentRenew: automaticSilentRenewExplicit });
+
     return {
-      userManager: new HerculesUserManager({
-        ...userManagerSettings,
-        authority: effectiveAuthority,
-        client_id: effectiveClientId,
-        prompt: userManagerSettings?.prompt ?? "select_account",
-        response_type: userManagerSettings?.response_type ?? "code",
-        scope: userManagerSettings?.scope ?? "openid profile email offline_access",
-        redirect_uri:
-          userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
-        post_logout_redirect_uri:
-          userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
-        userStore:
-          userManagerSettings?.userStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
-        stateStore:
-          userManagerSettings?.stateStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
-        // Started in the effect below, so a manager that React creates and
-        // discards (Strict Mode runs this initializer twice) never renews.
-        automaticSilentRenew: false,
-        silentRequestTimeoutInSeconds:
-          userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
-      }),
+      userManager,
       impersonationStorageKey: getHerculesImpersonationStorageKey(
         effectiveAuthority,
         effectiveClientId,

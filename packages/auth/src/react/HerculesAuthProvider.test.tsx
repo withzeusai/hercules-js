@@ -9,7 +9,7 @@ const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 let mockAuthState: Record<string, unknown> = {};
 // Managers whose silent renewal is running, as oidc-client-ts tracks it.
-const renewingManagers = new Set<object>();
+const renewingManagers = new Set<{ settings: { automaticSilentRenew?: boolean } }>();
 const localStorageMock = createMemoryStorage();
 
 Object.defineProperty(window, "localStorage", {
@@ -24,7 +24,9 @@ vi.mock("react-oidc-context", () => ({
 
 vi.mock("oidc-client-ts", () => ({
   UserManager: class {
+    settings: { automaticSilentRenew?: boolean };
     constructor(settings: { automaticSilentRenew?: boolean }) {
+      this.settings = { ...settings };
       if (settings.automaticSilentRenew) renewingManagers.add(this);
     }
     startSilentRenew() {
@@ -119,6 +121,7 @@ describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
         </HerculesAuthProvider>,
       );
       expect(renewingManagers.size).toBe(1);
+      expect([...renewingManagers][0]?.settings.automaticSilentRenew).toBe(true);
       unmount();
       expect(renewingManagers.size).toBe(0);
     } finally {
