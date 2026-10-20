@@ -209,7 +209,9 @@ export function HerculesAuthProvider({
           userManagerSettings?.userStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
         stateStore:
           userManagerSettings?.stateStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
-        automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
+        // Started in the effect below, so a manager that React creates and
+        // discards (Strict Mode runs this initializer twice) never renews.
+        automaticSilentRenew: false,
         silentRequestTimeoutInSeconds:
           userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
       }),
@@ -221,7 +223,10 @@ export function HerculesAuthProvider({
   });
 
   useEffect(() => {
-    if (automaticSilentRenewExplicit) return;
+    if (automaticSilentRenewExplicit) {
+      userManager.startSilentRenew();
+      return () => userManager.stopSilentRenew();
+    }
     let retryTimerId: ReturnType<typeof setTimeout> | null = null;
     let timeoutRetryCount = 0;
     let stopped = false;
