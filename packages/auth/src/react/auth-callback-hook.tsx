@@ -6,6 +6,9 @@ import { ConvexError } from "convex/values";
 import * as z from "zod";
 
 const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
+// Once the tokens are saved, the backend confirming them (such as a Convex
+// WebSocket on Safari) can take longer than the token exchange.
+const MIN_TIMEOUT_AFTER_TOKENS_MS = 60_000;
 const MISSING_STATE_MESSAGE = "No matching state found in storage";
 const MISSING_STATE_RETRY_KEY = "hercules-auth:missing-state-retry";
 
@@ -49,7 +52,8 @@ export type AuthCallbackStatus =
  */
 export interface UseAuthCallbackOptions {
   /**
-   * Timeout in milliseconds before the callback is considered failed.
+   * Timeout in milliseconds for each step of the callback. Once the tokens are
+   * saved, the backend and sync steps each get at least 60 seconds.
    * @default 20000
    */
   timeoutMs?: number;
@@ -178,12 +182,14 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
   useEffect(() => {
     if (status === "success" || status === "error") return;
 
+    const stepTimeoutMs =
+      status === "processing-oauth" ? timeoutMs : Math.max(timeoutMs, MIN_TIMEOUT_AFTER_TOKENS_MS);
     const timeout = setTimeout(() => {
       if (mountedRef.current) {
         setStatus("error");
         setError("Authentication timed out. Please try again.");
       }
-    }, timeoutMs);
+    }, stepTimeoutMs);
 
     return () => clearTimeout(timeout);
   }, [status, timeoutMs]);
