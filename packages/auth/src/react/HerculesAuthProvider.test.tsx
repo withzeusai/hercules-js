@@ -8,6 +8,8 @@ const mockSigninSilent = vi.fn();
 const mockSigninRedirect = vi.fn();
 const mockRemoveUser = vi.fn();
 let mockAuthState: Record<string, unknown> = {};
+// Managers whose silent renewal is running, as oidc-client-ts tracks it.
+const renewingManagers = new Set<{ settings: { automaticSilentRenew?: boolean } }>();
 const localStorageMock = createMemoryStorage();
 
 Object.defineProperty(window, "localStorage", {
@@ -22,7 +24,17 @@ vi.mock("react-oidc-context", () => ({
 
 vi.mock("oidc-client-ts", () => ({
   UserManager: class {
-    constructor() {}
+    settings: { automaticSilentRenew?: boolean };
+    constructor(settings: { automaticSilentRenew?: boolean }) {
+      this.settings = { ...settings };
+      if (settings.automaticSilentRenew) renewingManagers.add(this);
+    }
+    startSilentRenew() {
+      renewingManagers.add(this);
+    }
+    stopSilentRenew() {
+      renewingManagers.delete(this);
+    }
     events = {
       addAccessTokenExpiring: vi.fn(),
       removeAccessTokenExpiring: vi.fn(),
@@ -55,6 +67,7 @@ beforeEach(() => {
   mockSigninSilent.mockReset();
   mockSigninRedirect.mockReset();
   mockRemoveUser.mockReset();
+  renewingManagers.clear();
 });
 
 function renderProvider(
@@ -93,6 +106,27 @@ describe("HerculesAuthProvider accessTokenExpiring renewal listener", () => {
       </HerculesAuthProvider>,
     );
     expect(screen.getByTestId("app")).toBeDefined();
+  });
+
+  it("runs one silent renewal under Strict Mode and stops it on unmount", () => {
+    configure({ reactStrictMode: true });
+    try {
+      const { unmount } = render(
+        <HerculesAuthProvider
+          authority="https://auth.example.com"
+          client_id="test-client"
+          userManagerSettings={{ automaticSilentRenew: true }}
+        >
+          <div data-testid="app">app</div>
+        </HerculesAuthProvider>,
+      );
+      expect(renewingManagers.size).toBe(1);
+      expect([...renewingManagers][0]?.settings.automaticSilentRenew).toBe(true);
+      unmount();
+      expect(renewingManagers.size).toBe(0);
+    } finally {
+      configure({ reactStrictMode: false });
+    }
   });
 });
 
