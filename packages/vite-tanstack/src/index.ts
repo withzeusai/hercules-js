@@ -14,17 +14,18 @@ import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
 import type { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { herculesAliases } from "./aliases";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
-import {
-  onlyDeclared,
-  PREBUNDLED_PACKAGES,
-  readDeclaredDependencies,
-  SSR_PREBUNDLED_PACKAGES,
-} from "./prebundle";
+import { prebundleDependencies } from "./prebundle";
 
 export type { Alias } from "vite";
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
-export { PREBUNDLED_PACKAGES, SSR_PREBUNDLED_PACKAGES } from "./prebundle";
+export {
+  PREBUNDLED_ENTRIES,
+  SSR_PREBUNDLED_ENTRIES,
+  prebundleDependencies,
+  dependenciesToPrebundle,
+  type PrebundleOptions,
+} from "./prebundle";
 
 /** Options accepted by `tanstackStart()` from `@tanstack/react-start/plugin/vite`. */
 export type TanStackStartPluginOptions = NonNullable<Parameters<typeof tanstackStart>[0]>;
@@ -77,12 +78,22 @@ export interface HerculesTanStackConfigOptions {
   vite?: UserConfig;
 
   /**
-   * Packages to bundle up front in the browser and on the server, on top of
-   * {@link PREBUNDLED_PACKAGES}. Use it for a package the app adds, so the
-   * first page that imports it does not trigger a re-optimization and a full
-   * reload of the preview.
+   * Entries to bundle up front in the browser and on the server, on top of
+   * the app's dependencies and {@link PREBUNDLED_ENTRIES}. Use it for an
+   * entry a package name does not cover, such as a subpath (`lodash/debounce`)
+   * or a dependency of an excluded package (`excluded > nested`).
    */
   prebundle?: string[];
+
+  /**
+   * Bundle every runtime dependency in the app's `package.json` up front, and
+   * restart the dev server when the dependencies change, so a package the
+   * agent installs never makes Vite re-optimize mid-session. See
+   * {@link prebundleDependencies}. `false` bundles only {@link PREBUNDLED_ENTRIES} and
+   * `prebundle`.
+   * @default true
+   */
+  prebundleDependencies?: boolean;
 
   /**
    * Hold page requests while the dev server reloads the Worker, so the first
@@ -142,6 +153,7 @@ export interface HerculesTanStackConfigOptions {
 const OPTION_KEYS: ReadonlySet<string> = new Set<keyof HerculesTanStackConfigOptions>([
   "vite",
   "prebundle",
+  "prebundleDependencies",
   "holdPagesDuringReload",
   "srcDir",
   "convexDir",
@@ -207,10 +219,22 @@ async function normalizeOptions(
  * Build the Vite plugin stack. Everything is imported lazily so a disabled
  * plugin costs nothing at config load and optional peers stay optional.
  */
-async function buildPlugins(options: HerculesTanStackConfigOptions): Promise<PluginOption[]> {
+async function buildPlugins(
+  options: HerculesTanStackConfigOptions,
+  root: string,
+): Promise<PluginOption[]> {
   const plugins: PluginOption[] = [];
 
   if (options.holdPagesDuringReload !== false) plugins.push(holdPagesDuringReload());
+
+  plugins.push(
+    prebundleDependencies({
+      root,
+      srcDir: options.srcDir ?? "src",
+      dependencies: options.prebundleDependencies !== false,
+      extra: options.prebundle ?? [],
+    }),
+  );
 
   if (options.devtools !== false) {
     const mod = await importOptional(
@@ -260,6 +284,10 @@ async function buildPlugins(options: HerculesTanStackConfigOptions): Promise<Plu
   return plugins;
 }
 
+function rootOf(options: HerculesTanStackConfigOptions): string {
+  return path.resolve(options.vite?.root ?? process.cwd());
+}
+
 /**
  * Base config shared by every Hercules TanStack Start app. Kept separate from
  * `defineConfig` so the Vitest helper can reuse the same aliases.
@@ -268,32 +296,17 @@ export function herculesBaseConfig(
   options: HerculesTanStackConfigOptions,
   { sandbox = isHerculesDevServer() }: { sandbox?: boolean } = {},
 ): UserConfig {
-  const root = path.resolve(options.vite?.root ?? process.cwd());
+  const root = rootOf(options);
   const { srcDir = "src", convexDir = "convex" } = options;
-  const declared = readDeclaredDependencies(root);
-  const prebundled = [...onlyDeclared(PREBUNDLED_PACKAGES, declared), ...(options.prebundle ?? [])];
 
   return {
     resolve: {
       alias: herculesAliases({ root, srcDir, convexDir }),
       dedupe: [...DEDUPE],
     },
-    // The browser bundle gets the same list as the server: without it each
-    // package the app starts using triggers a re-bundle and a full reload of
-    // the preview.
-    optimizeDeps: {
-      include: prebundled,
-    },
-    environments: {
-      // "ssr" is the Worker environment (see `viteEnvironment` in
-      // `buildPlugins`). TanStack Start already includes React here and must
-      // keep its router packages out.
-      ssr: {
-        optimizeDeps: {
-          include: [...prebundled, ...onlyDeclared(SSR_PREBUNDLED_PACKAGES, declared)],
-        },
-      },
-    },
+    // Dependency pre-bundling for the browser and the "ssr" (Worker)
+    // environment is set by the `hercules:prebundle-dependencies` plugin, which needs the
+    // excludes other plugins add. See `prebundle.ts`.
     build: {
       chunkSizeWarningLimit: 1000,
     },
@@ -340,7 +353,7 @@ export function defineConfig(
   return async (env) => {
     const options = await normalizeOptions(config, env);
     const base = herculesBaseConfig(options);
-    base.plugins = await buildPlugins(options);
+    base.plugins = await buildPlugins(options, rootOf(options));
     return options.vite ? mergeConfig(base, options.vite) : base;
   };
 }
