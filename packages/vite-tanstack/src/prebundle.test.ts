@@ -128,6 +128,12 @@ describe("dependenciesToPrebundle", () => {
     expect(dependenciesToPrebundle(root)).toEqual([]);
   });
 
+  it("leaves out a package a project-root file shadows", () => {
+    const root = appRoot({ convex: "*", zod: "*" }, { convex: lib, zod: lib });
+    writeFileSync(path.join(root, "convex.json"), "{}");
+    expect(dependenciesToPrebundle(root)).toEqual(["zod"]);
+  });
+
   it("ignores devDependencies", () => {
     const root = appRoot({}, { vitest: lib });
     writeFileSync(
@@ -219,18 +225,36 @@ describe("restart on dependency changes", () => {
     server: ViteDevServer;
     watcher: EventEmitter & { add: ReturnType<typeof vi.fn> };
     restart: ReturnType<typeof vi.fn>;
+    finishRestart: (replaced: boolean) => void;
+    wsSend: ReturnType<typeof vi.fn>;
+    hotSend: ReturnType<typeof vi.fn>;
   }
 
   function fakeServer(): FakeServer {
     const watcher = Object.assign(new EventEmitter(), { add: vi.fn() });
-    const restart = vi.fn(() => Promise.resolve());
+    const wsSend = vi.fn();
+    const hotSend = vi.fn();
+    let finish: () => void = () => {};
     const server = {
       watcher,
-      restart,
       config: { logger: { info: vi.fn() } },
       httpServer: new EventEmitter(),
-    } as unknown as ViteDevServer;
-    return { server, watcher, restart };
+      ws: { send: wsSend },
+      environments: { client: { hot: { send: hotSend } } },
+    } as unknown as ViteDevServer & { environments: object };
+    const restart = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    Object.assign(server, { restart });
+    const finishRestart = (replaced: boolean) => {
+      // A successful restart swaps in the new server's environments.
+      if (replaced) Object.assign(server, { environments: {} });
+      finish();
+    };
+    return { server, watcher, restart, finishRestart, wsSend, hotSend };
   }
 
   function start(root: string, overrides: Partial<PrebundleOptions> = {}): FakeServer {
@@ -309,6 +333,45 @@ describe("restart on dependency changes", () => {
     watcher.emit("change", path.join(root, "package.json"));
     vi.advanceTimersByTime(1000);
     expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("mutes the old server's HMR messages while it restarts", async () => {
+    const root = appRoot({ zod: "*" }, { zod: lib });
+    const fake = start(root);
+    const { ws, environments } = fake.server;
+
+    install(root, "papaparse", lib);
+    declare(root, { zod: "*", papaparse: "*" });
+    fake.watcher.emit("change", path.join(root, "package.json"));
+    vi.advanceTimersByTime(1000);
+    expect(fake.restart).toHaveBeenCalledOnce();
+
+    ws.send({ type: "full-reload", path: "*" });
+    environments.client!.hot.send({ type: "full-reload", path: "*" });
+    expect(fake.wsSend).not.toHaveBeenCalled();
+    expect(fake.hotSend).not.toHaveBeenCalled();
+
+    fake.finishRestart(true);
+    await vi.runAllTimersAsync();
+    ws.send({ type: "full-reload", path: "*" });
+    expect(fake.wsSend).not.toHaveBeenCalled();
+  });
+
+  it("gives the old server its HMR messages back when the restart fails", async () => {
+    const root = appRoot({ zod: "*" }, { zod: lib });
+    const fake = start(root);
+
+    declare(root, {});
+    fake.watcher.emit("change", path.join(root, "package.json"));
+    vi.advanceTimersByTime(1000);
+    expect(fake.restart).toHaveBeenCalledOnce();
+
+    fake.finishRestart(false);
+    await vi.runAllTimersAsync();
+    fake.server.ws.send({ type: "full-reload", path: "*" });
+    fake.server.environments.client!.hot.send({ type: "full-reload", path: "*" });
+    expect(fake.wsSend).toHaveBeenCalledOnce();
+    expect(fake.hotSend).toHaveBeenCalledOnce();
   });
 
   it("does not watch when dependency bundling is off", () => {
