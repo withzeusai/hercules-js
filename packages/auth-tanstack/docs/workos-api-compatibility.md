@@ -56,7 +56,7 @@ fields are provider-dependent (see [Claim mapping](#claim-mapping)).
 | `getAuthKitContext`, `getAuthKitContextOrNull`                                            | ⛔                  | No public accessor; a per-request session cache exists internally (one unseal/refresh per request).                                                                                                                                                                                                                        |
 | `getAuthkit`, `AuthService`                                                               | ⛔                  | WorkOS session-service factory; not applicable.                                                                                                                                                                                                                                                                            |
 | Actions (`getAuthAction`, `refreshAuthAction`, …)                                         | ✅                  | Exported from the root **and** `./client` (plus ID-token variants); see below.                                                                                                                                                                                                                                             |
-| `OAuthStateMismatchError`, `PKCECookieMissingError`                                       | ✅                  | Passed to `handleCallbackRoute`'s `onError` for missing-state / unknown-state failures.                                                                                                                                                                                                                                    |
+| `OAuthStateMismatchError`, `PKCECookieMissingError`                                       | ✅                  | Passed to `handleCallbackRoute`'s `onError` for missing-state / unknown-state failures, with a `reason`. Hercules adds `OAuthProviderError` for a provider `error` response. Unlike WorkOS, recoverable failures default to a redirect back into the app with `?auth_error=<reason>` rather than an error body.            |
 | Types: `UserInfo`, `NoUserInfo`                                                           | ✅                  | Match WorkOS field-for-field.                                                                                                                                                                                                                                                                                              |
 | Types: `GetAuthURLOptions`                                                                | ✅ (subset)         | `{ screenHint, returnPathname, redirectUri, scope, maxAge, loginHint, prompt }`; `prompt` defaults to `login`. No WorkOS `organizationId`/custom `state` (state keys the PKCE cookie).                                                                                                                                     |
 | Types: `OauthTokens`                                                                      | ⛔                  |                                                                                                                                                                                                                                                                                                                            |
@@ -84,11 +84,15 @@ the SSR'd user state. `refreshAccessTokenAction` / `refreshAuthAction` perform a
 real OIDC `refresh_token` grant server-side and re-seal the session cookie.
 
 **Bundling:** both entries keep `openid-client` and the session plumbing out of
-their static import graphs. Every server body — actions, server functions
-(`getAuth`, `signOut`, URL builders, `checkRecentAuth`), and the route handlers —
+their static import graphs. Every server body (actions, server functions
+(`getAuth`, `signOut`, URL builders, `checkRecentAuth`), and the route handlers)
 is reached only through a dynamic `import()` of a body module, mirroring
-upstream's `action-bodies`/`server-fn-bodies`/lazy-handler pattern, so nothing
-server-only can leak into the client bundle regardless of compiler DCE.
+upstream's `action-bodies`/`server-fn-bodies`/lazy-handler pattern. A dynamic
+`import()` alone still lets the client build emit the chunk it points at, so
+each one also sits behind a TanStack Start compiler boundary that the client
+build replaces before bundling: `createServerFn` handlers become RPC stubs, and
+the route handlers' loader is a `createServerOnlyFn`, which becomes a throwing
+stub.
 
 **Difference from WorkOS:** we drop the `workos-access-token` "fast cookie"
 optimization (a JS-readable cookie that primes the token store on first paint).

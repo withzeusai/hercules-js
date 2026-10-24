@@ -43,19 +43,83 @@ export interface HandleSignInOptions {
   prompt?: AuthPrompt;
 }
 
+/**
+ * Why a callback failed, passed to {@link HandleCallbackOptions.onError}.
+ *
+ * The first four are recoverable: the user can simply sign in again, so by
+ * default they send the user back into the app with the reason in the
+ * `auth_error` query parameter (see {@link HandleCallbackOptions.onError}).
+ *
+ * - `access_denied`: the user cancelled or refused at the provider.
+ * - `provider_error`: the provider returned another OAuth error instead of a
+ *   code (e.g. `login_required` after `prompt=none`).
+ * - `invalid_callback`: the callback URL had no `state` or no `code`, such as
+ *   a bookmarked or hand-typed `/auth/callback`.
+ * - `sign_in_expired`: no usable sign-in is pending for this `state`. The
+ *   sign-in took longer than 10 minutes, was evicted by newer sign-ins in other
+ *   tabs, was started in another browser, already completed (a reloaded
+ *   callback), or its cookie could not be read.
+ *
+ * The last two point at the server or provider configuration and default to
+ * an HTTP 500 JSON response:
+ *
+ * - `token_exchange_failed`: the provider rejected the authorization code or
+ *   could not be reached.
+ * - `session_failed`: the session could not be sealed (e.g. a missing or short
+ *   cookie password).
+ */
+export type CallbackErrorReason =
+  | "access_denied"
+  | "provider_error"
+  | "invalid_callback"
+  | "sign_in_expired"
+  | "token_exchange_failed"
+  | "session_failed";
+
+/** What {@link HandleCallbackOptions.onError} receives. */
+export interface CallbackErrorParams {
+  /**
+   * The underlying error: an `OAuthProviderError`, `OAuthStateMismatchError`,
+   * or `PKCECookieMissingError` for the matching reasons, the token-exchange or
+   * session error otherwise, and `undefined` for a missing `code`.
+   */
+  error?: unknown;
+  /** The callback request. */
+  request: Request;
+  /** Why the callback failed. */
+  reason: CallbackErrorReason;
+  /**
+   * The `returnPathname` the failed sign-in was started with, when its PKCE
+   * cookie could still be read. Not yet validated: anchor it to your origin
+   * before redirecting to it.
+   */
+  returnPathname?: string;
+}
+
 export interface HandleCallbackOptions {
   returnPathname?: string;
   onSuccess?: (data: HandleAuthSuccessData) => void | Promise<void>;
   /**
-   * Custom error handler. Receives the underlying error and the original
-   * request, returns a Response. Errors thrown from inside `onError` are
-   * NOT caught by the SDK — they propagate up to the runtime. Wrap your
-   * `onError` body in a try/catch if you want different behavior.
+   * Custom error handler. Receives the reason, the underlying error, and the
+   * original request, and returns a Response. Errors thrown from inside
+   * `onError` are NOT caught by the SDK; they propagate up to the runtime.
+   * Wrap your `onError` body in a try/catch if you want different behavior.
    *
    * If both `onError` and `errorRedirectUrl` are provided, `onError` wins
    * and `errorRedirectUrl` is ignored.
+   *
+   * Without either, a recoverable failure (see {@link CallbackErrorReason})
+   * redirects (302) back into the app: to the page the sign-in started from
+   * (its `returnPathname`, anchored to the app's origin) when the flow's PKCE
+   * cookie is readable, else to `/`, with `?auth_error=<reason>` appended so
+   * the app can tell the user what happened. A guard that starts sign-in
+   * automatically should skip doing so when `auth_error` is present, or a user
+   * who cancels is sent straight back to the provider. Other failures respond
+   * with a JSON `{ error }` body and HTTP 500.
+   *
+   * Whatever responds, the failed flow's PKCE cookie is expired on it.
    */
-  onError?: (params: { error?: unknown; request: Request }) => Response | Promise<Response>;
+  onError?: (params: CallbackErrorParams) => Response | Promise<Response>;
   /**
    * Optional URL to redirect the user to when the callback fails. Accepts
    * absolute URLs (`https://example.com/sign-in`) or relative paths
@@ -63,8 +127,8 @@ export interface HandleCallbackOptions {
    * request origin.
    *
    * When set and `onError` is not, the SDK responds with a 302 Location
-   * redirect plus the verifier-delete cookies. When `onError` is also
-   * set, this option is ignored.
+   * redirect plus the verifier-delete cookies for every failure. When
+   * `onError` is also set, this option is ignored.
    *
    * The redirect URL is set at route-construction time by application
    * code, not derived from request input. Do not pass user-controlled
@@ -73,8 +137,8 @@ export interface HandleCallbackOptions {
    * `data:`).
    *
    * If the value is malformed and the URL constructor throws, the SDK
-   * logs a config warning and falls back to the path-dependent JSON
-   * error response (400 or 500) with delete-cookies.
+   * logs a config warning and falls back to the default handling
+   * described on {@link onError}.
    */
   errorRedirectUrl?: string;
 }

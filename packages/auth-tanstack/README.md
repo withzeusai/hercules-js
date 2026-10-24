@@ -100,11 +100,28 @@ handleCallbackRoute({
   onSuccess: async ({ accessToken, idToken, refreshToken, claims }) => {},
   // Where to send the user when the callback fails (302). Ignored when onError is set.
   errorRedirectUrl: "/sign-in?error=auth_failed",
-  // Full control over failure responses. Receives typed errors —
-  // OAuthStateMismatchError, PKCECookieMissingError — or the underlying exchange error.
-  onError: async ({ error, request }) => new Response("Sign-in failed", { status: 400 }),
+  // Full control over failure responses. `reason` says what went wrong (see below);
+  // `error` is a typed error (OAuthProviderError, OAuthStateMismatchError,
+  // PKCECookieMissingError) or the underlying exchange error.
+  onError: async ({ reason, error, request, returnPathname }) =>
+    new Response("Sign-in failed", { status: 400 }),
 });
 ```
+
+#### When the callback fails
+
+Without `onError` or `errorRedirectUrl`, a failure the user can recover from by signing in again sends them back into the app instead of showing an error body. They return to the page the sign-in started from (the flow's `returnPathname`, anchored to your origin), or `/` when that is unknown, with an `auth_error` query parameter naming the reason:
+
+| `auth_error`       | When                                                                                                                                                                                                  |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `access_denied`    | The user cancelled or refused at the provider.                                                                                                                                                        |
+| `provider_error`   | The provider returned another OAuth error instead of a code (e.g. `login_required` after `prompt: "none"`).                                                                                           |
+| `invalid_callback` | The callback URL has no `state` or no `code`, such as a bookmarked `/auth/callback`.                                                                                                                  |
+| `sign_in_expired`  | No sign-in is pending for this `state`: it took longer than 10 minutes, was evicted because more than 10 sign-ins were pending, already completed (a reloaded callback), or its cookie is unreadable. |
+
+The value is always one of these four, never provider text, so it is safe to show a message for it. Read it with `AUTH_ERROR_PARAM` (exported from the root entry), and if a guard starts sign-in automatically, skip that while `auth_error` is present, or a user who cancels is sent straight back to the provider.
+
+The remaining failures, `token_exchange_failed` and `session_failed`, point at server or provider configuration and answer with HTTP 500 and a JSON `{ error }` body. Every failure is logged, and the failed flow's PKCE cookie is expired on whatever response is returned.
 
 ### 3. Sign-in route
 
@@ -234,8 +251,8 @@ Top-level sign-out is unchanged.
 - Route handlers: `handleSignInRoute`, `handleCallbackRoute`
 - Server functions: `getAuth`, `signOut`, `getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`, `checkRecentAuth`
 - Actions (server functions backing the client hooks, exported for direct use): `getAuthAction`, `checkSessionAction`, `getAccessTokenAction`, `refreshAccessTokenAction`, `getIdTokenAction`, `refreshIdTokenAction`, `refreshAuthAction`
-- Errors: `OAuthStateMismatchError`, `PKCECookieMissingError`
-- Types: `User`, `Session`, `Impersonator`, `UserInfo`, `NoUserInfo`, `ClientUserInfo`, `AuthResult`, `BaseTokenClaims`, `CustomClaims`, `GetAuthURLOptions`, `SignInUrlOptions`, `RecentAuthResult`, `AuthPrompt`, `HandleSignInOptions`, `HandleCallbackOptions`, `HandleAuthSuccessData`, `HerculesAuthMiddlewareOptions`
+- Errors: `OAuthProviderError`, `OAuthStateMismatchError`, `PKCECookieMissingError`, and `AUTH_ERROR_PARAM` (the query parameter a failed callback adds)
+- Types: `User`, `Session`, `Impersonator`, `UserInfo`, `NoUserInfo`, `ClientUserInfo`, `AuthResult`, `BaseTokenClaims`, `CustomClaims`, `GetAuthURLOptions`, `SignInUrlOptions`, `RecentAuthResult`, `AuthPrompt`, `HandleSignInOptions`, `HandleCallbackOptions`, `CallbackErrorParams`, `CallbackErrorReason`, `HandleAuthSuccessData`, `HerculesAuthMiddlewareOptions`
 
 Authorization URL options (`getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`, `handleSignInRoute`): `returnPathname`, `redirectUri`, `scope`, `maxAge` (OIDC `max_age`), `loginHint` (OIDC `login_hint`), `prompt` (OIDC `prompt`), and — on `getAuthorizationUrl` — `screenHint`.
 

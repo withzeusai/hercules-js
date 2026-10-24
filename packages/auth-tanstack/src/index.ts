@@ -11,6 +11,8 @@ export type {
 } from "./types";
 export {
   type AuthPrompt,
+  type CallbackErrorParams,
+  type CallbackErrorReason,
   type HandleAuthSuccessData,
   type HandleCallbackOptions,
   type HandleSignInOptions,
@@ -37,5 +39,10 @@ export {
   refreshIdTokenAction,
   refreshAuthAction,
 } from "./server/actions";
-export { OAuthStateMismatchError, PKCECookieMissingError } from "./server/errors";
+export {
+  AUTH_ERROR_PARAM,
+  OAuthProviderError,
+  OAuthStateMismatchError,
+  PKCECookieMissingError,
+} from "./server/errors";
 export { type HerculesAuthMiddlewareOptions, herculesAuthMiddleware } from "./server/middleware";
