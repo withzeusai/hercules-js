@@ -33,19 +33,22 @@ export default defineVitestConfig();
 Plugins, in order:
 
 1. `hercules:hold-pages-during-reload` (dev server only): after a change that reloads the Worker, page requests wait until file changes go quiet, the first one warms the Worker alone, and the rest follow. Without it the first render after a reload can fail with "Invalid hook call". A request is never held longer than 3 seconds.
-2. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
-3. `@tailwindcss/vite`
-4. `@usehercules/vite` (component tagger, visual editor, error forwarding; dev server only)
-5. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
-6. `@tanstack/react-start`
-7. `@vitejs/plugin-react`
-8. Any plugins you pass
+2. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
+3. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
+4. `@tailwindcss/vite`
+5. `@usehercules/vite` (component tagger, visual editor, error forwarding; dev server only)
+6. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
+7. `@tanstack/react-start`
+8. `@vitejs/plugin-react`
+9. Any plugins you pass
 
 Base config:
 
 - `@` maps to `src/` and `@/convex` maps to `convex/`, matching the `paths` block in the app's `tsconfig.json`.
 - React, React DOM, TanStack Query and TanStack Router are deduped so only one copy ever loads.
-- The template packages (`PREBUNDLED_PACKAGES`: TanStack Query, Convex, the Hercules auth SDK, Radix, `motion`, `recharts`, and the rest of the starter's UI packages) are pre-bundled in both the browser and the `ssr` environment, so Vite never re-optimizes them mid-session. A server-side re-optimization loads a second React copy and breaks SSR until a restart. Packages the app's `package.json` does not declare are skipped.
+- Every runtime dependency in the app's `package.json` is pre-bundled in both the browser and the `ssr` environment when the dev server starts, so Vite does not discover a package mid-session. A mid-session discovery re-bundles the dependencies: in the browser, modules still requested with the old version hash fail with 504 "Outdated Optimize Dep" (a lazily loaded route shows "Failed to fetch dynamically imported module") and the page reloads; in the Worker it can load a second React copy and break SSR until a restart. Packages that cannot be bundled are skipped: CSS-only and types-only packages, packages that load a native addon, React (already included), and anything another plugin excludes, such as TanStack Start and Router.
+- Subpath entries of the template packages (`PREBUNDLED_ENTRIES`, such as `convex/react` and `motion/react`) are added when the app declares the package, and the `ssr` environment also scans every file under `src` for imports rather than only the server entries.
+- When `package.json` or the lockfile changes, the dev server restarts once the new packages are installed, so a package the agent just added is pre-bundled before any code imports it. The preview reloads once at that point instead of when the new code first runs.
 - Dev server: host `0.0.0.0`, port `5173`, all hosts allowed, HMR overlay off. This is the shape the Hercules preview expects.
 
 When `HERCULES_DEV_SERVER=true` (set on the Hercules dev machine) the config also:
@@ -74,20 +77,21 @@ export default defineConfig({
 });
 ```
 
-| Option          | Default    | Description                                                                        |
-| --------------- | ---------- | ---------------------------------------------------------------------------------- |
-| `plugins`       | `[]`       | Extra Vite plugins, appended after the Hercules stack.                             |
-| `prebundle`     | `[]`       | Extra packages to pre-bundle in the browser and the `ssr` environment.             |
-| `holdPagesDuringReload` | `true` | `false` lets page requests through while the dev server reloads the Worker. |
-| `vite`          |            | Vite options merged over the generated config. Anything set here wins.             |
-| `srcDir`        | `"src"`    | Application source directory, mapped to `@`.                                       |
-| `convexDir`     | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex. |
-| `react`         |            | Options for `@vitejs/plugin-react`.                                                |
-| `tanstackStart` |            | Options for `tanstackStart()`.                                                     |
-| `cloudflare`    |            | Options for `@cloudflare/vite-plugin`. `false` builds without it.                  |
-| `hercules`      |            | Options for `@usehercules/vite`. `false` leaves the Hercules dev tooling out.      |
-| `devtools`      |            | Options for `@tanstack/devtools-vite`. `false` skips it.                           |
-| `tailwind`      | `true`     | Whether to include `@tailwindcss/vite`.                                            |
+| Option                  | Default    | Description                                                                                                |
+| ----------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| `plugins`               | `[]`       | Extra Vite plugins, appended after the Hercules stack.                                                     |
+| `prebundle`             | `[]`       | Extra entries to pre-bundle in both environments, such as a subpath (`lodash/debounce`).                   |
+| `prebundleDependencies` | `true`     | `false` pre-bundles only `PREBUNDLED_ENTRIES` and `prebundle`, and stops restarting on dependency changes. |
+| `holdPagesDuringReload` | `true`     | `false` lets page requests through while the dev server reloads the Worker.                                |
+| `vite`                  |            | Vite options merged over the generated config. Anything set here wins.                                     |
+| `srcDir`                | `"src"`    | Application source directory, mapped to `@`.                                                               |
+| `convexDir`             | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex.                         |
+| `react`                 |            | Options for `@vitejs/plugin-react`.                                                                        |
+| `tanstackStart`         |            | Options for `tanstackStart()`.                                                                             |
+| `cloudflare`            |            | Options for `@cloudflare/vite-plugin`. `false` builds without it.                                          |
+| `hercules`              |            | Options for `@usehercules/vite`. `false` leaves the Hercules dev tooling out.                              |
+| `devtools`              |            | Options for `@tanstack/devtools-vite`. `false` skips it.                                                   |
+| `tailwind`              | `true`     | Whether to include `@tailwindcss/vite`.                                                                    |
 
 Optional peers that are not installed are skipped with a warning, unless you configured them explicitly, in which case the missing package is an error.
 
