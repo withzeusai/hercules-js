@@ -49,7 +49,7 @@ describe("PKCE state envelope", () => {
 
   it("omits the redirect_uri when not set", () => {
     const encoded = encodePkceState({ verifier: "v123" });
-    expect(decodePkceState(encoded).redirectUri).toBeUndefined();
+    expect(decodePkceState(encoded)?.redirectUri).toBeUndefined();
   });
 
   it("produces a cookie-safe value", () => {
@@ -61,8 +61,15 @@ describe("PKCE state envelope", () => {
     expect(encoded).not.toMatch(/[;,=\s]/);
   });
 
-  it("treats a bare (non-envelope) value as the verifier for back-compat", () => {
-    expect(decodePkceState("raw-verifier-string")).toEqual({ verifier: "raw-verifier-string" });
+  it.each([
+    ["a bare string", "raw-verifier-string"],
+    ["invalid base64url", "%%%"],
+    ["truncated JSON", encodePkceState({ verifier: "v123", returnPathname: "/a" }).slice(0, 12)],
+    ["JSON without a verifier", "eyJyIjoiL3gifQ"],
+    ["an empty verifier", "eyJ2IjoiIn0"],
+    ["JSON null", "bnVsbA"],
+  ])("returns undefined for %s", (_label, value) => {
+    expect(decodePkceState(value)).toBeUndefined();
   });
 });
 
@@ -147,7 +154,7 @@ describe("encodePkceCookie", () => {
 
   it("keeps the return path when the cookie fits", () => {
     const value = encodePkceCookie(name, { verifier: "v", returnPathname: "/dashboard" });
-    expect(decodePkceState(value).returnPathname).toBe("/dashboard");
+    expect(decodePkceState(value)?.returnPathname).toBe("/dashboard");
   });
 
   it("drops a return path that would make the browser discard the cookie", () => {
