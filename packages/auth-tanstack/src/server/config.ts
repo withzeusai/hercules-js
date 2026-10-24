@@ -202,18 +202,23 @@ export function encodePkceState(state: PkceState): string {
 }
 
 /**
- * Parse a PKCE cookie value. Falls back to treating the whole value as a bare
- * verifier so cookies written by older sign-ins (raw verifier strings) still
- * resolve.
+ * Parse a PKCE cookie value, or return `undefined` when it is not a readable
+ * envelope (truncated, tampered with, or otherwise corrupted). The callback
+ * treats an unreadable cookie like an expired one: without the verifier the
+ * token exchange cannot succeed, so it is not attempted.
+ *
+ * Every PKCE cookie has been written as an envelope since the per-flow cookies
+ * were introduced, and they live for {@link SIGN_IN_COOKIE_MAX_AGE} seconds, so
+ * no bare-verifier cookies remain to accept.
  */
-export function decodePkceState(raw: string): PkceState {
+export function decodePkceState(raw: string): PkceState | undefined {
   try {
     const decoded = JSON.parse(pkceTextDecoder.decode(fromBase64Url(raw))) as {
       v?: unknown;
       r?: unknown;
       u?: unknown;
-    };
-    if (decoded && typeof decoded.v === "string") {
+    } | null;
+    if (decoded && typeof decoded.v === "string" && decoded.v) {
       return {
         verifier: decoded.v,
         returnPathname: typeof decoded.r === "string" ? decoded.r : undefined,
@@ -221,7 +226,7 @@ export function decodePkceState(raw: string): PkceState {
       };
     }
   } catch {
-    // Not an envelope — treat the raw value as a bare verifier (back-compat).
+    // Not base64url, not UTF-8 JSON: unreadable.
   }
-  return { verifier: raw };
+  return undefined;
 }
