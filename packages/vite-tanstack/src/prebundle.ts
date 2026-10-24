@@ -168,6 +168,28 @@ function hasNativeAddon(manifest: Manifest): boolean {
   return dependencies.some((name) => NATIVE_ADDON_LOADERS.has(name) || PLATFORM_PACKAGE.test(name));
 }
 
+/** Extensions a bare-name lookup from the project root tries. */
+const ROOT_LOOKUP_EXTENSIONS: readonly string[] = [
+  "",
+  ".json",
+  ".js",
+  ".mjs",
+  ".ts",
+  ".mts",
+  ".jsx",
+  ".tsx",
+];
+
+/**
+ * Whether a file or directory in the project root has the package's name.
+ * With `resolve.tsconfigPaths`, a bare name is looked up from the root first,
+ * so `convex` resolves to the app's `convex.json`, and the optimizer warns
+ * "Cannot optimize dependency" on every start.
+ */
+function isShadowedByProjectPath(root: string, name: string): boolean {
+  return ROOT_LOOKUP_EXTENSIONS.some((extension) => existsSync(path.join(root, name + extension)));
+}
+
 /**
  * The app's runtime `dependencies` that can be bundled up front, read from
  * the installed packages. A dependency that is declared but not installed yet
@@ -179,6 +201,7 @@ export function dependenciesToPrebundle(root: string): string[] {
   const names = Object.keys(pkg?.dependencies ?? {}).sort();
   return names.filter((name) => {
     if (NEVER_PREBUNDLED.has(name) || name.startsWith("@types/")) return false;
+    if (isShadowedByProjectPath(root, name)) return false;
     const packageDir = path.join(root, "node_modules", name);
     const manifest = readManifest(path.join(packageDir, "package.json"));
     if (!manifest) return false;
@@ -250,6 +273,32 @@ function isInstalled(root: string, name: string): boolean {
   return existsSync(path.join(root, "node_modules", name, "package.json"));
 }
 
+interface HotSender {
+  send(...args: unknown[]): void;
+}
+
+/**
+ * Restarts the dev server with its HMR messages muted. Until the new server
+ * listens, a message from the old one (a reload for a route file the agent
+ * wrote meanwhile) sends the browser to a port that is about to close, and
+ * the page stays on a connection error. Browsers reload by themselves once
+ * the new server accepts their socket. A failed restart keeps the old server,
+ * so it gets its messages back.
+ */
+function restartQuietly(server: ViteDevServer): Promise<void> {
+  const { environments } = server;
+  const channels: HotSender[] = [
+    server.ws,
+    ...Object.values(environments).map((environment) => environment.hot),
+  ];
+  const sends = channels.map((channel) => [channel, channel.send] as const);
+  for (const [channel] of sends) channel.send = () => {};
+  return server.restart().finally(() => {
+    if (server.environments !== environments) return;
+    for (const [channel, send] of sends) channel.send = send;
+  });
+}
+
 /**
  * Restarts the dev server when the dependencies it would bundle differ from
  * `started`, the list the running server was configured with.
@@ -269,7 +318,7 @@ function watchDependencies(server: ViteDevServer, root: string, started: readonl
         "[hercules] dependencies changed; restarting the dev server to pre-bundle them",
         { timestamp: true },
       );
-      void server.restart();
+      void restartQuietly(server);
       return;
     }
     const declared = Object.keys(readManifest(path.join(root, "package.json"))?.dependencies ?? {});
