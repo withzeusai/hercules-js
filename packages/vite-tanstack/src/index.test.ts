@@ -1,18 +1,14 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Alias, ConfigEnv, Plugin, PluginOption } from "vite";
 import {
   DEDUPE,
   HERCULES_DEV_SERVER_ENV,
-  PREBUNDLED_PACKAGES,
   TOOL_MANAGED_WATCH_IGNORES,
   defineConfig,
   herculesBaseConfig,
   isHerculesDevServer,
 } from "./index";
-import { onlyDeclared, packageNameOf } from "./prebundle";
 
 const devtools = vi.hoisted(() => vi.fn((_options?: unknown) => ({ name: "devtools-stub" })));
 vi.mock("@tanstack/devtools-vite", () => ({ devtools }));
@@ -38,17 +34,6 @@ function pluginNames(plugins: PluginOption[] | undefined): string[] {
   return names;
 }
 
-/** A project root whose package.json declares `dependencies`. */
-function appRoot(dependencies: Record<string, string>): string {
-  const root = mkdtempSync(path.join(tmpdir(), "vite-tanstack-"));
-  writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies }));
-  return root;
-}
-
-const templateDependencies = Object.fromEntries(
-  PREBUNDLED_PACKAGES.map((entry) => [packageNameOf(entry), "*"]),
-);
-
 function aliasEntries(alias: unknown): Alias[] {
   return alias as Alias[];
 }
@@ -56,31 +41,6 @@ function aliasEntries(alias: unknown): Alias[] {
 afterEach(() => {
   vi.unstubAllEnvs();
   devtools.mockClear();
-});
-
-describe("packageNameOf", () => {
-  it.each([
-    ["clsx", "clsx"],
-    ["convex/react", "convex"],
-    ["motion/react", "motion"],
-    ["@hookform/resolvers/zod", "@hookform/resolvers"],
-    ["@tanstack/react-router > @tanstack/react-store", "@tanstack/react-router"],
-  ])("maps %s to %s", (entry, name) => {
-    expect(packageNameOf(entry)).toBe(name);
-  });
-});
-
-describe("onlyDeclared", () => {
-  it("keeps every entry when package.json cannot be read", () => {
-    expect(onlyDeclared(["clsx", "zod"], undefined)).toEqual(["clsx", "zod"]);
-  });
-
-  it("drops entries whose package the app does not declare", () => {
-    expect(onlyDeclared(["clsx", "convex/react", "zod"], new Set(["convex", "zod"]))).toEqual([
-      "convex/react",
-      "zod",
-    ]);
-  });
 });
 
 describe("isHerculesDevServer", () => {
@@ -115,21 +75,10 @@ describe("herculesBaseConfig", () => {
     expect(config.resolve?.dedupe).toEqual(DEDUPE);
   });
 
-  it("prebundles the template packages in the browser and the Worker", () => {
-    const root = appRoot(templateDependencies);
-    const config = herculesBaseConfig({ vite: { root } }, { sandbox: false });
-    expect(config.optimizeDeps?.include).toEqual(PREBUNDLED_PACKAGES);
-    expect(config.environments?.ssr?.optimizeDeps?.include).toEqual([
-      ...PREBUNDLED_PACKAGES,
-      "convex/browser",
-    ]);
-  });
-
-  it("prebundles only declared packages, plus the extra ones", () => {
-    const root = appRoot({ clsx: "*", three: "*" });
-    const config = herculesBaseConfig({ vite: { root }, prebundle: ["three"] }, { sandbox: false });
-    expect(config.optimizeDeps?.include).toEqual(["clsx", "three"]);
-    expect(config.environments?.ssr?.optimizeDeps?.include).toEqual(["clsx", "three"]);
+  it("leaves dependency pre-bundling to the plugin", () => {
+    const config = herculesBaseConfig({}, { sandbox: false });
+    expect(config.optimizeDeps).toBeUndefined();
+    expect(config.environments).toBeUndefined();
   });
 
   it("uses the Hercules dev-server shape everywhere", () => {
@@ -176,6 +125,19 @@ describe("defineConfig", () => {
       (await defineConfig({ ...bare, holdPagesDuringReload: false })(serve)).plugins,
     );
     expect(off).not.toContain("hercules:hold-pages-during-reload");
+  });
+
+  it("pre-bundles dependencies, with the extra entries passed through", async () => {
+    const config = await defineConfig({ ...bare, prebundle: ["lodash/debounce"] })(serve);
+    const plugin = (config.plugins as Plugin[]).find(
+      (p) => p.name === "hercules:prebundle-dependencies",
+    );
+    expect(plugin).toBeDefined();
+    const configEnvironment = plugin!.configEnvironment as unknown as (
+      name: string,
+      config: object,
+    ) => { optimizeDeps?: { include?: string[] } } | undefined;
+    expect(configEnvironment("client", {})?.optimizeDeps?.include).toContain("lodash/debounce");
   });
 
   it("turns devtools console piping off unless the app sets it", async () => {
