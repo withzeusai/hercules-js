@@ -6,6 +6,20 @@ import type { IDToken } from "openid-client";
  */
 export type AuthPrompt = "login" | "none" | "consent" | "select_account" | (string & {});
 
+/**
+ * Both of the session's tokens and the server's clock, as returned to the
+ * client token stores. Internal: not exported from the package entry points.
+ */
+export interface SessionTokens {
+  accessToken?: string;
+  idToken?: string;
+  /**
+   * Server time (ms since the epoch) when the tokens were read. The client
+   * judges token expiry on this clock rather than its own, which may be wrong.
+   */
+  serverTime: number;
+}
+
 export interface HandleSignInOptions {
   /**
    * Callback URL the provider redirects back to after authentication. Accepts
@@ -45,6 +59,12 @@ export interface HandleSignInOptions {
 
 export interface HandleCallbackOptions {
   returnPathname?: string;
+  /**
+   * Runs after the code exchange, before the session is sealed (e.g. to
+   * provision the user). If it throws, the sign-in fails: no session is set,
+   * and the error is handled like any other callback failure, through
+   * `onError`, `errorRedirectUrl`, or the default JSON 500.
+   */
   onSuccess?: (data: HandleAuthSuccessData) => void | Promise<void>;
   /**
    * Custom error handler. Receives the underlying error and the original

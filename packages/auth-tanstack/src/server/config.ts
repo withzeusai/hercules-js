@@ -96,9 +96,63 @@ export const PKCE_COOKIE_PREFIX = "hercules_pkce_";
  */
 export const DEFAULT_SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 400;
 
+/**
+ * Budget for a PKCE cookie's name plus value. Browsers drop a cookie whose
+ * name and value exceed 4096 bytes; this leaves room for the attributes.
+ */
+export const MAX_PKCE_COOKIE_BYTES = 3800;
+
 /** Cookie name holding the PKCE verifier for the flow identified by `state`. */
 export function pkceCookieName(state: string): string {
   return PKCE_COOKIE_PREFIX + state;
+}
+
+/**
+ * Pending sign-in cookies to expire when a new sign-in starts, given the
+ * request's cookie names in the order the browser sent them. Browsers list
+ * cookies on the same path oldest first (RFC 6265 §5.4), so this keeps the
+ * newest {@link MAX_PENDING_SIGN_INS} − 1, which leaves room for the flow
+ * being started, and expires the older ones, which are the likeliest to be
+ * abandoned.
+ */
+export function staleSignInCookieNames(cookieNames: readonly string[]): string[] {
+  const pending = cookieNames.filter((name) => name.startsWith(PKCE_COOKIE_PREFIX));
+  return pending.slice(0, Math.max(0, pending.length - (MAX_PENDING_SIGN_INS - 1)));
+}
+
+/**
+ * Encode the cookie value for the flow stored under `name`, dropping
+ * `returnPathname` when it would push the cookie past what browsers keep. A
+ * dropped cookie fails the callback as an unknown sign-in, so landing on the
+ * default page instead is the lesser failure.
+ */
+export function encodePkceCookie(name: string, state: PkceState): string {
+  const value = encodePkceState(state);
+  if (name.length + value.length <= MAX_PKCE_COOKIE_BYTES || !state.returnPathname) {
+    return value;
+  }
+  console.warn(
+    `[auth-tanstack] returnPathname is too long to store with the sign-in ` +
+      `(${state.returnPathname.length} characters); the user will land on the default page instead.`,
+  );
+  return encodePkceState({ ...state, returnPathname: undefined });
+}
+
+/**
+ * A hint for a token request the provider rejected with `invalid_client` while
+ * no client secret is configured. That is how a confidential client fails when
+ * it is set up as a public (PKCE-only) one, and the provider's error does not
+ * name the missing variable. Undefined for any other failure.
+ */
+export function clientAuthHint(error: unknown): string | undefined {
+  if (readEnv(CLIENT_SECRET_ENV_VARS)) return undefined;
+  if (!(error instanceof Error) || (error as { error?: unknown }).error !== "invalid_client") {
+    return undefined;
+  }
+  return (
+    `[auth-tanstack] The provider rejected the client (invalid_client) and no client secret ` +
+    `is configured. If this client has a secret, set ${CLIENT_SECRET_ENV_VARS.join(" or ")}.`
+  );
 }
 
 /**

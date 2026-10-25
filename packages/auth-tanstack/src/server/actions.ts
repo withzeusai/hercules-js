@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { ClientUserInfo, NoUserInfo } from "../types";
+import type { SessionTokens } from "./types";
 
 // These server functions back the client hooks. Their handlers dynamically
 // import the server-only implementation (`./action-bodies`, which pulls in
@@ -52,6 +53,28 @@ export const refreshIdTokenAction = createServerFn({ method: "POST" }).handler(
   async (): Promise<string | undefined> => {
     const { refreshIdTokenBody } = await import("./action-bodies");
     return refreshIdTokenBody();
+  },
+);
+
+/**
+ * Both current tokens plus the server's clock, for the client token stores.
+ * Internal: not exported from the package entry points.
+ */
+export const getSessionTokensAction = createServerFn({ method: "GET" }).handler(
+  async (): Promise<SessionTokens> => {
+    const { getSessionTokensBody } = await import("./action-bodies");
+    return getSessionTokensBody();
+  },
+);
+
+/**
+ * Refresh the session once and return both tokens plus the server's clock, for
+ * the client token stores. Internal: not exported from the package entry points.
+ */
+export const refreshSessionTokensAction = createServerFn({ method: "POST" }).handler(
+  async (): Promise<SessionTokens> => {
+    const { refreshSessionTokensBody } = await import("./action-bodies");
+    return refreshSessionTokensBody();
   },
 );
 

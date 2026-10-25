@@ -97,6 +97,7 @@ handleCallbackRoute({
   // Always anchored to the callback's origin — an absolute URL cannot redirect off-site.
   returnPathname: "/dashboard",
   // Inspect the token response (e.g. to provision the user) before the session is sealed.
+  // If it throws, sign-in fails through onError / errorRedirectUrl and no session is set.
   onSuccess: async ({ accessToken, idToken, refreshToken, claims }) => {},
   // Where to send the user when the callback fails (302). Ignored when onError is set.
   errorRedirectUrl: "/sign-in?error=auth_failed",
@@ -182,7 +183,7 @@ await fetch("/api/data", { headers: { Authorization: `Bearer ${token}` } });
 
 ### Require a recent login for sensitive actions
 
-`useRecentAuth` (client) is presentation-only; `checkRecentAuth` (server) is the enforcement half. Both judge the `auth_time` claim and fail closed.
+`useRecentAuth` (client) is presentation-only; `checkRecentAuth` (server) is the enforcement half. Both judge the `auth_time` claim, preferring the ID token's (OIDC puts it there; many access tokens lack it), and fail closed.
 
 ```ts
 import { checkRecentAuth, getSignInUrl } from "@usehercules/auth-tanstack";
@@ -250,4 +251,7 @@ Every sign-in sends `prompt=login` unless you pass `prompt`, so the user signs i
 
 ## License
 
-MIT
+MIT. Portions are derived from WorkOS's
+[`@workos/authkit-tanstack-react-start`](https://github.com/workos/authkit-tanstack-start)
+and [`@workos/authkit-session`](https://github.com/workos/authkit-session),
+also MIT; see [LICENSE](./LICENSE) for both notices.

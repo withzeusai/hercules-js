@@ -53,7 +53,7 @@ fields are provider-dependent (see [Claim mapping](#claim-mapping)).
 | `switchToOrganization(...)`                                                               | ⛔                  | Tier 3.                                                                                                                                                                                                                                                                                                                    |
 | `checkRecentAuth({ maxAge })`                                                             | ✅                  | From the `auth_time` claim; fails closed. Pair with `getSignInUrl({ maxAge })` (OIDC `max_age`) to force reauth.                                                                                                                                                                                                           |
 | `authkitMiddleware`                                                                       | ✅ (different)      | `herculesAuthMiddleware` carries app-wide config (`redirectUri`, `cookieSameSite`, `cookieMaxAge`, `cookieDomain`). Unlike WorkOS it does no per-request work: session auto-refresh happens on read (`getAuth`/actions), so all helpers work without the middleware.                                                       |
-| `getAuthKitContext`, `getAuthKitContextOrNull`                                            | ⛔                  | No public accessor; a per-request session cache exists internally (one unseal/refresh per request).                                                                                                                                                                                                                        |
+| `getAuthKitContext`, `getAuthKitContextOrNull`                                            | ⛔                  | No public accessor (upstream has exported one since 0.8.6); a per-request session cache exists internally (one unseal/refresh per request).                                                                                                                                                                                |
 | `getAuthkit`, `AuthService`                                                               | ⛔                  | WorkOS session-service factory; not applicable.                                                                                                                                                                                                                                                                            |
 | Actions (`getAuthAction`, `refreshAuthAction`, …)                                         | ✅                  | Exported from the root **and** `./client` (plus ID-token variants); see below.                                                                                                                                                                                                                                             |
 | `OAuthStateMismatchError`, `PKCECookieMissingError`                                       | ✅                  | Passed to `handleCallbackRoute`'s `onError` for missing-state / unknown-state failures.                                                                                                                                                                                                                                    |
@@ -64,24 +64,28 @@ fields are provider-dependent (see [Claim mapping](#claim-mapping)).
 
 ### Client entry (`./client`)
 
-| WorkOS export                                                                                         | Hercules            | Notes                                                                                                                |
-| ----------------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `AuthKitProvider`                                                                                     | ✅                  | Same props (`onSessionExpired`, `initialAuth`).                                                                      |
-| `useAuth(options?)`                                                                                   | ✅                  | Returns user + claim fields, `loading`, `getAuth`, `refreshAuth`, `signOut`. **No `switchToOrganization`** (Tier 3). |
-| `useAccessToken()`                                                                                    | ✅                  | Token store with single-flight + proactive scheduled refresh and refresh-on-wake.                                    |
-| `useTokenClaims<T>()`                                                                                 | ✅                  | Decodes the access token in memory.                                                                                  |
-| `useRecentAuth({ maxAge })`                                                                           | ✅                  | From the `auth_time` claim. Presentation-only; `checkRecentAuth` (server) enforces.                                  |
-| `useIdToken()`                                                                                        | ✅ (Hercules extra) | ID-token twin of `useAccessToken` over its own token store.                                                          |
-| `getAuthAction`                                                                                       | ✅                  | Re-exported for seeding `initialAuth`.                                                                               |
-| `Impersonation` component                                                                             | ⛔                  | WorkOS-specific; not applicable.                                                                                     |
-| Types: `AuthContextType`, `AuthKitProviderProps`, `UseAccessTokenReturn`, `JWTPayload`, `TokenClaims` | ✅                  |                                                                                                                      |
+| WorkOS export                                                                                         | Hercules            | Notes                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AuthKitProvider`                                                                                     | ✅                  | Same props (`onSessionExpired`, `initialAuth`).                                                                                            |
+| `useAuth(options?)`                                                                                   | ✅                  | Returns user + claim fields, `loading`, `getAuth`, `refreshAuth`, `signOut`. **No `switchToOrganization`** (Tier 3).                       |
+| `useAccessToken()`                                                                                    | ✅                  | Token store with proactive scheduled refresh and refresh-on-wake. Shares one token source with `useIdToken` (see below).                   |
+| `useTokenClaims<T>()`                                                                                 | ✅                  | Decodes the access token in memory.                                                                                                        |
+| `useRecentAuth({ maxAge })`                                                                           | ✅                  | From the `auth_time` claim, preferring the ID token's (as `checkRecentAuth` does). Presentation-only; `checkRecentAuth` (server) enforces. |
+| `useIdToken()`                                                                                        | ✅ (Hercules extra) | ID-token twin of `useAccessToken` over its own token store.                                                                                |
+| `getAuthAction`                                                                                       | ✅                  | Re-exported for seeding `initialAuth`.                                                                                                     |
+| `Impersonation` component                                                                             | ⛔                  | WorkOS-specific; not applicable.                                                                                                           |
+| Types: `AuthContextType`, `AuthKitProviderProps`, `UseAccessTokenReturn`, `JWTPayload`, `TokenClaims` | ✅                  |                                                                                                                                            |
 
 **How it fits together:** `AuthKitProvider` fetches sanitized auth (no access
 token) via `getAuthAction` and monitors expiry via `checkSessionAction`. The
-access token is fetched separately by `useAccessToken`'s token store
-(`getAccessTokenAction` / `refreshAccessTokenAction`), so it is never embedded in
-the SSR'd user state. `refreshAccessTokenAction` / `refreshAuthAction` perform a
-real OIDC `refresh_token` grant server-side and re-seal the session cookie.
+tokens are fetched separately by the token stores behind `useAccessToken` and
+`useIdToken`, so they are never embedded in the SSR'd user state. Both stores
+go through one shared token source and two internal server functions
+(`getSessionTokensAction` / `refreshSessionTokensAction`) that return both
+tokens at once, so one read and one OIDC `refresh_token` grant serve both
+stores, and the grant re-seals the session cookie. The public per-token actions
+(`getAccessTokenAction`, `refreshAccessTokenAction`, and the ID-token variants)
+remain for direct use.
 
 **Bundling:** both entries keep `openid-client` and the session plumbing out of
 their static import graphs. Every server body — actions, server functions
@@ -90,9 +94,28 @@ is reached only through a dynamic `import()` of a body module, mirroring
 upstream's `action-bodies`/`server-fn-bodies`/lazy-handler pattern, so nothing
 server-only can leak into the client bundle regardless of compiler DCE.
 
-**Difference from WorkOS:** we drop the `workos-access-token` "fast cookie"
-optimization (a JS-readable cookie that primes the token store on first paint).
-The first access-token read does one RPC instead.
+**Token store differences from WorkOS:**
+
+- **Shared refresh.** WorkOS has one token store; we have two (access and ID
+  token), whose tokens usually expire together. Refreshing separately they would
+  spend the same refresh token twice at once, which a provider that rotates
+  refresh tokens with reuse detection treats as theft. The shared source
+  single-flights reads and refreshes and hands every result to both stores.
+  (WorkOS instead dedupes concurrent refreshes in server memory, which isn't
+  reliable on Cloudflare Workers, where requests can't safely await each
+  other's promises.)
+- **Server clock.** Expiry is judged on the server's clock, measured from the
+  `serverTime` every token response carries; a browser clock that's off would
+  otherwise make every token look expired (a refresh grant every 15 s) or never
+  expire (handing out dead tokens, which leaves Convex unauthenticated for the
+  rest of the page). WorkOS (0.12.0) measures the offset from refreshed tokens'
+  `iat`, so a clock that runs behind goes uncorrected until the first refresh;
+  measuring on every response covers it from the first read. A wall-clock jump
+  (checked against monotonic time) triggers a cheap re-read to re-measure.
+- **Timers follow listeners.** A store with no mounted hook schedules nothing,
+  and a hook that remounts on a fresh token re-queues its refresh.
+- Neither SDK has the `workos-access-token` "fast cookie" any more (WorkOS
+  removed it in 0.11.1), so the first access-token read is one RPC in both.
 
 ## Claim mapping
 
@@ -152,6 +175,32 @@ unprefixed `AUTH_*`.
 - **Verified by types/tests/build, not a live app.** The `createServerFn`
   runtime (RPC, cookie writes inside actions, the provider/hook lifecycle) should
   be smoke-tested in a consuming TanStack Start app before release.
+
+### Also aligned with upstream
+
+- **`onSuccess` failures** go through `onError` / `errorRedirectUrl` with the
+  verifier cleared and no session sealed, as WorkOS does (previously a throw
+  escaped as a bare 500).
+- **Pending-verifier eviction** expires the oldest flows (browsers send
+  same-path cookies oldest first) and keeps the newest nine.
+- **Oversized return paths** are dropped (with a warning) rather than letting
+  the browser silently discard the verifier cookie; WorkOS throws instead.
+- **Rate-limited refresh** (HTTP 429) is retried once after `Retry-After`
+  (capped at 5 s), like authkit-session. Other failures are not retried, since
+  the provider may already have spent the refresh token.
+- **Public (PKCE-only) clients** have been supported from the start (WorkOS
+  added keyless mode in 0.12.0). A token request rejected with `invalid_client`
+  while no secret is configured logs a hint naming `HERCULES_AUTH_CLIENT_SECRET`.
+- **Sealed PKCE state** (WorkOS) is not adopted: WorkOS sends its state blob,
+  including the return path, through the provider in the `state` parameter, so
+  it must be tamper-proof. Ours sends only a random `state` and keeps the data in
+  an HttpOnly cookie, which neither the URL nor page script can alter.
+
+## License
+
+Portions of this package are derived from `@workos/authkit-tanstack-react-start`
+and `@workos/authkit-session` (MIT, © WorkOS). The package's `LICENSE` carries
+WorkOS's copyright and permission notice alongside ours.
 
 ### Resolved (previously listed here)
 

@@ -26,10 +26,12 @@ vi.mock("openid-client", () => ({
 import { getRequest } from "@tanstack/react-start/server";
 import * as client from "openid-client";
 import {
+  getSessionTokensBody,
   getSignOutUrlBody,
   refreshAccessTokenBody,
   refreshAuthBody,
   refreshIdTokenBody,
+  refreshSessionTokensBody,
 } from "./action-bodies";
 import type { SessionData } from "./session";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
@@ -194,5 +196,60 @@ describe("refresh actions without a refresh token", () => {
 
     await expect(refreshIdTokenBody()).resolves.toBeUndefined();
     await expect(refreshAuthBody()).resolves.toEqual({ user: null });
+  });
+});
+
+// The client's access- and ID-token stores share these: one read, one refresh
+// grant, both tokens, and the server's clock to judge their expiry by.
+describe("session token actions", () => {
+  it("getSessionTokensBody returns both tokens and the server's time", async () => {
+    const session = unrefreshableSession();
+    vi.mocked(getResolvedSession).mockResolvedValue(session);
+    const before = Date.now();
+
+    const tokens = await getSessionTokensBody();
+
+    expect(tokens).toMatchObject({ accessToken: session.accessToken, idToken: session.idToken });
+    expect(tokens.serverTime).toBeGreaterThanOrEqual(before);
+    expect(tokens.serverTime).toBeLessThanOrEqual(Date.now());
+    expect(refreshResolvedSession).not.toHaveBeenCalled();
+  });
+
+  it("getSessionTokensBody returns no tokens for an expired session", async () => {
+    vi.mocked(getResolvedSession).mockResolvedValue(
+      unrefreshableSession({ expiresAt: Math.floor(Date.now() / 1000) - 1 }),
+    );
+
+    const tokens = await getSessionTokensBody();
+    expect(tokens.accessToken).toBeUndefined();
+    expect(tokens.idToken).toBeUndefined();
+    expect(typeof tokens.serverTime).toBe("number");
+  });
+
+  it("refreshSessionTokensBody returns both refreshed tokens from one grant", async () => {
+    const refreshed = unrefreshableSession({
+      accessToken: fakeJwt({ sub: "user-1", fresh: "at" }),
+      idToken: fakeJwt({ sub: "user-1", fresh: "id" }),
+    });
+    vi.mocked(refreshResolvedSession).mockResolvedValue(refreshed);
+
+    const tokens = await refreshSessionTokensBody();
+
+    expect(tokens).toMatchObject({
+      accessToken: refreshed.accessToken,
+      idToken: refreshed.idToken,
+    });
+    expect(refreshResolvedSession).toHaveBeenCalledOnce();
+  });
+
+  it("refreshSessionTokensBody falls back to the current tokens when no refresh is possible", async () => {
+    const session = unrefreshableSession();
+    vi.mocked(refreshResolvedSession).mockResolvedValue(null);
+    vi.mocked(getResolvedSession).mockResolvedValue(session);
+
+    await expect(refreshSessionTokensBody()).resolves.toMatchObject({
+      accessToken: session.accessToken,
+      idToken: session.idToken,
+    });
   });
 });

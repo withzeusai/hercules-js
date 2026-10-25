@@ -6,6 +6,7 @@ import { resolvePostLogoutRedirectUri } from "./request-url";
 import type { SessionData } from "./session";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
 import { clearSession, readSession } from "./session-store";
+import type { SessionTokens } from "./types";
 
 /** Strip the access token from a {@link UserInfo} before sending it to a client. */
 function toClientUserInfo(info: UserInfo | NoUserInfo): ClientUserInfo | NoUserInfo {
@@ -82,6 +83,28 @@ export async function getIdTokenBody(): Promise<string | undefined> {
 export async function refreshIdTokenBody(): Promise<string | undefined> {
   const session = await refreshedOrCurrentSession();
   return session?.idToken;
+}
+
+function sessionTokens(session: SessionData | null): SessionTokens {
+  return { accessToken: session?.accessToken, idToken: session?.idToken, serverTime: Date.now() };
+}
+
+/**
+ * Backs `getSessionTokensAction`: both current tokens, if authenticated, with
+ * no refresh grant.
+ */
+export async function getSessionTokensBody(): Promise<SessionTokens> {
+  const session = await getResolvedSession();
+  return sessionTokens(session && userInfoFromSession(session).user ? session : null);
+}
+
+/**
+ * Backs `refreshSessionTokensAction`: refresh once and return both tokens, or
+ * the current ones when no refresh is possible and the session is still valid.
+ * The access-token and ID-token stores share this one grant.
+ */
+export async function refreshSessionTokensBody(): Promise<SessionTokens> {
+  return sessionTokens(await refreshedOrCurrentSession());
 }
 
 /**
