@@ -313,3 +313,31 @@ describe("clock skew", () => {
     expect(fetchTokens).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("empty responses", () => {
+  it("notifies listeners when a read carries neither token, and only then", async () => {
+    const listener = vi.fn();
+    source.onEmpty(listener);
+
+    await source.fetch();
+    expect(listener).not.toHaveBeenCalled();
+
+    fetchTokens.mockResolvedValueOnce({ serverTime: Date.now() });
+    await source.fetch();
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    refreshTokens.mockResolvedValueOnce({ serverTime: Date.now() });
+    await source.refresh();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops notifying after unsubscribe", async () => {
+    const listener = vi.fn();
+    const unsubscribe = source.onEmpty(listener);
+    unsubscribe();
+
+    fetchTokens.mockResolvedValueOnce({ serverTime: Date.now() });
+    await source.fetch();
+    expect(listener).not.toHaveBeenCalled();
+  });
+});

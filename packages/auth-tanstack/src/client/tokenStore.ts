@@ -56,6 +56,7 @@ interface ParsedToken {
  */
 export class TokenSource {
   private readonly stores = new Set<TokenStore>();
+  private readonly emptyListeners = new Set<() => void>();
   private fetchPromise: Promise<SessionTokens> | null = null;
   private refreshPromise: Promise<SessionTokens> | null = null;
   /** Browser clock minus server clock, in ms. */
@@ -77,6 +78,19 @@ export class TokenSource {
   /** Hand every future result to `store`. */
   register(store: TokenStore): void {
     this.stores.add(store);
+  }
+
+  /**
+   * Call `listener` after every response that carries neither token, which is
+   * how a session that ended server-side shows up here: it expired, was
+   * revoked, or no longer unseals because the cookie password was rotated.
+   * Returns the unsubscribe function.
+   */
+  onEmpty(listener: () => void): () => void {
+    this.emptyListeners.add(listener);
+    return () => {
+      this.emptyListeners.delete(listener);
+    };
   }
 
   /** The current time on the server's clock, in epoch seconds. */
@@ -130,6 +144,9 @@ export class TokenSource {
       this.measuredAt = { wall: receivedAt, monotonic: this.monotonic() };
     }
     for (const store of this.stores) store.receive(tokens);
+    if (!tokens.accessToken && !tokens.idToken) {
+      for (const listener of this.emptyListeners) listener();
+    }
     return tokens;
   }
 
