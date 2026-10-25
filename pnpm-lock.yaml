@@ -57,7 +57,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@28.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.2)(jsdom@28.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
 
   packages/auth:
     dependencies:
@@ -106,7 +106,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
 
   packages/auth-tanstack:
     dependencies:
@@ -155,44 +155,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
-
-  packages/convex:
-    dependencies:
-      '@usehercules/sdk':
-        specifier: ^1.15.13
-        version: 1.15.13
-      convex-helpers:
-        specifier: 0.1.120
-        version: 0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(react@19.2.7))(react@19.2.7)(typescript@6.0.3)(zod@4.4.3)
-      standardwebhooks:
-        specifier: ^1.0.0
-        version: 1.0.0
-      tslib:
-        specifier: ^2.8.1
-        version: 2.8.1
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@edge-runtime/vm':
-        specifier: ^5.0.0
-        version: 5.0.0
-      '@types/node':
-        specifier: ^24.13.2
-        version: 24.13.2
-      convex:
-        specifier: ^1.42.1
-        version: 1.42.1(react@19.2.7)
-      convex-test:
-        specifier: ^0.0.53
-        version: 0.0.53(convex@1.42.1(react@19.2.7))
-      vitest:
-        specifier: ^4.1.11
-        version: 4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
 
   packages/eslint-plugin:
     dependencies:
@@ -229,7 +192,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
 
   packages/vite:
     dependencies:
@@ -266,7 +229,7 @@ importers:
         version: 8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
+        version: 4.1.11(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
 
 packages:
 
@@ -522,14 +485,6 @@ packages:
   '@csstools/css-tokenizer@4.0.0':
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
-
-  '@edge-runtime/primitives@6.0.0':
-    resolution: {integrity: sha512-FqoxaBT+prPBHBwE1WXS1ocnu/VLTQyZ6NMUBAdbP7N2hsFTTxMC/jMu2D/8GAlMQfxeuppcPuCUk/HO3fpIvA==}
-    engines: {node: '>=18'}
-
-  '@edge-runtime/vm@5.0.0':
-    resolution: {integrity: sha512-NKBGBSIKUG584qrS1tyxVpX/AKJKQw5HgjYEnPLC0QsTw79JrGn+qUr8CXFb955Iy7GUdiiUv1rJ6JBGvaKb6w==}
-    engines: {node: '>=18'}
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -1133,9 +1088,6 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
-  '@stablelib/base64@1.0.1':
-    resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
-
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -1438,9 +1390,6 @@ packages:
     resolution: {integrity: sha512-UexrHGnGTpbuQHct2ExOc2ZcFbGUS9FOesCxxqdBGcpI1BxYu/LZ6U8Aq6/72XtF/qRBk9nhuGHFJIXXMhPMdw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@usehercules/sdk@1.15.13':
-    resolution: {integrity: sha512-Quh4CbkZ/V5Pet8vyJWNDg9OQEjX7ONiB4UcjCPeddurMTcHcdwJBY+e3xi17vA15+QqT5Z2Mx67Wc4kWHwR7g==}
-
   '@vitest/expect@4.1.11':
     resolution: {integrity: sha512-VX2x5vNJXET47KAFzwERI+KRMtTTCSWTfSMKsW7JsUsXV4psq++e3DvZpuTDOpHcxytiDs6p2nhVb2tVDiiUYw==}
 
@@ -1702,33 +1651,6 @@ packages:
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
 
-  convex-helpers@0.1.120:
-    resolution: {integrity: sha512-FPqtmN/10uoxmmhVq0ViNi08AnmHKT/eU1R8+ohmPZoHfg8noZEZCltApY/ASDdhq92o0kLZETggzBvMfHJDLQ==}
-    hasBin: true
-    peerDependencies:
-      '@standard-schema/spec': ^1.0.0
-      convex: ^1.32.0
-      hono: ^4.0.5
-      react: ^17.0.2 || ^18.0.0 || ^19.0.0
-      typescript: ^5.5 || ^6.0.0
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      '@standard-schema/spec':
-        optional: true
-      hono:
-        optional: true
-      react:
-        optional: true
-      typescript:
-        optional: true
-      zod:
-        optional: true
-
-  convex-test@0.0.53:
-    resolution: {integrity: sha512-bouZQTnTvZi8IHljHL++yClj1vcV+/9ZxEcd8JZz7RDxOfPkRKrkMgkk/xlX4M1EAiwcEJPNiQE7VJFvDM3lCQ==}
-    peerDependencies:
-      convex: ^1.32.0
-
   convex@1.42.1:
     resolution: {integrity: sha512-yFKp4xerVuBwQqpuTtvosOk9F/fX0twZs+Xti3oj/MlwPUU90QuhgCYo/I2wvFBAFwXsmx9tXpf2q8ekh1+3ug==}
     engines: {node: '>=18.0.0', npm: '>=7.0.0'}
@@ -1908,9 +1830,6 @@ packages:
 
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
-
-  fast-sha256@1.3.0:
-    resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
   fast-string-truncated-width@3.0.3:
     resolution: {integrity: sha512-0jjjIEL6+0jag3l2XWWizO64/aZVtpiGE3t0Zgqxv0DPuxiMjvB3M24fCyhZUO4KomJQPj3LTSUnDP3GpdwC0g==}
@@ -2455,9 +2374,6 @@ packages:
 
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
-
-  standardwebhooks@1.0.0:
-    resolution: {integrity: sha512-BbHGOQK9olHPMvQNHWul6MYlrRTAOKn03rOe4A8O3CLWhNf4YHBqq2HJKKC+sfqpxiBY52pNeesD6jIiLDz8jg==}
 
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
@@ -3150,12 +3066,6 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0': {}
 
-  '@edge-runtime/primitives@6.0.0': {}
-
-  '@edge-runtime/vm@5.0.0':
-    dependencies:
-      '@edge-runtime/primitives': 6.0.0
-
   '@emnapi/core@1.11.1':
     dependencies:
       '@emnapi/wasi-threads': 1.2.2
@@ -3522,8 +3432,6 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
-
-  '@stablelib/base64@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -3951,8 +3859,6 @@ snapshots:
       '@typescript-eslint/types': 8.63.0
       eslint-visitor-keys: 5.0.1
 
-  '@usehercules/sdk@1.15.13': {}
-
   '@vitest/expect@4.1.11':
     dependencies:
       '@standard-schema/spec': 1.1.0
@@ -4133,19 +4039,6 @@ snapshots:
       readdirp: 5.0.0
 
   convert-source-map@2.0.0: {}
-
-  convex-helpers@0.1.120(@standard-schema/spec@1.1.0)(convex@1.42.1(react@19.2.7))(react@19.2.7)(typescript@6.0.3)(zod@4.4.3):
-    dependencies:
-      convex: 1.42.1(react@19.2.7)
-    optionalDependencies:
-      '@standard-schema/spec': 1.1.0
-      react: 19.2.7
-      typescript: 6.0.3
-      zod: 4.4.3
-
-  convex-test@0.0.53(convex@1.42.1(react@19.2.7)):
-    dependencies:
-      convex: 1.42.1(react@19.2.7)
 
   convex@1.42.1(react@19.2.7):
     dependencies:
@@ -4333,8 +4226,6 @@ snapshots:
   fast-json-stable-stringify@2.1.0: {}
 
   fast-levenshtein@2.0.6: {}
-
-  fast-sha256@1.3.0: {}
 
   fast-string-truncated-width@3.0.3: {}
 
@@ -4827,11 +4718,6 @@ snapshots:
 
   stackback@0.0.2: {}
 
-  standardwebhooks@1.0.0:
-    dependencies:
-      '@stablelib/base64': 1.0.1
-      fast-sha256: 1.3.0
-
   std-env@4.2.0: {}
 
   strip-indent@3.0.0:
@@ -4902,7 +4788,8 @@ snapshots:
       - oxc-resolver
       - vue-tsc
 
-  tslib@2.8.1: {}
+  tslib@2.8.1:
+    optional: true
 
   turbo@2.10.4:
     optionalDependencies:
@@ -4974,7 +4861,7 @@ snapshots:
     optionalDependencies:
       vite: 8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)
 
-  vitest@4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@28.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)):
+  vitest@4.1.11(@types/node@24.13.2)(jsdom@28.1.0)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
@@ -4997,13 +4884,12 @@ snapshots:
       vite: 8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@edge-runtime/vm': 5.0.0
       '@types/node': 24.13.2
       jsdom: 28.1.0
     transitivePeerDependencies:
       - msw
 
-  vitest@4.1.11(@edge-runtime/vm@5.0.0)(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)):
+  vitest@4.1.11(@types/node@24.13.2)(jsdom@29.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0))
@@ -5026,7 +4912,6 @@ snapshots:
       vite: 8.1.3(@types/node@24.13.2)(esbuild@0.27.0)(jiti@2.7.0)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@edge-runtime/vm': 5.0.0
       '@types/node': 24.13.2
       jsdom: 29.1.1
     transitivePeerDependencies:
