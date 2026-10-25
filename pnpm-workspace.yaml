@@ -8,8 +8,45 @@ allowBuilds:
 blockExoticSubdeps: true
 minimumReleaseAge: 10080 # 7 days
 minimumReleaseAgeExclude:
-  # Release tooling only, never shipped to users.
-  - "@changesets/*"
+  - '@oxfmt/binding-android-arm-eabi@0.74.0'
+  - '@oxfmt/binding-android-arm64@0.74.0'
+  - '@oxfmt/binding-darwin-arm64@0.74.0'
+  - '@oxfmt/binding-darwin-x64@0.74.0'
+  - '@oxfmt/binding-freebsd-x64@0.74.0'
+  - '@oxfmt/binding-linux-arm-gnueabihf@0.74.0'
+  - '@oxfmt/binding-linux-arm-musleabihf@0.74.0'
+  - '@oxfmt/binding-linux-arm64-gnu@0.74.0'
+  - '@oxfmt/binding-linux-arm64-musl@0.74.0'
+  - '@oxfmt/binding-linux-ppc64-gnu@0.74.0'
+  - '@oxfmt/binding-linux-riscv64-gnu@0.74.0'
+  - '@oxfmt/binding-linux-riscv64-musl@0.74.0'
+  - '@oxfmt/binding-linux-s390x-gnu@0.74.0'
+  - '@oxfmt/binding-linux-x64-gnu@0.74.0'
+  - '@oxfmt/binding-linux-x64-musl@0.74.0'
+  - '@oxfmt/binding-openharmony-arm64@0.74.0'
+  - '@oxfmt/binding-win32-arm64-msvc@0.74.0'
+  - '@oxfmt/binding-win32-ia32-msvc@0.74.0'
+  - '@oxfmt/binding-win32-x64-msvc@0.74.0'
+  - '@turbo/darwin-64@2.11.10'
+  - '@turbo/darwin-arm64@2.11.10'
+  - '@turbo/linux-64@2.11.10'
+  - '@turbo/linux-arm64@2.11.10'
+  - '@turbo/windows-64@2.11.10'
+  - '@turbo/windows-arm64@2.11.10'
+  - '@typescript-eslint/eslint-plugin@8.72.0'
+  - '@typescript-eslint/parser@8.72.0'
+  - '@typescript-eslint/project-service@8.72.0'
+  - '@typescript-eslint/rule-tester@8.72.0'
+  - '@typescript-eslint/scope-manager@8.72.0'
+  - '@typescript-eslint/tsconfig-utils@8.72.0'
+  - '@typescript-eslint/type-utils@8.72.0'
+  - '@typescript-eslint/types@8.72.0'
+  - '@typescript-eslint/typescript-estree@8.72.0'
+  - '@typescript-eslint/utils@8.72.0'
+  - '@typescript-eslint/visitor-keys@8.72.0'
+  - oxfmt@0.74.0
+  - turbo@2.11.10
+  - vite@8.3.5
 
 onlyBuiltDependencies:
   - esbuild
