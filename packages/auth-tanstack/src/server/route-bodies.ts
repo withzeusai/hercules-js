@@ -2,6 +2,7 @@ import * as client from "openid-client";
 import {
   DEFAULT_REDIRECT,
   SIGN_IN_COOKIE_MAX_AGE,
+  type PkceState,
   clientAuthHint,
   decodePkceState,
   encodePkceCookie,
@@ -12,7 +13,12 @@ import {
   staleSignInCookieNames,
 } from "./config";
 import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
-import { OAuthStateMismatchError, PKCECookieMissingError } from "./errors";
+import {
+  AUTH_ERROR_PARAM,
+  OAuthProviderError,
+  OAuthStateMismatchError,
+  PKCECookieMissingError,
+} from "./errors";
 import {
   cookieSecurity,
   resolveCallbackUrl,
@@ -21,7 +27,12 @@ import {
 } from "./request-url";
 import { authorizationParameters } from "./server-fn-bodies";
 import { type SessionData, sealSession, serializeSessionCookies } from "./session";
-import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
+import type {
+  CallbackErrorReason,
+  HandleAuthSuccessData,
+  HandleCallbackOptions,
+  HandleSignInOptions,
+} from "./types";
 
 // Bodies for the route handlers in `server.ts`, loaded via dynamic import so
 // the root barrel never statically reaches openid-client — see the note there.
@@ -60,56 +71,108 @@ function withDeletedCookie(response: Response, name: string): Response {
   }
 }
 
+/** A callback failure, before the caller's preferences shape the response. */
+interface CallbackFailure {
+  reason: CallbackErrorReason;
+  /** Logged, and the JSON body's `error` when the default response is JSON. */
+  message: string;
+  /** Handed to `onError` and logged alongside `message`. */
+  error?: unknown;
+  /**
+   * The failed flow's verifier cookie. It is expired on whichever response is
+   * returned (including one produced by `onError`), so a failed flow never
+   * strands its verifier; other pending sign-in flows are left untouched.
+   */
+  clearCookieName?: string;
+  /** The failed flow's sealed PKCE state, when its cookie was readable. */
+  pkce?: PkceState;
+}
+
+/**
+ * Failures a user recovers from by signing in again. By default they send the
+ * user back into the app instead of answering with an error body.
+ */
+const RECOVERABLE_REASONS: ReadonlySet<CallbackErrorReason> = new Set([
+  "access_denied",
+  "provider_error",
+  "invalid_callback",
+  "sign_in_expired",
+]);
+
 /**
  * Resolve a callback failure into a Response, honoring the caller's error
  * handling preferences (see {@link HandleCallbackOptions}). `onError` wins over
- * `errorRedirectUrl`, which in turn wins over the default JSON error response.
- *
- * When `clearCookieName` is given (the failed flow's verifier cookie) it is
- * expired on whichever response is returned — including one produced by
- * `onError` — so a failed flow never strands its verifier; other pending
- * sign-in flows are left untouched.
+ * `errorRedirectUrl`, which in turn wins over the default: a redirect back into
+ * the app for a recoverable failure, a JSON 500 otherwise.
  */
 async function handleError(
   request: Request,
-  status: 400 | 500,
-  message: string,
-  error: unknown,
+  failure: CallbackFailure,
   options?: HandleCallbackOptions,
-  clearCookieName?: string,
 ): Promise<Response> {
-  // Always log before the response is shaped by caller preferences — otherwise
+  const { reason, message, error, clearCookieName, pkce } = failure;
+  const recoverable = RECOVERABLE_REASONS.has(reason);
+
+  // Always log before the response is shaped by caller preferences, otherwise
   // the failure is invisible whenever it's surfaced as a redirect or a generic
-  // message. Include the underlying error when there is one.
+  // message. A recoverable failure is usually the user's doing (a cancel, a
+  // stale tab), so it is a warning rather than an error.
+  const log = recoverable ? console.warn : console.error;
   if (error !== undefined) {
-    console.error(`[auth-tanstack] ${message} (HTTP ${status}):`, error);
+    log(`[auth-tanstack] Sign-in callback failed (${reason}): ${message}`, error);
   } else {
-    console.error(`[auth-tanstack] ${message} (HTTP ${status})`);
+    log(`[auth-tanstack] Sign-in callback failed (${reason}): ${message}`);
   }
 
-  // `onError` is intentionally not wrapped — errors it throws propagate.
+  // `onError` is intentionally not wrapped: errors it throws propagate.
   if (options?.onError) {
-    const response = await options.onError({ error, request });
+    const response = await options.onError({
+      error,
+      request,
+      reason,
+      returnPathname: pkce?.returnPathname,
+    });
     return clearCookieName ? withDeletedCookie(response, clearCookieName) : response;
   }
 
   if (options?.errorRedirectUrl) {
     try {
       const location = new URL(options.errorRedirectUrl, resolveOrigin(request)).toString();
-      const headers = new Headers({ Location: location });
-      if (clearCookieName) deleteCookie(headers, clearCookieName);
-      return new Response(null, { status: 302, headers });
+      return redirectResponse(location, clearCookieName);
     } catch {
-      // Malformed config value — warn and fall back to the JSON error response.
+      // Malformed config value: warn and fall back to the default response.
       console.warn(
         `[auth-tanstack] Ignoring malformed errorRedirectUrl: ${options.errorRedirectUrl}`,
       );
     }
   }
 
+  if (recoverable) {
+    // Back to where the sign-in started, anchored to the app's origin (the
+    // same origin a successful callback redirects to) so a poisoned
+    // returnPathname cannot send the user off-site.
+    const origin = resolveCallbackUrl(request, pkce?.redirectUri).origin;
+    let location: URL;
+    try {
+      location = buildRedirectUrl(origin, pkce?.returnPathname ?? DEFAULT_REDIRECT);
+    } catch {
+      // A returnPathname the URL parser rejects (e.g. a bad host): go home.
+      location = buildRedirectUrl(origin, DEFAULT_REDIRECT);
+    }
+    location.searchParams.set(AUTH_ERROR_PARAM, reason);
+    return redirectResponse(location.toString(), clearCookieName);
+  }
+
   const headers = new Headers({ "Content-Type": "application/json" });
   if (clearCookieName) deleteCookie(headers, clearCookieName);
-  return new Response(JSON.stringify({ error: message }), { status, headers });
+  return new Response(JSON.stringify({ error: message }), { status: 500, headers });
+}
+
+/** A 302 to `location`, expiring `clearCookieName` when given. */
+function redirectResponse(location: string, clearCookieName?: string): Response {
+  const headers = new Headers({ Location: location });
+  if (clearCookieName) deleteCookie(headers, clearCookieName);
+  return new Response(null, { status: 302, headers });
 }
 
 /**
@@ -211,43 +274,88 @@ export async function handleCallbackInternal(
   // and tells concurrent flows apart. Pass `state` as `expectedState` so the
   // grant also rejects a response whose `state` is missing or mismatched.
   const state = url.searchParams.get("state");
-  if (!state) {
+  const verifierCookieName = state ? pkceCookieName(state) : undefined;
+  const verifierCookie = verifierCookieName
+    ? parseCookies(request.headers.get("cookie") ?? "")[verifierCookieName]
+    : undefined;
+  // A cookie that cannot be decoded is as dead as a missing one, but is still
+  // expired below so it stops riding along on every request.
+  const pkce = verifierCookie ? decodePkceState(verifierCookie) : undefined;
+  // Expire the flow's verifier on error responses only when it exists.
+  const clearCookieName = verifierCookie ? verifierCookieName : undefined;
+
+  // The provider declined to issue a code: the user cancelled (`access_denied`)
+  // or it could not complete the request. Report its reason rather than a
+  // generic missing-code error, and evict the dead flow's verifier.
+  const providerError = url.searchParams.get("error");
+  if (providerError) {
     return handleError(
       request,
-      400,
-      "Missing state parameter",
-      new OAuthStateMismatchError("Missing state parameter"),
+      {
+        reason: providerError === "access_denied" ? "access_denied" : "provider_error",
+        message: `Provider returned ${JSON.stringify(providerError)}`,
+        error: new OAuthProviderError(
+          providerError,
+          url.searchParams.get("error_description") ?? undefined,
+        ),
+        clearCookieName,
+        pkce,
+      },
       options,
     );
   }
 
-  const verifierCookieName = pkceCookieName(state);
-  const verifierCookie = parseCookies(request.headers.get("cookie") ?? "")[verifierCookieName];
-  // Expire the flow's verifier on error responses only when it exists.
-  const clearName = verifierCookie ? verifierCookieName : undefined;
+  if (!state || !verifierCookieName) {
+    return handleError(
+      request,
+      {
+        reason: "invalid_callback",
+        message: "Missing state parameter",
+        error: new OAuthStateMismatchError("Missing state parameter"),
+      },
+      options,
+    );
+  }
 
   const code = url.searchParams.get("code");
   if (!code) {
-    // The flow is dead without a code — evict its verifier rather than leaving
+    // The flow is dead without a code: evict its verifier rather than leaving
     // it to linger until it times out.
-    return handleError(request, 400, "Missing code parameter", undefined, options, clearName);
+    return handleError(
+      request,
+      { reason: "invalid_callback", message: "Missing code parameter", clearCookieName, pkce },
+      options,
+    );
   }
 
   if (!verifierCookie) {
     return handleError(
       request,
-      400,
-      "Unknown or expired sign-in state",
-      new PKCECookieMissingError(),
+      {
+        reason: "sign_in_expired",
+        message: "Unknown or expired sign-in state",
+        error: new PKCECookieMissingError(),
+      },
       options,
     );
   }
 
-  const {
-    verifier: pkceCodeVerifier,
-    returnPathname,
-    redirectUri: sealedRedirectUri,
-  } = decodePkceState(verifierCookie);
+  if (!pkce) {
+    return handleError(
+      request,
+      {
+        reason: "sign_in_expired",
+        message: "Unreadable sign-in state",
+        error: new PKCECookieMissingError(
+          "The PKCE verifier cookie for this sign-in is unreadable",
+        ),
+        clearCookieName,
+      },
+      options,
+    );
+  }
+
+  const { verifier: pkceCodeVerifier, returnPathname, redirectUri: sealedRedirectUri } = pkce;
   const checks: client.AuthorizationCodeGrantChecks = { pkceCodeVerifier, expectedState: state };
 
   // authorizationCodeGrant derives the token request's redirect_uri from this
@@ -265,7 +373,17 @@ export async function handleCallbackInternal(
   } catch (error) {
     const hint = clientAuthHint(error);
     if (hint) console.error(hint);
-    return handleError(request, 500, "Token exchange failed", error, options, verifierCookieName);
+    return handleError(
+      request,
+      {
+        reason: "token_exchange_failed",
+        message: "Token exchange failed",
+        error,
+        clearCookieName: verifierCookieName,
+        pkce,
+      },
+      options,
+    );
   }
 
   const claims = tokens.claims();
@@ -287,7 +405,17 @@ export async function handleCallbackInternal(
   try {
     await options?.onSuccess?.(data);
   } catch (error) {
-    return handleError(request, 500, "onSuccess failed", error, options, verifierCookieName);
+    return handleError(
+      request,
+      {
+        reason: "on_success_failed",
+        message: "onSuccess failed",
+        error,
+        clearCookieName: verifierCookieName,
+        pkce,
+      },
+      options,
+    );
   }
 
   // Persist the tokens as a sealed session so getAuth()/signOut() can recover
@@ -314,11 +442,14 @@ export async function handleCallbackInternal(
   } catch (error) {
     return handleError(
       request,
-      500,
-      "Failed to persist session",
-      error,
+      {
+        reason: "session_failed",
+        message: "Failed to persist session",
+        error,
+        clearCookieName: verifierCookieName,
+        pkce,
+      },
       options,
-      verifierCookieName,
     );
   }
 
