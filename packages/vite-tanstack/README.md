@@ -74,20 +74,20 @@ export default defineConfig({
 });
 ```
 
-| Option          | Default    | Description                                                                        |
-| --------------- | ---------- | ---------------------------------------------------------------------------------- |
-| `plugins`       | `[]`       | Extra Vite plugins, appended after the Hercules stack.                             |
-| `prebundle`     | `[]`       | Extra packages to pre-bundle in the browser and the `ssr` environment.             |
-| `holdPagesDuringReload` | `true` | `false` lets page requests through while the dev server reloads the Worker. |
-| `vite`          |            | Vite options merged over the generated config. Anything set here wins.             |
-| `srcDir`        | `"src"`    | Application source directory, mapped to `@`.                                       |
-| `convexDir`     | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex. |
-| `react`         |            | Options for `@vitejs/plugin-react`.                                                |
-| `tanstackStart` |            | Options for `tanstackStart()`.                                                     |
-| `cloudflare`    |            | Options for `@cloudflare/vite-plugin`. `false` builds without it.                  |
-| `hercules`      |            | Options for `@usehercules/vite`. `false` leaves the Hercules dev tooling out.      |
-| `devtools`      |            | Options for `@tanstack/devtools-vite`. `false` skips it.                           |
-| `tailwind`      | `true`     | Whether to include `@tailwindcss/vite`.                                            |
+| Option                  | Default    | Description                                                                        |
+| ----------------------- | ---------- | ---------------------------------------------------------------------------------- |
+| `plugins`               | `[]`       | Extra Vite plugins, appended after the Hercules stack.                             |
+| `prebundle`             | `[]`       | Extra packages to pre-bundle in the browser and the `ssr` environment.             |
+| `holdPagesDuringReload` | `true`     | `false` lets page requests through while the dev server reloads the Worker.        |
+| `vite`                  |            | Vite options merged over the generated config. Anything set here wins.             |
+| `srcDir`                | `"src"`    | Application source directory, mapped to `@`.                                       |
+| `convexDir`             | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex. |
+| `react`                 |            | Options for `@vitejs/plugin-react`.                                                |
+| `tanstackStart`         |            | Options for `tanstackStart()`.                                                     |
+| `cloudflare`            |            | Options for `@cloudflare/vite-plugin`. `false` builds without it.                  |
+| `hercules`              |            | Options for `@usehercules/vite`. `false` leaves the Hercules dev tooling out.      |
+| `devtools`              |            | Options for `@tanstack/devtools-vite`. `false` skips it.                           |
+| `tailwind`              | `true`     | Whether to include `@tailwindcss/vite`.                                            |
 
 Optional peers that are not installed are skipped with a warning, unless you configured them explicitly, in which case the missing package is an error.
 

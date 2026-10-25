@@ -76,7 +76,10 @@ export function readDeclaredDependencies(root: string): Set<string> | undefined 
  * Keeps the entries whose package the app declares. An app that removes a
  * template package must not get "Failed to resolve dependency" on every start.
  */
-export function onlyDeclared(entries: readonly string[], declared: Set<string> | undefined): string[] {
+export function onlyDeclared(
+  entries: readonly string[],
+  declared: Set<string> | undefined,
+): string[] {
   if (!declared) return [...entries];
   return entries.filter((entry) => declared.has(packageNameOf(entry)));
 }
