@@ -1,5 +1,13 @@
 # @usehercules/vite-tanstack
 
+## 0.1.1
+
+### Patch Changes
+
+- [#200](https://github.com/withzeusai/hercules-js/pull/200) [`a2c69d5`](https://github.com/withzeusai/hercules-js/commit/a2c69d54bf0053ca033f3b33a9bd0cb34a5a2c98) Thanks [@grant0417](https://github.com/grant0417)! - Release 0.1.1 with no source changes.
+- Updated dependencies [[`6a8b36e`](https://github.com/withzeusai/hercules-js/commit/6a8b36ef32f8a9ba3063d2f77fc5eea9be5f3d10)]:
+  - @usehercules/vite@2.0.1
+
 ## 0.1.0
 
 ### Minor Changes

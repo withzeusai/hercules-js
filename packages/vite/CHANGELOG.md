@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 2.0.1
+
+### Patch Changes
+
+- [#197](https://github.com/withzeusai/hercules-js/pull/197) [`6a8b36e`](https://github.com/withzeusai/hercules-js/commit/6a8b36ef32f8a9ba3063d2f77fc5eea9be5f3d10) Thanks [@delbyte](https://github.com/delbyte)! - Stop tagging components imported from `@vis.gl/react-google-maps`. `<Pin>` passes every prop to the Google Maps `PinElement` constructor, which threw `Unknown property 'data-hercules-id' of PinElement` and blanked the page in the dev preview. Those components never put the attributes in the DOM, so the visual editor loses nothing.
+
 ## 2.0.0
 
 ### Major Changes
