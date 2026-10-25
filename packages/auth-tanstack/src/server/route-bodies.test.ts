@@ -64,6 +64,7 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -198,6 +199,47 @@ describe("handleCallbackInternal", () => {
       true,
     );
   });
+
+  it("fails the sign-in through onError when onSuccess throws", async () => {
+    vi.mocked(oidc.authorizationCodeGrant).mockResolvedValue(
+      tokenResponse() as unknown as Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>,
+    );
+    const provisioningError = new Error("provisioning failed");
+    const onError = vi.fn(async () => new Response("handled", { status: 403 }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await handleCallbackInternal(callbackRequest(), {
+      onSuccess: async () => {
+        throw provisioningError;
+      },
+      onError,
+    });
+
+    expect(response.status).toBe(403);
+    expect(onError.mock.calls[0]![0].error).toBe(provisioningError);
+    const setCookies = response.headers.getSetCookie();
+    // No session is sealed, and the flow's verifier is cleared.
+    expect(setCookies.some((h) => h.startsWith("hercules_session."))).toBe(false);
+    expect(setCookies.some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`))).toBe(true);
+  });
+
+  it("reports 500 when onSuccess throws and no error handling is configured", async () => {
+    vi.mocked(oidc.authorizationCodeGrant).mockResolvedValue(
+      tokenResponse() as unknown as Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>,
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await handleCallbackInternal(callbackRequest(), {
+      onSuccess: () => {
+        throw new Error("provisioning failed");
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`))).toBe(
+      true,
+    );
+  });
 });
 
 describe("handleSignInInternal", () => {
@@ -230,5 +272,22 @@ describe("handleSignInInternal", () => {
     expect(await promptOf()).toBe("login");
     expect(await promptOf({ prompt: "select_account" })).toBe("select_account");
     expect(await promptOf({ prompt: "" })).toBeNull();
+  });
+
+  it("expires the oldest pending sign-ins and keeps the newest", async () => {
+    // The browser sends same-path cookies oldest first.
+    const pending = Array.from({ length: 12 }, (_, index) => pkceCookieName(`old-${index}`));
+    const cookie = pending.map((name) => `${name}=x`).join("; ");
+
+    const response = await handleSignInInternal(
+      new Request("https://app.example.com/auth/sign-in", { headers: { cookie } }),
+    );
+
+    const expired = response.headers
+      .getSetCookie()
+      .filter((h) => h.includes("Max-Age=0"))
+      .map((h) => h.split("=")[0]);
+    // 12 pending + this flow, capped at 10: the 3 oldest go.
+    expect(new Set(expired)).toEqual(new Set(pending.slice(0, 3)));
   });
 });

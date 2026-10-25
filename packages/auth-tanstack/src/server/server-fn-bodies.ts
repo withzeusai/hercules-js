@@ -7,14 +7,13 @@ import type { NoUserInfo, UserInfo } from "../types";
 import type { GetAuthURLOptions, RecentAuthResult, SignInUrlOptions } from "./auth";
 import { collectClaims, userInfoFromSession } from "./claims";
 import {
-  MAX_PENDING_SIGN_INS,
-  PKCE_COOKIE_PREFIX,
   SIGN_IN_COOKIE_MAX_AGE,
   defaultScope,
-  encodePkceState,
+  encodePkceCookie,
   getConfig,
   pkceCookieName,
   sessionCookieDomain,
+  staleSignInCookieNames,
 } from "./config";
 import { resolveLogoutLocation } from "./refresh";
 import {
@@ -99,9 +98,10 @@ async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promis
   // so fall back to Lax over plain HTTP (local dev); overridable via
   // herculesAuthMiddleware({ cookieSameSite }).
   const { secure, sameSite } = cookieSecurity(request);
+  const cookieName = pkceCookieName(state);
   setCookie(
-    pkceCookieName(state),
-    encodePkceState({
+    cookieName,
+    encodePkceCookie(cookieName, {
       verifier: codeVerifier,
       returnPathname: options.returnPathname,
       redirectUri,
@@ -116,12 +116,11 @@ async function generateAuthorizationUrl(options: GetAuthURLOptions = {}): Promis
   );
 
   // Bound the number of pending verifier cookies. `getCookies()` reflects the
-  // incoming request (the cookie just set is not included), so keep the newest
-  // MAX-1 of the prior flows plus this fresh one. Clear with the same
-  // SameSite/Secure the cookies were set with so the deletion is honored in the
-  // cross-site server-function context.
-  const pending = Object.keys(getCookies()).filter((name) => name.startsWith(PKCE_COOKIE_PREFIX));
-  for (const name of pending.slice(MAX_PENDING_SIGN_INS - 1)) {
+  // incoming request in the browser's order (the cookie just set is not
+  // included), so this expires the oldest and keeps the most recent flows.
+  // Clear with the same SameSite/Secure the cookies were set with so the
+  // deletion is honored in the cross-site server-function context.
+  for (const name of staleSignInCookieNames(Object.keys(getCookies()))) {
     deleteCookie(name, { path: "/", secure, sameSite: toCookieSameSite(sameSite) });
   }
 

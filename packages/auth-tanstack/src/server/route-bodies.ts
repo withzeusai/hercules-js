@@ -1,15 +1,15 @@
 import * as client from "openid-client";
 import {
   DEFAULT_REDIRECT,
-  MAX_PENDING_SIGN_INS,
-  PKCE_COOKIE_PREFIX,
   SIGN_IN_COOKIE_MAX_AGE,
+  clientAuthHint,
   decodePkceState,
-  encodePkceState,
+  encodePkceCookie,
   getConfig,
   pkceCookieName,
   sessionCookieDomain,
   sessionCookieMaxAge,
+  staleSignInCookieNames,
 } from "./config";
 import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
 import { OAuthStateMismatchError, PKCECookieMissingError } from "./errors";
@@ -165,11 +165,12 @@ export async function handleSignInInternal(
   // when the app is embedded cross-site; over plain HTTP (local dev) fall back
   // to Lax. Overridable via herculesAuthMiddleware({ cookieSameSite }).
   const { secure, sameSite } = cookieSecurity(request);
+  const cookieName = pkceCookieName(state);
   headers.append(
     "Set-Cookie",
     serializeCookie(
-      pkceCookieName(state),
-      encodePkceState({
+      cookieName,
+      encodePkceCookie(cookieName, {
         verifier: codeVerifier,
         returnPathname: options?.returnPathname,
         redirectUri,
@@ -185,13 +186,11 @@ export async function handleSignInInternal(
   );
 
   // Bound the number of pending verifier cookies. Abandoned flows would
-  // otherwise linger until they expire and could overflow the cookie header; we
-  // can't tell their age, so once over the cap we expire the surplus and keep
-  // this fresh flow plus a handful of genuinely concurrent ones.
-  const pending = parseCookieNames(request.headers.get("cookie") ?? "").filter((name) =>
-    name.startsWith(PKCE_COOKIE_PREFIX),
-  );
-  for (const name of pending.slice(MAX_PENDING_SIGN_INS - 1)) {
+  // otherwise linger until they expire and could overflow the cookie header,
+  // so once over the cap expire the oldest and keep the most recent flows.
+  for (const name of staleSignInCookieNames(
+    parseCookieNames(request.headers.get("cookie") ?? ""),
+  )) {
     deleteCookie(headers, name);
   }
 
@@ -264,6 +263,8 @@ export async function handleCallbackInternal(
     const config = await getConfig();
     tokens = await client.authorizationCodeGrant(config, callbackUrl, checks);
   } catch (error) {
+    const hint = clientAuthHint(error);
+    if (hint) console.error(hint);
     return handleError(request, 500, "Token exchange failed", error, options, verifierCookieName);
   }
 
@@ -280,7 +281,14 @@ export async function handleCallbackInternal(
     state,
   };
 
-  await options?.onSuccess?.(data);
+  // A throwing onSuccess (e.g. failed user provisioning) fails the sign-in
+  // like any other callback error: through onError/errorRedirectUrl, with the
+  // verifier cleared and no session sealed.
+  try {
+    await options?.onSuccess?.(data);
+  } catch (error) {
+    return handleError(request, 500, "onSuccess failed", error, options, verifierCookieName);
+  }
 
   // Persist the tokens as a sealed session so getAuth()/signOut() can recover
   // identity and refresh. Derive an absolute expiry for the refresh-on-read
