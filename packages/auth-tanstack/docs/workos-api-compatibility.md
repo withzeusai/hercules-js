@@ -11,7 +11,7 @@ model:
   session.
 - **Hercules** authenticates against a generic **OIDC provider** with
   `openid-client`. We seal an equivalent session (`{ accessToken, idToken,
-refreshToken, expiresAt }`) into a cookie and derive the WorkOS-shaped
+  refreshToken, expiresAt }`) into a cookie and derive the WorkOS-shaped
   `UserInfo`/`User` by mapping standard OIDC ID-token claims.
 
 Because identity comes from OIDC claims rather than a WorkOS user record, a few

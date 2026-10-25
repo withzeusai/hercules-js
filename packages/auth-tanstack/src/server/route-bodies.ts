@@ -13,7 +13,12 @@ import {
 } from "./config";
 import { parseCookieNames, parseCookies, serializeCookie } from "./cookie-utils";
 import { OAuthStateMismatchError, PKCECookieMissingError } from "./errors";
-import { cookieSecurity, resolveCallbackUrl, resolveOrigin, resolveRedirectUri } from "./request-url";
+import {
+  cookieSecurity,
+  resolveCallbackUrl,
+  resolveOrigin,
+  resolveRedirectUri,
+} from "./request-url";
 import { authorizationParameters } from "./server-fn-bodies";
 import { type SessionData, sealSession, serializeSessionCookies } from "./session";
 import type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";

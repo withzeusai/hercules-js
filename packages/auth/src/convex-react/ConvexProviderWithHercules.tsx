@@ -6,7 +6,6 @@ import { jwtDecode } from "jwt-decode";
 import { useCallback, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { withRefreshLock } from "../internal/refresh-lock";
-import type { HerculesAuthProvider } from "../react/HerculesAuthProvider";
 
 const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
 
@@ -79,7 +78,7 @@ function useUseAuthFromHercules() {
  * A wrapper React component which provides a {@link ConvexReactClient}
  * authenticated with Hercules Auth.
  *
- * It must be wrapped by a configured `{@link HerculesAuthProvider}`.
+ * It must be wrapped by a configured `HerculesAuthProvider`.
  *
  * @public
  */

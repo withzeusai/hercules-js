@@ -1,7 +1,9 @@
 import { readFile } from "fs/promises";
 import path from "path";
 import { parse } from "@babel/parser";
-import MagicString from "magic-string";
+// Named, not default: magic-string is ESM-only, and the CJS build's interop
+// hands require()'s whole namespace back as `default`.
+import { MagicString } from "magic-string";
 import type { Plugin, ViteDevServer } from "vite";
 
 // Types

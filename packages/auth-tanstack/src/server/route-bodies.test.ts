@@ -1,9 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_SESSION_COOKIE_MAX_AGE,
-  encodePkceState,
-  pkceCookieName,
-} from "./config";
+import { DEFAULT_SESSION_COOKIE_MAX_AGE, encodePkceState, pkceCookieName } from "./config";
 import { OAuthStateMismatchError, PKCECookieMissingError } from "./errors";
 import { buildRedirectUrl, handleCallbackInternal, handleSignInInternal } from "./route-bodies";
 import { unsealSession } from "./session";
@@ -176,9 +172,9 @@ describe("handleCallbackInternal", () => {
     const response = await handleCallbackInternal(callbackRequest({ code: null }), { onError });
 
     expect(await response.text()).toBe("handled");
-    expect(
-      response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`)),
-    ).toBe(true);
+    expect(response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`))).toBe(
+      true,
+    );
   });
 
   it("clones an immutable onError response to attach the delete cookies", async () => {
@@ -187,9 +183,9 @@ describe("handleCallbackInternal", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toBe("https://app.example.com/signin");
-    expect(
-      response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`)),
-    ).toBe(true);
+    expect(response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`))).toBe(
+      true,
+    );
   });
 
   it("clears the verifier and reports 500 when the token exchange fails", async () => {
@@ -198,9 +194,9 @@ describe("handleCallbackInternal", () => {
     const response = await handleCallbackInternal(callbackRequest());
 
     expect(response.status).toBe(500);
-    expect(
-      response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`)),
-    ).toBe(true);
+    expect(response.headers.getSetCookie().some((h) => h.startsWith(`${VERIFIER_COOKIE}=;`))).toBe(
+      true,
+    );
   });
 });
 
