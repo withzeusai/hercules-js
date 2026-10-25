@@ -8,7 +8,11 @@ import {
   type UserConfigFnPromise,
 } from "vite";
 import type { HerculesPluginOptions } from "@usehercules/vite";
-import { importOptional, isHerculesDevServer } from "@usehercules/vite-common";
+import {
+  importOptional,
+  isHerculesDevMachine,
+  isHerculesDevServer,
+} from "@usehercules/vite-common";
 import type { Options as ReactPluginOptions } from "@vitejs/plugin-react";
 import type { PluginConfig as CloudflarePluginConfig } from "@cloudflare/vite-plugin";
 import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
@@ -18,11 +22,17 @@ import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 
 export type { Alias } from "vite";
-export { HERCULES_DEV_SERVER_ENV, isHerculesDevServer } from "@usehercules/vite-common";
+export {
+  HERCULES_DEV_MACHINE_ENV,
+  HERCULES_DEV_SERVER_ENV,
+  isHerculesDevMachine,
+  isHerculesDevServer,
+} from "@usehercules/vite-common";
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export {
   PREBUNDLED_ENTRIES,
+  PREBUNDLED_EXPORT_MAPS,
   SSR_PREBUNDLED_ENTRIES,
   prebundleDependencies,
   dependenciesToPrebundle,
@@ -70,9 +80,10 @@ export interface HerculesTanStackConfigOptions {
 
   /**
    * Entries to bundle up front in the browser and on the server, on top of
-   * the app's dependencies and {@link PREBUNDLED_ENTRIES}. Use it for an
-   * entry a package name does not cover, such as a subpath (`lodash/debounce`)
-   * or a dependency of an excluded package (`excluded > nested`).
+   * the app's dependencies, {@link PREBUNDLED_ENTRIES} and
+   * {@link PREBUNDLED_EXPORT_MAPS}. Use it for an entry a package name does
+   * not cover, such as a subpath (`lodash/debounce`) or a dependency of an
+   * excluded package (`excluded > nested`).
    */
   prebundle?: string[];
 
@@ -80,8 +91,8 @@ export interface HerculesTanStackConfigOptions {
    * Bundle every runtime dependency in the app's `package.json` up front, and
    * restart the dev server when the dependencies change, so a package the
    * agent installs never makes Vite re-optimize mid-session. See
-   * {@link prebundleDependencies}. `false` bundles only {@link PREBUNDLED_ENTRIES} and
-   * `prebundle`.
+   * {@link prebundleDependencies}. `false` bundles only {@link PREBUNDLED_ENTRIES},
+   * {@link PREBUNDLED_EXPORT_MAPS} and `prebundle`.
    * @default true
    */
   prebundleDependencies?: boolean;
@@ -242,12 +253,21 @@ function rootOf(options: HerculesTanStackConfigOptions): string {
 }
 
 /**
+ * Whether the dev server runs on a Hercules dev machine. The machine image
+ * sets `HERCULES_DEV_MACHINE=1` and herculesd passes it on to the dev server
+ * it starts. `HERCULES_DEV_SERVER=true` turns the same settings on elsewhere.
+ */
+function onHerculesDevMachine(): boolean {
+  return isHerculesDevMachine() || isHerculesDevServer();
+}
+
+/**
  * Base config shared by every Hercules TanStack Start app. Kept separate from
  * `defineConfig` so the Vitest helper can reuse the same aliases.
  */
 export function herculesBaseConfig(
   options: HerculesTanStackConfigOptions,
-  { sandbox = isHerculesDevServer() }: { sandbox?: boolean } = {},
+  { sandbox = onHerculesDevMachine() }: { sandbox?: boolean } = {},
 ): UserConfig {
   const root = rootOf(options);
   const { srcDir = "src", convexDir = "convex" } = options;
@@ -255,6 +275,9 @@ export function herculesBaseConfig(
   return {
     resolve: {
       alias: herculesAliases({ root, srcDir, convexDir }),
+      // Any other `paths` in tsconfig.json resolve too. Vite 7 ignores this;
+      // the aliases above cover `@` and `@/convex` on both.
+      tsconfigPaths: true,
       dedupe: [...DEDUPE],
     },
     // Dependency pre-bundling for the browser and the "ssr" (Worker)

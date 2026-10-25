@@ -6,6 +6,7 @@ import { packageNameOf, sourceEntries } from "@usehercules/vite-common";
 import { appRoot, declare, install, lib } from "@usehercules/vite-common/testing";
 import {
   PREBUNDLED_ENTRIES,
+  PREBUNDLED_EXPORT_MAPS,
   dependenciesToPrebundle,
   prebundleDependencies,
   type PrebundleOptions,
@@ -80,6 +81,49 @@ describe("prebundleDependencies", () => {
       "convex/browser",
     ]);
     expect(result?.optimizeDeps?.entries).toEqual(sourceEntries("app"));
+  });
+
+  describe("Base UI", () => {
+    const baseUi = {
+      exports: {
+        ".": "./index.js",
+        "./dialog": { import: "./dialog/index.mjs", require: "./dialog/index.js" },
+        "./menu": "./menu/index.js",
+        "./package.json": "./package.json",
+        "./internals/use-button": "./internals/use-button/index.js",
+      },
+    };
+
+    it("bundles every component entry of a declared Base UI in both environments", () => {
+      expect(Object.keys(PREBUNDLED_EXPORT_MAPS)).toEqual(["@base-ui/react"]);
+      const root = appRoot({ "@base-ui/react": "*" }, { "@base-ui/react": baseUi });
+      const plugin = prebundleDependencies(options(root));
+      for (const environment of ["client", "ssr"]) {
+        expect(configEnvironment(plugin, environment)?.optimizeDeps?.include).toEqual([
+          "@base-ui/react",
+          "@base-ui/react/dialog",
+          "@base-ui/react/menu",
+        ]);
+      }
+    });
+
+    it("skips Base UI when the app does not declare it", () => {
+      const root = appRoot({ zod: "*" }, { zod: lib, "@base-ui/react": baseUi });
+      const result = configEnvironment(prebundleDependencies(options(root)), "client");
+      expect(result?.optimizeDeps?.include).toEqual(["zod"]);
+    });
+
+    it("keeps the component entries when dependencies are off", () => {
+      const root = appRoot({ "@base-ui/react": "*" }, { "@base-ui/react": baseUi });
+      const result = configEnvironment(
+        prebundleDependencies(options(root, { dependencies: false })),
+        "client",
+      );
+      expect(result?.optimizeDeps?.include).toEqual([
+        "@base-ui/react/dialog",
+        "@base-ui/react/menu",
+      ]);
+    });
   });
 
   it("leaves other environments alone", () => {

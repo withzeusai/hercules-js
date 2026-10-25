@@ -5,11 +5,13 @@
 
 export {
   dependenciesToPrebundle,
+  exportedSubpaths,
   onlyDeclared,
   packageNameOf,
   readDeclaredDependencies,
   sourceEntries,
   withoutExcluded,
+  type ExportedSubpathsOptions,
   type SourceEntriesOptions,
 } from "./dependencies";
 export {

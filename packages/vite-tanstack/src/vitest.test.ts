@@ -15,6 +15,7 @@ describe("defineVitestConfig", () => {
     const config = defineVitestConfig({ root: "/app" });
     const alias = config.resolve?.alias as Alias[];
     expect(alias.map((a) => a.find)).toEqual(["@/convex", "@"]);
+    expect(config.resolve?.tsconfigPaths).toBe(true);
 
     const [convex, frontend] = projects(config);
     expect(convex?.test).toMatchObject({
