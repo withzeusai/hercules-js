@@ -33,7 +33,6 @@ const MIN_PASSWORD_LENGTH = 32;
  */
 const MAX_CHUNK_LENGTH = 3072;
 
-const PBKDF2_ITERATIONS = 100_000;
 const KEY_SALT = new TextEncoder().encode("hercules-auth-tanstack/session/v1");
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -65,51 +64,49 @@ export function isSessionExpired(
   return session.expiresAt !== undefined && session.expiresAt <= nowSeconds;
 }
 
-// The AES-GCM key is derived from the password once (PBKDF2 is deliberately
-// expensive) and reused for every seal/unseal. A fixed application salt keeps
-// the key cacheable; per-seal security comes from the random IV. The password
-// itself is expected to be a high-entropy 32+ char secret.
-let keyPromise: Promise<CryptoKey> | undefined;
-function getKey(): Promise<CryptoKey> {
-  if (!keyPromise) {
-    let matchedName: string | undefined;
-    let password: string | undefined;
-    for (const name of COOKIE_PASSWORD_ENV_VARS) {
-      const value = process.env[name];
-      if (value) {
-        matchedName = name;
-        password = value;
-        break;
-      }
+// The AES-GCM key is derived from the password with HKDF and reused for every
+// seal/unseal. The password must already be a high-entropy secret (Hercules
+// sets a random 256-bit one per app), so it is not stretched; a fixed
+// application salt keeps the key cacheable, and per-seal security comes from
+// the random IV. The cache is keyed by the password, so a rotated value is
+// never sealed or unsealed with the previous one's key.
+let cachedKey: { password: string; key: Promise<CryptoKey> } | undefined;
+
+function readPassword(): string {
+  for (const name of COOKIE_PASSWORD_ENV_VARS) {
+    const value = process.env[name];
+    if (!value) continue;
+    if (value.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`[auth-tanstack] ${name} must be at least ${MIN_PASSWORD_LENGTH} characters`);
     }
-    if (!password) {
-      throw new Error(
-        `[auth-tanstack] Missing required environment variable: ${COOKIE_PASSWORD_ENV_VARS.join(" or ")}`,
-      );
-    }
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      throw new Error(
-        `[auth-tanstack] ${matchedName} must be at least ${MIN_PASSWORD_LENGTH} characters`,
-      );
-    }
-    keyPromise = crypto.subtle
-      .importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveKey"])
-      .then((material) =>
-        crypto.subtle.deriveKey(
-          { name: "PBKDF2", salt: KEY_SALT, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
-          material,
-          { name: "AES-GCM", length: 256 },
-          false,
-          ["encrypt", "decrypt"],
-        ),
-      )
-      .catch((error) => {
-        // Don't cache a failed derivation (e.g. transient crypto error).
-        keyPromise = undefined;
-        throw error;
-      });
+    return value;
   }
-  return keyPromise;
+  throw new Error(
+    `[auth-tanstack] Missing required environment variable: ${COOKIE_PASSWORD_ENV_VARS.join(" or ")}`,
+  );
+}
+
+function getKey(): Promise<CryptoKey> {
+  const password = readPassword();
+  if (cachedKey?.password === password) return cachedKey.key;
+  const key = crypto.subtle
+    .importKey("raw", textEncoder.encode(password), "HKDF", false, ["deriveKey"])
+    .then((material) =>
+      crypto.subtle.deriveKey(
+        { name: "HKDF", hash: "SHA-256", salt: KEY_SALT, info: new Uint8Array() },
+        material,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"],
+      ),
+    )
+    .catch((error: unknown) => {
+      // Don't cache a failed derivation (e.g. transient crypto error).
+      if (cachedKey?.key === key) cachedKey = undefined;
+      throw error;
+    });
+  cachedKey = { password, key };
+  return key;
 }
 
 /** Seal a session into a versioned, cookie-safe `v1.<iv>.<ciphertext>` string. */

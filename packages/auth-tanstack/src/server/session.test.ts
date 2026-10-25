@@ -63,6 +63,41 @@ describe("sealSession / unsealSession", () => {
   });
 });
 
+describe("cookie password", () => {
+  const original = "test-password-at-least-32-characters-long";
+
+  afterEach(() => {
+    process.env.HERCULES_AUTH_COOKIE_PASSWORD = original;
+  });
+
+  it("seals with the current password after it changes, and old sessions stop unsealing", async () => {
+    const before = await sealSession({ accessToken: "a" });
+
+    process.env.HERCULES_AUTH_COOKIE_PASSWORD = "rotated-password-at-least-32-characters";
+    expect(await unsealSession(before)).toBeNull();
+    const after = await sealSession({ accessToken: "a" });
+    expect(await unsealSession(after)).toEqual({ accessToken: "a" });
+
+    process.env.HERCULES_AUTH_COOKIE_PASSWORD = original;
+    expect(await unsealSession(before)).toEqual({ accessToken: "a" });
+    expect(await unsealSession(after)).toBeNull();
+  });
+
+  it("rejects a password shorter than 32 characters", async () => {
+    process.env.HERCULES_AUTH_COOKIE_PASSWORD = "too-short";
+    await expect(sealSession({ accessToken: "a" })).rejects.toThrow(
+      "HERCULES_AUTH_COOKIE_PASSWORD must be at least 32 characters",
+    );
+  });
+
+  it("rejects a missing password", async () => {
+    delete process.env.HERCULES_AUTH_COOKIE_PASSWORD;
+    await expect(sealSession({ accessToken: "a" })).rejects.toThrow(
+      "Missing required environment variable: HERCULES_AUTH_COOKIE_PASSWORD",
+    );
+  });
+});
+
 describe("session cookie chunking", () => {
   it("round-trips a value spanning multiple chunks", () => {
     const value = "x".repeat(7000); // > MAX_CHUNK_LENGTH (3072) -> 3 chunks
