@@ -29,6 +29,25 @@ describe("ComponentTagger", () => {
       ).not.toThrow();
     },
   );
+
+  it("skips components imported from @vis.gl/react-google-maps", async () => {
+    const output = await tag(`import { AdvancedMarker, Pin } from "@vis.gl/react-google-maps";
+import * as Maps from "@vis.gl/react-google-maps";
+export const Stop = () => (
+  <div>
+    <AdvancedMarker position={{ lat: 0, lng: 0 }}>
+      <Pin background="red" />
+    </AdvancedMarker>
+    <Maps.Pin />
+  </div>
+);
+`);
+
+    expect(output).toContain("<div data-component-id=");
+    expect(output).toContain("<AdvancedMarker position=");
+    expect(output).toContain('<Pin background="red" />');
+    expect(output).toContain("<Maps.Pin />");
+  });
 });
 
 interface Fixture {

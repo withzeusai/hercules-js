@@ -165,8 +165,15 @@ function shouldTagElement(
   elementName: string,
   importsReactThree: boolean,
   fiberImports: Set<string>,
+  googleMapsImports: Set<string>,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
+    return false;
+  }
+  // @vis.gl/react-google-maps components never put these attributes in the
+  // DOM, and <Pin> passes every prop to the PinElement constructor, which
+  // throws "Unknown property 'data-hercules-id'" and blanks the page.
+  if (googleMapsImports.has(elementName.split(".")[0]!)) {
     return false;
   }
   // In a file that imports @react-three/*, any component (a name that is not a
@@ -367,11 +374,12 @@ export class ComponentTagger {
       let changedElementsCount = 0;
       let importsReactThree = false;
       const fiberImports = new Set<string>();
+      const googleMapsImports = new Set<string>();
 
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
 
-      // First pass: find @react-three/* imports
+      // First pass: find @react-three/* and @vis.gl/react-google-maps imports
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
@@ -381,6 +389,9 @@ export class ComponentTagger {
               if (source === "@react-three/fiber") {
                 node.specifiers.forEach((spec) => fiberImports.add(spec.local.name));
               }
+            }
+            if (source === "@vis.gl/react-google-maps") {
+              node.specifiers.forEach((spec) => googleMapsImports.add(spec.local.name));
             }
           }
         },
@@ -409,7 +420,12 @@ export class ComponentTagger {
             const { line, col } = position ?? locate(jsxNode.start);
             const dataComponentId = `${relativePath}:${line}:${col}`;
 
-            const shouldTag = shouldTagElement(elementName, importsReactThree, fiberImports);
+            const shouldTag = shouldTagElement(
+              elementName,
+              importsReactThree,
+              fiberImports,
+              googleMapsImports,
+            );
 
             if (shouldTag) {
               // Insert after the tag name, or after its type arguments in
