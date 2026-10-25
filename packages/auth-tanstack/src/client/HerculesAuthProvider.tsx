@@ -8,6 +8,7 @@ import {
 import type { ClientUserInfo, Impersonator, NoUserInfo, User } from "../types";
 import type { AuthContextType, HerculesAuthProviderProps } from "./types";
 import { resolveSignOutNavigation, signOutFallback } from "./sign-out-redirect";
+import { tokenSource } from "./tokenStore";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -104,7 +105,12 @@ export function HerculesAuthProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Detect session expiration when the tab regains focus/visibility.
+  // Detect session expiration when the tab regains focus/visibility, and when
+  // a token read comes back empty while a user is shown. The second covers a
+  // session that ends while the tab is in use, such as a rotated cookie
+  // password: the page moves to signed out instead of showing a user whose
+  // tokens are gone. Both act only on the server's own session check, so an
+  // empty read the server still considers signed in changes nothing.
   useEffect(() => {
     if (onSessionExpired === false) return;
 
@@ -133,9 +139,11 @@ export function HerculesAuthProvider({
 
     window.addEventListener("visibilitychange", check);
     window.addEventListener("focus", check);
+    const unsubscribeEmpty = tokenSource.onEmpty(() => void check());
     return () => {
       window.removeEventListener("visibilitychange", check);
       window.removeEventListener("focus", check);
+      unsubscribeEmpty();
     };
   }, [onSessionExpired, apply]);
 
