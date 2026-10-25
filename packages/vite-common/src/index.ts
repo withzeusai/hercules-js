@@ -10,7 +10,13 @@ export {
   readDeclaredDependencies,
   sourceEntries,
   withoutExcluded,
+  type SourceEntriesOptions,
 } from "./dependencies";
-export { HERCULES_DEV_SERVER_ENV, isHerculesDevServer } from "./environment";
+export {
+  HERCULES_DEV_MACHINE_ENV,
+  HERCULES_DEV_SERVER_ENV,
+  isHerculesDevMachine,
+  isHerculesDevServer,
+} from "./environment";
 export { importOptional, isModuleNotFound, type ImportOptionalOptions } from "./optional-import";
 export { watchDependencies, type WatchDependenciesOptions } from "./restart-on-install";

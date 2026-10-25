@@ -130,4 +130,12 @@ describe("sourceEntries", () => {
       "!app/**/__mocks__/**",
     ]);
   });
+
+  it("leaves out server modules on request", () => {
+    expect(sourceEntries("src", { serverFiles: false })).toEqual([
+      ...sourceEntries("src"),
+      "!src/**/*.server.{js,jsx,ts,tsx,mjs,mts}",
+      "!src/server/**",
+    ]);
+  });
 });

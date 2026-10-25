@@ -121,10 +121,11 @@ export interface HerculesTanStackConfigOptions {
 
   /**
    * Options forwarded to `@usehercules/vite`. Pass `false` to leave the
-   * Hercules dev tooling (component tagger, visual editor, error forwarding)
-   * out of the stack.
+   * Hercules dev tooling (component tagger, visual editor endpoints) out of
+   * the stack. Its dependency pre-bundling stays off: the
+   * `hercules:prebundle-dependencies` plugin covers both environments.
    */
-  hercules?: HerculesPluginOptions | false;
+  hercules?: Omit<HerculesPluginOptions, "prebundleDependencies"> | false;
 
   /**
    * Options forwarded to `@tanstack/devtools-vite`. Console piping and
@@ -212,7 +213,7 @@ async function buildPlugins(
 
   if (options.hercules !== false) {
     const { hercules } = await import("@usehercules/vite");
-    plugins.push(hercules(options.hercules));
+    plugins.push(hercules({ ...options.hercules, prebundleDependencies: false }));
   }
 
   if (options.cloudflare !== false) {

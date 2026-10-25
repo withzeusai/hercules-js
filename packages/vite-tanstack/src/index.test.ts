@@ -131,6 +131,13 @@ describe("defineConfig", () => {
     expect(configEnvironment("client", {})?.optimizeDeps?.include).toContain("lodash/debounce");
   });
 
+  it("keeps @usehercules/vite's own dependency pre-bundling off", async () => {
+    const names = pluginNames((await defineConfig({ ...bare, hercules: {} })(serve)).plugins);
+    expect(names).toContain("vite-plugin-hercules-component-tagger");
+    expect(names).toContain("hercules:prebundle-dependencies");
+    expect(names).not.toContain("vite-plugin-hercules-prebundle-dependencies");
+  });
+
   it("turns devtools console piping off unless the app sets it", async () => {
     await defineConfig({ ...bare, devtools: undefined })(serve);
     expect(devtools).toHaveBeenLastCalledWith({

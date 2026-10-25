@@ -1,7 +1,16 @@
 import path from "node:path";
 import { parse } from "@babel/parser";
-import { describe, expect, it } from "vitest";
-import { ComponentTagger } from "./component-tagger";
+import { parseAst } from "vite";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ComponentTagger,
+  componentTaggerPlugin,
+  parseWithBabel,
+  type ParseModule,
+} from "./component-tagger";
+
+/** What `this.parse` runs on Vite 8. */
+const parseWithOxc: ParseModule = (code) => parseAst(code, { lang: "tsx", sourceType: "module" });
 
 async function tag(code: string): Promise<string> {
   const result = await new ComponentTagger().transformCode(code, "/app/src/App.tsx");
@@ -171,7 +180,46 @@ describe("ComponentTagger output", () => {
   it.each(Object.entries(fixtures))("tags %s", async (_name, fixture) => {
     const tagger = new ComponentTagger({ dataAttribute: "data-hercules-id" });
     const id = path.join(process.cwd(), fixture.file);
-    const result = await tagger.transformCode(fixture.code, id, fixture.source);
-    expect(result?.code).toMatchSnapshot();
+    const withOxc = await tagger.transformCode(fixture.code, id, {
+      source: fixture.source,
+      parse: parseWithOxc,
+    });
+    const withBabel = await tagger.transformCode(fixture.code, id, {
+      source: fixture.source,
+      parse: parseWithBabel,
+    });
+    expect(withOxc?.code).toMatchSnapshot();
+    // Snapshots normalize line endings, so compare the two parsers exactly too.
+    expect(withBabel?.code).toBe(withOxc?.code);
+  });
+});
+
+describe("componentTaggerPlugin", () => {
+  const code = "export const A = () => <div><span /></div>;\n";
+  // Not on disk, so the tagger has no source file to take positions from.
+  const id = path.join(process.cwd(), "src/missing/A.tsx");
+
+  async function transform(context: object): Promise<string | undefined> {
+    const plugin = componentTaggerPlugin({ dataAttribute: "data-hercules-id" });
+    const hook = plugin.transform as unknown as (
+      this: object,
+      code: string,
+      id: string,
+    ) => Promise<{ code: string } | null>;
+    return (await hook.call(context, code, id))?.code;
+  }
+
+  it("parses with Vite's own parser on Vite 8", async () => {
+    const parse = vi.fn((input: string, options: object) => parseAst(input, options));
+    const output = await transform({ meta: { rolldownVersion: "1.2.15" }, parse });
+    expect(parse).toHaveBeenCalledWith(code, { lang: "tsx", sourceType: "module" });
+    expect(output).toContain('<div data-hercules-id="src/missing/A.tsx:1:23"');
+  });
+
+  it("falls back to Babel on Vite 7, whose parser has no TypeScript support", async () => {
+    const parse = vi.fn();
+    const output = await transform({ meta: { rollupVersion: "4.52.0" }, parse });
+    expect(parse).not.toHaveBeenCalled();
+    expect(output).toBe(await transform({ meta: { rolldownVersion: "1.2.15" }, parse: parseAst }));
   });
 });

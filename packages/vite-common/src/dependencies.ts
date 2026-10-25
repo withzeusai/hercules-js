@@ -177,13 +177,26 @@ export function withoutExcluded(
   return entries.filter((entry) => !excluded.has(entry) && !excluded.has(packageNameOf(entry)));
 }
 
+export interface SourceEntriesOptions {
+  /**
+   * Scan server modules too: `*.server.*` files and the `server` directory.
+   * An environment that never runs them leaves them out, so their Node-only
+   * imports never become optimizer entries.
+   * @default true
+   */
+  serverFiles?: boolean;
+}
+
 /**
  * `optimizeDeps.entries` globs for every source file under `srcDir`, minus
  * tests, stories and type declarations. Routes load lazily, so scanning only
  * the entry's static imports would meet a package first when a page that
  * imports it renders.
  */
-export function sourceEntries(srcDir: string): string[] {
+export function sourceEntries(
+  srcDir: string,
+  { serverFiles = true }: SourceEntriesOptions = {},
+): string[] {
   const dir = srcDir.replace(/\/+$/, "");
   return [
     `${dir}/**/*.{js,jsx,ts,tsx,mjs,mts}`,
@@ -191,5 +204,6 @@ export function sourceEntries(srcDir: string): string[] {
     `!${dir}/**/*.{test,spec,stories}.{js,jsx,ts,tsx,mjs,mts}`,
     `!${dir}/**/__tests__/**`,
     `!${dir}/**/__mocks__/**`,
+    ...(serverFiles ? [] : [`!${dir}/**/*.server.{js,jsx,ts,tsx,mjs,mts}`, `!${dir}/server/**`]),
   ];
 }
