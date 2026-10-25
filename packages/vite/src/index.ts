@@ -2,10 +2,6 @@ import type { Plugin } from "vite";
 import { setupErrorHandling } from "./error-handling";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
-import {
-  dynamicComponentCreatorPlugin,
-  type DynamicComponentCreatorOptions,
-} from "./dynamic-component-creator";
 
 export interface HerculesPluginOptions {
   /**
@@ -41,16 +37,6 @@ export interface HerculesPluginOptions {
    * @default { enabled: true }
    */
   visualEditor?: VisualEditorOptions & { enabled?: boolean };
-
-  /**
-   * Dynamic component creator options
-   * Note: Only active when HERCULES_DEV_MACHINE environment variable is set,
-   * unless 'force' option is true
-   * @default { enabled: true }
-   */
-  dynamicComponentCreator?: DynamicComponentCreatorOptions & {
-    enabled?: boolean;
-  };
 }
 
 /**
@@ -64,26 +50,12 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     handleViteErrors = true,
     componentTagger = { enabled: true },
     visualEditor = { enabled: true },
-    dynamicComponentCreator = { enabled: true },
   } = options;
 
   const plugins: Plugin[] = [];
 
   // Track whether we're in dev mode (for dev-only features like error handler injection)
   let isDev = false;
-
-  // Dynamic component creator plugin (only when on Hercules dev machine or forced)
-  if (
-    dynamicComponentCreator.enabled &&
-    (process.env.HERCULES_DEV_MACHINE || dynamicComponentCreator.force)
-  ) {
-    plugins.push(
-      dynamicComponentCreatorPlugin({
-        debug,
-        ...dynamicComponentCreator,
-      }),
-    );
-  }
 
   // Add component tagger plugin if enabled
   if (componentTagger.enabled) {
@@ -299,12 +271,6 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
 
   return plugins;
 }
-
-// Re-export plugins for standalone use
-export {
-  dynamicComponentCreatorPlugin,
-  type DynamicComponentCreatorOptions,
-} from "./dynamic-component-creator";
 
 // Default export for convenience
 export default hercules;
