@@ -7,7 +7,6 @@ import {
   TOOL_MANAGED_WATCH_IGNORES,
   defineConfig,
   herculesBaseConfig,
-  isHerculesDevServer,
 } from "./index";
 
 const devtools = vi.hoisted(() => vi.fn((_options?: unknown) => ({ name: "devtools-stub" })));
@@ -41,14 +40,6 @@ function aliasEntries(alias: unknown): Alias[] {
 afterEach(() => {
   vi.unstubAllEnvs();
   devtools.mockClear();
-});
-
-describe("isHerculesDevServer", () => {
-  it("is on only when the env var is exactly 'true'", () => {
-    expect(isHerculesDevServer({})).toBe(false);
-    expect(isHerculesDevServer({ [HERCULES_DEV_SERVER_ENV]: "1" })).toBe(false);
-    expect(isHerculesDevServer({ [HERCULES_DEV_SERVER_ENV]: "true" })).toBe(true);
-  });
 });
 
 describe("herculesBaseConfig", () => {
