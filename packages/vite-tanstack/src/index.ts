@@ -8,6 +8,7 @@ import {
   type UserConfigFnPromise,
 } from "vite";
 import type { HerculesPluginOptions } from "@usehercules/vite";
+import { importOptional, isHerculesDevServer } from "@usehercules/vite-common";
 import type { Options as ReactPluginOptions } from "@vitejs/plugin-react";
 import type { PluginConfig as CloudflarePluginConfig } from "@cloudflare/vite-plugin";
 import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
@@ -17,6 +18,7 @@ import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 
 export type { Alias } from "vite";
+export { HERCULES_DEV_SERVER_ENV, isHerculesDevServer } from "@usehercules/vite-common";
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export {
@@ -31,17 +33,6 @@ export {
 export type TanStackStartPluginOptions = NonNullable<Parameters<typeof tanstackStart>[0]>;
 
 const PACKAGE_NAME = "@usehercules/vite-tanstack";
-
-/**
- * Set to `"true"` by the Hercules dev machine. It is the same signal
- * `@usehercules/vite` already reads, so one variable switches every
- * sandbox-only behaviour on.
- */
-export const HERCULES_DEV_SERVER_ENV = "HERCULES_DEV_SERVER";
-
-export function isHerculesDevServer(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[HERCULES_DEV_SERVER_ENV] === "true";
-}
 
 /**
  * Directories written by agents and tooling rather than by the app. Changes
@@ -165,45 +156,6 @@ const OPTION_KEYS: ReadonlySet<string> = new Set<keyof HerculesTanStackConfigOpt
   "tailwind",
 ]);
 
-function logWarning(message: string): void {
-  console.warn(`[${PACKAGE_NAME}] ${message}`);
-}
-
-function isModuleNotFound(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const { code, message } = error as { code?: unknown; message?: unknown };
-  return (
-    code === "ERR_MODULE_NOT_FOUND" ||
-    code === "MODULE_NOT_FOUND" ||
-    (typeof message === "string" && /Cannot find (module|package)/.test(message))
-  );
-}
-
-/**
- * Import an optional peer. When the user configured it explicitly a missing
- * package is an error; otherwise it is skipped with a warning so an app that
- * dropped the dependency on purpose still starts.
- */
-async function importOptional<T>(
-  specifier: string,
-  load: () => Promise<T>,
-  explicit: boolean,
-): Promise<T | undefined> {
-  try {
-    return await load();
-  } catch (error) {
-    if (!isModuleNotFound(error)) throw error;
-    if (explicit) {
-      throw new Error(
-        `[${PACKAGE_NAME}] \`${specifier}\` is configured in vite.config.ts but is not installed. Add it to devDependencies.`,
-        { cause: error },
-      );
-    }
-    logWarning(`\`${specifier}\` is not installed; skipping it.`);
-    return undefined;
-  }
-}
-
 async function normalizeOptions(
   config: HerculesTanStackConfigOptions | UserConfigExport | undefined,
   env: ConfigEnv,
@@ -240,7 +192,7 @@ async function buildPlugins(
     const mod = await importOptional(
       "@tanstack/devtools-vite",
       () => import("@tanstack/devtools-vite"),
-      options.devtools !== undefined,
+      { explicit: options.devtools !== undefined, owner: PACKAGE_NAME },
     );
     if (mod) {
       plugins.push(
@@ -267,7 +219,7 @@ async function buildPlugins(
     const mod = await importOptional(
       "@cloudflare/vite-plugin",
       () => import("@cloudflare/vite-plugin"),
-      options.cloudflare !== undefined,
+      { explicit: options.cloudflare !== undefined, owner: PACKAGE_NAME },
     );
     if (mod) {
       plugins.push(mod.cloudflare({ viteEnvironment: { name: "ssr" }, ...options.cloudflare }));
