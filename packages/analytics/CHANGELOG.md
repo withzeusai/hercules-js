@@ -1,5 +1,11 @@
 # @usehercules/analytics
 
+## 2.0.2
+
+### Patch Changes
+
+- [#187](https://github.com/withzeusai/hercules-js/pull/187) [`c277313`](https://github.com/withzeusai/hercules-js/commit/c2773132579db4287f266ebde345a8f7b11c02a5) Thanks [@grant0417](https://github.com/grant0417)! - Update `web-vitals` to 6. Soft navigation reporting stays off, so metrics are reported as before. The browser script grows by about 1 KB gzipped.
+
 ## 2.0.1
 
 ### Patch Changes

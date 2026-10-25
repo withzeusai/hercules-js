@@ -1,5 +1,40 @@
 # @usehercules/vite
 
+## 2.0.0
+
+### Major Changes
+
+- [#189](https://github.com/withzeusai/hercules-js/pull/189) [`0c1da2b`](https://github.com/withzeusai/hercules-js/commit/0c1da2ba38fdf594cff1cb34d9dc535ec2c1ade2) Thanks [@grant0417](https://github.com/grant0417)! - Remove the dynamic component creator. On a Hercules dev machine it wrote a stub file for any imported component that did not exist, which hid a broken import that lint and the build would otherwise report. The `dynamicComponentCreator` option and the `dynamicComponentCreatorPlugin` export are gone; delete the option from your `hercules()` call if you passed it.
+
+- [#192](https://github.com/withzeusai/hercules-js/pull/192) [`5128d5d`](https://github.com/withzeusai/hercules-js/commit/5128d5d93275d5589404a738ef8e61ea86273ac6) Thanks [@grant0417](https://github.com/grant0417)! - Slim the plugin down to what has to run inside the app's Vite process: the component tagger, the visual editor's endpoints, and dependency pre-bundling. herculesd already serves and injects the error handler and visual editor scripts, and handles `vite:error` in the browser, so the copies here are gone.
+
+  Removed options (delete them from your `hercules()` call if you passed them):
+
+  - `handleViteErrors`: the server-side `[Vite Error]` and `[Vite Server Error]` logging, the `/__hercules_error_handler.js` route and its `<script>` tag are gone.
+  - `debug`: set `componentTagger.debug` or `visualEditor.debug` instead.
+  - `message`: it was only logged at build start.
+  - `visualEditor.dataAttribute`: it only configured the visual editor script, which this plugin no longer serves.
+
+  Also removed: the `/__hercules_visual_editor.js` route and its `<script>` tag, the `/hercules-status` and `/hercules-component-tagger-stats` endpoints, and the plugin's empty `load`, `transform`, `resolveId`, `handleHotUpdate` and `generateBundle` hooks. The package's exports (`hercules`, the default export, and `HerculesPluginOptions`) are unchanged. The visual editor's `/__hercules_analyze_element`, `/__hercules_update_element` and `/__hercules_delete_element` endpoints stay until herculesd serves them.
+
+  Dependency pre-bundling now covers what the agent installs. On the dev server every runtime dependency in `package.json` is bundled up front (skipping React, CSS-only and types-only packages, native addons, and anything in `optimizeDeps.exclude`), on top of the existing crawl of `src`. On the Hercules dev machine (`HERCULES_DEV_MACHINE=1`) the dev server restarts when `package.json` or the lockfile changes and the bundled set differs, so a new package is bundled before code imports it instead of making Vite re-optimize and reload the page. A local `vite dev` does not restart. Set `prebundleDependencies: false` to turn both off.
+
+  On Vite 8 the component tagger parses with Vite's own parser instead of Babel. `data-hercules-id` values are unchanged; files Babel could not parse, such as ones with decorators, are now tagged too. Vite 7 still uses Babel.
+
+  The package no longer publishes its `src` directory.
+
+### Patch Changes
+
+- [#187](https://github.com/withzeusai/hercules-js/pull/187) [`c277313`](https://github.com/withzeusai/hercules-js/commit/c2773132579db4287f266ebde345a8f7b11c02a5) Thanks [@grant0417](https://github.com/grant0417)! - Update `magic-string` to 1.x. It ships ESM only, so the component tagger now imports `MagicString` by name; the default import resolved to the module namespace in the CJS build and every file failed to tag.
+
+- [#193](https://github.com/withzeusai/hercules-js/pull/193) [`f76f96e`](https://github.com/withzeusai/hercules-js/commit/f76f96ec6e9d68f4f9043b4cb56ed68f50a08977) Thanks [@grant0417](https://github.com/grant0417)! - Turn the dev machine settings (`strictPort`, the watch ignores for agent-managed directories, and `awaitWriteFinish`) on when `HERCULES_DEV_MACHINE=1`, which the Hercules dev machine image sets and herculesd passes on to the dev server. They were gated on `HERCULES_DEV_SERVER=true` alone, which nothing on the platform sets, so they never turned on. `HERCULES_DEV_SERVER=true` still works as an alternate trigger.
+
+  Pre-bundle every Base UI component entry when the app declares `@base-ui/react`: each one (`@base-ui/react/dialog`, ...) is its own optimizer entry, read from the package's export map minus `./internals/*`, so the first component the app imports no longer triggers a re-bundle and a full reload. `@shadcn/react/message-scroller` joins `PREBUNDLED_ENTRIES`.
+
+  Turn on `resolve.tsconfigPaths` in the Vite and Vitest configs, next to the `@` and `@/convex` aliases, so any other `paths` the app adds to `tsconfig.json` resolve as well (Vite 8).
+
+  Dependency pre-bundling in both `@usehercules/vite` and `@usehercules/vite-tanstack` now skips CSS-only fontsource packages (`@fontsource-variable/geist` and the like). Their export map lists an `index.d.css.ts` declaration, which was taken for a JavaScript entry, so Vite was asked to bundle a stylesheet.
+
 ## 1.2.5
 
 ### Patch Changes

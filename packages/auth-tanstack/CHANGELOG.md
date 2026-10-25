@@ -1,5 +1,36 @@
 # @usehercules/auth-tanstack
 
+## 0.8.0
+
+### Minor Changes
+
+- [#196](https://github.com/withzeusai/hercules-js/pull/196) [`0cce356`](https://github.com/withzeusai/hercules-js/commit/0cce356821f1ea041ef51ae4f44cdf482b18980c) Thanks [@grant0417](https://github.com/grant0417)! - Derive the session-cookie key from `HERCULES_AUTH_COOKIE_PASSWORD` with HKDF instead of 100,000 rounds of PBKDF2, which cost about 11 ms of CPU on every cold start (Node, desktop CPU) against well under 1 ms now. The password must be random (Hercules sets one per app), since it is no longer stretched. The derived key is cached per password value, so a changed password takes effect without a restart. Sessions sealed by earlier versions no longer unseal, so upgrading signs users out once.
+
+- [#186](https://github.com/withzeusai/hercules-js/pull/186) [`7aaad86`](https://github.com/withzeusai/hercules-js/commit/7aaad862f58ec65b8712c009fce3e21779a5583b) Thanks [@grant0417](https://github.com/grant0417)! - Send users back into the app when a sign-in callback fails in a way they can recover from, instead of showing a raw JSON error.
+
+  - Cancelling at the provider, a sign-in older than 10 minutes, a reloaded or bookmarked `/auth/callback`, a sign-in evicted by too many pending ones, and a missing `code` or `state` used to answer with a 400 such as `{"error":"Unknown or expired sign-in state"}`. `handleCallbackRoute` now redirects to the page the sign-in started from (its `returnPathname`, anchored to the app's origin), or `/` when that is unknown, and appends `?auth_error=<reason>`: `access_denied`, `provider_error`, `invalid_callback`, or `sign_in_expired`. A provider `error` response is reported as such rather than as a missing code. `onError` and `errorRedirectUrl` still take precedence, and `onError` now also receives the `reason` and the flow's `returnPathname`. A failed token exchange, an `onSuccess` that throws (`on_success_failed`), or a failed session seal still answers with a JSON 500.
+  - A PKCE cookie that cannot be decoded is treated like an expired one, before the token exchange, instead of falling through to "Token exchange failed" (500). Bare-verifier cookies are no longer accepted; none have been written since the per-flow cookies were introduced, and they expire after 10 minutes.
+  - The client bundle no longer contains the route handlers' server code. The dynamic `import()` behind `handleSignInRoute` and `handleCallbackRoute` left the bundler emitting a 35 KB chunk with `openid-client` and the session plumbing into the browser assets, even though nothing loaded it. The loader is now a `createServerOnlyFn`, which TanStack Start's compiler stubs out of the client build.
+  - New exports: `AUTH_ERROR_PARAM`, `OAuthProviderError`, and the `CallbackErrorReason` and `CallbackErrorParams` types.
+
+### Patch Changes
+
+- [#187](https://github.com/withzeusai/hercules-js/pull/187) [`c277313`](https://github.com/withzeusai/hercules-js/commit/c2773132579db4287f266ebde345a8f7b11c02a5) Thanks [@grant0417](https://github.com/grant0417)! - Require `@tanstack/react-start` 1.169.3 or later. Earlier versions, and the `@tanstack/start-server-core` they pull in, are affected by GHSA-qx66-fv34-fjm8.
+
+- [#190](https://github.com/withzeusai/hercules-js/pull/190) [`00e6c55`](https://github.com/withzeusai/hercules-js/commit/00e6c55d4902ee83291e08c4c123f3287413ce1b) Thanks [@grant0417](https://github.com/grant0417)! - Keep tokens fresh when the browser clock is wrong, and refresh once for both tokens.
+
+  - The access-token and ID-token stores now share one read and one refresh. Their tokens usually expire together, so each refreshed with the same refresh token at the same moment; a provider that rotates refresh tokens with reuse detection revokes the session for that.
+  - Token expiry is judged on the server's clock. A browser clock running more than about a minute behind made the store hand out expired ID tokens, which left Convex unauthenticated for the rest of the page. A clock running ahead by roughly a token lifetime made every token look expired and spent a refresh grant every 15 seconds. `useRecentAuth` also uses the server's clock.
+  - `useRecentAuth` reads `auth_time` from the ID token first, as `checkRecentAuth` does, and falls back to the access token. It previously read only the access token, which many providers issue without `auth_time`, so it reported every sign-in as stale.
+  - An `onSuccess` that throws in `handleCallbackRoute` now fails the sign-in through `onError` or `errorRedirectUrl`, clears the flow's verifier cookie, and sets no session. Previously the error escaped as a bare 500.
+  - When more than 10 sign-ins are pending, the oldest verifier cookies are expired instead of the newest.
+  - A `returnPathname` too long to fit in the verifier cookie is dropped with a warning, instead of the browser discarding the cookie and the callback failing.
+  - A rate-limited (HTTP 429) refresh is retried once after `Retry-After`, capped at 5 seconds.
+  - A token request rejected with `invalid_client` while no client secret is configured logs a hint naming `HERCULES_AUTH_CLIENT_SECRET`.
+  - The package now ships a `LICENSE`, including the MIT notice for the portions derived from WorkOS AuthKit.
+
+- [#196](https://github.com/withzeusai/hercules-js/pull/196) [`0cce356`](https://github.com/withzeusai/hercules-js/commit/0cce356821f1ea041ef51ae4f44cdf482b18980c) Thanks [@grant0417](https://github.com/grant0417)! - `HerculesAuthProvider` now notices a session that ends while the tab is in use, not only when the tab regains focus. When a token read comes back empty while a user is shown (the session expired, was revoked, or no longer unseals after a cookie password rotation), the provider runs the same session check it runs on focus, and if the server confirms there is no session it moves to signed out and calls `onSessionExpired` (or reloads). Before, the page kept showing the user while their tokens were gone.
+
 ## 0.7.0
 
 ### Minor Changes

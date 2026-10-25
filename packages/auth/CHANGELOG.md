@@ -1,5 +1,13 @@
 # @usehercules/auth
 
+## 1.2.2
+
+### Patch Changes
+
+- [#181](https://github.com/withzeusai/hercules-js/pull/181) [`9f1e77a`](https://github.com/withzeusai/hercules-js/commit/9f1e77af6768bb6e7eeb633ee8658eda46e7820d) Thanks [@delbyte](https://github.com/delbyte)! - Give `useAuthCallback` at least 60 seconds for each step after the sign-in tokens are saved: waiting for the backend, such as Convex, to accept the token, and running `onSync`. Each step previously got the same 20 second `timeoutMs` as the token exchange, so a slow Convex connection, which happens on Safari, showed "Authentication timed out" even though sign-in had already succeeded. The token exchange still times out after `timeoutMs`, and a `timeoutMs` above 60 seconds still applies to every step.
+
+- [#141](https://github.com/withzeusai/hercules-js/pull/141) [`c5ad544`](https://github.com/withzeusai/hercules-js/commit/c5ad5449403b0c40f77efb86b498bf5bb75ae789) Thanks [@delbyte](https://github.com/delbyte)! - Start `automaticSilentRenew: true` renewal when `HerculesAuthProvider` mounts and stop it when it unmounts. Under React Strict Mode the provider's initializer runs twice, and both `UserManager` instances started renewing with the same refresh token.
+
 ## 1.2.1
 
 ### Patch Changes
