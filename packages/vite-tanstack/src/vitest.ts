@@ -106,6 +106,8 @@ export function defineVitestConfig(options: HerculesVitestOptions = {}): UserCon
   const base: UserConfig = {
     resolve: {
       alias: herculesAliases({ root, srcDir, convexDir }),
+      // Any other `paths` in tsconfig.json resolve too, as in the Vite config.
+      tsconfigPaths: true,
     },
     test: {
       passWithNoTests: true,

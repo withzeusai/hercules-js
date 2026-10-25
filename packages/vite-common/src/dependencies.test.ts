@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   dependenciesToPrebundle,
+  exportedSubpaths,
   onlyDeclared,
   packageNameOf,
   sourceEntries,
@@ -65,6 +66,7 @@ describe("dependenciesToPrebundle", () => {
       {
         "@types/papaparse": "*",
         "@fontsource-variable/geist": "*",
+        "@fontsource-variable/geist-mono": "*",
         "subpaths-only": "*",
         "native-gyp": "*",
         "native-loader": "*",
@@ -74,6 +76,14 @@ describe("dependenciesToPrebundle", () => {
       {
         "@types/papaparse": { types: "index.d.ts" },
         "@fontsource-variable/geist": { main: "index.css", exports: { ".": "./index.css" } },
+        // The shape fontsource publishes: a declaration for the stylesheet.
+        "@fontsource-variable/geist-mono": {
+          main: "index.css",
+          exports: {
+            ".": { types: "./index.d.css.ts", sass: "./index.css", default: "./index.css" },
+            "./*": { sass: "./*.css", default: "./*.css" },
+          },
+        },
         "subpaths-only": { exports: { "./client": "./client.js" } },
         "native-gyp": { main: "index.js", gypfile: true },
         "native-loader": { main: "index.js", dependencies: { "node-gyp-build": "*" } },
@@ -105,6 +115,69 @@ describe("dependenciesToPrebundle", () => {
 
   it("returns nothing when package.json cannot be read", () => {
     expect(dependenciesToPrebundle(path.join(tmpdir(), "does-not-exist"), none)).toEqual([]);
+  });
+});
+
+describe("exportedSubpaths", () => {
+  const conditional = (file: string) => ({
+    import: { types: `./${file}.d.mts`, default: `./${file}.mjs` },
+    require: { types: `./${file}.d.ts`, default: `./${file}.js` },
+  });
+
+  it("lists the JavaScript subpaths in the export map", () => {
+    const root = appRoot(
+      { "@base-ui/react": "*" },
+      {
+        "@base-ui/react": {
+          exports: {
+            ".": conditional("index"),
+            "./dialog": conditional("dialog/index"),
+            "./use-render": "./use-render/index.js",
+            "./package.json": "./package.json",
+            "./types": { types: "./types/index.d.ts" },
+            "./styles.css": "./styles.css",
+            "./locale/*": "./locale/*.js",
+          },
+        },
+      },
+    );
+    expect(exportedSubpaths(root, "@base-ui/react")).toEqual([
+      "@base-ui/react/dialog",
+      "@base-ui/react/use-render",
+    ]);
+  });
+
+  it("leaves out the subpaths the predicate excludes", () => {
+    const root = appRoot(
+      { "@base-ui/react": "*" },
+      {
+        "@base-ui/react": {
+          exports: {
+            "./dialog": "./dialog/index.js",
+            "./internals/noop": "./internals/noop/index.js",
+          },
+        },
+      },
+    );
+    const exclude = (subpath: string) => subpath.startsWith("./internals/");
+    expect(exportedSubpaths(root, "@base-ui/react", { exclude })).toEqual([
+      "@base-ui/react/dialog",
+    ]);
+  });
+
+  it("returns nothing without a subpath export map", () => {
+    const root = appRoot(
+      { lib: "*", conditions: "*", entry: "*" },
+      {
+        lib,
+        conditions: { exports: { import: "./index.mjs", default: "./index.js" } },
+        entry: { exports: "./index.js" },
+      },
+    );
+    expect(exportedSubpaths(root, "lib")).toEqual([]);
+    expect(exportedSubpaths(root, "conditions")).toEqual([]);
+    expect(exportedSubpaths(root, "entry")).toEqual([]);
+    expect(exportedSubpaths(root, "not-installed")).toEqual([]);
   });
 });
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Alias, ConfigEnv, Plugin, PluginOption } from "vite";
 import {
   DEDUPE,
+  HERCULES_DEV_MACHINE_ENV,
   HERCULES_DEV_SERVER_ENV,
   TOOL_MANAGED_WATCH_IGNORES,
   defineConfig,
@@ -61,6 +62,11 @@ describe("herculesBaseConfig", () => {
     expect(alias[0]?.replacement).toBe(path.resolve("/app/app"));
   });
 
+  it("also resolves the paths in tsconfig.json", () => {
+    const config = herculesBaseConfig({}, { sandbox: false });
+    expect(config.resolve?.tsconfigPaths).toBe(true);
+  });
+
   it("dedupes React and TanStack", () => {
     const config = herculesBaseConfig({}, { sandbox: false });
     expect(config.resolve?.dedupe).toEqual(DEDUPE);
@@ -94,9 +100,24 @@ describe("herculesBaseConfig", () => {
     });
   });
 
-  it("reads the sandbox flag from the environment by default", () => {
+  it("turns the sandbox settings on on a Hercules dev machine", () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    vi.stubEnv(HERCULES_DEV_SERVER_ENV, undefined);
+    expect(herculesBaseConfig({}).server?.strictPort).toBe(true);
+  });
+
+  it("still takes HERCULES_DEV_SERVER=true as the sandbox flag", () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, undefined);
     vi.stubEnv(HERCULES_DEV_SERVER_ENV, "true");
     expect(herculesBaseConfig({}).server?.strictPort).toBe(true);
+  });
+
+  it("leaves the sandbox settings off when neither variable is set", () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, undefined);
+    vi.stubEnv(HERCULES_DEV_SERVER_ENV, undefined);
+    const { server } = herculesBaseConfig({});
+    expect(server?.strictPort).toBeUndefined();
+    expect(server?.watch).toBeUndefined();
   });
 });
 
@@ -192,7 +213,7 @@ describe("defineConfig", () => {
   });
 
   it("merges watch ignores from the user with the sandbox defaults", async () => {
-    vi.stubEnv(HERCULES_DEV_SERVER_ENV, "true");
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
     const config = await defineConfig({
       ...bare,
       vite: { server: { watch: { ignored: ["**/generated/**"] } } },

@@ -1,10 +1,12 @@
 import {
   dependenciesToPrebundle as appDependenciesToPrebundle,
+  exportedSubpaths,
   onlyDeclared,
   readDeclaredDependencies,
   sourceEntries,
   watchDependencies,
   withoutExcluded,
+  type ExportedSubpathsOptions,
 } from "@usehercules/vite-common";
 import type { Plugin } from "vite";
 
@@ -23,7 +25,20 @@ export const PREBUNDLED_ENTRIES: readonly string[] = [
   "convex/values",
   "@hookform/resolvers/zod",
   "motion/react",
+  "@shadcn/react/message-scroller",
 ];
+
+/**
+ * Template packages that publish one entry per component, such as
+ * `@base-ui/react/dialog`. Every subpath in their export map is bundled up
+ * front, minus the ones `exclude` drops, so the first component the app
+ * imports does not make Vite bundle the dependencies again and reload the
+ * page. Each is expanded only when the app declares it.
+ */
+export const PREBUNDLED_EXPORT_MAPS: Readonly<Record<string, ExportedSubpathsOptions>> = {
+  // `internals/` holds hooks the components import from inside the package.
+  "@base-ui/react": { exclude: (subpath) => subpath.startsWith("./internals/") },
+};
 
 /** Server-only entries, on top of {@link PREBUNDLED_ENTRIES}. */
 export const SSR_PREBUNDLED_ENTRIES: readonly string[] = ["convex/browser"];
@@ -72,9 +87,17 @@ function entriesFor(
   return [
     ...dependencies,
     ...onlyDeclared(PREBUNDLED_ENTRIES, declared),
+    ...exportMapEntries(options.root, declared),
     ...(environment === "ssr" ? onlyDeclared(SSR_PREBUNDLED_ENTRIES, declared) : []),
     ...options.extra,
   ];
+}
+
+/** The subpath entries of each {@link PREBUNDLED_EXPORT_MAPS} package the app declares. */
+function exportMapEntries(root: string, declared: Set<string> | undefined): string[] {
+  return onlyDeclared(Object.keys(PREBUNDLED_EXPORT_MAPS), declared).flatMap((name) =>
+    exportedSubpaths(root, name, PREBUNDLED_EXPORT_MAPS[name]),
+  );
 }
 
 /**

@@ -21,7 +21,9 @@ const PLATFORM_PACKAGE = /-(?:darwin|linux|win32|freebsd|android)-(?:x64|arm64|a
 
 /** Matches what Vite's optimizer accepts as an entry, minus type declarations. */
 const JS_ENTRY = /\.[cm]?[jt]s$/;
-const TYPE_DECLARATION = /\.d\.[cm]?ts$/;
+// `.d.ts` and `.d.mts`, and declarations for other file types, such as the
+// `index.d.css.ts` a fontsource package lists for its stylesheet.
+const TYPE_DECLARATION = /\.d\.(?:[^./]+\.)?[cm]?ts$/;
 
 export interface Manifest {
   dependencies?: Record<string, string>;
@@ -165,6 +167,40 @@ export function dependenciesToPrebundle(root: string, never: ReadonlySet<string>
     if (!manifest) return false;
     return hasJsRootEntry(manifest, packageDir) && !hasNativeAddon(manifest);
   });
+}
+
+export interface ExportedSubpathsOptions {
+  /** Leaves out a subpath, given as its export map key, such as `./internals/noop`. */
+  exclude?: (subpath: string) => boolean;
+}
+
+/**
+ * The subpath entries an installed package publishes in its `exports` map,
+ * such as `@base-ui/react/dialog` for `"./dialog"`. A package that ships one
+ * entry per component has each one treated as its own package by the
+ * optimizer, so listing them all covers a component the app starts using
+ * later. Left out: the root entry (a dependency like any other), pattern keys
+ * such as `./*`, and subpaths that load no JavaScript, such as
+ * `./package.json` or a stylesheet. Returns nothing when the package is not
+ * installed.
+ */
+export function exportedSubpaths(
+  root: string,
+  name: string,
+  { exclude }: ExportedSubpathsOptions = {},
+): string[] {
+  const manifest = readManifest(path.join(root, "node_modules", name, "package.json"));
+  const { exports } = manifest ?? {};
+  if (!exports || typeof exports !== "object" || Array.isArray(exports)) return [];
+  return Object.entries(exports as Record<string, unknown>)
+    .filter(
+      ([key, target]) =>
+        key.startsWith("./") &&
+        !key.includes("*") &&
+        !exclude?.(key) &&
+        exportTargets(target).some(isJsEntry),
+    )
+    .map(([key]) => `${name}/${key.slice(2)}`);
 }
 
 /** Drops entries whose package the environment excludes from optimization. */
