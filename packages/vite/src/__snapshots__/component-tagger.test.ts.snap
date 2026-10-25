@@ -1,0 +1,128 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ComponentTagger output > tags crlf 1`] = `
+"import { Button } from "@/components/ui/button";
+export const Windows = () => (
+  <section data-hercules-id="src/components/Windows.tsx:3:2" data-hercules-name="section">
+    <Button data-hercules-id="src/components/Windows.tsx:4:4" data-hercules-name="Button" variant="ghost">Save</Button>
+    <span data-hercules-id="src/components/Windows.tsx:5:4" data-hercules-name="span" />
+  </section>
+);
+"
+`;
+
+exports[`ComponentTagger output > tags devtoolsAttributes 1`] = `
+"export const About = () => <div data-hercules-id="src/routes/about.tsx:1:27" data-hercules-name="div" data-tsd-source="/src/routes/about.tsx:1:25"><p data-hercules-id="src/routes/about.tsx:1:32" data-hercules-name="p" data-tsd-source="/src/routes/about.tsx:1:30">One</p><p data-hercules-id="src/routes/about.tsx:1:42" data-hercules-name="p" data-tsd-source="/src/routes/about.tsx:1:40">Two</p></div>;
+"
+`;
+
+exports[`ComponentTagger output > tags javascript 1`] = `
+"export function Widget({ label }) {
+  return <label data-hercules-id="src/legacy/Widget.jsx:2:9" data-hercules-name="label" htmlFor="w">{label}<input data-hercules-id="src/legacy/Widget.jsx:2:35" data-hercules-name="input" id="w" /></label>;
+}
+"
+`;
+
+exports[`ComponentTagger output > tags names 1`] = `
+"import { motion } from "motion/react";
+export const Names = () => (
+  <svg data-hercules-id="src/components/Names.tsx:3:2" data-hercules-name="svg">
+    <svg:rect width={1} />
+    <a.b.c data-hercules-id="src/components/Names.tsx:5:4" data-hercules-name="undefined.c" />
+    <motion.div data-hercules-id="src/components/Names.tsx:6:4" data-hercules-name="motion.div" animate={{ opacity: 1 }} />
+    <Fragment><g data-hercules-id="src/components/Names.tsx:7:14" data-hercules-name="g" /></Fragment>
+  </svg>
+);
+"
+`;
+
+exports[`ComponentTagger output > tags page 1`] = `
+"import { useState } from "react";
+import { Card } from "@/components/ui/card";
+import * as React from "react";
+
+type Item = { id: string; title: string; done: boolean };
+
+export default function Dashboard({ items }: { items: Item[] }) {
+  const [filter, setFilter] = useState<"all" | "done">("all");
+  const visible = items.filter((item) => filter === "all" || item.done);
+  return (
+    <main data-hercules-id="src/pages/Dashboard.tsx:11:4" data-hercules-name="main" className="flex flex-col gap-4 p-6">
+      <header data-hercules-id="src/pages/Dashboard.tsx:12:6" data-hercules-name="header" className={\`title \${filter}\`}>
+        <h1 data-hercules-id="src/pages/Dashboard.tsx:13:8" data-hercules-name="h1">Dashboard</h1>
+        <button data-hercules-id="src/pages/Dashboard.tsx:14:8" data-hercules-name="button" type="button" onClick={() => setFilter(filter === "all" ? "done" : "all")}>
+          Show {filter === "all" ? "done" : "all"}
+        </button>
+      </header>
+      {visible.length === 0 ? (
+        <p data-hercules-id="src/pages/Dashboard.tsx:19:8" data-hercules-name="p" className="text-muted">Nothing here yet.</p>
+      ) : (
+        <ul data-hercules-id="src/pages/Dashboard.tsx:21:8" data-hercules-name="ul">
+          {visible.map((item) => (
+            <li data-hercules-id="src/pages/Dashboard.tsx:23:12" data-hercules-name="li" key={item.id} {...{ "data-done": item.done }}>
+              <Card.Header data-hercules-id="src/pages/Dashboard.tsx:24:14" data-hercules-name="Card.Header">{item.title}</Card.Header>
+              <React.Fragment>
+                <input data-hercules-id="src/pages/Dashboard.tsx:26:16" data-hercules-name="input" type="checkbox" checked={item.done} readOnly />
+              </React.Fragment>
+            </li>
+          ))}
+        </ul>
+      )}
+      <>
+        <footer data-hercules-id="src/pages/Dashboard.tsx:33:8" data-hercules-name="footer" />
+      </>
+    </main>
+  );
+}
+"
+`;
+
+exports[`ComponentTagger output > tags reactThree 1`] = `
+"import { Canvas } from "@react-three/fiber";
+import { OrbitControls, Html } from "@react-three/drei";
+function Label(props: { text: string }) {
+  return <Html><div data-hercules-id="src/scene/Scene.tsx:4:15" data-hercules-name="div" className="label">{props.text}</div></Html>;
+}
+export const Scene = () => (
+  <div data-hercules-id="src/scene/Scene.tsx:7:2" data-hercules-name="div" className="h-full">
+    <Canvas data-hercules-id="src/scene/Scene.tsx:8:4" data-hercules-name="Canvas">
+      <mesh>
+        <boxGeometry />
+        <meshStandardMaterial color="orange" />
+      </mesh>
+      <Label text="box" />
+      <OrbitControls />
+    </Canvas>
+  </div>
+);
+"
+`;
+
+exports[`ComponentTagger output > tags routeSplit 1`] = `
+"import { createFileRoute } from "@tanstack/react-router";
+export const Route = createFileRoute("/")({ component: Home });
+function Home() {
+  return <div data-hercules-id="src/routes/index.tsx:4:9" data-hercules-name="div"><h1 data-hercules-id="src/routes/index.tsx:4:14" data-hercules-name="h1">Home</h1></div>;
+}
+"
+`;
+
+exports[`ComponentTagger output > tags typescript 1`] = `
+"enum Size { Small, Large }
+interface Option { value: string; label: string }
+const identity = <T,>(value: T) => <span data-hercules-id="src/components/Select.tsx:3:35" data-hercules-name="span">{String(value)}</span>;
+function Select<T extends Option>({ options }: { options: T[] }) {
+  return <select data-hercules-id="src/components/Select.tsx:5:9" data-hercules-name="select">{options.map((o) => <option data-hercules-id="src/components/Select.tsx:5:37" data-hercules-name="option" key={o.value} value={o.value}>{o.label}</option>)}</select>;
+}
+export const A = () => <Select<Option> data-hercules-id="src/components/Select.tsx:7:23" data-hercules-name="Select" options={[] satisfies Option[]} />;
+export const B = () => <Select<Option> data-hercules-id="src/components/Select.tsx:8:23" data-hercules-name="Select">{identity(Size.Large)}</Select>;
+"
+`;
+
+exports[`ComponentTagger output > tags unicode 1`] = `
+"const wave = "👋🏽 你好";
+export const Greeting = () => <p data-hercules-id="src/components/Greeting.tsx:2:30" data-hercules-name="p" title="😀">😀 <b data-hercules-id="src/components/Greeting.tsx:2:47" data-hercules-name="b">{wave}</b> 𝒳𝒴 <i data-hercules-id="src/components/Greeting.tsx:2:66" data-hercules-name="i">ok</i></p>;
+// 🚀 a comment with an emoji before the next element
+export const Rocket = () => <div data-hercules-id="src/components/Greeting.tsx:4:28" data-hercules-name="div">{/* ✨ */}<span data-hercules-id="src/components/Greeting.tsx:4:42" data-hercules-name="span">🚀</span><em data-hercules-id="src/components/Greeting.tsx:4:57" data-hercules-name="em" /></div>;
+"
+`;

@@ -1,101 +1,62 @@
 # @usehercules/vite
 
-A Vite plugin for the Hercules application. This plugin supports **Vite 7 and Vite 8**.
+The Vite plugin for Hercules apps. It runs on the dev server only and supports **Vite 7 and Vite 8**.
 
 ## Installation
 
 ```bash
-npm install @usehercules/vite --save-dev
-# or
-pnpm add @usehercules/vite --save-dev
-# or
-yarn add @usehercules/vite --dev
+pnpm add -D @usehercules/vite
 ```
 
 ## Usage
 
-Add the plugin to your `vite.config.js` or `vite.config.ts`:
-
 ```typescript
 import { defineConfig } from "vite";
-import { herculesPlugin } from "@usehercules/vite";
+import hercules from "@usehercules/vite";
 
 export default defineConfig({
-  plugins: [
-    herculesPlugin({
-      debug: true,
-      message: "Custom message here!",
-    }),
-  ],
+  plugins: [hercules()],
 });
 ```
 
+TanStack Start apps get the plugin through `@usehercules/vite-tanstack` instead.
+
+## What it does
+
+- **Component tagging.** Adds `data-hercules-id="<file>:<line>:<column>"` and `data-hercules-name` to every JSX element, so the visual editor can map a DOM node back to its source. Line and column come from the file on disk, even when an earlier plugin changed the code. On Vite 8 the tagger parses with Vite's own parser (Oxc); on Vite 7 it uses Babel.
+- **Visual editor endpoints.** `/__hercules_analyze_element`, `/__hercules_update_element` and `/__hercules_delete_element`, which the visual editor calls to read and change the source behind a tagged element.
+- **Dependency pre-bundling.** Seeds the optimizer from every file under `src` (minus tests, `*.server.*` and `src/server/`), and bundles every runtime dependency in `package.json` up front, so Vite does not discover a package mid-session and reload the page. On the Hercules dev machine (`HERCULES_DEV_MACHINE=1`) the dev server also restarts when `package.json` or the lockfile changes, so a package the agent installs is bundled before code imports it.
+
+herculesd serves the visual editor and error handler scripts and injects them into every page; this plugin does not.
+
 ## Options
 
-| Option                    | Type      | Default                         | Description                                             |
-| ------------------------- | --------- | ------------------------------- | ------------------------------------------------------- |
-| `debug`                   | `boolean` | `false`                         | Enable debug logging to console                         |
-| `message`                 | `string`  | `'Hercules plugin is running!'` | Custom message to display during build                  |
-| `componentTagger.enabled` | `boolean` | `true`                          | Tag JSX elements with data attributes on the dev server |
-| `visualEditor.enabled`    | `boolean` | `true`                          | Enable the visual editor (dev server only)              |
+| Option                    | Type      | Default | Description                                                                                            |
+| ------------------------- | --------- | ------- | ------------------------------------------------------------------------------------------------------ |
+| `componentTagger.enabled` | `boolean` | `true`  | Tag JSX elements with data attributes.                                                                 |
+| `componentTagger.debug`   | `boolean` | `false` | Log how many elements each file got.                                                                   |
+| `visualEditor.enabled`    | `boolean` | `true`  | Serve the visual editor endpoints. When off, elements are tagged with `data-component-id` instead.     |
+| `visualEditor.debug`      | `boolean` | `false` | Log endpoint errors.                                                                                   |
+| `prebundleDependencies`   | `boolean` | `true`  | Bundle the `package.json` dependencies up front, and restart on dependency changes on the dev machine. |
 
-## Component tagging is dev-only
+## Builds stay clean
 
-During `vite dev`, the component tagger adds `data-hercules-id` and
-`data-hercules-name` attributes to JSX elements so the visual editor can map
-DOM nodes back to source.
-
-Both the tagger and the visual editor are `apply: "serve"` plugins, so they are
-dropped from the `vite build` pipeline entirely. Built output contains no
-tagging attributes and no injected editor script — published sites ship
-white-label markup regardless of how `NODE_ENV` is set.
-
-## Features
-
-Currently, this is a dummy plugin that:
-
-- ✅ Provides debug logging capabilities
-- ✅ Adds a custom development server endpoint at `/hercules-status`
-- ✅ Includes all necessary Vite plugin hooks
-- ✅ Has proper TypeScript support
-- ⏳ Ready for future functionality implementation
-
-## Development Server Endpoint
-
-When running in development mode, the plugin adds a status endpoint:
-
-```
-GET /hercules-status
-```
-
-Returns:
-
-```json
-{
-  "status": "active",
-  "plugin": "hercules",
-  "timestamp": "2024-01-01T00:00:00.000Z"
-}
-```
+Every plugin here is `apply: "serve"`, so `vite build` never runs them. Built output contains no tagging attributes and no Hercules endpoints, whatever `NODE_ENV` is.
 
 ## Compatibility
 
 - **Vite**: 7.x / 8.x
 - **Node.js**: 20.19+ / 22.12+
-- **TypeScript**: 5.x / 6.x
 
 ## Development
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Build the plugin
-pnpm run build
-
-# Watch mode for development
-pnpm run dev
+pnpm --filter @usehercules/vite build
+pnpm --filter @usehercules/vite test
 ```
+
+The package bundles the private `@usehercules/vite-common` workspace package into its `dist`; `src/dist.test.ts` fails if a build still imports it.
 
 ## License
 

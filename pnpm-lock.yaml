@@ -218,6 +218,9 @@ importers:
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
+      '@usehercules/vite-common':
+        specifier: workspace:*
+        version: link:../vite-common
       tsdown:
         specifier: ^0.23.1
         version: 0.23.1(typescript@7.0.2)

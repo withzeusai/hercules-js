@@ -1,10 +1,10 @@
 import { readFile } from "fs/promises";
 import path from "path";
-import { parse } from "@babel/parser";
+import { parse as babelParse } from "@babel/parser";
 // Named, not default: magic-string is ESM-only, and the CJS build's interop
 // hands require()'s whole namespace back as `default`.
 import { MagicString } from "magic-string";
-import type { Plugin, ViteDevServer } from "vite";
+import type { Plugin, Rolldown } from "vite";
 
 // Types
 export interface ComponentTaggerOptions {
@@ -15,12 +15,6 @@ export interface ComponentTaggerOptions {
    * @default "data-component-id"
    */
   dataAttribute?: string;
-}
-
-export interface ComponentTaggerStats {
-  totalFiles: number;
-  processedFiles: number;
-  totalElements: number;
 }
 
 // Keep: Three.js Fiber elements that should not be tagged
@@ -187,7 +181,6 @@ function shouldTagElement(
 
 // Constants
 const validExtensions = new Set([".jsx", ".tsx"]);
-const isSandbox = process.env.HERCULES_DEV_SERVER === "true";
 
 // TanStack Router's code splitter loads each route component from a virtual
 // module, `routes/index.tsx?tsr-split=component`, and the module-level bindings
@@ -214,6 +207,60 @@ export function taggableFilePath(id: string): string | null {
   return filePath;
 }
 
+/**
+ * Parses a `.jsx` or `.tsx` module into an ESTree-shaped tree whose nodes carry
+ * `start` and `end` as UTF-16 offsets into the code, the indices MagicString
+ * and JavaScript strings use. Both parsers below accept TypeScript in either
+ * extension, so the two kinds of file are tagged alike.
+ */
+export type ParseModule = (code: string) => unknown;
+
+export const parseWithBabel: ParseModule = (code) =>
+  babelParse(code, { sourceType: "module", plugins: ["jsx", "typescript"] });
+
+/**
+ * The parser Vite already runs. Rolldown (Vite 8) parses TSX with Oxc and
+ * reports the same offsets as Babel; Rollup's parser (Vite 7) has no
+ * TypeScript support, so Vite 7 keeps Babel.
+ */
+function parserOf(context: Rolldown.PluginContext): ParseModule {
+  if (!context.meta.rolldownVersion) {
+    return parseWithBabel;
+  }
+  return (code) => context.parse(code, { lang: "tsx", sourceType: "module" });
+}
+
+/**
+ * Turns UTF-16 offsets into 1-based lines and 0-based columns, counting line
+ * breaks as JavaScript does (`\n`, `\r\n`, `\r`, U+2028, U+2029), like Babel's
+ * `loc`.
+ */
+function lineLocator(code: string): (offset: number) => { line: number; col: number } {
+  const lineStarts = [0];
+  for (let i = 0; i < code.length; i++) {
+    const char = code.charCodeAt(i);
+    if (char === 0x0d && code.charCodeAt(i + 1) === 0x0a) {
+      i++;
+      lineStarts.push(i + 1);
+    } else if (char === 0x0a || char === 0x0d || char === 0x2028 || char === 0x2029) {
+      lineStarts.push(i + 1);
+    }
+  }
+  return (offset) => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (lineStarts[mid]! <= offset) {
+        low = mid;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return { line: low + 1, col: offset - lineStarts[low]! };
+  };
+}
+
 function openingElementName(node: any): string | null {
   if (node.name.type === "JSXIdentifier") {
     return node.name.name;
@@ -233,18 +280,18 @@ interface ElementPosition {
 /**
  * The name and start of every JSX opening element in `code`, in walk order.
  */
-async function openingElementPositions(code: string): Promise<ElementPosition[]> {
-  const ast = parse(code, { sourceType: "module", plugins: ["jsx", "typescript"] });
+async function openingElementPositions(
+  code: string,
+  parse: ParseModule,
+): Promise<ElementPosition[]> {
+  const ast = parse(code);
+  const locate = lineLocator(code);
   const { walk } = await import("estree-walker");
   const positions: ElementPosition[] = [];
   walk(ast as any, {
     enter(node: any) {
       if (node.type === "JSXOpeningElement") {
-        positions.push({
-          name: openingElementName(node),
-          line: node.loc?.start?.line ?? 0,
-          col: node.loc?.start?.column ?? 0,
-        });
+        positions.push({ name: openingElementName(node), ...locate(node.start) });
       }
     },
   });
@@ -259,10 +306,14 @@ async function openingElementPositions(code: string): Promise<ElementPosition[]>
  * element on the same line to the right. The editor looks elements up in the
  * file on disk, so their ids must carry the file's columns.
  */
-async function sourcePositions(code: string, source: string): Promise<ElementPosition[] | null> {
+async function sourcePositions(
+  code: string,
+  source: string,
+  parse: ParseModule,
+): Promise<ElementPosition[] | null> {
   const [fromCode, fromSource] = await Promise.all([
-    openingElementPositions(code),
-    openingElementPositions(source),
+    openingElementPositions(code, parse),
+    openingElementPositions(source, parse),
   ]);
   if (fromCode.length !== fromSource.length) {
     return null;
@@ -275,12 +326,14 @@ async function sourcePositions(code: string, source: string): Promise<ElementPos
   return fromSource;
 }
 
+export interface TransformOptions {
+  /** The file on disk. When given, ids carry its line and column instead of those of the code. */
+  source?: string;
+  /** @default parseWithBabel */
+  parse?: ParseModule;
+}
+
 export class ComponentTagger {
-  private stats: ComponentTaggerStats = {
-    totalFiles: 0,
-    processedFiles: 0,
-    totalElements: 0,
-  };
   private cwd = process.cwd();
   private dataAttribute: string;
 
@@ -289,31 +342,26 @@ export class ComponentTagger {
   }
 
   /**
-   * Tags the JSX elements of `code`. When `source` is given (the file on disk),
-   * ids carry its line and column instead of those of `code`.
+   * Tags the JSX elements of `code` with `<dataAttribute>="<file>:<line>:<column>"`
+   * and `data-hercules-name`.
    */
   async transformCode(
     code: string,
     id: string,
-    source?: string,
+    { source, parse = parseWithBabel }: TransformOptions = {},
   ): Promise<{ code: string; map: any } | null> {
     const filePath = taggableFilePath(id);
     if (!filePath) {
       return null;
     }
 
-    this.stats.totalFiles++;
     const relativePath = path.relative(this.cwd, filePath) || filePath;
 
     try {
-      const parserOptions = {
-        sourceType: "module" as const,
-        plugins: ["jsx", "typescript"] as any,
-      };
-
-      const ast = parse(code, parserOptions);
+      const ast = parse(code);
+      const locate = lineLocator(code);
       const positions =
-        source === undefined || source === code ? null : await sourcePositions(code, source);
+        source === undefined || source === code ? null : await sourcePositions(code, source, parse);
       let elementIndex = 0;
       const magicString = new MagicString(code);
       let changedElementsCount = 0;
@@ -358,8 +406,7 @@ export class ComponentTagger {
               return;
             }
 
-            const line = position?.line ?? jsxNode.loc?.start?.line ?? 0;
-            const col = position?.col ?? jsxNode.loc?.start?.column ?? 0;
+            const { line, col } = position ?? locate(jsxNode.start);
             const dataComponentId = `${relativePath}:${line}:${col}`;
 
             const shouldTag = shouldTagElement(elementName, importsReactThree, fiberImports);
@@ -379,9 +426,6 @@ export class ComponentTagger {
         },
       });
 
-      this.stats.processedFiles++;
-      this.stats.totalElements += changedElementsCount;
-
       if (this.options.debug) {
         console.log(
           `[Component Tagger] Processed ${relativePath}: ${changedElementsCount} elements`,
@@ -394,25 +438,7 @@ export class ComponentTagger {
       };
     } catch (error) {
       console.error(`Error processing file ${relativePath}:`, error);
-      this.stats.processedFiles++;
       return null;
-    }
-  }
-
-  getStats(): ComponentTaggerStats {
-    return { ...this.stats };
-  }
-
-  // Tailwind v4 configuration handling
-  // Note: Tailwind v4 uses CSS-based configuration instead of JS config files
-  // This method is a placeholder for future Tailwind v4 integration
-  async handleTailwindConfig(_server?: ViteDevServer): Promise<void> {
-    if (!isSandbox) return;
-
-    // TODO: Implement Tailwind v4 CSS-based config handling
-    // Tailwind v4 doesn't use tailwind.config.js, so this needs different approach
-    if (this.options.debug) {
-      console.log("[Component Tagger] Tailwind v4 config handling not yet implemented");
     }
   }
 }
@@ -420,7 +446,6 @@ export class ComponentTagger {
 // Export Vite plugin for component tagging
 export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plugin {
   const tagger = new ComponentTagger(options);
-  const stats = tagger.getStats.bind(tagger);
 
   return {
     name: "vite-plugin-hercules-component-tagger",
@@ -428,24 +453,6 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
     // Dev-server only: tagging is editor tooling, and published sites must
     // ship no Hercules identifiers in their markup
     apply: "serve",
-
-    async buildStart() {
-      await tagger.handleTailwindConfig();
-    },
-
-    async configureServer(server) {
-      await tagger.handleTailwindConfig(server);
-
-      // Expose stats endpoint
-      server.middlewares.use("/hercules-component-tagger-stats", (req, res, next) => {
-        if (req.method === "GET") {
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(stats()));
-        } else {
-          next();
-        }
-      });
-    },
 
     // TanStack route split modules are tagged when they load, from the route
     // file on disk. In `transform` they may already be regenerated by the
@@ -456,7 +463,7 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
       if (!filePath || filePath === id) {
         return null;
       }
-      return tagger.transformCode(await readFile(filePath, "utf8"), id);
+      return tagger.transformCode(await readFile(filePath, "utf8"), id, { parse: parserOf(this) });
     },
 
     // Plugins listed earlier may have changed the code already (TanStack
@@ -467,7 +474,7 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
         return null;
       }
       const source = await readFile(id, "utf8").catch(() => undefined);
-      return tagger.transformCode(code, id, source);
+      return tagger.transformCode(code, id, { source, parse: parserOf(this) });
     },
   };
 }

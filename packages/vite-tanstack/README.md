@@ -36,7 +36,7 @@ Plugins, in order:
 2. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
 3. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
 4. `@tailwindcss/vite`
-5. `@usehercules/vite` (component tagger, visual editor, error forwarding; dev server only)
+5. `@usehercules/vite` (component tagger and visual editor endpoints; dev server only). Its own dependency pre-bundling is off, since plugin 2 covers both environments.
 6. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
 7. `@tanstack/react-start`
 8. `@vitejs/plugin-react`
