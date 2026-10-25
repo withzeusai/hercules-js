@@ -221,6 +221,11 @@ resolved against the app's own origin; use `postLogoutRedirectUri` to land on a
 different host, or to pin the exact spelling when your provider registered the
 trailing-slash form (an absolute value there is sent verbatim).
 
+**Inside an iframe.** The provider's end-session page refuses to be framed, so
+`useAuth().signOut()` in a framed app sends the end-session request in the
+background and navigates the frame to its own post-logout destination instead.
+Top-level sign-out is unchanged.
+
 ## API
 
 **`@usehercules/auth-tanstack`**
@@ -230,9 +235,11 @@ trailing-slash form (an absolute value there is sent verbatim).
 - Server functions: `getAuth`, `signOut`, `getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`, `checkRecentAuth`
 - Actions (server functions backing the client hooks, exported for direct use): `getAuthAction`, `checkSessionAction`, `getAccessTokenAction`, `refreshAccessTokenAction`, `getIdTokenAction`, `refreshIdTokenAction`, `refreshAuthAction`
 - Errors: `OAuthStateMismatchError`, `PKCECookieMissingError`
-- Types: `User`, `Session`, `Impersonator`, `UserInfo`, `NoUserInfo`, `ClientUserInfo`, `AuthResult`, `BaseTokenClaims`, `CustomClaims`, `GetAuthURLOptions`, `SignInUrlOptions`, `RecentAuthResult`, `HandleSignInOptions`, `HandleCallbackOptions`, `HandleAuthSuccessData`, `HerculesAuthMiddlewareOptions`
+- Types: `User`, `Session`, `Impersonator`, `UserInfo`, `NoUserInfo`, `ClientUserInfo`, `AuthResult`, `BaseTokenClaims`, `CustomClaims`, `GetAuthURLOptions`, `SignInUrlOptions`, `RecentAuthResult`, `AuthPrompt`, `HandleSignInOptions`, `HandleCallbackOptions`, `HandleAuthSuccessData`, `HerculesAuthMiddlewareOptions`
 
-Authorization URL options (`getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`, `handleSignInRoute`): `returnPathname`, `redirectUri`, `scope`, `maxAge` (OIDC `max_age`), `loginHint` (OIDC `login_hint`), and — on `getAuthorizationUrl` — `screenHint`.
+Authorization URL options (`getSignInUrl`, `getSignUpUrl`, `getAuthorizationUrl`, `handleSignInRoute`): `returnPathname`, `redirectUri`, `scope`, `maxAge` (OIDC `max_age`), `loginHint` (OIDC `login_hint`), `prompt` (OIDC `prompt`), and — on `getAuthorizationUrl` — `screenHint`.
+
+Every sign-in sends `prompt=login` unless you pass `prompt`, so the user signs in explicitly instead of silently reusing an account already signed in at the provider. Pass `select_account`, `consent`, or `none` to change that, or an empty string to send no `prompt`.
 
 **`@usehercules/auth-tanstack/client`**
 

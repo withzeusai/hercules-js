@@ -1,6 +1,11 @@
 import type { HandleCallbackOptions, HandleSignInOptions } from "./types";
 
-export type { HandleAuthSuccessData, HandleCallbackOptions, HandleSignInOptions } from "./types";
+export type {
+  AuthPrompt,
+  HandleAuthSuccessData,
+  HandleCallbackOptions,
+  HandleSignInOptions,
+} from "./types";
 
 // The route handlers are exported from the root barrel, which route files
 // import isomorphically, so their bodies (`./route-bodies`, which pulls in

@@ -10,6 +10,7 @@ export type {
   ClientUserInfo,
 } from "./types";
 export {
+  type AuthPrompt,
   type HandleAuthSuccessData,
   type HandleCallbackOptions,
   type HandleSignInOptions,

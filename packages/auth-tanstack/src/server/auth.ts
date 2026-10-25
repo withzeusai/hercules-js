@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 import type { NoUserInfo, UserInfo } from "../types";
+import type { AuthPrompt } from "./types";
 
 // These server functions are loader-safe and exported from the root barrel, so
 // route files import this module isomorphically. Each handler dynamically
@@ -30,6 +31,12 @@ export interface GetAuthURLOptions {
   maxAge?: number;
   /** OIDC `login_hint`: pre-fill the provider's login form (e.g. an email). */
   loginHint?: string;
+  /**
+   * OIDC `prompt`. Defaults to `login`, so the user signs in explicitly instead
+   * of silently reusing the provider's existing session. Pass `select_account`,
+   * `consent`, or `none` to change that, or an empty string to send no `prompt`.
+   */
+  prompt?: AuthPrompt;
 }
 
 /** Options accepted by {@link getSignInUrl}/{@link getSignUpUrl}. */
@@ -70,8 +77,9 @@ export const signOut = createServerFn({ method: "POST" })
 
 /**
  * Build a custom authorization URL with full control over screen hint, return
- * path, redirect URI, scope, `max_age`, and `login_hint`. Sets a PKCE verifier
- * cookie — call on a user action or redirect route, not prefetched in a loader.
+ * path, redirect URI, scope, `max_age`, `login_hint`, and `prompt`. Sets a PKCE
+ * verifier cookie — call on a user action or redirect route, not prefetched in
+ * a loader.
  */
 export const getAuthorizationUrl = createServerFn({ method: "GET" })
   .validator((options?: GetAuthURLOptions) => options)

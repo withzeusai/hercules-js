@@ -6,8 +6,14 @@ import {
   type AuthProviderUserManagerProps,
   useAuth,
 } from "react-oidc-context";
-import { UserManager, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
+import {
+  InMemoryWebStorage,
+  WebStorageStateStore,
+  type UserManager,
+  type UserManagerSettings,
+} from "oidc-client-ts";
 import { withRefreshLock } from "../internal/refresh-lock";
+import { HerculesUserManager } from "../internal/user-manager";
 import {
   clearHerculesImpersonationParamsFromUrl,
   getHerculesImpersonationStorageKey,
@@ -52,6 +58,64 @@ export function useHerculesAuthProvider() {
     throw new Error("HerculesAuthProviderContext not found");
   }
   return context;
+}
+
+/**
+ * Browsers that deny storage to a frame, such as a third-party iframe with
+ * third-party cookies blocked, throw `SecurityError` from the `localStorage`
+ * getter. Firefox still allows `sessionStorage` there, which keeps the OIDC
+ * state across the sign-in redirect. Memory is the last resort: the app
+ * renders, but a redirect sign-in cannot complete in that frame. The state
+ * store needs this too: the oidc-client-ts default reads `localStorage`.
+ */
+function getAuthStorage(): Storage {
+  try {
+    return window.localStorage;
+  } catch {
+    try {
+      return window.sessionStorage;
+    } catch {
+      return new InMemoryWebStorage();
+    }
+  }
+}
+
+function DefaultLoadingFallback() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading"
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "grid",
+        placeItems: "center",
+        pointerEvents: "none",
+      }}
+    >
+      <svg
+        width="32"
+        height="32"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="10" opacity="0.25" />
+        <path d="M22 12a10 10 0 0 0-10-10" strokeLinecap="round">
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 12 12"
+            to="360 12 12"
+            dur="0.8s"
+            repeatCount="indefinite"
+          />
+        </path>
+      </svg>
+    </div>
+  );
 }
 
 function AuthRecoveryGate({
@@ -121,7 +185,7 @@ export function HerculesAuthProvider({
   userManagerSettings,
   authority,
   client_id,
-  loadingFallback = null,
+  loadingFallback = <DefaultLoadingFallback />,
   ...props
 }: HerculesAuthProviderProps) {
   const automaticSilentRenewExplicit = userManagerSettings?.automaticSilentRenew === true;
@@ -129,25 +193,31 @@ export function HerculesAuthProvider({
     const effectiveAuthority = userManagerSettings?.authority ?? authority;
     const effectiveClientId = userManagerSettings?.client_id ?? client_id;
 
+    const userManager = new HerculesUserManager({
+      ...userManagerSettings,
+      authority: effectiveAuthority,
+      client_id: effectiveClientId,
+      prompt: userManagerSettings?.prompt ?? "select_account",
+      response_type: userManagerSettings?.response_type ?? "code",
+      scope: userManagerSettings?.scope ?? "openid profile email offline_access",
+      redirect_uri: userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
+      post_logout_redirect_uri:
+        userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
+      userStore:
+        userManagerSettings?.userStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
+      stateStore:
+        userManagerSettings?.stateStore ?? new WebStorageStateStore({ store: getAuthStorage() }),
+      // Started in the effect below, so a manager that React creates and
+      // discards (Strict Mode runs this initializer twice) never renews.
+      automaticSilentRenew: false,
+      silentRequestTimeoutInSeconds:
+        userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
+    });
+    // Only the constructor reads this, so report the caller's value afterward.
+    Object.assign(userManager.settings, { automaticSilentRenew: automaticSilentRenewExplicit });
+
     return {
-      userManager: new UserManager({
-        ...userManagerSettings,
-        authority: effectiveAuthority,
-        client_id: effectiveClientId,
-        prompt: userManagerSettings?.prompt ?? "select_account",
-        response_type: userManagerSettings?.response_type ?? "code",
-        scope: userManagerSettings?.scope ?? "openid profile email offline_access",
-        redirect_uri:
-          userManagerSettings?.redirect_uri ?? `${window.location.origin}/auth/callback`,
-        post_logout_redirect_uri:
-          userManagerSettings?.post_logout_redirect_uri ?? window.location.origin,
-        userStore:
-          userManagerSettings?.userStore ??
-          new WebStorageStateStore({ store: window.localStorage }),
-        automaticSilentRenew: userManagerSettings?.automaticSilentRenew ?? false,
-        silentRequestTimeoutInSeconds:
-          userManagerSettings?.silentRequestTimeoutInSeconds ?? RECOVERY_TIMEOUT_MS / 1000,
-      }),
+      userManager,
       impersonationStorageKey: getHerculesImpersonationStorageKey(
         effectiveAuthority,
         effectiveClientId,
@@ -156,7 +226,10 @@ export function HerculesAuthProvider({
   });
 
   useEffect(() => {
-    if (automaticSilentRenewExplicit) return;
+    if (automaticSilentRenewExplicit) {
+      userManager.startSilentRenew();
+      return () => userManager.stopSilentRenew();
+    }
     let retryTimerId: ReturnType<typeof setTimeout> | null = null;
     let timeoutRetryCount = 0;
     let stopped = false;

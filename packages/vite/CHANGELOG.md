@@ -1,5 +1,31 @@
 # @usehercules/vite
 
+## 1.2.5
+
+### Patch Changes
+
+- [#179](https://github.com/withzeusai/hercules-js/pull/179) [`3266cf4`](https://github.com/withzeusai/hercules-js/commit/3266cf42ff3ff6fa0776792fbc8d6c32c8b6a77b) Thanks [@delbyte](https://github.com/delbyte)! - Tag JSX elements after their type arguments. An element with explicit type arguments, such as `<Select<Option> value={value} />`, got its `data-hercules-id` and `data-hercules-name` attributes between the tag name and the type arguments, which is a syntax error, so the dev preview failed to load.
+
+- [#175](https://github.com/withzeusai/hercules-js/pull/175) [`37506e2`](https://github.com/withzeusai/hercules-js/commit/37506e20bfeee55651a3df389f1c91f9bfd450da) Thanks [@delbyte](https://github.com/delbyte)! - Stop tagging components in files that import from `@react-three/*`, except those imported from `@react-three/fiber` such as `<Canvas>`. A wrapper like `function Tag(props) { return <Html {...props} /> }` forwarded `data-hercules-name` into the React Three Fiber reconciler, which threw `R3F: Cannot set "data-hercules-name"` and blanked the canvas in the dev preview. DOM elements in those files are still tagged.
+
+## 1.2.4
+
+### Patch Changes
+
+- [#176](https://github.com/withzeusai/hercules-js/pull/176) [`2455a9c`](https://github.com/withzeusai/hercules-js/commit/2455a9cb150cf4c7bc3d4e8cdae3fbec5fd7843c) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Take element ids' line and column from the file on disk when an earlier plugin changed the code. TanStack devtools (listed before `hercules()` in the TanStack Start template) adds a `data-tsd-source` attribute to every opening tag, so each element after the first on a line got a column too far right, and the visual editor failed with "Component not found" when it saved a text or class change to that element.
+
+## 1.2.3
+
+### Patch Changes
+
+- [#173](https://github.com/withzeusai/hercules-js/pull/173) [`f27ab75`](https://github.com/withzeusai/hercules-js/commit/f27ab755a8367888a332f769f1210b2fcd8d921d) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Tag TanStack route split modules when they load, from the route file on disk. With `tanstackStart()` or `tanstackRouter()` listed before `hercules()`, the tagger received the router plugin's regenerated code, so its `data-hercules-id` line and column did not match the route file and the visual editor could change the wrong element.
+
+## 1.2.2
+
+### Patch Changes
+
+- [#171](https://github.com/withzeusai/hercules-js/pull/171) [`c807772`](https://github.com/withzeusai/hercules-js/commit/c8077720e8c034aa9eca807fbf78ceedca6bab73) Thanks [@adrian-hercules](https://github.com/adrian-hercules)! - Tag JSX in TanStack Router route components. The code splitter loads them from `?tsr-split` and `?tsr-shared` virtual modules, which the component tagger skipped, so the visual editor could not select anything on a TanStack Start page.
+
 ## 1.2.1
 
 ### Patch Changes

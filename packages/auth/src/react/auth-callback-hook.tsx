@@ -1,15 +1,39 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useAuth, hasAuthParams } from "react-oidc-context";
+import { useAuth, hasAuthParams, type ErrorContext } from "react-oidc-context";
 import { ConvexError } from "convex/values";
 import * as z from "zod";
 
 const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
+// Once the tokens are saved, the backend confirming them (such as a Convex
+// WebSocket on Safari) can take longer than the token exchange.
+const MIN_TIMEOUT_AFTER_TOKENS_MS = 60_000;
+const MISSING_STATE_MESSAGE = "No matching state found in storage";
+const MISSING_STATE_RETRY_KEY = "hercules-auth:missing-state-retry";
 
 const convexErrorSchema = z.object({
   message: z.string(),
 });
+
+function claimMissingStateRetry(error: ErrorContext): boolean {
+  if (error.source !== "signinCallback" || error.message !== MISSING_STATE_MESSAGE) return false;
+
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("code")) return false;
+
+  try {
+    if (window.sessionStorage.getItem(MISSING_STATE_RETRY_KEY) !== null) return false;
+    window.sessionStorage.setItem(MISSING_STATE_RETRY_KEY, "1");
+  } catch {
+    return false;
+  }
+
+  url.searchParams.delete("code");
+  url.searchParams.delete("state");
+  window.history.replaceState({}, document.title, url.toString());
+  return true;
+}
 
 /**
  * Authentication callback status states
@@ -28,7 +52,8 @@ export type AuthCallbackStatus =
  */
 export interface UseAuthCallbackOptions {
   /**
-   * Timeout in milliseconds before the callback is considered failed.
+   * Timeout in milliseconds for each step of the callback. Once the tokens are
+   * saved, the backend and sync steps each get at least 60 seconds.
    * @default 20000
    */
   timeoutMs?: number;
@@ -142,6 +167,7 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
   const hadAuthParams = useRef(hasAuthParams());
   // Track if we've already started sync to prevent double execution
   const syncStarted = useRef(false);
+  const missingStateRetryError = useRef<ErrorContext | null>(null);
 
   // Reset on mount, cleanup on unmount
   useEffect(() => {
@@ -156,12 +182,14 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
   useEffect(() => {
     if (status === "success" || status === "error") return;
 
+    const stepTimeoutMs =
+      status === "processing-oauth" ? timeoutMs : Math.max(timeoutMs, MIN_TIMEOUT_AFTER_TOKENS_MS);
     const timeout = setTimeout(() => {
       if (mountedRef.current) {
         setStatus("error");
         setError("Authentication timed out. Please try again.");
       }
-    }, timeoutMs);
+    }, stepTimeoutMs);
 
     return () => clearTimeout(timeout);
   }, [status, timeoutMs]);
@@ -173,6 +201,12 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
 
     // Handle OIDC errors
     if (oidcError) {
+      if (oidcError === missingStateRetryError.current) return;
+      if (claimMissingStateRetry(oidcError)) {
+        missingStateRetryError.current = oidcError;
+        void signinRedirect();
+        return;
+      }
       setStatus("error");
       setError(oidcError.message || "Authentication failed");
       return;
@@ -211,7 +245,7 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
     }
 
     return;
-  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, onNoAuthParams]);
+  }, [isAuthLoading, isOidcAuthenticated, oidcError, status, onNoAuthParams, signinRedirect]);
 
   // Sync with backend once backend is authenticated
   useEffect(() => {

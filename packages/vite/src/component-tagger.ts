@@ -1,6 +1,9 @@
+import { readFile } from "fs/promises";
 import path from "path";
 import { parse } from "@babel/parser";
-import MagicString from "magic-string";
+// Named, not default: magic-string is ESM-only, and the CJS build's interop
+// hands require()'s whole namespace back as `default`.
+import { MagicString } from "magic-string";
 import type { Plugin, ViteDevServer } from "vite";
 
 // Types
@@ -166,20 +169,18 @@ const threeFiberElems = new Set([
 // Keep: Check if element should be tagged
 function shouldTagElement(
   elementName: string,
-  threeDreiImportedElements: Set<string>,
-  threeDreiNamespaces: Set<string>,
+  importsReactThree: boolean,
+  fiberImports: Set<string>,
 ): boolean {
   if (threeFiberElems.has(elementName)) {
     return false;
   }
-  if (threeDreiImportedElements.has(elementName)) {
-    return false;
-  }
-  if (elementName.includes(".")) {
-    const namespace = elementName.split(".")[0];
-    if (namespace && threeDreiNamespaces.has(namespace)) {
-      return false;
-    }
+  // In a file that imports @react-three/*, any component (a name that is not a
+  // lowercase intrinsic, such as drei or a wrapper spreading props into <mesh>)
+  // may render into the R3F reconciler, which throws on data-* props. Only
+  // fiber's own Canvas renders DOM.
+  if (importsReactThree && !/^[a-z][^.]*$/.test(elementName)) {
+    return fiberImports.has(elementName.split(".")[0]!);
   }
   return true;
 }
@@ -187,6 +188,92 @@ function shouldTagElement(
 // Constants
 const validExtensions = new Set([".jsx", ".tsx"]);
 const isSandbox = process.env.HERCULES_DEV_SERVER === "true";
+
+// TanStack Router's code splitter loads each route component from a virtual
+// module, `routes/index.tsx?tsr-split=component`, and the module-level bindings
+// the pieces share from `routes/index.tsx?tsr-shared=1`. Both carry the route
+// file's own source, so they are tagged as that file.
+const routeSplitParams = new Set(["tsr-split", "tsr-shared"]);
+
+/**
+ * The source file a module id is tagged as, or null when the id is not a JSX
+ * source file. Ids with any other query (`?raw`, `?url`) are left alone.
+ */
+export function taggableFilePath(id: string): string | null {
+  const queryStart = id.indexOf("?");
+  const filePath = queryStart === -1 ? id : id.slice(0, queryStart);
+  if (queryStart !== -1) {
+    const params = [...new URLSearchParams(id.slice(queryStart + 1)).keys()];
+    if (params.length === 0 || !params.every((param) => routeSplitParams.has(param))) {
+      return null;
+    }
+  }
+  if (!validExtensions.has(path.extname(filePath)) || filePath.includes("node_modules")) {
+    return null;
+  }
+  return filePath;
+}
+
+function openingElementName(node: any): string | null {
+  if (node.name.type === "JSXIdentifier") {
+    return node.name.name;
+  }
+  if (node.name.type === "JSXMemberExpression") {
+    return `${node.name.object.name}.${node.name.property.name}`;
+  }
+  return null;
+}
+
+interface ElementPosition {
+  name: string | null;
+  line: number;
+  col: number;
+}
+
+/**
+ * The name and start of every JSX opening element in `code`, in walk order.
+ */
+async function openingElementPositions(code: string): Promise<ElementPosition[]> {
+  const ast = parse(code, { sourceType: "module", plugins: ["jsx", "typescript"] });
+  const { walk } = await import("estree-walker");
+  const positions: ElementPosition[] = [];
+  walk(ast as any, {
+    enter(node: any) {
+      if (node.type === "JSXOpeningElement") {
+        positions.push({
+          name: openingElementName(node),
+          line: node.loc?.start?.line ?? 0,
+          col: node.loc?.start?.column ?? 0,
+        });
+      }
+    },
+  });
+  return positions;
+}
+
+/**
+ * Element positions taken from the source file when `code` has the same JSX
+ * elements in the same order, or null when it does not. A plugin that runs
+ * before this one can insert text into the file's code: TanStack devtools adds
+ * a `data-tsd-source` attribute to every opening tag, which moves each later
+ * element on the same line to the right. The editor looks elements up in the
+ * file on disk, so their ids must carry the file's columns.
+ */
+async function sourcePositions(code: string, source: string): Promise<ElementPosition[] | null> {
+  const [fromCode, fromSource] = await Promise.all([
+    openingElementPositions(code),
+    openingElementPositions(source),
+  ]);
+  if (fromCode.length !== fromSource.length) {
+    return null;
+  }
+  for (let i = 0; i < fromCode.length; i++) {
+    if (fromCode[i]!.name !== fromSource[i]!.name) {
+      return null;
+    }
+  }
+  return fromSource;
+}
 
 export class ComponentTagger {
   private stats: ComponentTaggerStats = {
@@ -201,13 +288,22 @@ export class ComponentTagger {
     this.dataAttribute = options.dataAttribute || "data-component-id";
   }
 
-  async transformCode(code: string, id: string): Promise<{ code: string; map: any } | null> {
-    if (!validExtensions.has(path.extname(id)) || id.includes("node_modules")) {
+  /**
+   * Tags the JSX elements of `code`. When `source` is given (the file on disk),
+   * ids carry its line and column instead of those of `code`.
+   */
+  async transformCode(
+    code: string,
+    id: string,
+    source?: string,
+  ): Promise<{ code: string; map: any } | null> {
+    const filePath = taggableFilePath(id);
+    if (!filePath) {
       return null;
     }
 
     this.stats.totalFiles++;
-    const relativePath = path.relative(this.cwd, id) || id;
+    const relativePath = path.relative(this.cwd, filePath) || filePath;
 
     try {
       const parserOptions = {
@@ -216,35 +312,27 @@ export class ComponentTagger {
       };
 
       const ast = parse(code, parserOptions);
+      const positions =
+        source === undefined || source === code ? null : await sourcePositions(code, source);
+      let elementIndex = 0;
       const magicString = new MagicString(code);
       let changedElementsCount = 0;
-      const threeDreiImportedElements = new Set<string>();
-      const threeDreiNamespaces = new Set<string>();
+      let importsReactThree = false;
+      const fiberImports = new Set<string>();
 
       // Dynamic import estree-walker
       const { walk } = await import("estree-walker");
 
-      // First pass: collect @react-three/* companion-package imports (drei,
-      // postprocessing, cannon, rapier, xr). Their named exports render into
-      // the R3F reconciler, which trips on injected data-hercules-name.
-      // @react-three/fiber's <Canvas> is excluded since it renders a real
-      // DOM canvas where data-* attributes are valid.
+      // First pass: find @react-three/* imports
       walk(ast as any, {
         enter(node) {
           if (node.type === "ImportDeclaration") {
             const source = node.source?.value;
-            if (
-              typeof source === "string" &&
-              source.startsWith("@react-three/") &&
-              source !== "@react-three/fiber"
-            ) {
-              node.specifiers.forEach((spec: any) => {
-                if (spec.type === "ImportSpecifier") {
-                  threeDreiImportedElements.add(spec.local.name);
-                } else if (spec.type === "ImportNamespaceSpecifier") {
-                  threeDreiNamespaces.add(spec.local.name);
-                }
-              });
+            if (typeof source === "string" && source.startsWith("@react-three/")) {
+              importsReactThree = true;
+              if (source === "@react-three/fiber") {
+                node.specifiers.forEach((spec) => fiberImports.add(spec.local.name));
+              }
             }
           }
         },
@@ -258,14 +346,10 @@ export class ComponentTagger {
         enter(node: any) {
           if (node.type === "JSXOpeningElement") {
             const jsxNode = node;
-            let elementName: string;
-
-            if (jsxNode.name.type === "JSXIdentifier") {
-              elementName = jsxNode.name.name;
-            } else if (jsxNode.name.type === "JSXMemberExpression") {
-              const memberExpr = jsxNode.name;
-              elementName = `${memberExpr.object.name}.${memberExpr.property.name}`;
-            } else {
+            const position = positions?.[elementIndex];
+            elementIndex++;
+            const elementName = openingElementName(jsxNode);
+            if (elementName === null) {
               return;
             }
 
@@ -274,19 +358,16 @@ export class ComponentTagger {
               return;
             }
 
-            const line = jsxNode.loc?.start?.line ?? 0;
-            const col = jsxNode.loc?.start?.column ?? 0;
+            const line = position?.line ?? jsxNode.loc?.start?.line ?? 0;
+            const col = position?.col ?? jsxNode.loc?.start?.column ?? 0;
             const dataComponentId = `${relativePath}:${line}:${col}`;
 
-            const shouldTag = shouldTagElement(
-              elementName,
-              threeDreiImportedElements,
-              threeDreiNamespaces,
-            );
+            const shouldTag = shouldTagElement(elementName, importsReactThree, fiberImports);
 
             if (shouldTag) {
-              // Only add the new data attributes (no legacy)
-              const endPosition = jsxNode.name.end ?? 0;
+              // Insert after the tag name, or after its type arguments in
+              // `<Foo<Bar>>`: an attribute between them is a syntax error
+              const endPosition = (jsxNode.typeArguments ?? jsxNode.name).end ?? 0;
 
               // Build the attributes string
               let attributesString = ` ${dataAttribute}="${dataComponentId}" data-hercules-name="${elementName}"`;
@@ -366,9 +447,27 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
       });
     },
 
+    // TanStack route split modules are tagged when they load, from the route
+    // file on disk. In `transform` they may already be regenerated by the
+    // router plugin (when it is listed before this one), and line and column
+    // taken from that code would point at the wrong element of the route file.
+    async load(id) {
+      const filePath = taggableFilePath(id);
+      if (!filePath || filePath === id) {
+        return null;
+      }
+      return tagger.transformCode(await readFile(filePath, "utf8"), id);
+    },
+
+    // Plugins listed earlier may have changed the code already (TanStack
+    // devtools adds an attribute to every element), so ids take their line and
+    // column from the file on disk.
     async transform(code, id) {
-      const result = await tagger.transformCode(code, id);
-      return result;
+      if (taggableFilePath(id) !== id) {
+        return null;
+      }
+      const source = await readFile(id, "utf8").catch(() => undefined);
+      return tagger.transformCode(code, id, source);
     },
   };
 }

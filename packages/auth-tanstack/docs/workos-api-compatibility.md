@@ -11,7 +11,7 @@ model:
   session.
 - **Hercules** authenticates against a generic **OIDC provider** with
   `openid-client`. We seal an equivalent session (`{ accessToken, idToken,
-refreshToken, expiresAt }`) into a cookie and derive the WorkOS-shaped
+  refreshToken, expiresAt }`) into a cookie and derive the WorkOS-shaped
   `UserInfo`/`User` by mapping standard OIDC ID-token claims.
 
 Because identity comes from OIDC claims rather than a WorkOS user record, a few
@@ -58,7 +58,7 @@ fields are provider-dependent (see [Claim mapping](#claim-mapping)).
 | Actions (`getAuthAction`, `refreshAuthAction`, …)                                         | ✅                  | Exported from the root **and** `./client` (plus ID-token variants); see below.                                                                                                                                                                                                                                             |
 | `OAuthStateMismatchError`, `PKCECookieMissingError`                                       | ✅                  | Passed to `handleCallbackRoute`'s `onError` for missing-state / unknown-state failures.                                                                                                                                                                                                                                    |
 | Types: `UserInfo`, `NoUserInfo`                                                           | ✅                  | Match WorkOS field-for-field.                                                                                                                                                                                                                                                                                              |
-| Types: `GetAuthURLOptions`                                                                | ✅ (subset)         | `{ screenHint, returnPathname, redirectUri, scope, maxAge, loginHint }`. No WorkOS-specific `organizationId`/custom `state` (state keys the PKCE cookie).                                                                                                                                                                  |
+| Types: `GetAuthURLOptions`                                                                | ✅ (subset)         | `{ screenHint, returnPathname, redirectUri, scope, maxAge, loginHint, prompt }`; `prompt` defaults to `login`. No WorkOS `organizationId`/custom `state` (state keys the PKCE cookie).                                                                                                                                     |
 | Types: `OauthTokens`                                                                      | ⛔                  |                                                                                                                                                                                                                                                                                                                            |
 | Types: `User`, `Session`, `Impersonator`, `AuthResult`, `BaseTokenClaims`, `CustomClaims` | ✅                  | Real shapes (were empty `{}`).                                                                                                                                                                                                                                                                                             |
 

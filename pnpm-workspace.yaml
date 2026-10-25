@@ -6,9 +6,14 @@ allowBuilds:
 
 minimumReleaseAge: 4320 # 3 days
 minimumReleaseAgeExclude:
-  - "@usehercules/sdk"
   # Release tooling only, never shipped to users.
   - "@changesets/*"
 
 onlyBuiltDependencies:
   - esbuild
+
+overrides:
+  # GHSA-rfgv-xxqx-mfg5 batch, fixed in 7.29.1.
+  "undici@7": "^7.29.1"
+  # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr, fixed in 5.0.12.
+  "brace-expansion@5": "^5.0.12"
