@@ -21,7 +21,9 @@ const PLATFORM_PACKAGE = /-(?:darwin|linux|win32|freebsd|android)-(?:x64|arm64|a
 
 /** Matches what Vite's optimizer accepts as an entry, minus type declarations. */
 const JS_ENTRY = /\.[cm]?[jt]s$/;
-const TYPE_DECLARATION = /\.d\.[cm]?ts$/;
+// `.d.ts` and `.d.mts`, and declarations for other file types, such as the
+// `index.d.css.ts` a fontsource package lists for its stylesheet.
+const TYPE_DECLARATION = /\.d\.(?:[^./]+\.)?[cm]?ts$/;
 
 export interface Manifest {
   dependencies?: Record<string, string>;

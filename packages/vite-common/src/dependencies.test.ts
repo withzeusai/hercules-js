@@ -66,6 +66,7 @@ describe("dependenciesToPrebundle", () => {
       {
         "@types/papaparse": "*",
         "@fontsource-variable/geist": "*",
+        "@fontsource-variable/geist-mono": "*",
         "subpaths-only": "*",
         "native-gyp": "*",
         "native-loader": "*",
@@ -75,6 +76,14 @@ describe("dependenciesToPrebundle", () => {
       {
         "@types/papaparse": { types: "index.d.ts" },
         "@fontsource-variable/geist": { main: "index.css", exports: { ".": "./index.css" } },
+        // The shape fontsource publishes: a declaration for the stylesheet.
+        "@fontsource-variable/geist-mono": {
+          main: "index.css",
+          exports: {
+            ".": { types: "./index.d.css.ts", sass: "./index.css", default: "./index.css" },
+            "./*": { sass: "./*.css", default: "./*.css" },
+          },
+        },
         "subpaths-only": { exports: { "./client": "./client.js" } },
         "native-gyp": { main: "index.js", gypfile: true },
         "native-loader": { main: "index.js", dependencies: { "node-gyp-build": "*" } },
