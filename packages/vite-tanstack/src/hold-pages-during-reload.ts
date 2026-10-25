@@ -1,6 +1,17 @@
 import type { Plugin } from "vite";
 
 /**
+ * Whether a message on the Worker's hot channel reloads its program: a full
+ * reload, or an update that re-runs changed modules. Custom events do not.
+ */
+function reloadsProgram(payload: unknown): boolean {
+  if (typeof payload !== "object" || payload === null || !("type" in payload)) {
+    return false;
+  }
+  return payload.type === "full-reload" || payload.type === "update";
+}
+
+/**
  * Holds page requests while the server program reloads, then lets one through
  * ahead of the rest.
  *
@@ -9,9 +20,13 @@ import type { Plugin } from "vite";
  * Worker re-evaluates its modules on the next request, and requests that
  * arrive while that is under way see half-initialized modules: the render
  * fails once with errors such as "Invalid hook call" or "is not a function",
- * then the next request succeeds. So page requests wait until the file changes
- * go quiet, the first one warms the program alone, and the others follow.
+ * then the next request succeeds. So page requests wait until the reloads go
+ * quiet, the first one warms the program alone, and the others follow.
  * A request already rendering when the reload starts can still fail.
+ *
+ * Only a reload sent to the Worker starts a hold, not any file event: miniflare
+ * writes its request trace store under `.wrangler` on every request, so file
+ * events would hold every page that follows another within the quiet period.
  */
 export function holdPagesDuringReload(): Plugin {
   const QUIET_MS = 500;
@@ -51,12 +66,11 @@ export function holdPagesDuringReload(): Plugin {
         lastChangeAt = Date.now();
         warm = false;
       };
-      server.watcher.on("all", touch);
       const hot = server.environments.ssr?.hot;
       if (hot) {
         const send = hot.send.bind(hot);
         hot.send = ((...args: Parameters<typeof send>) => {
-          touch();
+          if (reloadsProgram(args[0])) touch();
           return send(...args);
         }) as typeof hot.send;
       }
