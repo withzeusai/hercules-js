@@ -40,7 +40,7 @@ export interface AnalyticsConfig {
   apiEndpoint?: string;
   debug?: boolean;
   enabled?: boolean;
-  /** Events per batch before an immediate flush */
+  /** Events per batch before an immediate flush (at most 50) */
   bufferSize?: number;
   /** How long events buffer before a flush, in ms */
   flushInterval?: number;

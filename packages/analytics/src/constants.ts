@@ -17,6 +17,8 @@ export const SESSION_LENGTH_LIMIT_MS = 24 * 60 * 60 * 1000;
 // Request pipeline defaults (posthog-js request-queue.ts / retry-queue.ts)
 export const DEFAULT_FLUSH_INTERVAL_MS = 3000;
 export const DEFAULT_BUFFER_SIZE = 10;
+/** The ingest endpoint refuses a longer batch whole, so `bufferSize` is clamped to this */
+export const MAX_EVENTS_PER_BATCH = 50;
 export const RETRY_BASE_DELAY_MS = 6000;
 export const RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
 export const MAX_RETRIES = 10;
