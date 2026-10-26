@@ -8,6 +8,7 @@ configure({ reactStrictMode: true });
 
 const mockGetIdToken = vi.fn();
 const mockRefresh = vi.fn();
+const mockSetAuth = vi.fn();
 
 let mockAuthState: Record<string, unknown> = {};
 let mockIdTokenState: Record<string, unknown> = {};
@@ -66,17 +67,23 @@ function setState(overrides: StateOverrides = {}) {
   };
 }
 
+let client: { setAuth: typeof mockSetAuth };
+
 beforeEach(() => {
   setState();
   mockGetIdToken.mockReset().mockResolvedValue(TOKEN);
   mockRefresh.mockReset().mockResolvedValue(TOKEN);
+  mockSetAuth.mockReset();
   capturedUseAuth = null;
+  // Released clients are remembered for the life of the module, so each test
+  // needs a client of its own.
+  client = { setAuth: mockSetAuth };
 });
 
 function renderBridge() {
   return renderHook(() => capturedUseAuth?.(), {
     wrapper: ({ children }) => (
-      <ConvexProviderWithHerculesAuth client={{} as never}>
+      <ConvexProviderWithHerculesAuth client={client as never}>
         {children}
       </ConvexProviderWithHerculesAuth>
     ),
@@ -161,5 +168,69 @@ describe("ConvexProviderWithHerculesAuth", () => {
         result.current?.fetchAccessToken({ forceRefreshToken: true }),
       ).resolves.toBeNull();
     });
+  });
+});
+
+// Server-rendered queries subscribe as soon as the client boots, before this
+// provider can hand Convex a token, so apps create the client with
+// `expectAuth: true`. It then holds every request until its first `setAuth`,
+// which Convex itself only calls for a signed-in session.
+describe("ConvexProviderWithHerculesAuth with an expectAuth client", () => {
+  async function releasedFetcherResult() {
+    const [fetchToken] = mockSetAuth.mock.calls[0] as [() => Promise<string | null>];
+    return fetchToken();
+  }
+
+  it("releases a signed-out client once, with a fetcher that has no token", async () => {
+    setState({ user: null, idToken: undefined });
+    renderBridge();
+
+    // Once despite strict mode running the effect twice.
+    expect(mockSetAuth).toHaveBeenCalledTimes(1);
+    await expect(releasedFetcherResult()).resolves.toBeNull();
+  });
+
+  it("holds the client while a seeded session waits for its token", () => {
+    setState({ idToken: undefined, tokenLoading: true });
+    renderBridge();
+    expect(mockSetAuth).not.toHaveBeenCalled();
+  });
+
+  it("holds the client while the session itself is loading", () => {
+    setState({ user: null, loading: true, idToken: undefined });
+    renderBridge();
+    expect(mockSetAuth).not.toHaveBeenCalled();
+  });
+
+  it("releases the client when a session settles without a token", () => {
+    setState({ idToken: undefined, tokenLoading: true });
+    const { rerender } = renderBridge();
+
+    setState({ idToken: undefined, tokenLoading: false });
+    rerender();
+
+    expect(mockSetAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a signed-in client to Convex", () => {
+    renderBridge();
+    expect(mockSetAuth).not.toHaveBeenCalled();
+  });
+
+  it("never replaces Convex's fetcher after signing out", () => {
+    const { rerender } = renderBridge();
+
+    setState({ user: null, idToken: undefined });
+    rerender();
+
+    expect(mockSetAuth).not.toHaveBeenCalled();
+  });
+
+  it("releases a client only once across remounts", () => {
+    setState({ user: null, idToken: undefined });
+    renderBridge().unmount();
+    renderBridge();
+
+    expect(mockSetAuth).toHaveBeenCalledTimes(1);
   });
 });
