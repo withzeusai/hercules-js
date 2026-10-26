@@ -56,6 +56,14 @@ describe("Analytics core", () => {
     expect(payloads[0]!.events).toHaveLength(1);
   });
 
+  it("never sends a batch longer than the ingest endpoint accepts", () => {
+    const instance = createAnalytics({ bufferSize: 1000 });
+    for (let i = 0; i < 60; i++) instance.track(`event_${i}`);
+    vi.advanceTimersByTime(1000);
+
+    expect(sentPayloads().map((payload) => payload.events.length)).toEqual([50, 10]);
+  });
+
   it("builds pageview events with dimensions, session, and pageview id", () => {
     createAnalytics().trackPageview();
     vi.advanceTimersByTime(1000);

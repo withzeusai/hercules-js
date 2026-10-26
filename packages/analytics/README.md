@@ -63,7 +63,7 @@ interface AnalyticsConfig {
   apiEndpoint?: string; // Analytics endpoint URL
   debug?: boolean; // Enable debug logging (default: false)
   enabled?: boolean; // Enable/disable tracking (default: true)
-  bufferSize?: number; // Events per batch before an immediate flush (default: 10)
+  bufferSize?: number; // Events per batch before an immediate flush (default: 10, max: 50)
   flushInterval?: number; // How long events buffer before a flush, ms (default: 3000)
   trackPerformance?: boolean; // Capture Core Web Vitals (default: true)
   trackHistoryChanges?: boolean; // Capture SPA pageviews via history API (default: true)
@@ -169,6 +169,11 @@ exponential backoff (6s · 2ⁿ, capped at 30 minutes, 10 attempts max) and wait
 out offline periods. On `pagehide` the client sends a final pageleave and
 drains all queues through `sendBeacon`. Retries can deliver a batch twice —
 the ingest side deduplicates on `event_id`.
+
+The ingest endpoint is public, so it bounds what it accepts: at most 50 events
+per batch (`bufferSize` is clamped to match), and every string field is cut to
+a fixed length (8,192 characters for URLs and paths). `properties` keeps its
+first 50 keys.
 
 ## Core Web Vitals
 
