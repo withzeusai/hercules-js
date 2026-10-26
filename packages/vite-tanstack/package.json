@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/vite-tanstack",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "Shared Vite and Vitest configuration for Hercules TanStack Start applications",
   "type": "module",
   "sideEffects": false,

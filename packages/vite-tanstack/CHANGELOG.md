@@ -1,5 +1,11 @@
 # @usehercules/vite-tanstack
 
+## 1.0.0
+
+### Major Changes
+
+- [#203](https://github.com/withzeusai/hercules-js/pull/203) [`c545016`](https://github.com/withzeusai/hercules-js/commit/c5450167dbfbde5fd6ea9f6162466d02cbb63b3e) Thanks [@grant0417](https://github.com/grant0417)! - Release 1.0.0 with no source changes. From here on, a breaking change bumps the major version. Apps on a `^0.x` range do not pick this up on their own and need their range raised to `^1.0.0`.
+
 ## 0.1.1
 
 ### Patch Changes

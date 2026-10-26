@@ -1,5 +1,11 @@
 # @usehercules/analytics
 
+## 2.0.3
+
+### Patch Changes
+
+- [#201](https://github.com/withzeusai/hercules-js/pull/201) [`6d02df2`](https://github.com/withzeusai/hercules-js/commit/6d02df2b1cad3aa75bd3343406202c6207e2c596) Thanks [@grant0417](https://github.com/grant0417)! - Cap what `AnalyticsPayloadSchema` accepts, since the ingest endpoint takes writes from anyone who can load a Hercules app. A batch holds at most 50 events, and `bufferSize` is clamped to 50 so the client never sends a batch the server refuses. Every string field is cut to a fixed length (8,192 characters for URLs and paths, 128 to 512 for ids and labels), and `properties` and `properties_numeric` keep their first 50 keys. Values over a cap are cut, not rejected, so one long URL never fails a whole batch.
+
 ## 2.0.2
 
 ### Patch Changes
