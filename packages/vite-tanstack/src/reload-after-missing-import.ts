@@ -1,4 +1,4 @@
-import type { Plugin } from "vite";
+import { normalizePath, type Plugin } from "vite";
 
 function isModuleNotFound(error: unknown): boolean {
   return (
@@ -19,7 +19,8 @@ function isModuleNotFound(error: unknown): boolean {
  * has no link from the importer to a file that did not exist, so creating the
  * file changes nothing: every page answers 500 until the importer itself
  * changes. So the importers of a missing module are re-transformed and the
- * Worker program reloads when the next file is created.
+ * Worker program reloads when the next file is created. An importer that
+ * changes in the meantime is forgotten: the edit may have fixed the import.
  */
 export function reloadAfterMissingImport(): Plugin {
   return {
@@ -40,6 +41,10 @@ export function reloadAfterMissingImport(): Plugin {
         }
       };
 
+      // An edit to the importer re-runs it, so it reports again if still broken.
+      const forget = (file: string) => importers.delete(normalizePath(file));
+      server.watcher.on("change", forget);
+      server.watcher.on("unlink", forget);
       server.watcher.on("add", () => {
         if (importers.size === 0) return;
         for (const file of importers) {

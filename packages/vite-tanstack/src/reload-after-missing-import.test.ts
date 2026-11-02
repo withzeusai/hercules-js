@@ -47,6 +47,16 @@ describe("reloadAfterMissingImport", () => {
     expect(ssr.hot.send).toHaveBeenCalledOnce();
   });
 
+  it("forgets an importer that changes before the file is created", async () => {
+    const { watcher, ssr, fetch } = start(() => Promise.reject(notFound()));
+    await expect(fetch("@/hooks/use-later.ts", ROOT)).rejects.toThrow("Cannot find module");
+
+    // The edit removed the import, so a later file must not reload the Worker.
+    watcher.emit("change", ROOT);
+    watcher.emit("add", "/app/src/hooks/unrelated.ts");
+    expect(ssr.hot.send).not.toHaveBeenCalled();
+  });
+
   it("leaves the Worker alone when no import failed", async () => {
     const { watcher, ssr, fetch } = start(() => Promise.resolve({ code: "" }));
     await fetch("/src/routes/__root.tsx");
