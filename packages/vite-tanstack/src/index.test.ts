@@ -139,6 +139,11 @@ describe("defineConfig", () => {
     expect(off).not.toContain("hercules:hold-pages-during-reload");
   });
 
+  it("shows error pages for page loads the hold has released", async () => {
+    const names = pluginNames((await defineConfig(bare)(serve)).plugins);
+    expect(names.indexOf("hercules:dev-error-page")).toBe(1);
+  });
+
   it("pre-bundles dependencies, with the extra entries passed through", async () => {
     const config = await defineConfig({ ...bare, prebundle: ["lodash/debounce"] })(serve);
     const plugin = (config.plugins as Plugin[]).find(

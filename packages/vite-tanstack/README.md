@@ -33,15 +33,16 @@ export default defineVitestConfig();
 Plugins, in order:
 
 1. `hercules:hold-pages-during-reload` (dev server only): after a change that reloads the Worker, page requests wait until file changes go quiet, the first one warms the Worker alone, and the rest follow. Without it the first render after a reload can fail with "Invalid hook call". A request is never held longer than 3 seconds.
-2. `hercules:reload-after-missing-import` (dev server only): when the Worker fails to import a file that does not exist yet, the next file created re-transforms the importer and reloads the Worker. Without it, an import written before its file leaves every page answering 500 until the importer changes again.
-3. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
-4. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
-5. `@tailwindcss/vite`
-6. `@usehercules/vite` (component tagger and visual editor endpoints; dev server only). Its own dependency pre-bundling is off, since plugin 3 covers both environments.
-7. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
-8. `@tanstack/react-start`
-9. `@vitejs/plugin-react`
-10. Any plugins you pass
+2. `hercules:dev-error-page` (dev server only): when a page load keeps failing with TanStack Start's bare JSON error (`{"status":500,...,"unhandled":true,"message":"HTTPError"}`, from an error thrown outside the router, such as in request middleware or `getRouter`) for 4 seconds, it answers with an HTML page instead. The page shows the error the Worker logged, reports it to the Hercules preview as `[Vite Server Error]`, and reloads when the Worker reloads. Until then the JSON passes through, so a failure that clears up as a reload settles never shows: the preview retries a failing page load for 8 seconds. Fetches, such as server functions, and every other response are unchanged.
+3. `hercules:reload-after-missing-import` (dev server only): when the Worker fails to import a file that does not exist yet, the next file created re-transforms the importer and reloads the Worker. Without it, an import written before its file leaves every page answering 500 until the importer changes again.
+4. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
+5. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
+6. `@tailwindcss/vite`
+7. `@usehercules/vite` (component tagger and visual editor endpoints; dev server only). Its own dependency pre-bundling is off, since plugin 4 covers both environments.
+8. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
+9. `@tanstack/react-start`
+10. `@vitejs/plugin-react`
+11. Any plugins you pass
 
 Base config:
 

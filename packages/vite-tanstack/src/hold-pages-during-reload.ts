@@ -4,7 +4,7 @@ import type { Plugin } from "vite";
  * Whether a message on the Worker's hot channel reloads its program: a full
  * reload, or an update that re-runs changed modules. Custom events do not.
  */
-function reloadsProgram(payload: unknown): boolean {
+export function reloadsProgram(payload: unknown): boolean {
   if (typeof payload !== "object" || payload === null || !("type" in payload)) {
     return false;
   }

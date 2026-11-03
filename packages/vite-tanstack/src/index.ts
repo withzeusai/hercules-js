@@ -18,6 +18,7 @@ import type { PluginConfig as CloudflarePluginConfig } from "@cloudflare/vite-pl
 import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
 import type { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { herculesAliases } from "./aliases";
+import { devErrorPage } from "./dev-error-page";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 import { reloadAfterMissingImport } from "./reload-after-missing-import";
@@ -30,6 +31,7 @@ export {
   isHerculesDevServer,
 } from "@usehercules/vite-common";
 export { herculesAliases, type AliasDirs } from "./aliases";
+export { devErrorPage } from "./dev-error-page";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export { reloadAfterMissingImport } from "./reload-after-missing-import";
 export {
@@ -192,7 +194,7 @@ async function buildPlugins(
   const plugins: PluginOption[] = [];
 
   if (options.holdPagesDuringReload !== false) plugins.push(holdPagesDuringReload());
-  plugins.push(reloadAfterMissingImport());
+  plugins.push(devErrorPage(), reloadAfterMissingImport());
 
   plugins.push(
     prebundleDependencies({
