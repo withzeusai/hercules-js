@@ -23,11 +23,14 @@ type Reply = {
   headers: OutgoingHttpHeaders;
   body: string[];
   log?: string;
-  /** Write each chunk only once the one before it is flushed, as streams do. */
-  awaitWrites?: boolean;
-  /** After the first chunk, `pause` resolves, then the rest waits for `resume`. */
-  gate?: { paused: () => void; resume: Promise<void> };
+  /** Writes the body after `writeHead`; by default as the Cloudflare plugin does. */
+  writer?: (res: ServerResponse, chunks: Uint8Array[]) => void;
 };
+
+function cloudflareWriter(res: ServerResponse, chunks: Uint8Array[]): void {
+  for (const chunk of chunks) res.write(chunk);
+  res.end();
+}
 
 const startError = (): Reply => ({
   status: 500,
@@ -69,23 +72,7 @@ async function start(settleMs = 0) {
             if (reply.log) server.config.logger.error(reply.log);
             res.writeHead(reply.status, reply.headers);
             const chunks = reply.body.map((chunk) => new TextEncoder().encode(chunk));
-            if (reply.gate) {
-              res.write(chunks[0]!);
-              reply.gate.paused();
-              void reply.gate.resume.then(() => res.end(chunks[1]));
-              return;
-            }
-            if (!reply.awaitWrites) {
-              for (const chunk of chunks) res.write(chunk);
-              res.end();
-              return;
-            }
-            const writeNext = () => {
-              const chunk = chunks.shift();
-              if (chunk) res.write(chunk, writeNext);
-              else res.end();
-            };
-            writeNext();
+            (reply.writer ?? cloudflareWriter)(res, chunks);
           });
         },
       },
@@ -153,7 +140,7 @@ describe("devErrorPage", () => {
       headers: { "content-type": "application/json" },
       body: ["x".repeat(1000), "x".repeat(100)],
     };
-    for (const reply of [html500, ownJson, large, { ...ownJson, awaitWrites: true }]) {
+    for (const reply of [html500, ownJson, large]) {
       respond(reply);
       expect(await get()).toMatchObject({ status: 500, body: reply.body.join("") });
     }
@@ -174,14 +161,30 @@ describe("devErrorPage", () => {
     expect((await get({ accept: "text/html" })).body).toContain("[Vite Server Error]");
   });
 
-  it("answers a writer that waits for each write to flush", async () => {
+  it("passes Start's error through unchanged when it is written any other way", async () => {
     const { get, respond } = await start();
-    respond({
-      ...startError(),
-      body: [START_ERROR.slice(0, 20), START_ERROR.slice(20)],
-      awaitWrites: true,
-    });
-    expect((await get()).body).toContain("[Vite Server Error]");
+    const writers: Array<(res: ServerResponse, chunks: Uint8Array[]) => void> = [
+      // A writer that waits for each write's callback.
+      (res, chunks) => {
+        const writeNext = () => {
+          const chunk = chunks.shift();
+          if (chunk) res.write(chunk, writeNext);
+          else res.end();
+        };
+        writeNext();
+      },
+      (res, chunks) => {
+        res.flushHeaders();
+        cloudflareWriter(res, chunks);
+      },
+      (res, chunks) => res.end(chunks[0]),
+    ];
+    for (const writer of writers) {
+      respond({ ...startError(), writer });
+      const page = await get();
+      expect(page).toMatchObject({ status: 500, body: START_ERROR });
+      expect(page.headers["content-type"]).toBe("application/json");
+    }
   });
 
   it("keeps each page's own error when page loads overlap", async () => {
@@ -189,9 +192,15 @@ describe("devErrorPage", () => {
     let paused!: () => void;
     let resume!: () => void;
     const isPaused = new Promise<void>((resolve) => (paused = resolve));
-    const gate = { paused, resume: new Promise<void>((resolve) => (resume = resolve)) };
+    const resumed = new Promise<void>((resolve) => (resume = resolve));
+    // Writes half the body, then waits while another page load fails.
+    const writer = (res: ServerResponse, [head, tail]: Uint8Array[]) => {
+      res.write(head!);
+      paused();
+      void resumed.then(() => cloudflareWriter(res, [tail!]));
+    };
     const split = [START_ERROR.slice(0, 20), START_ERROR.slice(20)];
-    respond({ ...startError(), log: "Error: first", body: split, gate });
+    respond({ ...startError(), log: "Error: first", body: split, writer });
     const first = get();
     await isPaused;
     respond({ ...startError(), log: "Error: second" });

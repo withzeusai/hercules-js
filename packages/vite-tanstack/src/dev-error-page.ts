@@ -42,68 +42,75 @@ console.error("[Vite Server Error]", ${json(error)});
 `;
 }
 
-type Chunk = string | Uint8Array;
-type Writers = {
-  writeHead(status: number, ...rest: unknown[]): unknown;
-  write(chunk: Chunk, ...rest: unknown[]): boolean;
-  end(...args: unknown[]): unknown;
-};
+type Method = (...args: unknown[]) => unknown;
+
+// Any of these while a response is held ends the hold: it goes out unchanged.
+const HEADER_CALLS = "appendHeader flushHeaders removeHeader setHeader setHeaders writeEarlyHints";
+const OTHER_CALLS = `${HEADER_CALLS} addTrailers cork uncork writeContinue`.split(" ");
 
 /**
- * Lets `replace` swap a small 5xx JSON body written with
- * `writeHead(status, headers)`, as the Cloudflare plugin writes it, for HTML.
- * `onHead` runs when the headers are written, and `replace` runs once after,
- * without a body when the response cannot be swapped. Responses it leaves
- * alone go out byte for byte.
+ * Lets `replace` swap a small 5xx JSON body for HTML when the response is
+ * written exactly as the Cloudflare plugin writes it: `writeHead(status,
+ * headers)`, then `write(chunk)` for each chunk, then `end()`. Any other call
+ * sends what was held, unchanged, and stops intercepting. `onHead` runs when
+ * the headers are written, and `replace` runs once after, without a body when
+ * the response cannot be swapped.
  */
 function replaceJsonError(
   response: ServerResponse,
   onHead: () => void,
   replace: (status: number, body?: string) => string | undefined,
 ): void {
-  const res = response as unknown as Writers;
-  const { writeHead, write, end } = res;
+  const res = response as unknown as Record<string, Method>;
+  const writeHead = res.writeHead!;
 
-  res.writeHead = (status, ...rest) => {
+  res.writeHead = (...head) => {
     res.writeHead = writeHead;
     onHead();
-    const headers = rest.find((arg) => typeof arg === "object" && arg !== null);
-    const entries = headers && !Array.isArray(headers) ? Object.entries(headers) : [];
+    const [status, headers] = head as [number, unknown];
+    const isObject = typeof headers === "object" && headers !== null && !Array.isArray(headers);
+    const entries = isObject ? Object.entries(headers) : [];
     const type = entries.find(([name]) => name.toLowerCase() === "content-type")?.[1];
-    if (status < 500 || !String(type).includes("application/json")) {
+    if (head.length !== 2 || status < 500 || !String(type).includes("application/json")) {
       replace(status);
-      return writeHead.call(res, status, ...rest);
+      return writeHead.apply(res, head);
     }
 
-    const held: Array<[Chunk, unknown]> = [];
+    const originals = ["write", "end", ...OTHER_CALLS].map((name) => [name, res[name]!] as const);
+    const restore = () => {
+      for (const [name, method] of originals) res[name] = method;
+    };
+    const chunks: Uint8Array[] = [];
     let size = 0;
     const release = () => {
-      Object.assign(res, { write, end });
-      writeHead.call(res, status, ...rest);
-      let ok = true;
-      for (const [chunk, encoding] of held) ok = write.call(res, chunk, encoding);
-      return ok;
+      restore();
+      writeHead.apply(res, head);
+      for (const chunk of chunks) res.write!(chunk);
     };
-    res.write = (chunk, ...args) => {
-      held.push([chunk, args.find((arg) => typeof arg === "string")]);
-      // A writer may wait for the callback before it ends the response.
-      const callback = args.find((arg) => typeof arg === "function");
-      if (callback) process.nextTick(callback as () => void);
-      size += Buffer.byteLength(chunk);
-      if (size <= MAX_BODY_BYTES) return true;
-      replace(status);
-      return release();
+    const passThrough =
+      (name: string): Method =>
+      (...args) => {
+        replace(status);
+        release();
+        return res[name]!(...args);
+      };
+    for (const name of OTHER_CALLS) res[name] = passThrough(name);
+    res.write = (...args) => {
+      const [chunk] = args;
+      const fits = chunk instanceof Uint8Array && size + chunk.byteLength <= MAX_BODY_BYTES;
+      if (args.length !== 1 || !fits) return passThrough("write")(...args);
+      chunks.push(chunk);
+      size += chunk.byteLength;
+      return true;
     };
     res.end = (...args) => {
-      const chunks = held.map(([chunk]) => chunk);
-      if (typeof args[0] === "string" || args[0] instanceof Uint8Array) chunks.push(args[0]);
-      const body = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
-      const html = replace(status, body.byteLength <= MAX_BODY_BYTES ? body.toString() : undefined);
+      if (args.length !== 0) return passThrough("end")(...args);
+      const html = replace(status, Buffer.concat(chunks).toString());
       if (html === undefined) {
         release();
-        return end.apply(res, args);
+        return res.end!();
       }
-      Object.assign(res, { write, end });
+      restore();
       // The app's policy may block the page's inline script.
       const replaced = /^(cache-control|content-(length|type|security-policy(-report-only)?))$/i;
       const kept = entries.filter(([name]) => !replaced.test(name));
@@ -113,8 +120,7 @@ function replaceJsonError(
         "content-length": Buffer.byteLength(html),
         "cache-control": "no-store",
       });
-      const callback = args.find((arg) => typeof arg === "function");
-      return end.call(res, html, callback);
+      return res.end!(html);
     };
     return res;
   };
