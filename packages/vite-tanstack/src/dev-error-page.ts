@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { Plugin } from "vite";
@@ -6,15 +6,7 @@ import { reloadsProgram } from "./hold-pages-during-reload";
 
 // Start's body is about 70 bytes; anything larger is the app's own response.
 const MAX_BODY_BYTES = 1024;
-/** Sent to error pages when the Worker reloads, so they try again. */
-export const SERVER_RELOAD_EVENT = "hercules:server-reload";
-
-function isPageLoad(req: IncomingMessage): boolean {
-  if (req.method !== "GET") return false;
-  const dest = req.headers["sec-fetch-dest"];
-  if (dest !== undefined) return dest === "document" || dest === "iframe";
-  return req.headers.accept?.includes("text/html") ?? false;
-}
+const SERVER_RELOAD_EVENT = "hercules:server-reload";
 
 /** Whether `body` is exactly what Start writes for an unhandled error. */
 function isStartError(body: string, status: number): boolean {
@@ -27,10 +19,6 @@ function isStartError(body: string, status: number): boolean {
   }
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-}
-
 function errorPage(logged: string | undefined, clientUrl: string): string {
   const text = logged
     ? stripVTControlCharacters(logged)
@@ -38,58 +26,34 @@ function errorPage(logged: string | undefined, clientUrl: string): string {
   const at = text.search(/\n\s+at /);
   const error =
     at === -1 ? { message: text } : { message: text.slice(0, at), stack: text.slice(at + 1) };
-  // Inside a script, `<` is escaped so the text cannot close the tag.
   const json = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
+  const escaped = text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+  // After `</head>`, where the preview injects its bridge, so the bridge sees the log.
   return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Server error</title>
-    <style>
-      :root { color-scheme: light dark; }
-      body { margin: 2rem; font-family: system-ui, sans-serif; }
-      pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-    </style>
-  </head>
-  <body>
-    <h1>This page failed to render</h1>
-    <pre>${escapeHtml(text)}</pre>
-    <script type="module">
-      console.error("[Vite Server Error]", ${json(error)});
-    </script>
-    <script type="module">
-      import { createHotContext } from ${json(clientUrl)};
-      createHotContext("/@hercules/dev-error-page").on(${json(SERVER_RELOAD_EVENT)}, () => location.reload());
-    </script>
-  </body>
-</html>
+<head></head>
+<body>
+<pre>${escaped}</pre>
+<script type="module">
+import { createHotContext } from ${json(clientUrl)};
+createHotContext("/@hercules/dev-error-page").on(${json(SERVER_RELOAD_EVENT)}, () => location.reload());
+console.error("[Vite Server Error]", ${json(error)});
+</script>
+</body>
 `;
 }
 
-/** A page load not answered yet, with the last error logged since it started. */
-type PageLoad = { error?: string };
-
 type Chunk = string | Uint8Array;
-/** `ServerResponse`'s writers, without their overloads. */
 type Writers = {
   writeHead(status: number, ...rest: unknown[]): unknown;
   write(chunk: Chunk, ...rest: unknown[]): boolean;
   end(...args: unknown[]): unknown;
 };
 
-// Set by the error page, or dropped: the app's policy may block its inline scripts.
-const REPLACED_HEADER =
-  /^(cache-control|content-length|content-type|content-security-policy(-report-only)?)$/i;
-
 /**
- * Lets `replace` swap the body of a 5xx JSON response of at most
- * {@link MAX_BODY_BYTES} for an HTML page. `replace` runs once per response:
- * with the body when it could be swapped, or with none once it cannot. When
- * it returns nothing, the response goes out byte for byte as written; only
- * those small 5xx JSON bodies are held until they end. Handles responses
- * written with `writeHead(status, headers)`, as the Cloudflare plugin writes
- * them.
+ * Lets `replace` swap a small 5xx JSON body written with
+ * `writeHead(status, headers)`, as the Cloudflare plugin writes it, for HTML.
+ * `replace` runs once, without a body when the response cannot be swapped.
+ * Responses it leaves alone go out byte for byte.
  */
 function replaceJsonError(
   response: ServerResponse,
@@ -108,8 +72,6 @@ function replaceJsonError(
       return writeHead.call(res, status, ...rest);
     }
 
-    // Each held chunk with its encoding. Its callback runs right away, so a
-    // writer that waits for it before ending is not stuck.
     const held: Array<[Chunk, unknown]> = [];
     let size = 0;
     const release = () => {
@@ -121,6 +83,7 @@ function replaceJsonError(
     };
     res.write = (chunk, ...args) => {
       held.push([chunk, args.find((arg) => typeof arg === "string")]);
+      // A writer may wait for the callback before it ends the response.
       const callback = args.find((arg) => typeof arg === "function");
       if (callback) process.nextTick(callback as () => void);
       size += Buffer.byteLength(chunk);
@@ -138,8 +101,11 @@ function replaceJsonError(
         return end.apply(res, args);
       }
       Object.assign(res, { write, end });
+      // The app's policy may block the page's inline script.
+      const replaced = /^(cache-control|content-(length|type|security-policy(-report-only)?))$/i;
+      const kept = entries.filter(([name]) => !replaced.test(name));
       writeHead.call(res, status, {
-        ...Object.fromEntries(entries.filter(([name]) => !REPLACED_HEADER.test(name))),
+        ...Object.fromEntries(kept),
         "content-type": "text/html; charset=utf-8",
         "content-length": Buffer.byteLength(html),
         "cache-control": "no-store",
@@ -153,33 +119,21 @@ function replaceJsonError(
 
 /**
  * Answers a page load that keeps failing with TanStack Start's bare JSON
- * error with an HTML page showing the error, on the dev server only.
- *
- * Start answers an error thrown outside the router (request middleware,
- * `getRouter`, a route tree that fails to import) with
- * `{"status":500,...,"unhandled":true,"message":"HTTPError"}` and logs the
- * error only in the Worker. A JSON page has no `</head>`, so the Hercules
- * preview cannot inject its bridge into it. The page instead shows the error
- * the Worker logged while the request ran, reports it to the preview as
- * `[Vite Server Error]`, and reloads when the Worker reloads.
- *
- * Most such failures clear up within moments, as a reload settles, and the
- * preview retries a failing page load for 8 s while it keeps showing the old
- * page. So the JSON passes through until the same page has kept failing for
- * `settleMs` since the Worker last reloaded. Every other response is
- * untouched.
+ * error (thrown outside the router) with an HTML page, so the Hercules
+ * preview can inject its bridge, see the error the Worker logged, and reload.
+ * The JSON passes through for the first `settleMs`: the preview retries a
+ * failing page load for 8 s (0.25 to 7.25 s), which hides failures that clear up.
  */
 export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): Plugin {
   return {
     name: "hercules:dev-error-page",
     apply: "serve",
     configureServer(server) {
-      // When each page that keeps failing first failed.
       const failingSince = new Map<string, number>();
-      // Start logs the error just before it answers.
-      const inFlight = new Set<PageLoad>();
+      const inFlight = new Set<{ error?: string }>();
 
-      // The Cloudflare plugin passes the Worker's logs to this logger.
+      // The Cloudflare plugin passes the Worker's logs here. Start logs the
+      // error just before it answers, so the last one is the request's.
       const { logger } = server.config;
       const logError = logger.error;
       const captureError: typeof logError = function (this: unknown, message, options) {
@@ -197,7 +151,6 @@ export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): P
         hot.send = ((...args: Parameters<typeof send>) => {
           if (reloadsProgram(args[0])) {
             failingSince.clear();
-            // Pages without an error page ignore the event.
             server.environments.client.hot.send(SERVER_RELOAD_EVENT);
           }
           return send(...args);
@@ -206,9 +159,14 @@ export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): P
       const clientUrl = path.posix.join(server.config.base, "@vite/client");
 
       server.middlewares.use((req, res, next) => {
-        if (!isPageLoad(req)) return next();
+        const dest = req.headers["sec-fetch-dest"];
+        const isPage =
+          dest === undefined
+            ? req.headers.accept?.includes("text/html")
+            : dest === "document" || dest === "iframe";
+        if (req.method !== "GET" || !isPage) return next();
         const url = req.url ?? "/";
-        const request: PageLoad = {};
+        const request: { error?: string } = {};
         inFlight.add(request);
         res.once("close", () => inFlight.delete(request));
         replaceJsonError(res, (status, body) => {
@@ -219,8 +177,7 @@ export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): P
           }
           const since = failingSince.get(url) ?? Date.now();
           failingSince.set(url, since);
-          if (Date.now() - since < settleMs) return undefined;
-          return errorPage(request.error, clientUrl);
+          return Date.now() - since < settleMs ? undefined : errorPage(request.error, clientUrl);
         });
         next();
       });

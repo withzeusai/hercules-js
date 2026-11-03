@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type ViteDevServer } from "vite";
-import { devErrorPage, SERVER_RELOAD_EVENT } from "./dev-error-page";
+import { devErrorPage } from "./dev-error-page";
 
 const START_ERROR = '{"status":500,"statusText":"","unhandled":true,"message":"HTTPError"}';
 const LOGGED = "Error: Boom <b>&</b>\n    at handler (/app/src/start.ts:3:9)";
@@ -195,7 +195,7 @@ describe("devErrorPage", () => {
     expect((await get()).body).toContain("[Vite Server Error]");
 
     vite.environments.ssr!.hot.send({ type: "full-reload" });
-    expect(notify).toHaveBeenCalledExactlyOnceWith(SERVER_RELOAD_EVENT);
+    expect(notify).toHaveBeenCalledExactlyOnceWith("hercules:server-reload");
     expect((await get()).body).toBe(START_ERROR);
 
     vi.advanceTimersByTime(4000);
