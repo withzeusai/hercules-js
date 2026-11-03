@@ -52,11 +52,13 @@ type Writers = {
 /**
  * Lets `replace` swap a small 5xx JSON body written with
  * `writeHead(status, headers)`, as the Cloudflare plugin writes it, for HTML.
- * `replace` runs once, without a body when the response cannot be swapped.
- * Responses it leaves alone go out byte for byte.
+ * `onHead` runs when the headers are written, and `replace` runs once after,
+ * without a body when the response cannot be swapped. Responses it leaves
+ * alone go out byte for byte.
  */
 function replaceJsonError(
   response: ServerResponse,
+  onHead: () => void,
   replace: (status: number, body?: string) => string | undefined,
 ): void {
   const res = response as unknown as Writers;
@@ -64,6 +66,7 @@ function replaceJsonError(
 
   res.writeHead = (status, ...rest) => {
     res.writeHead = writeHead;
+    onHead();
     const headers = rest.find((arg) => typeof arg === "object" && arg !== null);
     const entries = headers && !Array.isArray(headers) ? Object.entries(headers) : [];
     const type = entries.find(([name]) => name.toLowerCase() === "content-type")?.[1];
@@ -133,7 +136,8 @@ export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): P
       const inFlight = new Set<{ error?: string }>();
 
       // The Cloudflare plugin passes the Worker's logs here. Start logs the
-      // error just before it answers, so the last one is the request's.
+      // error just before it writes the headers, so the last one by then is
+      // the request's.
       const { logger } = server.config;
       const logError = logger.error;
       const captureError: typeof logError = function (this: unknown, message, options) {
@@ -169,8 +173,8 @@ export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): P
         const request: { error?: string } = {};
         inFlight.add(request);
         res.once("close", () => inFlight.delete(request));
-        replaceJsonError(res, (status, body) => {
-          inFlight.delete(request);
+        const stopCapture = () => inFlight.delete(request);
+        replaceJsonError(res, stopCapture, (status, body) => {
           if (body === undefined || !isStartError(body, status)) {
             failingSince.delete(url);
             return undefined;

@@ -25,6 +25,8 @@ type Reply = {
   log?: string;
   /** Write each chunk only once the one before it is flushed, as streams do. */
   awaitWrites?: boolean;
+  /** After the first chunk, `pause` resolves, then the rest waits for `resume`. */
+  gate?: { paused: () => void; resume: Promise<void> };
 };
 
 const startError = (): Reply => ({
@@ -67,6 +69,12 @@ async function start(settleMs = 0) {
             if (reply.log) server.config.logger.error(reply.log);
             res.writeHead(reply.status, reply.headers);
             const chunks = reply.body.map((chunk) => new TextEncoder().encode(chunk));
+            if (reply.gate) {
+              res.write(chunks[0]!);
+              reply.gate.paused();
+              void reply.gate.resume.then(() => res.end(chunks[1]));
+              return;
+            }
             if (!reply.awaitWrites) {
               for (const chunk of chunks) res.write(chunk);
               res.end();
@@ -174,6 +182,24 @@ describe("devErrorPage", () => {
       awaitWrites: true,
     });
     expect((await get()).body).toContain("[Vite Server Error]");
+  });
+
+  it("keeps each page's own error when page loads overlap", async () => {
+    const { get, respond } = await start();
+    let paused!: () => void;
+    let resume!: () => void;
+    const isPaused = new Promise<void>((resolve) => (paused = resolve));
+    const gate = { paused, resume: new Promise<void>((resolve) => (resume = resolve)) };
+    const split = [START_ERROR.slice(0, 20), START_ERROR.slice(20)];
+    respond({ ...startError(), log: "Error: first", body: split, gate });
+    const first = get();
+    await isPaused;
+    respond({ ...startError(), log: "Error: second" });
+    expect((await get()).body).toContain("Error: second");
+    resume();
+    const page = (await first).body;
+    expect(page).toContain("Error: first");
+    expect(page).not.toContain("Error: second");
   });
 
   it("shows only an error logged while the page load ran", async () => {
