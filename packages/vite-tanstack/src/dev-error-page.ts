@@ -108,18 +108,22 @@ function replaceJsonError(
       return writeHead.call(res, status, ...rest);
     }
 
-    const held: Array<[Chunk, ...unknown[]]> = [];
+    // Each held chunk with its encoding. Its callback runs right away, so a
+    // writer that waits for it before ending is not stuck.
+    const held: Array<[Chunk, unknown]> = [];
     let size = 0;
     const release = () => {
       Object.assign(res, { write, end });
       writeHead.call(res, status, ...rest);
       let ok = true;
-      for (const args of held) ok = write.apply(res, args);
+      for (const [chunk, encoding] of held) ok = write.call(res, chunk, encoding);
       return ok;
     };
-    res.write = (...args) => {
-      held.push(args);
-      size += Buffer.byteLength(args[0]);
+    res.write = (chunk, ...args) => {
+      held.push([chunk, args.find((arg) => typeof arg === "string")]);
+      const callback = args.find((arg) => typeof arg === "function");
+      if (callback) process.nextTick(callback as () => void);
+      size += Buffer.byteLength(chunk);
       if (size <= MAX_BODY_BYTES) return true;
       replace(status);
       return release();

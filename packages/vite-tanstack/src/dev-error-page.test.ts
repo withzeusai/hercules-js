@@ -18,7 +18,14 @@ const START_ERROR = '{"status":500,"statusText":"","unhandled":true,"message":"H
 const LOGGED = "Error: Boom <b>&</b>\n    at handler (/app/src/start.ts:3:9)";
 const DOCUMENT = { "sec-fetch-dest": "document", accept: "text/html" };
 
-type Reply = { status: number; headers: OutgoingHttpHeaders; body: string[]; log?: string };
+type Reply = {
+  status: number;
+  headers: OutgoingHttpHeaders;
+  body: string[];
+  log?: string;
+  /** Write each chunk only once the one before it is flushed, as streams do. */
+  awaitWrites?: boolean;
+};
 
 const startError = (): Reply => ({
   status: 500,
@@ -59,8 +66,18 @@ async function start(settleMs = 0) {
           server.middlewares.use((_req, res: ServerResponse) => {
             if (reply.log) server.config.logger.error(reply.log);
             res.writeHead(reply.status, reply.headers);
-            for (const chunk of reply.body) res.write(new TextEncoder().encode(chunk));
-            res.end();
+            const chunks = reply.body.map((chunk) => new TextEncoder().encode(chunk));
+            if (!reply.awaitWrites) {
+              for (const chunk of chunks) res.write(chunk);
+              res.end();
+              return;
+            }
+            const writeNext = () => {
+              const chunk = chunks.shift();
+              if (chunk) res.write(chunk, writeNext);
+              else res.end();
+            };
+            writeNext();
           });
         },
       },
@@ -128,7 +145,7 @@ describe("devErrorPage", () => {
       headers: { "content-type": "application/json" },
       body: ["x".repeat(1000), "x".repeat(100)],
     };
-    for (const reply of [html500, ownJson, large]) {
+    for (const reply of [html500, ownJson, large, { ...ownJson, awaitWrites: true }]) {
       respond(reply);
       expect(await get()).toMatchObject({ status: 500, body: reply.body.join("") });
     }
@@ -147,6 +164,16 @@ describe("devErrorPage", () => {
     const { get, respond } = await start();
     respond(startError());
     expect((await get({ accept: "text/html" })).body).toContain("[Vite Server Error]");
+  });
+
+  it("answers a writer that waits for each write to flush", async () => {
+    const { get, respond } = await start();
+    respond({
+      ...startError(),
+      body: [START_ERROR.slice(0, 20), START_ERROR.slice(20)],
+      awaitWrites: true,
+    });
+    expect((await get()).body).toContain("[Vite Server Error]");
   });
 
   it("shows only an error logged while the page load ran", async () => {
