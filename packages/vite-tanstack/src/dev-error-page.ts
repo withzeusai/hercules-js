@@ -143,11 +143,12 @@ export function devErrorPage({ settleMs = 4000 }: { settleMs?: number } = {}): P
 
       // The Cloudflare plugin passes the Worker's logs here. Start logs the
       // error just before it writes the headers, so the last one by then is
-      // the request's.
+      // the request's. One logged while several run could be any of theirs.
       const { logger } = server.config;
       const logError = logger.error;
       const captureError: typeof logError = function (this: unknown, message, options) {
-        for (const request of inFlight) request.error = message;
+        const error = inFlight.size === 1 ? message : undefined;
+        for (const request of inFlight) request.error = error;
         return logError.call(this, message, options);
       };
       logger.error = captureError;

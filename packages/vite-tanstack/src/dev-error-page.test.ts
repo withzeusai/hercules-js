@@ -25,6 +25,8 @@ type Reply = {
   log?: string;
   /** Writes the body after `writeHead`; by default as the Cloudflare plugin does. */
   writer?: (res: ServerResponse, chunks: Uint8Array[]) => void;
+  /** Awaited between logging and writing the headers. */
+  beforeHead?: Promise<void>;
 };
 
 function cloudflareWriter(res: ServerResponse, chunks: Uint8Array[]): void {
@@ -68,11 +70,13 @@ async function start(settleMs = 0) {
       {
         name: "worker",
         configureServer(server) {
-          server.middlewares.use((_req, res: ServerResponse) => {
-            if (reply.log) server.config.logger.error(reply.log);
-            res.writeHead(reply.status, reply.headers);
-            const chunks = reply.body.map((chunk) => new TextEncoder().encode(chunk));
-            (reply.writer ?? cloudflareWriter)(res, chunks);
+          server.middlewares.use(async (_req, res: ServerResponse) => {
+            const current = reply;
+            if (current.log) server.config.logger.error(current.log);
+            await current.beforeHead;
+            res.writeHead(current.status, current.headers);
+            const chunks = current.body.map((chunk) => new TextEncoder().encode(chunk));
+            (current.writer ?? cloudflareWriter)(res, chunks);
           });
         },
       },
@@ -209,6 +213,24 @@ describe("devErrorPage", () => {
     const page = (await first).body;
     expect(page).toContain("Error: first");
     expect(page).not.toContain("Error: second");
+  });
+
+  it("shows no error when page loads overlap before their headers", async () => {
+    const { vite, get, respond } = await start();
+    const logged = vi.spyOn(vite.config.logger, "error");
+    let resume!: () => void;
+    const beforeHead = new Promise<void>((resolve) => (resume = resolve));
+    respond({ ...startError(), log: "Error: first", beforeHead });
+    const first = get();
+    await vi.waitFor(() => expect(logged).toHaveBeenCalledOnce());
+    respond({ ...startError(), log: "Error: second" });
+    const secondPage = (await get()).body;
+    resume();
+    const firstPage = (await first).body;
+    for (const body of [firstPage, secondPage]) {
+      expect(body).not.toMatch(/Error: (first|second)/);
+      expect(body).toContain("The cause is in the dev server log.");
+    }
   });
 
   it("shows only an error logged while the page load ran", async () => {
