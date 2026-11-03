@@ -1,17 +1,13 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AuthProvider as ReactAuthProvider,
   type AuthProviderUserManagerProps,
   useAuth,
 } from "react-oidc-context";
-import {
-  InMemoryWebStorage,
-  WebStorageStateStore,
-  type UserManager,
-  type UserManagerSettings,
-} from "oidc-client-ts";
+import { InMemoryWebStorage, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
+import { HerculesAuthProviderContext } from "../internal/auth-context";
 import { withRefreshLock } from "../internal/refresh-lock";
 import { HerculesUserManager } from "../internal/user-manager";
 import {
@@ -44,13 +40,6 @@ const DEFAULT_AUTH_CONFIG: Partial<HerculesAuthProviderProps> = {
   onSignoutCallback,
   onSigninCallback,
 };
-
-interface HerculesAuthProviderContext {
-  userManager: UserManager;
-  impersonationStorageKey: string;
-}
-
-const HerculesAuthProviderContext = createContext<HerculesAuthProviderContext | null>(null);
 
 export function useHerculesAuthProvider() {
   const context = useContext(HerculesAuthProviderContext);

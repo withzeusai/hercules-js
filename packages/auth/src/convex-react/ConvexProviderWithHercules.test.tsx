@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { ErrorResponse } from "oidc-client-ts";
 import type { ReactNode } from "react";
 import { renderHook, act, configure } from "@testing-library/react";
 import { ConvexProviderWithHerculesAuth } from "./ConvexProviderWithHercules.js";
@@ -302,5 +303,71 @@ describe("ConvexProviderWithHerculesAuth fetchAccessToken", () => {
 
     expect(result.current.fetchAccessToken).not.toBe(firstFetch);
     expect(await result.current.fetchAccessToken({ forceRefreshToken: false })).toBe(SECOND_TOKEN);
+  });
+});
+
+describe("ConvexProviderWithHerculesAuth transient refresh failures", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["a network error", new TypeError("Failed to fetch")],
+    ["a timeout", Object.assign(new Error("Network timed out"), { name: "ErrorTimeout" })],
+    ["a 5xx", new Error("Service Unavailable (503)")],
+    ["an OAuth server_error", new ErrorResponse({ error: "server_error" })],
+  ])("retries after %s and returns the refreshed token", async (_label, err) => {
+    mockSigninSilent.mockRejectedValueOnce(err).mockResolvedValueOnce({ id_token: "fresh-token" });
+    const { result } = renderUseAuth();
+
+    const token = result.current.fetchAccessToken({ forceRefreshToken: true });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(await token).toBe("fresh-token");
+    expect(mockSigninSilent).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null once the retries run out", async () => {
+    mockSigninSilent.mockRejectedValue(new TypeError("Failed to fetch"));
+    const { result } = renderUseAuth();
+
+    const token = result.current.fetchAccessToken({ forceRefreshToken: true });
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expect(await token).toBeNull();
+    expect(mockSigninSilent).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ["invalid_grant", new ErrorResponse({ error: "invalid_grant" })],
+    ["a 4xx", new Error("Bad Request (400)")],
+  ])("returns null on %s without retrying", async (_label, err) => {
+    mockSigninSilent.mockRejectedValue(err);
+    const { result } = renderUseAuth();
+
+    expect(await result.current.fetchAccessToken({ forceRefreshToken: true })).toBeNull();
+    expect(mockSigninSilent).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the browser to come back online before retrying", async () => {
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    mockSigninSilent
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ id_token: "fresh-token" });
+    const { result } = renderUseAuth();
+
+    const token = result.current.fetchAccessToken({ forceRefreshToken: true });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(mockSigninSilent).toHaveBeenCalledOnce();
+
+    onLine.mockReturnValue(true);
+    window.dispatchEvent(new Event("online"));
+
+    expect(await token).toBe("fresh-token");
+    expect(mockSigninSilent).toHaveBeenCalledTimes(2);
   });
 });
