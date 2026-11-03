@@ -1,4 +1,4 @@
-import type { Plugin } from "vite";
+import { normalizePath, type Plugin, type ViteDevServer } from "vite";
 
 /**
  * Whether a message on the Worker's hot channel reloads its program: a full
@@ -9,6 +9,22 @@ function reloadsProgram(payload: unknown): boolean {
     return false;
   }
   return payload.type === "full-reload" || payload.type === "update";
+}
+
+/**
+ * Returns a check for whether the watcher has seen a write to a module the
+ * Worker loaded but not reported it yet. With `awaitWriteFinish` (set on
+ * Hercules dev machines), chokidar keeps a written file in its private
+ * `_pendingWrites` until the file stops changing, and only then does Vite
+ * reload the Worker. Without that option, or if chokidar drops the field,
+ * nothing is pending.
+ */
+function pendingModuleWrite(server: ViteDevServer): () => boolean {
+  const pending = (server.watcher as { _pendingWrites?: unknown })._pendingWrites;
+  const graph = server.environments.ssr?.moduleGraph;
+  if (!(pending instanceof Map) || !graph) return () => false;
+  const files = pending as Map<string, unknown>;
+  return () => [...files.keys()].some((file) => graph.getModulesByFile(normalizePath(file))?.size);
 }
 
 /**
@@ -24,14 +40,20 @@ function reloadsProgram(payload: unknown): boolean {
  * quiet, the first one warms the program alone, and the others follow.
  * A request already rendering when the reload starts can still fail.
  *
- * Only a reload sent to the Worker starts a hold, not any file event: miniflare
- * writes its request trace store under `.wrangler` on every request, so file
- * events would hold every page that follows another within the quiet period.
+ * A hold starts on a reload sent to the Worker, or on a page request while a
+ * write to a module the Worker loaded waits out `awaitWriteFinish`: rendering
+ * then would serve the old module to a browser that loads the new one, and
+ * React reports a hydration mismatch. Other file events do not hold pages:
+ * miniflare writes its request trace store under `.wrangler` on every request,
+ * so they would hold every page that follows another within the quiet period.
  */
 export function holdPagesDuringReload(): Plugin {
   const QUIET_MS = 500;
   // Below the 5 s navigation timeout of the screenshot browser.
   const MAX_HOLD_MS = 3000;
+  // How often a held request re-checks for a pending write. Well under
+  // QUIET_MS, so the reload a finished write sends is seen before release.
+  const POLL_MS = 100;
   let lastChangeAt = 0;
   let warm = true;
   let warming = false;
@@ -42,6 +64,7 @@ export function holdPagesDuringReload(): Plugin {
     apply: "serve",
     configureServer(server) {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const writePending = pendingModuleWrite(server);
 
       const releaseAll = () => {
         warm = true;
@@ -52,9 +75,10 @@ export function holdPagesDuringReload(): Plugin {
       const pump = () => {
         timer = undefined;
         if (warm || warming || waiting.length === 0) return;
+        if (writePending()) touch();
         const quietFor = Date.now() - lastChangeAt;
         if (quietFor < QUIET_MS) {
-          timer = setTimeout(pump, QUIET_MS - quietFor);
+          timer = setTimeout(pump, Math.min(QUIET_MS - quietFor, POLL_MS));
           return;
         }
         // The first request re-evaluates the program by itself.
@@ -77,7 +101,9 @@ export function holdPagesDuringReload(): Plugin {
 
       server.middlewares.use((req, res, next) => {
         const isPage = req.method === "GET" && (req.headers.accept ?? "").includes("text/html");
-        if (!isPage || warm) return next();
+        if (!isPage) return next();
+        if (writePending()) touch();
+        if (warm) return next();
 
         let released = false;
         const proceed = () => {
