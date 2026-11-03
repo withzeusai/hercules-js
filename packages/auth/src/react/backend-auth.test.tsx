@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 // The Convex bridge's tests cover the refresh rules; these, that the hook works on its
-// own, as a backend's auth provider (Fundulus's FundulusProviderWithAuth) calls it.
+// own, as a backend's auth provider (Olympus's OlympusProviderWithAuth) calls it.
 describe("useBackendAuth", () => {
   it("says the user is signed in and hands over their ID token", async () => {
     const { result } = renderHook(() => useBackendAuth());

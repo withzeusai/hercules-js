@@ -48,7 +48,7 @@ function tokenExpiresWithin(token: string, ms: number): boolean {
 
 /**
  * The signed-in user's ID token, for a backend's auth provider: the hook Convex's
- * `ConvexProviderWithAuth` and Fundulus's `FundulusProviderWithAuth` take, as
+ * `ConvexProviderWithAuth` and Olympus's `OlympusProviderWithAuth` take, as
  * `useAuth`. It must be called inside a configured `HerculesAuthProvider`.
  *
  * `fetchAccessToken` hands back the current ID token, and with `forceRefreshToken`
@@ -57,9 +57,9 @@ function tokenExpiresWithin(token: string, ms: number): boolean {
  * transient reason. It keeps its identity while the user does.
  *
  * @example
- * <FundulusProviderWithAuth client={client} useAuth={useBackendAuth}>
+ * <OlympusProviderWithAuth client={client} useAuth={useBackendAuth}>
  *   <App />
- * </FundulusProviderWithAuth>
+ * </OlympusProviderWithAuth>
  *
  * @public
  */
