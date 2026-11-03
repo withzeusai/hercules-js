@@ -4,8 +4,9 @@ import type { ReactNode } from "react";
 import { ConvexProviderWithAuth, type ConvexReactClient } from "convex/react";
 import { jwtDecode } from "jwt-decode";
 import { ErrorResponse } from "oidc-client-ts";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useContext, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
+import { HerculesAuthProviderContext } from "../internal/auth-context";
 import { withRefreshLock } from "../internal/refresh-lock";
 
 const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
@@ -59,6 +60,12 @@ function useUseAuthFromHercules() {
   const signinSilentRef = useRef(signinSilent);
   signinSilentRef.current = signinSilent;
 
+  // react-oidc-context's signinSilent resolves null on failure, hiding the
+  // error, so call the manager directly when HerculesAuthProvider supplies it.
+  const userManager = useContext(HerculesAuthProviderContext)?.userManager;
+  const userManagerRef = useRef(userManager);
+  userManagerRef.current = userManager;
+
   const inFlightRefresh = useRef<Promise<string | null> | null>(null);
 
   const fetchAccessToken = useCallback(
@@ -78,14 +85,20 @@ function useUseAuthFromHercules() {
         if (tokenAfterLock != null && !tokenExpiresWithin(tokenAfterLock, REFRESH_THRESHOLD_MS)) {
           return tokenAfterLock;
         }
+        const manager = userManagerRef.current;
         for (let attempt = 0; ; attempt++) {
           try {
-            const refreshed = await signinSilentRef.current();
+            const refreshed = await (manager ? manager.signinSilent() : signinSilentRef.current());
             return refreshed?.id_token ?? null;
           } catch (err) {
             const delay = RETRY_DELAYS_MS[attempt];
-            if (delay === undefined || !isTransientRefreshError(err)) return null;
-            await waitBeforeRetry(delay);
+            if (delay !== undefined && isTransientRefreshError(err)) {
+              await waitBeforeRetry(delay);
+              continue;
+            }
+            // Record the failure in auth state, as react-oidc-context's wrapper does.
+            void manager?.events._raiseSilentRenewError(err as Error);
+            return null;
           }
         }
       }).finally(() => {
