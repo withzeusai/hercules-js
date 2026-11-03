@@ -20,6 +20,7 @@ import type { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { herculesAliases } from "./aliases";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
+import { reloadAfterMissingImport } from "./reload-after-missing-import";
 
 export type { Alias } from "vite";
 export {
@@ -30,6 +31,7 @@ export {
 } from "@usehercules/vite-common";
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
+export { reloadAfterMissingImport } from "./reload-after-missing-import";
 export {
   PREBUNDLED_ENTRIES,
   PREBUNDLED_EXPORT_MAPS,
@@ -190,6 +192,7 @@ async function buildPlugins(
   const plugins: PluginOption[] = [];
 
   if (options.holdPagesDuringReload !== false) plugins.push(holdPagesDuringReload());
+  plugins.push(reloadAfterMissingImport());
 
   plugins.push(
     prebundleDependencies({
