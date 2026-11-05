@@ -1,8 +1,9 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildScriptExclusions,
   dependenciesToPrebundle,
   exportedSubpaths,
   onlyDeclared,
@@ -190,6 +191,38 @@ describe("withoutExcluded", () => {
 
   it("keeps every entry when nothing is excluded", () => {
     expect(withoutExcluded(["clsx"], undefined)).toEqual(["clsx"]);
+  });
+});
+
+describe("buildScriptExclusions", () => {
+  function srcFiles(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(tmpdir(), "vite-common-scripts-"));
+    for (const [file, source] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), source);
+    }
+    return root;
+  }
+
+  it("excludes files that import Vite or a Vite plugin", () => {
+    const root = srcFiles({
+      "src/lib/prerender/run.mjs": 'import { build } from "vite";',
+      "src/scripts/css.ts": "const tw = await import('@tailwindcss/vite');",
+      "src/scripts/react.js": 'import react from "@vitejs/plugin-react";',
+      "src/main.tsx": 'import { createRoot } from "react-dom/client";',
+      "src/vite-env.ts": 'import "vite-plugin-pwa/client";',
+      "src/node_modules/x/index.js": 'import "vite";',
+      "src/notes.md": 'import "vite";',
+    });
+    expect(buildScriptExclusions(root, "src/").sort()).toEqual([
+      "!src/lib/prerender/run.mjs",
+      "!src/scripts/css.ts",
+      "!src/scripts/react.js",
+    ]);
+  });
+
+  it("excludes nothing when the source directory is missing", () => {
+    expect(buildScriptExclusions(srcFiles({}), "src")).toEqual([]);
   });
 });
 

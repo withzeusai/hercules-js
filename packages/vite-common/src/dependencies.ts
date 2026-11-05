@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -242,4 +242,43 @@ export function sourceEntries(
     `!${dir}/**/__mocks__/**`,
     ...(serverFiles ? [] : [`!${dir}/**/*.server.{js,jsx,ts,tsx,mjs,mts}`, `!${dir}/server/**`]),
   ];
+}
+
+/** A static or dynamic import of Vite or a Vite plugin package. */
+const BUILD_TOOLING_IMPORT =
+  /\b(?:from|import)\s*\(?\s*["'](?:vite|@vitejs\/[^"'/]+|@tailwindcss\/vite)(?:\/[^"']*)?["']/;
+const SOURCE_FILE = /\.(?:[jt]sx?|m[jt]s)$/;
+
+/**
+ * Exclusion globs for the files under `srcDir` that import Vite or a Vite
+ * plugin. Only a Node build script, such as a prerender runner, does that. As
+ * an optimizer entry it makes Vite bundle the build toolchain and its native
+ * binaries for the browser, which fails every dev server start. A file the
+ * app does import is still reached through the import graph.
+ */
+export function buildScriptExclusions(root: string, srcDir: string): string[] {
+  const dir = srcDir.replace(/\/+$/, "");
+  let files: string[];
+  try {
+    files = readdirSync(path.join(root, dir), { recursive: true, encoding: "utf8" });
+  } catch {
+    return [];
+  }
+  return files
+    .map((file) => file.split(path.sep).join("/"))
+    .filter(
+      (file) =>
+        SOURCE_FILE.test(file) &&
+        !file.split("/").includes("node_modules") &&
+        BUILD_TOOLING_IMPORT.test(readSource(path.join(root, dir, file))),
+    )
+    .map((file) => `!${dir}/${file}`);
+}
+
+function readSource(file: string): string {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
 }

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { appRoot, lib } from "@usehercules/vite-common/testing";
 import type { EnvironmentOptions, Plugin, UserConfig, ViteDevServer } from "vite";
@@ -60,7 +61,8 @@ describe("hercules", () => {
 
 describe("optimizerEntriesPlugin", () => {
   it("crawls src without server modules or tests, plus every HTML entry", () => {
-    expect(config(optimizerEntriesPlugin())?.optimizeDeps?.entries).toEqual([
+    const root = appRoot({});
+    expect(config(optimizerEntriesPlugin(), { root })?.optimizeDeps?.entries).toEqual([
       "**/*.html",
       "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
       "!src/**/*.d.{ts,mts}",
@@ -70,6 +72,23 @@ describe("optimizerEntriesPlugin", () => {
       "!src/**/*.server.{js,jsx,ts,tsx,mjs,mts}",
       "!src/server/**",
     ]);
+  });
+
+  it("leaves out Node build scripts that import Vite or a Vite plugin", () => {
+    const root = appRoot({});
+    const prerender = path.join(root, "src/lib/site/prerender");
+    mkdirSync(prerender, { recursive: true });
+    writeFileSync(
+      path.join(prerender, "run.mjs"),
+      'import { build } from "vite";\nimport tailwindcss from "@tailwindcss/vite";\n',
+    );
+    writeFileSync(
+      path.join(root, "src/main.tsx"),
+      'import { createRoot } from "react-dom/client";\n',
+    );
+    const entries = config(optimizerEntriesPlugin(), { root })?.optimizeDeps?.entries;
+    expect(entries?.at(-1)).toBe("!src/lib/site/prerender/run.mjs");
+    expect(entries?.filter((entry) => entry.includes("main.tsx"))).toEqual([]);
   });
 
   it.each([

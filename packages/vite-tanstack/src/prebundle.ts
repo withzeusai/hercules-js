@@ -1,4 +1,5 @@
 import {
+  buildScriptExclusions,
   dependenciesToPrebundle as appDependenciesToPrebundle,
   exportedSubpaths,
   onlyDeclared,
@@ -140,7 +141,14 @@ export function prebundleDependencies(options: PrebundleOptions): Plugin {
       return {
         optimizeDeps: {
           include: withoutExcluded(entries, config.optimizeDeps?.exclude),
-          ...(name === "ssr" ? { entries: sourceEntries(options.srcDir) } : {}),
+          ...(name === "ssr"
+            ? {
+                entries: [
+                  ...sourceEntries(options.srcDir),
+                  ...buildScriptExclusions(options.root, options.srcDir),
+                ],
+              }
+            : {}),
         },
       };
     },
