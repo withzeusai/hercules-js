@@ -26,6 +26,15 @@ export const PREBUNDLED_ENTRIES: readonly string[] = [
   "@hookform/resolvers/zod",
   "motion/react",
   "@shadcn/react/message-scroller",
+  // Subpaths apps add after the server starts. Each one Vite found mid-session
+  // made it bundle again in both environments and reload the Worker: on
+  // Hercules dev machines from Oct 29 to Nov 4, date-fns/locale did in about
+  // 200 apps and the Phosphor server entry in 60.
+  "date-fns/locale",
+  "react-day-picker/locale",
+  "@phosphor-icons/react/ssr",
+  "@phosphor-icons/react/dist/ssr",
+  "zustand/middleware",
 ];
 
 /**
