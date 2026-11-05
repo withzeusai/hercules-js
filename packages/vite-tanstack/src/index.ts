@@ -21,6 +21,7 @@ import { herculesAliases } from "./aliases";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 import { reloadAfterMissingImport } from "./reload-after-missing-import";
+import { startupProfiler, type StartupProfiler } from "./startup-profile";
 
 export type { Alias } from "vite";
 export {
@@ -32,6 +33,7 @@ export {
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export { reloadAfterMissingImport } from "./reload-after-missing-import";
+export { STARTUP_PROFILE_PREFIX, type StartupProfileReport } from "./startup-profile";
 export {
   PREBUNDLED_ENTRIES,
   PREBUNDLED_EXPORT_MAPS,
@@ -107,6 +109,14 @@ export interface HerculesTanStackConfigOptions {
   holdPagesDuringReload?: boolean;
 
   /**
+   * Log a `[hercules:startup-profile]` line once the dev server has started,
+   * timing the config load, each plugin's startup hooks, the dependency
+   * optimizer and the first page. See {@link StartupProfileReport}.
+   * @default true on the Hercules dev machine
+   */
+  startupProfile?: boolean;
+
+  /**
    * Application source directory, relative to the Vite root. Mapped to `@`.
    * @default "src"
    */
@@ -160,6 +170,7 @@ const OPTION_KEYS: ReadonlySet<string> = new Set<keyof HerculesTanStackConfigOpt
   "prebundle",
   "prebundleDependencies",
   "holdPagesDuringReload",
+  "startupProfile",
   "srcDir",
   "convexDir",
   "react",
@@ -188,6 +199,7 @@ async function normalizeOptions(
 async function buildPlugins(
   options: HerculesTanStackConfigOptions,
   root: string,
+  step: StartupProfiler["step"] = (_name, load) => load(),
 ): Promise<PluginOption[]> {
   const plugins: PluginOption[] = [];
 
@@ -204,48 +216,66 @@ async function buildPlugins(
   );
 
   if (options.devtools !== false) {
-    const mod = await importOptional(
-      "@tanstack/devtools-vite",
-      () => import("@tanstack/devtools-vite"),
-      { explicit: options.devtools !== undefined, owner: PACKAGE_NAME },
-    );
-    if (mod) {
-      plugins.push(
-        mod.devtools({
+    plugins.push(
+      await step("@tanstack/devtools-vite", async () => {
+        const mod = await importOptional(
+          "@tanstack/devtools-vite",
+          () => import("@tanstack/devtools-vite"),
+          { explicit: options.devtools !== undefined, owner: PACKAGE_NAME },
+        );
+        return mod?.devtools({
           consolePiping: { enabled: false },
           enhancedLogs: { enabled: false },
           ...options.devtools,
-        }),
-      );
-    }
+        });
+      }),
+    );
   }
 
   if (options.tailwind !== false) {
-    const { default: tailwindcss } = await import("@tailwindcss/vite");
-    plugins.push(tailwindcss());
+    plugins.push(
+      await step("@tailwindcss/vite", async () => {
+        const { default: tailwindcss } = await import("@tailwindcss/vite");
+        return tailwindcss();
+      }),
+    );
   }
 
   if (options.hercules !== false) {
-    const { hercules } = await import("@usehercules/vite");
-    plugins.push(hercules({ ...options.hercules, prebundleDependencies: false }));
+    plugins.push(
+      await step("@usehercules/vite", async () => {
+        const { hercules } = await import("@usehercules/vite");
+        return hercules({ ...options.hercules, prebundleDependencies: false });
+      }),
+    );
   }
 
   if (options.cloudflare !== false) {
-    const mod = await importOptional(
-      "@cloudflare/vite-plugin",
-      () => import("@cloudflare/vite-plugin"),
-      { explicit: options.cloudflare !== undefined, owner: PACKAGE_NAME },
+    plugins.push(
+      await step("@cloudflare/vite-plugin", async () => {
+        const mod = await importOptional(
+          "@cloudflare/vite-plugin",
+          () => import("@cloudflare/vite-plugin"),
+          { explicit: options.cloudflare !== undefined, owner: PACKAGE_NAME },
+        );
+        return mod?.cloudflare({ viteEnvironment: { name: "ssr" }, ...options.cloudflare });
+      }),
     );
-    if (mod) {
-      plugins.push(mod.cloudflare({ viteEnvironment: { name: "ssr" }, ...options.cloudflare }));
-    }
   }
 
-  const { tanstackStart } = await import("@tanstack/react-start/plugin/vite");
-  plugins.push(tanstackStart(options.tanstackStart));
+  plugins.push(
+    await step("@tanstack/react-start", async () => {
+      const { tanstackStart } = await import("@tanstack/react-start/plugin/vite");
+      return tanstackStart(options.tanstackStart);
+    }),
+  );
 
-  const { default: react } = await import("@vitejs/plugin-react");
-  plugins.push(react(options.react));
+  plugins.push(
+    await step("@vitejs/plugin-react", async () => {
+      const { default: react } = await import("@vitejs/plugin-react");
+      return react(options.react);
+    }),
+  );
 
   if (options.plugins) plugins.push(...options.plugins);
   return plugins;
@@ -331,9 +361,14 @@ export function defineConfig(
 ): UserConfigFnPromise {
   return async (env) => {
     const options = await normalizeOptions(config, env);
+    const root = rootOf(options);
+    const profile = env.command === "serve" && (options.startupProfile ?? onHerculesDevMachine());
+    const profiler = profile ? startupProfiler({ root }) : undefined;
     const base = herculesBaseConfig(options);
-    base.plugins = await buildPlugins(options, rootOf(options));
-    return options.vite ? mergeConfig(base, options.vite) : base;
+    base.plugins = await buildPlugins(options, root, profiler?.step);
+    const merged = options.vite ? mergeConfig(base, options.vite) : base;
+    if (profiler) merged.plugins = await profiler.instrument(merged.plugins ?? []);
+    return merged;
   };
 }
 

@@ -57,7 +57,8 @@ On the Hercules dev machine (`HERCULES_DEV_MACHINE=1`, which the machine image s
 
 - pins the port with `strictPort`, so the preview never points at a fallback port;
 - ignores file changes under `.agents`, `.claude`, `.hercules`, `.tanstack/tmp`, `.workspace` and `.wrangler`;
-- waits for files to stop changing for one second before triggering HMR, so half-written modules never reach the browser.
+- waits for files to stop changing for one second before triggering HMR, so half-written modules never reach the browser;
+- logs a startup profile once the dev server is up (see [Startup profile](#startup-profile)).
 
 `HERCULES_DEV_SERVER=true` turns the same settings on anywhere else.
 
@@ -87,6 +88,7 @@ export default defineConfig({
 | `prebundle`             | `[]`       | Extra entries to pre-bundle in both environments, such as a subpath (`lodash/debounce`).                                             |
 | `prebundleDependencies` | `true`     | `false` pre-bundles only `PREBUNDLED_ENTRIES`, `PREBUNDLED_EXPORT_MAPS` and `prebundle`, and stops restarting on dependency changes. |
 | `holdPagesDuringReload` | `true`     | `false` lets page requests through while the dev server reloads the Worker.                                                          |
+| `startupProfile`        |            | Log the [startup profile](#startup-profile). On by default on the Hercules dev machine, for `vite dev` only.                         |
 | `vite`                  |            | Vite options merged over the generated config. Anything set here wins.                                                               |
 | `srcDir`                | `"src"`    | Application source directory, mapped to `@`.                                                                                         |
 | `convexDir`             | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex.                                                   |
@@ -98,6 +100,20 @@ export default defineConfig({
 | `tailwind`              | `true`     | Whether to include `@tailwindcss/vite`.                                                                                              |
 
 Optional peers that are not installed are skipped with a warning, unless you configured them explicitly, in which case the missing package is an error.
+
+## Startup profile
+
+On the Hercules dev machine, each dev server start logs one line, `[hercules:startup-profile] {...}`, once the first page has been served and the dependency optimizer is idle, or a minute after the server starts listening. Herculesd ships the dev server's output to the platform logs, so the line shows where startup time goes on real machines. Times are milliseconds since the process started, rounded:
+
+- `marks`: when the config started loading, when every plugin was loaded, when the config was resolved, and when the server started listening (what Vite prints as "ready in").
+- `imports`: loading each optional plugin, import and factory call together.
+- `hooks`: each plugin's `config`, `configEnvironment`, `configResolved`, `configureServer` and `buildStart` time, slowest first. The Cloudflare plugin starts workerd in `configureServer`.
+- `optimizer`: each dependency optimizer run per environment, a `scan` for imports or a `bundle`, and `include`, the number of entries pre-bundled per environment.
+- `modules`: `resolveId`, `load` and `transform` time per plugin until the report. Calls overlap and a hook that calls `this.resolve` includes the plugins it reaches, so these rank plugins rather than add up.
+- `firstPage`: the first page request, usually herculesd's readiness probe of `/`: when it started, how long it took and its status.
+- `versions` of Vite, the Cloudflare plugin, TanStack Start and this package, and `start`, which counts up after each `server.restart()`.
+
+The profile's plugin stays in the config on every start, because Vite's dependency cache hash includes the plugin names: switching it on and off would re-bundle the dependencies each time.
 
 ## What `defineVitestConfig()` sets up
 

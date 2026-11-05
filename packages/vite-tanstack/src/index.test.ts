@@ -221,4 +221,26 @@ describe("defineConfig", () => {
     const ignored = config.server?.watch?.ignored as string[];
     expect(ignored).toEqual([...TOOL_MANAGED_WATCH_IGNORES, "**/generated/**"]);
   });
+
+  it("profiles the dev server start on a Hercules dev machine, user plugins included", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    const config = await defineConfig({ ...bare, plugins: [{ name: "user-plugin" }] })(serve);
+    const names = pluginNames(config.plugins);
+    expect(names[0]).toBe("hercules:startup-profile");
+    expect(names).toContain("user-plugin");
+  });
+
+  it("leaves the profiler out of builds and off the dev machine unless asked", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    const build = await defineConfig(bare)({ command: "build", mode: "production" });
+    expect(pluginNames(build.plugins)).not.toContain("hercules:startup-profile");
+    const off = await defineConfig({ ...bare, startupProfile: false })(serve);
+    expect(pluginNames(off.plugins)).not.toContain("hercules:startup-profile");
+
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, undefined);
+    const local = await defineConfig(bare)(serve);
+    expect(pluginNames(local.plugins)).not.toContain("hercules:startup-profile");
+    const asked = await defineConfig({ ...bare, startupProfile: true })(serve);
+    expect(pluginNames(asked.plugins)[0]).toBe("hercules:startup-profile");
+  });
 });
