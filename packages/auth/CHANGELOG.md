@@ -1,5 +1,15 @@
 # @usehercules/auth
 
+## 1.3.0
+
+### Minor Changes
+
+- [#210](https://github.com/withzeusai/hercules-js/pull/210) [`134c5c3`](https://github.com/withzeusai/hercules-js/commit/134c5c371fbe61b218c693ae259bab1961c43c41) Thanks [@grant0417](https://github.com/grant0417)! - Export `useBackendAuth` from `@usehercules/auth/react`: the hook `ConvexProviderWithHerculesAuth` gives Convex, `{ isLoading, isAuthenticated, fetchAccessToken }`, so any backend whose auth provider takes Convex's hook can sign users in with Hercules. Olympus's `OlympusProviderWithAuth` takes it as it is: `<OlympusProviderWithAuth client={client} useAuth={useBackendAuth}>`. `ConvexProviderWithHerculesAuth` now uses the same hook and behaves as before, including its retries of a token renewal that fails for a transient reason.
+
+### Patch Changes
+
+- [#211](https://github.com/withzeusai/hercules-js/pull/211) [`81c841c`](https://github.com/withzeusai/hercules-js/commit/81c841cc36e6fb41be64c5d22f3109d3cd1163b0) Thanks [@delbyte](https://github.com/delbyte)! - `ConvexProviderWithHerculesAuth` now retries a token renewal that fails for a transient reason, such as a dropped connection, a timeout, a 5xx, or the browser being offline, instead of handing Convex a null token. Convex reads null as signed out and does not ask again, so a brief network drop, like a laptop waking from sleep, used to sign the user out of Convex until the page reloaded. It retries twice with a short backoff, and while offline waits for the browser's `online` event. An OAuth error such as `invalid_grant`, or any other 4xx, still ends the session immediately.
+
 ## 1.2.2
 
 ### Patch Changes
