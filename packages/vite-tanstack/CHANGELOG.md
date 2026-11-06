@@ -1,5 +1,13 @@
 # @usehercules/vite-tanstack
 
+## 1.0.1
+
+### Patch Changes
+
+- [#209](https://github.com/withzeusai/hercules-js/pull/209) [`bc895fd`](https://github.com/withzeusai/hercules-js/commit/bc895fd895e41dd4aa00838493d83401e7e588f2) Thanks [@delbyte](https://github.com/delbyte)! - Recover server rendering in dev when a file is created after an import of it failed. When code imported a file that did not exist yet, the Worker kept the failed import after the file was written, and every page answered `{"status":500,"statusText":"","unhandled":true,"message":"HTTPError"}` until the importing file changed again. The next file created now re-transforms the importer and reloads the Worker.
+
+- [#223](https://github.com/withzeusai/hercules-js/pull/223) [`b299c5d`](https://github.com/withzeusai/hercules-js/commit/b299c5d24fbcfd7ff0de2aae912d5ad3a07ff6c9) Thanks [@grant0417](https://github.com/grant0417)! - Bundle `date-fns/locale`, `react-day-picker/locale`, `@phosphor-icons/react/ssr`, `@phosphor-icons/react/dist/ssr` and `zustand/middleware` up front when the app declares their package. A package name does not cover a subpath, so the first import of one after the server started made Vite bundle the dependencies again in the browser and the Worker and reload the page, which dropped requests in flight. On Hercules dev machines from October 29 to November 4 `date-fns/locale` did this in about 200 TanStack Start apps and the Phosphor server entry in 60.
+
 ## 1.0.0
 
 ### Major Changes

@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle,
   isHerculesDevMachine,
   sourceEntries,
@@ -25,7 +26,9 @@ const NEVER_PREBUNDLED: ReadonlySet<string> = new Set(["react", "react-dom"]);
  * inputs are not dropped. Server-only code is kept out of the client
  * optimizer: deps under convex/ are never reached, and server modules
  * colocated in src (src/server/**, *.server.*) are excluded so their Node-only
- * imports never become optimizer roots.
+ * imports never become optimizer roots. Vite and its plugins are excluded, so
+ * a Node script in src that imports them, such as a prerender runner, does not
+ * pull them into the browser bundle.
  */
 export function optimizerEntriesPlugin(): Plugin {
   return {
@@ -50,6 +53,7 @@ export function optimizerEntriesPlugin(): Plugin {
       return {
         optimizeDeps: {
           entries: [...inputEntries, "**/*.html", ...sourceEntries("src", { serverFiles: false })],
+          exclude: [...BUILD_TOOL_PACKAGES],
         },
       };
     },
@@ -62,7 +66,8 @@ export function optimizerEntriesPlugin(): Plugin {
  * packages the code already imports; this also covers one the agent just
  * installed and is about to use. Packages that cannot be bundled (CSS or
  * types only, native addons, or excluded by the app or another plugin) are
- * skipped.
+ * skipped. That includes Vite and its plugins, which `optimizerEntriesPlugin`
+ * excludes.
  *
  * On the Hercules dev machine the dev server restarts when `package.json` or
  * the lockfile changes and the bundled set differs, so the new package is

@@ -1,6 +1,8 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { BUILD_TOOL_PACKAGES } from "@usehercules/vite-common";
 import { appRoot, lib } from "@usehercules/vite-common/testing";
+import { resolveConfig } from "vite";
 import type { EnvironmentOptions, Plugin, UserConfig, ViteDevServer } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hercules } from "./index";
@@ -72,6 +74,15 @@ describe("optimizerEntriesPlugin", () => {
     ]);
   });
 
+  it("excludes Vite and its plugins from the optimizer", () => {
+    expect(config(optimizerEntriesPlugin())?.optimizeDeps?.exclude).toEqual([
+      "vite",
+      "@tailwindcss/vite",
+      "@vitejs/plugin-react",
+      "@vitejs/plugin-react-swc",
+    ]);
+  });
+
   it.each([
     ["app/main.ts", ["app/main.ts"]],
     [
@@ -110,6 +121,17 @@ describe("prebundleDependenciesPlugin", () => {
   it("leaves other environments alone", () => {
     const root = appRoot({ zod: "*" }, { zod: lib });
     expect(configEnvironment(plugin(root), "ssr")).toBeUndefined();
+  });
+
+  it("does not bundle a Vite plugin the app lists under dependencies", async () => {
+    const root = appRoot(
+      { "@tailwindcss/vite": "*", zod: "*" },
+      { "@tailwindcss/vite": lib, zod: lib },
+    );
+    const resolved = await resolveConfig({ root, configFile: false, plugins: hercules() }, "serve");
+    const { optimizeDeps } = resolved.environments.client!;
+    expect(optimizeDeps.include).toEqual(["zod"]);
+    expect(optimizeDeps.exclude).toEqual(expect.arrayContaining([...BUILD_TOOL_PACKAGES]));
   });
 
   it("restarts on dependency changes only on the Hercules dev machine", () => {
