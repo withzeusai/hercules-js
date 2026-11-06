@@ -157,6 +157,17 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             "!src/**/__tests__/**",
             "!src/**/__mocks__/**",
           ],
+          // Vite and its plugins run only in Node, but a Node script in src,
+          // such as a prerender runner, can import them. The optimizer must
+          // neither scan nor bundle them: `@tailwindcss/vite` and
+          // `@vitejs/plugin-react-swc` load native binaries, which fail the
+          // whole run.
+          exclude: [
+            "vite",
+            "@tailwindcss/vite",
+            "@vitejs/plugin-react",
+            "@vitejs/plugin-react-swc",
+          ],
         },
       };
     },

@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 1.2.6
+
+### Patch Changes
+
+- Exclude Vite and its plugins (`vite`, `@tailwindcss/vite`, `@vitejs/plugin-react`, `@vitejs/plugin-react-swc`) from the dependency optimizer. A Node script under `src` that imports them, such as a prerender runner, made Vite bundle their native binaries for the browser, which failed every dev server start. Backport of #224.
+
 ## 1.2.5
 
 ### Patch Changes
