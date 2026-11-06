@@ -177,6 +177,7 @@ describe("defineConfig", () => {
   });
 
   it("turns devtools console piping off unless the app sets it", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, undefined);
     await defineConfig({ ...bare, devtools: undefined })(serve);
     expect(devtools).toHaveBeenLastCalledWith({
       consolePiping: { enabled: false },
@@ -188,6 +189,19 @@ describe("defineConfig", () => {
       consolePiping: { enabled: true },
       enhancedLogs: { enabled: false },
     });
+  });
+
+  it("leaves devtools out of the dev server on a Hercules dev machine unless the app sets it", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    const dev = await defineConfig({ ...bare, devtools: undefined })(serve);
+    expect(devtools).not.toHaveBeenCalled();
+    expect(pluginNames(dev.plugins)).not.toContain("devtools-stub");
+
+    await defineConfig({ ...bare, devtools: undefined })({ command: "build", mode: "production" });
+    expect(devtools).toHaveBeenCalledOnce();
+
+    await defineConfig({ ...bare, devtools: { consolePiping: { enabled: true } } })(serve);
+    expect(devtools).toHaveBeenCalledTimes(2);
   });
 
   it("appends user plugins after the Hercules stack", async () => {

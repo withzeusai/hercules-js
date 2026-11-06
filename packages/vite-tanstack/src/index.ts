@@ -165,6 +165,7 @@ export interface HerculesTanStackConfigOptions {
    * enhanced logs are off unless set here: server logs already reach the
    * terminal, and piping them into the browser prints each line twice.
    * Pass `false` to skip it.
+   * @default left out of `vite dev` on the Hercules dev machine, included elsewhere
    */
   devtools?: TanStackDevtoolsViteConfig | false;
 
@@ -376,8 +377,13 @@ export function defineConfig(
     const profile =
       serving && (startupProfileFromEnv() ?? options.startupProfile ?? onHerculesDevMachine());
     const profiler = profile ? startupProfiler({ root }) : undefined;
+    // The template never renders the devtools panel, and the component tagger
+    // already maps elements to their source, so on the dev machine the plugin
+    // only adds a transform to every module (about 15% of the first render).
+    // Builds keep it, since it strips devtools from production bundles.
+    const devtools = options.devtools ?? (serving && onHerculesDevMachine() ? false : undefined);
     const base = herculesBaseConfig(options);
-    base.plugins = await buildPlugins(options, root, profiler?.step);
+    base.plugins = await buildPlugins({ ...options, devtools }, root, profiler?.step);
     const merged = options.vite ? mergeConfig(base, options.vite) : base;
     if (profiler) {
       merged.plugins = await profiler.instrument(merged.plugins ?? []);
