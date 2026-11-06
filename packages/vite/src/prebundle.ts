@@ -66,7 +66,8 @@ export function optimizerEntriesPlugin(): Plugin {
  * packages the code already imports; this also covers one the agent just
  * installed and is about to use. Packages that cannot be bundled (CSS or
  * types only, native addons, or excluded by the app or another plugin) are
- * skipped.
+ * skipped. That includes Vite and its plugins, which `optimizerEntriesPlugin`
+ * excludes.
  *
  * On the Hercules dev machine the dev server restarts when `package.json` or
  * the lockfile changes and the bundled set differs, so the new package is
