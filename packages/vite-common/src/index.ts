@@ -4,6 +4,7 @@
 // of this code. Keep it free of module-level state.
 
 export {
+  BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle,
   exportedSubpaths,
   onlyDeclared,

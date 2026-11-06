@@ -1,4 +1,5 @@
 import {
+  BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle as appDependenciesToPrebundle,
   exportedSubpaths,
   onlyDeclared,
@@ -119,9 +120,10 @@ function exportMapEntries(root: string, declared: Set<string> | undefined): stri
  * So every runtime dependency the app declares is bundled when the server
  * starts, minus packages that cannot be (CSS or types only, native addons, or
  * excluded by another plugin), and the Worker scans the whole source tree
- * rather than only the server entries. When `package.json` or the lockfile
- * changes, the dev server restarts so a package the agent just installed is
- * bundled before any code imports it.
+ * rather than only the server entries. Vite and its plugins are excluded in
+ * both environments, so neither scans nor bundles them. When `package.json`
+ * or the lockfile changes, the dev server restarts so a package the agent
+ * just installed is bundled before any code imports it.
  */
 export function prebundleDependencies(options: PrebundleOptions): Plugin {
   // Read once per server start, so both environments and the watcher agree.
@@ -137,9 +139,11 @@ export function prebundleDependencies(options: PrebundleOptions): Plugin {
     configEnvironment(name, config) {
       if (name !== "client" && name !== "ssr") return;
       const entries = entriesFor(name, options, configuredDependencies());
+      const exclude = [...(config.optimizeDeps?.exclude ?? []), ...BUILD_TOOL_PACKAGES];
       return {
         optimizeDeps: {
-          include: withoutExcluded(entries, config.optimizeDeps?.exclude),
+          include: withoutExcluded(entries, exclude),
+          exclude: [...BUILD_TOOL_PACKAGES],
           ...(name === "ssr" ? { entries: sourceEntries(options.srcDir) } : {}),
         },
       };

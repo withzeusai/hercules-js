@@ -16,6 +16,20 @@ const NATIVE_ADDON_LOADERS: ReadonlySet<string> = new Set([
   "prebuild-install",
 ]);
 
+/**
+ * Vite and its React and Tailwind plugins. They run only in Node, but a Node
+ * script under `src`, such as a prerender runner, can import them, and an app
+ * can list one under `dependencies`. The optimizer must neither scan nor
+ * bundle them: `@tailwindcss/vite` and `@vitejs/plugin-react-swc` load native
+ * binaries, which fail the whole run.
+ */
+export const BUILD_TOOL_PACKAGES: readonly string[] = [
+  "vite",
+  "@tailwindcss/vite",
+  "@vitejs/plugin-react",
+  "@vitejs/plugin-react-swc",
+];
+
 /** Platform builds of a napi-rs or sharp style package, such as `@img/sharp-linux-x64`. */
 const PLATFORM_PACKAGE = /-(?:darwin|linux|win32|freebsd|android)-(?:x64|arm64|arm|ia32)\b/;
 
