@@ -40,7 +40,10 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - run: pnpm publish --recursive --access public
+      # 1.x patch release: publish only @usehercules/vite, under the
+      # `latest-1` dist-tag, so npm `latest` stays on 2.x.
+      - run: pnpm publish --tag latest-1 --access public --no-git-checks
+        working-directory: packages/vite
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
