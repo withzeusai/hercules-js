@@ -126,7 +126,10 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       // not dropped. Server-only code is kept out of the client optimizer: deps
       // under convex/ are never reached, and server modules colocated in src
       // (src/server/**, *.server.*) are excluded so their Node-only imports
-      // never become optimizer roots.
+      // never become optimizer roots. Vite and its plugins are excluded, so a
+      // Node script in src that imports them, such as a prerender runner, does
+      // not pull them (and the native binaries of `@tailwindcss/vite` and
+      // `@vitejs/plugin-react-swc`) into the browser bundle.
       if (env.command !== "serve") return;
       // Defining `optimizeDeps.entries` overrides Vite's default of deriving
       // entries from `build.rollupOptions.input`, so a custom/library-mode app
@@ -156,6 +159,12 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
             "!src/server/**",
             "!src/**/__tests__/**",
             "!src/**/__mocks__/**",
+          ],
+          exclude: [
+            "vite",
+            "@tailwindcss/vite",
+            "@vitejs/plugin-react",
+            "@vitejs/plugin-react-swc",
           ],
         },
       };
