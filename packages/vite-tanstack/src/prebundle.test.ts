@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentOptions, Plugin, ViteDevServer } from "vite";
-import { packageNameOf, sourceEntries } from "@usehercules/vite-common";
+import { BUILD_TOOL_PACKAGES, packageNameOf, sourceEntries } from "@usehercules/vite-common";
 import { appRoot, declare, install, lib } from "@usehercules/vite-common/testing";
 import {
   PREBUNDLED_ENTRIES,
@@ -129,6 +129,19 @@ describe("prebundleDependencies", () => {
   it("leaves other environments alone", () => {
     const plugin = prebundleDependencies(options(appRoot({ papaparse: "*" }, { papaparse: lib })));
     expect(configEnvironment(plugin, "rsc")).toBeUndefined();
+  });
+
+  it("excludes Vite and its plugins in both environments, even when listed as dependencies", () => {
+    const root = appRoot(
+      { "@tailwindcss/vite": "*", zod: "*" },
+      { "@tailwindcss/vite": lib, zod: lib },
+    );
+    const plugin = prebundleDependencies(options(root));
+    for (const environment of ["client", "ssr"]) {
+      const result = configEnvironment(plugin, environment);
+      expect(result?.optimizeDeps?.exclude).toEqual([...BUILD_TOOL_PACKAGES]);
+      expect(result?.optimizeDeps?.include).toEqual(["zod"]);
+    }
   });
 
   it("drops what another plugin excludes, by entry or by package", () => {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -15,6 +15,20 @@ const NATIVE_ADDON_LOADERS: ReadonlySet<string> = new Set([
   "@mapbox/node-pre-gyp",
   "prebuild-install",
 ]);
+
+/**
+ * Vite and its React and Tailwind plugins. They run only in Node, but a Node
+ * script under `src`, such as a prerender runner, can import them, and an app
+ * can list one under `dependencies`. The optimizer must neither scan nor
+ * bundle them: `@tailwindcss/vite` and `@vitejs/plugin-react-swc` load native
+ * binaries, which fail the whole run.
+ */
+export const BUILD_TOOL_PACKAGES: readonly string[] = [
+  "vite",
+  "@tailwindcss/vite",
+  "@vitejs/plugin-react",
+  "@vitejs/plugin-react-swc",
+];
 
 /** Platform builds of a napi-rs or sharp style package, such as `@img/sharp-linux-x64`. */
 const PLATFORM_PACKAGE = /-(?:darwin|linux|win32|freebsd|android)-(?:x64|arm64|arm|ia32)\b/;
@@ -242,43 +256,4 @@ export function sourceEntries(
     `!${dir}/**/__mocks__/**`,
     ...(serverFiles ? [] : [`!${dir}/**/*.server.{js,jsx,ts,tsx,mjs,mts}`, `!${dir}/server/**`]),
   ];
-}
-
-/** A static or dynamic import of Vite or a Vite plugin package. */
-const BUILD_TOOLING_IMPORT =
-  /\b(?:from|import)\s*\(?\s*["'](?:vite|@vitejs\/[^"'/]+|@tailwindcss\/vite)(?:\/[^"']*)?["']/;
-const SOURCE_FILE = /\.(?:[jt]sx?|m[jt]s)$/;
-
-/**
- * Exclusion globs for the files under `srcDir` that import Vite or a Vite
- * plugin. Only a Node build script, such as a prerender runner, does that. As
- * an optimizer entry it makes Vite bundle the build toolchain and its native
- * binaries for the browser, which fails every dev server start. A file the
- * app does import is still reached through the import graph.
- */
-export function buildScriptExclusions(root: string, srcDir: string): string[] {
-  const dir = srcDir.replace(/\/+$/, "");
-  let files: string[];
-  try {
-    files = readdirSync(path.join(root, dir), { recursive: true, encoding: "utf8" });
-  } catch {
-    return [];
-  }
-  return files
-    .map((file) => file.split(path.sep).join("/"))
-    .filter(
-      (file) =>
-        SOURCE_FILE.test(file) &&
-        !file.split("/").includes("node_modules") &&
-        BUILD_TOOLING_IMPORT.test(readSource(path.join(root, dir, file))),
-    )
-    .map((file) => `!${dir}/${file}`);
-}
-
-function readSource(file: string): string {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
 }

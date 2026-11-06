@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { BUILD_TOOL_PACKAGES } from "@usehercules/vite-common";
 import { appRoot, lib } from "@usehercules/vite-common/testing";
+import { resolveConfig } from "vite";
 import type { EnvironmentOptions, Plugin, UserConfig, ViteDevServer } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hercules } from "./index";
@@ -61,8 +62,7 @@ describe("hercules", () => {
 
 describe("optimizerEntriesPlugin", () => {
   it("crawls src without server modules or tests, plus every HTML entry", () => {
-    const root = appRoot({});
-    expect(config(optimizerEntriesPlugin(), { root })?.optimizeDeps?.entries).toEqual([
+    expect(config(optimizerEntriesPlugin())?.optimizeDeps?.entries).toEqual([
       "**/*.html",
       "src/**/*.{js,jsx,ts,tsx,mjs,mts}",
       "!src/**/*.d.{ts,mts}",
@@ -74,21 +74,13 @@ describe("optimizerEntriesPlugin", () => {
     ]);
   });
 
-  it("leaves out Node build scripts that import Vite or a Vite plugin", () => {
-    const root = appRoot({});
-    const prerender = path.join(root, "src/lib/site/prerender");
-    mkdirSync(prerender, { recursive: true });
-    writeFileSync(
-      path.join(prerender, "run.mjs"),
-      'import { build } from "vite";\nimport tailwindcss from "@tailwindcss/vite";\n',
-    );
-    writeFileSync(
-      path.join(root, "src/main.tsx"),
-      'import { createRoot } from "react-dom/client";\n',
-    );
-    const entries = config(optimizerEntriesPlugin(), { root })?.optimizeDeps?.entries;
-    expect(entries?.at(-1)).toBe("!src/lib/site/prerender/run.mjs");
-    expect(entries?.filter((entry) => entry.includes("main.tsx"))).toEqual([]);
+  it("excludes Vite and its plugins from the optimizer", () => {
+    expect(config(optimizerEntriesPlugin())?.optimizeDeps?.exclude).toEqual([
+      "vite",
+      "@tailwindcss/vite",
+      "@vitejs/plugin-react",
+      "@vitejs/plugin-react-swc",
+    ]);
   });
 
   it.each([
@@ -129,6 +121,17 @@ describe("prebundleDependenciesPlugin", () => {
   it("leaves other environments alone", () => {
     const root = appRoot({ zod: "*" }, { zod: lib });
     expect(configEnvironment(plugin(root), "ssr")).toBeUndefined();
+  });
+
+  it("does not bundle a Vite plugin the app lists under dependencies", async () => {
+    const root = appRoot(
+      { "@tailwindcss/vite": "*", zod: "*" },
+      { "@tailwindcss/vite": lib, zod: lib },
+    );
+    const resolved = await resolveConfig({ root, configFile: false, plugins: hercules() }, "serve");
+    const { optimizeDeps } = resolved.environments.client!;
+    expect(optimizeDeps.include).toEqual(["zod"]);
+    expect(optimizeDeps.exclude).toEqual(expect.arrayContaining([...BUILD_TOOL_PACKAGES]));
   });
 
   it("restarts on dependency changes only on the Hercules dev machine", () => {

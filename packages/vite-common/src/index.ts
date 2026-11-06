@@ -4,7 +4,7 @@
 // of this code. Keep it free of module-level state.
 
 export {
-  buildScriptExclusions,
+  BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle,
   exportedSubpaths,
   onlyDeclared,

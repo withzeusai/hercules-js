@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  buildScriptExclusions,
+  BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle,
   isHerculesDevMachine,
   sourceEntries,
@@ -26,8 +26,9 @@ const NEVER_PREBUNDLED: ReadonlySet<string> = new Set(["react", "react-dom"]);
  * inputs are not dropped. Server-only code is kept out of the client
  * optimizer: deps under convex/ are never reached, and server modules
  * colocated in src (src/server/**, *.server.*) are excluded so their Node-only
- * imports never become optimizer roots, and so are Node build scripts that
- * import Vite or a Vite plugin.
+ * imports never become optimizer roots. Vite and its plugins are excluded, so
+ * a Node script in src that imports them, such as a prerender runner, does not
+ * pull them into the browser bundle.
  */
 export function optimizerEntriesPlugin(): Plugin {
   return {
@@ -51,12 +52,8 @@ export function optimizerEntriesPlugin(): Plugin {
               : [];
       return {
         optimizeDeps: {
-          entries: [
-            ...inputEntries,
-            "**/*.html",
-            ...sourceEntries("src", { serverFiles: false }),
-            ...buildScriptExclusions(path.resolve(userConfig.root ?? process.cwd()), "src"),
-          ],
+          entries: [...inputEntries, "**/*.html", ...sourceEntries("src", { serverFiles: false })],
+          exclude: [...BUILD_TOOL_PACKAGES],
         },
       };
     },
