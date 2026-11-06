@@ -2,7 +2,9 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { Plugin, ResolvedConfig, ViteDevServer } from "vite";
 import {
+  HERCULES_STARTUP_PROFILE_ENV,
   STARTUP_PROFILE_PREFIX,
+  startupProfileFromEnv,
   startupProfiler,
   type StartupProfileReport,
 } from "./startup-profile";
@@ -87,6 +89,21 @@ function startServer(reporter: Plugin) {
   };
   return { httpServer, optimizer, request };
 }
+
+describe("startupProfileFromEnv", () => {
+  it.each([
+    ["1", true],
+    ["true", true],
+    [" TRUE ", true],
+    ["0", false],
+    ["false", false],
+    [undefined, undefined],
+    ["", undefined],
+    ["yes", undefined],
+  ])("reads %j as %j", (value, expected) => {
+    expect(startupProfileFromEnv({ [HERCULES_STARTUP_PROFILE_ENV]: value })).toBe(expected);
+  });
+});
 
 describe("startupProfiler", () => {
   it("times hooks without changing what they return or the `this` they see", async () => {

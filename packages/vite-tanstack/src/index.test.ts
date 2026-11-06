@@ -5,6 +5,7 @@ import {
   DEDUPE,
   HERCULES_DEV_MACHINE_ENV,
   HERCULES_DEV_SERVER_ENV,
+  HERCULES_STARTUP_PROFILE_ENV,
   TOOL_MANAGED_WATCH_IGNORES,
   defineConfig,
   herculesBaseConfig,
@@ -32,6 +33,21 @@ function pluginNames(plugins: PluginOption[] | undefined): string[] {
   };
   plugins?.forEach(visit);
   return names;
+}
+
+/** Whether the startup profile plugin reports, rather than only holding its place. */
+function isProfiling(plugins: PluginOption[] | undefined): boolean {
+  const first = plugins?.[0] as Plugin | undefined;
+  expect(first?.name).toBe("hercules:startup-profile");
+  return first?.configureServer !== undefined;
+}
+
+/** The rolldown plugins the startup profile's plugin adds to the optimizer of an environment. */
+function optimizerPluginNames(plugins: PluginOption[] | undefined): string[] {
+  const configEnvironment = (plugins?.[0] as Plugin).configEnvironment as unknown as (
+    name: string,
+  ) => { optimizeDeps: { rolldownOptions: { plugins: Array<{ name: string }> } } };
+  return configEnvironment("client").optimizeDeps.rolldownOptions.plugins.map((p) => p.name);
 }
 
 function aliasEntries(alias: unknown): Alias[] {
@@ -130,8 +146,9 @@ describe("defineConfig", () => {
   });
 
   it("holds page requests during reloads unless turned off", async () => {
+    // Second, after the startup profile's plugin.
     const on = pluginNames((await defineConfig(bare)(serve)).plugins);
-    expect(on[0]).toBe("hercules:hold-pages-during-reload");
+    expect(on[1]).toBe("hercules:hold-pages-during-reload");
 
     const off = pluginNames(
       (await defineConfig({ ...bare, holdPagesDuringReload: false })(serve)).plugins,
@@ -224,23 +241,49 @@ describe("defineConfig", () => {
 
   it("profiles the dev server start on a Hercules dev machine, user plugins included", async () => {
     vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    vi.stubEnv(HERCULES_STARTUP_PROFILE_ENV, undefined);
     const config = await defineConfig({ ...bare, plugins: [{ name: "user-plugin" }] })(serve);
     const names = pluginNames(config.plugins);
     expect(names[0]).toBe("hercules:startup-profile");
     expect(names).toContain("user-plugin");
+    expect(isProfiling(config.plugins)).toBe(true);
   });
 
-  it("leaves the profiler out of builds and off the dev machine unless asked", async () => {
+  it("keeps the plugin names the same when profiling is off, so Vite's cache survives", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    vi.stubEnv(HERCULES_STARTUP_PROFILE_ENV, undefined);
+    const on = await defineConfig(bare)(serve);
+    const off = await defineConfig({ ...bare, startupProfile: false })(serve);
+    expect(isProfiling(off.plugins)).toBe(false);
+    expect(pluginNames(off.plugins)).toEqual(pluginNames(on.plugins));
+    // The optimizer's own plugin names are in the cache hash too.
+    expect(optimizerPluginNames(off.plugins)).toEqual(["hercules:startup-profile-optimizer"]);
+    expect(optimizerPluginNames(off.plugins)).toEqual(optimizerPluginNames(on.plugins));
+  });
+
+  it("leaves the profile plugin out of builds", async () => {
     vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
     const build = await defineConfig(bare)({ command: "build", mode: "production" });
     expect(pluginNames(build.plugins)).not.toContain("hercules:startup-profile");
-    const off = await defineConfig({ ...bare, startupProfile: false })(serve);
-    expect(pluginNames(off.plugins)).not.toContain("hercules:startup-profile");
+  });
+
+  it("profiles off the dev machine only when asked", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, undefined);
+    vi.stubEnv(HERCULES_STARTUP_PROFILE_ENV, undefined);
+    expect(isProfiling((await defineConfig(bare)(serve)).plugins)).toBe(false);
+    const asked = await defineConfig({ ...bare, startupProfile: true })(serve);
+    expect(isProfiling(asked.plugins)).toBe(true);
+  });
+
+  it("lets HERCULES_STARTUP_PROFILE switch profiling for one machine, over the option", async () => {
+    vi.stubEnv(HERCULES_DEV_MACHINE_ENV, "1");
+    vi.stubEnv(HERCULES_STARTUP_PROFILE_ENV, "0");
+    expect(isProfiling((await defineConfig(bare)(serve)).plugins)).toBe(false);
+    const asked = await defineConfig({ ...bare, startupProfile: true })(serve);
+    expect(isProfiling(asked.plugins)).toBe(false);
 
     vi.stubEnv(HERCULES_DEV_MACHINE_ENV, undefined);
-    const local = await defineConfig(bare)(serve);
-    expect(pluginNames(local.plugins)).not.toContain("hercules:startup-profile");
-    const asked = await defineConfig({ ...bare, startupProfile: true })(serve);
-    expect(pluginNames(asked.plugins)[0]).toBe("hercules:startup-profile");
+    vi.stubEnv(HERCULES_STARTUP_PROFILE_ENV, "1");
+    expect(isProfiling((await defineConfig(bare)(serve)).plugins)).toBe(true);
   });
 });

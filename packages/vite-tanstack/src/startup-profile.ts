@@ -5,6 +5,47 @@ import type { Plugin, PluginOption, ResolvedConfig, ViteDevServer } from "vite";
 /** Starts the report line, so a log query can find it. */
 export const STARTUP_PROFILE_PREFIX = "[hercules:startup-profile]";
 
+/** The reporting plugin's name, the same whether profiling is on or off. */
+const PLUGIN_NAME = "hercules:startup-profile";
+
+/** The name of the plugin that times the dependency optimizer, likewise. */
+const OPTIMIZER_PLUGIN_NAME = "hercules:startup-profile-optimizer";
+
+/**
+ * Set to `1` or `0` to switch the startup profile on or off for one machine.
+ * It wins over the `startupProfile` option and the dev machine default.
+ */
+export const HERCULES_STARTUP_PROFILE_ENV = "HERCULES_STARTUP_PROFILE";
+
+/**
+ * The machine's choice: `true` for `1` or `true`, `false` for `0` or `false`,
+ * and `undefined` when {@link HERCULES_STARTUP_PROFILE_ENV} is unset or
+ * anything else.
+ */
+export function startupProfileFromEnv(env: NodeJS.ProcessEnv = process.env): boolean | undefined {
+  const value = env[HERCULES_STARTUP_PROFILE_ENV]?.trim().toLowerCase();
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  return undefined;
+}
+
+/**
+ * Stands in for the reporting plugin when profiling is off. Vite's dependency
+ * cache hash includes the names of the plugins and of the optimizer's rolldown
+ * plugins, so both names stay in every dev config and switching profiling on
+ * or off never re-bundles the dependencies.
+ */
+export function idleStartupProfilePlugin(): Plugin {
+  return {
+    name: PLUGIN_NAME,
+    apply: "serve",
+    enforce: "pre",
+    configEnvironment() {
+      return { optimizeDeps: { rolldownOptions: { plugins: [{ name: OPTIMIZER_PLUGIN_NAME }] } } };
+    },
+  };
+}
+
 /** Hooks that run once, or once per environment, before the dev server answers. */
 const STARTUP_HOOKS = [
   "config",
@@ -200,9 +241,8 @@ function scheduleUnref(callback: () => void, delayMs: number): void {
  * `configureServer`), each optimizer run per environment, and the first
  * server render.
  *
- * Its plugin must be in the config on every start: Vite's dependency cache
- * hash includes the plugin names, so switching it on and off would re-bundle
- * the dependencies each time.
+ * When profiling is off, {@link idleStartupProfilePlugin} takes the reporting
+ * plugin's place.
  */
 export function startupProfiler({
   root,
@@ -286,7 +326,7 @@ export function startupProfiler({
       reportWhenIdle();
     };
     return {
-      name: "hercules:startup-profile-optimizer",
+      name: OPTIMIZER_PLUGIN_NAME,
       buildStart() {
         run = undefined;
         if (reported) return;
@@ -308,9 +348,7 @@ export function startupProfiler({
   };
 
   const reporter: Plugin = {
-    name: "hercules:startup-profile",
-    apply: "serve",
-    enforce: "pre",
+    ...idleStartupProfilePlugin(),
     configEnvironment(name) {
       return { optimizeDeps: { rolldownOptions: { plugins: [optimizerTimer(name)] } } };
     },

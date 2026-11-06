@@ -21,7 +21,12 @@ import { herculesAliases } from "./aliases";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 import { reloadAfterMissingImport } from "./reload-after-missing-import";
-import { startupProfiler, type StartupProfiler } from "./startup-profile";
+import {
+  idleStartupProfilePlugin,
+  startupProfileFromEnv,
+  startupProfiler,
+  type StartupProfiler,
+} from "./startup-profile";
 
 export type { Alias } from "vite";
 export {
@@ -33,7 +38,11 @@ export {
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export { reloadAfterMissingImport } from "./reload-after-missing-import";
-export { STARTUP_PROFILE_PREFIX, type StartupProfileReport } from "./startup-profile";
+export {
+  HERCULES_STARTUP_PROFILE_ENV,
+  STARTUP_PROFILE_PREFIX,
+  type StartupProfileReport,
+} from "./startup-profile";
 export {
   PREBUNDLED_ENTRIES,
   PREBUNDLED_EXPORT_MAPS,
@@ -112,6 +121,7 @@ export interface HerculesTanStackConfigOptions {
    * Log a `[hercules:startup-profile]` line once the dev server has started,
    * timing the config load, each plugin's startup hooks, the dependency
    * optimizer and the first page. See {@link StartupProfileReport}.
+   * `HERCULES_STARTUP_PROFILE=1` or `0` overrides it for one machine.
    * @default true on the Hercules dev machine
    */
   startupProfile?: boolean;
@@ -362,12 +372,18 @@ export function defineConfig(
   return async (env) => {
     const options = await normalizeOptions(config, env);
     const root = rootOf(options);
-    const profile = env.command === "serve" && (options.startupProfile ?? onHerculesDevMachine());
+    const serving = env.command === "serve";
+    const profile =
+      serving && (startupProfileFromEnv() ?? options.startupProfile ?? onHerculesDevMachine());
     const profiler = profile ? startupProfiler({ root }) : undefined;
     const base = herculesBaseConfig(options);
     base.plugins = await buildPlugins(options, root, profiler?.step);
     const merged = options.vite ? mergeConfig(base, options.vite) : base;
-    if (profiler) merged.plugins = await profiler.instrument(merged.plugins ?? []);
+    if (profiler) {
+      merged.plugins = await profiler.instrument(merged.plugins ?? []);
+    } else if (serving) {
+      merged.plugins = [idleStartupProfilePlugin(), ...(merged.plugins ?? [])];
+    }
     return merged;
   };
 }

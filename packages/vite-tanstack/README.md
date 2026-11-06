@@ -32,6 +32,8 @@ export default defineVitestConfig();
 
 Plugins, in order:
 
+Under `vite dev`, `hercules:startup-profile` comes before all of them. It does nothing unless the [startup profile](#startup-profile) is on.
+
 1. `hercules:hold-pages-during-reload` (dev server only): after a change that reloads the Worker, page requests wait until file changes go quiet, the first one warms the Worker alone, and the rest follow. Without it the first render after a reload can fail with "Invalid hook call". A request is never held longer than 3 seconds.
 2. `hercules:reload-after-missing-import` (dev server only): when the Worker fails to import a file that does not exist yet, the next file created re-transforms the importer and reloads the Worker. Without it, an import written before its file leaves every page answering 500 until the importer changes again.
 3. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
@@ -82,22 +84,22 @@ export default defineConfig({
 });
 ```
 
-| Option                  | Default    | Description                                                                                                                          |
-| ----------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `plugins`               | `[]`       | Extra Vite plugins, appended after the Hercules stack.                                                                               |
-| `prebundle`             | `[]`       | Extra entries to pre-bundle in both environments, such as a subpath (`lodash/debounce`).                                             |
-| `prebundleDependencies` | `true`     | `false` pre-bundles only `PREBUNDLED_ENTRIES`, `PREBUNDLED_EXPORT_MAPS` and `prebundle`, and stops restarting on dependency changes. |
-| `holdPagesDuringReload` | `true`     | `false` lets page requests through while the dev server reloads the Worker.                                                          |
-| `startupProfile`        |            | Log the [startup profile](#startup-profile). On by default on the Hercules dev machine, for `vite dev` only.                         |
-| `vite`                  |            | Vite options merged over the generated config. Anything set here wins.                                                               |
-| `srcDir`                | `"src"`    | Application source directory, mapped to `@`.                                                                                         |
-| `convexDir`             | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex.                                                   |
-| `react`                 |            | Options for `@vitejs/plugin-react`.                                                                                                  |
-| `tanstackStart`         |            | Options for `tanstackStart()`.                                                                                                       |
-| `cloudflare`            |            | Options for `@cloudflare/vite-plugin`. `false` builds without it.                                                                    |
-| `hercules`              |            | Options for `@usehercules/vite`. `false` leaves the Hercules dev tooling out.                                                        |
-| `devtools`              |            | Options for `@tanstack/devtools-vite`. `false` skips it.                                                                             |
-| `tailwind`              | `true`     | Whether to include `@tailwindcss/vite`.                                                                                              |
+| Option                  | Default    | Description                                                                                                                                           |
+| ----------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugins`               | `[]`       | Extra Vite plugins, appended after the Hercules stack.                                                                                                |
+| `prebundle`             | `[]`       | Extra entries to pre-bundle in both environments, such as a subpath (`lodash/debounce`).                                                              |
+| `prebundleDependencies` | `true`     | `false` pre-bundles only `PREBUNDLED_ENTRIES`, `PREBUNDLED_EXPORT_MAPS` and `prebundle`, and stops restarting on dependency changes.                  |
+| `holdPagesDuringReload` | `true`     | `false` lets page requests through while the dev server reloads the Worker.                                                                           |
+| `startupProfile`        |            | Log the [startup profile](#startup-profile). On by default on the Hercules dev machine, for `vite dev` only. `HERCULES_STARTUP_PROFILE` overrides it. |
+| `vite`                  |            | Vite options merged over the generated config. Anything set here wins.                                                                                |
+| `srcDir`                | `"src"`    | Application source directory, mapped to `@`.                                                                                                          |
+| `convexDir`             | `"convex"` | Convex functions directory, mapped to `@/convex`. `false` for apps without Convex.                                                                    |
+| `react`                 |            | Options for `@vitejs/plugin-react`.                                                                                                                   |
+| `tanstackStart`         |            | Options for `tanstackStart()`.                                                                                                                        |
+| `cloudflare`            |            | Options for `@cloudflare/vite-plugin`. `false` builds without it.                                                                                     |
+| `hercules`              |            | Options for `@usehercules/vite`. `false` leaves the Hercules dev tooling out.                                                                         |
+| `devtools`              |            | Options for `@tanstack/devtools-vite`. `false` skips it.                                                                                              |
+| `tailwind`              | `true`     | Whether to include `@tailwindcss/vite`.                                                                                                               |
 
 Optional peers that are not installed are skipped with a warning, unless you configured them explicitly, in which case the missing package is an error.
 
@@ -113,7 +115,7 @@ On the Hercules dev machine, each dev server start logs one line, `[hercules:sta
 - `firstPage`: the first page request, usually herculesd's readiness probe of `/`: when it started, how long it took and its status.
 - `versions` of Vite, the Cloudflare plugin, TanStack Start and this package, and `start`, which counts up after each `server.restart()`.
 
-The profile's plugin stays in the config on every start, because Vite's dependency cache hash includes the plugin names: switching it on and off would re-bundle the dependencies each time.
+Set `HERCULES_STARTUP_PROFILE=1` or `0` in the dev server's environment to switch the profile on or off for one machine. The variable wins over the `startupProfile` option, which wins over the dev machine default. When the profile is off, an idle plugin with the same name takes its place: Vite's dependency cache hash includes the plugin names, so switching the profile on or off never re-bundles the dependencies.
 
 ## What `defineVitestConfig()` sets up
 
