@@ -21,6 +21,7 @@ import { herculesAliases } from "./aliases";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 import { reloadAfterMissingImport } from "./reload-after-missing-import";
+import { skipReactThreeSourceInjection } from "./skip-react-three-source";
 
 export type { Alias } from "vite";
 export {
@@ -211,11 +212,13 @@ async function buildPlugins(
     );
     if (mod) {
       plugins.push(
-        mod.devtools({
-          consolePiping: { enabled: false },
-          enhancedLogs: { enabled: false },
-          ...options.devtools,
-        }),
+        skipReactThreeSourceInjection(
+          mod.devtools({
+            consolePiping: { enabled: false },
+            enhancedLogs: { enabled: false },
+            ...options.devtools,
+          }),
+        ),
       );
     }
   }
