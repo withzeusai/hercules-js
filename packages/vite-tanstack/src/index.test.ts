@@ -10,7 +10,7 @@ import {
   herculesBaseConfig,
 } from "./index";
 
-const devtools = vi.hoisted(() => vi.fn((_options?: unknown) => ({ name: "devtools-stub" })));
+const devtools = vi.hoisted(() => vi.fn((_options?: unknown) => [{ name: "devtools-stub" }]));
 vi.mock("@tanstack/devtools-vite", () => ({ devtools }));
 
 const serve: ConfigEnv = { command: "serve", mode: "development" };
