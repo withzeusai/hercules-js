@@ -1,11 +1,14 @@
 import { normalizePath, type Plugin } from "vite";
 
-function isModuleNotFound(error: unknown): boolean {
+// An unresolved bare or aliased import fails with ERR_MODULE_NOT_FOUND. An
+// unresolved relative one (`./-lib/x.ts`) fails with ERR_LOAD_URL: the
+// transform keeps the specifier, and Vite fetches it without its importer.
+function isMissingFile(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    error.code === "ERR_MODULE_NOT_FOUND"
+    (error.code === "ERR_MODULE_NOT_FOUND" || error.code === "ERR_LOAD_URL")
   );
 }
 
@@ -36,7 +39,7 @@ export function reloadAfterMissingImport(): Plugin {
         try {
           return await fetchModule(id, importer, options);
         } catch (error) {
-          if (importer && isModuleNotFound(error)) importers.add(importer);
+          if (importer && isMissingFile(error)) importers.add(importer);
           throw error;
         }
       };
