@@ -47,6 +47,19 @@ describe("reloadAfterMissingImport", () => {
     expect(ssr.hot.send).toHaveBeenCalledOnce();
   });
 
+  it("handles a relative import the same way", async () => {
+    // Vite fetches an unresolved relative import without its importer, so it fails to load.
+    const loadFailed = Object.assign(new Error("Failed to load url ./-lib/filters.ts"), {
+      code: "ERR_LOAD_URL",
+    });
+    const { watcher, ssr, rootModule, fetch } = start(() => Promise.reject(loadFailed));
+    await expect(fetch("./-lib/filters.ts", ROOT)).rejects.toThrow("Failed to load url");
+
+    watcher.emit("add", "/app/src/routes/-lib/filters.ts");
+    expect(ssr.moduleGraph.invalidateModule).toHaveBeenCalledWith(rootModule);
+    expect(ssr.hot.send).toHaveBeenCalledExactlyOnceWith({ type: "full-reload" });
+  });
+
   it("forgets an importer that changes before the file is created", async () => {
     const { watcher, ssr, fetch } = start(() => Promise.reject(notFound()));
     await expect(fetch("@/hooks/use-later.ts", ROOT)).rejects.toThrow("Cannot find module");
