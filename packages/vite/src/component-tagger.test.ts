@@ -241,4 +241,11 @@ describe("componentTaggerPlugin", () => {
     expect(parse).not.toHaveBeenCalled();
     expect(output).toBe(await transform({ meta: { rolldownVersion: "1.2.15" }, parse: parseAst }));
   });
+
+  it("leaves a route split module whose file was deleted to Vite", async () => {
+    const plugin = componentTaggerPlugin({ dataAttribute: "data-hercules-id" });
+    const load = plugin.load as unknown as (this: object, id: string) => Promise<unknown>;
+    // Vite then answers 404, as for any missing file, instead of a 500.
+    await expect(load.call({ parse: parseAst }, `${id}?tsr-split=component`)).resolves.toBeNull();
+  });
 });
