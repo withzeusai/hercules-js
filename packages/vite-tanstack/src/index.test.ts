@@ -127,6 +127,7 @@ describe("defineConfig", () => {
     const names = pluginNames(config.plugins);
     expect(names.some((n) => n.includes("tanstack"))).toBe(true);
     expect(names.some((n) => n.startsWith("vite:react"))).toBe(true);
+    expect(names).toContain("hercules:skip-deleted-route-updates");
   });
 
   it("holds page requests during reloads unless turned off", async () => {

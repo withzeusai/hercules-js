@@ -479,7 +479,18 @@ export function componentTaggerPlugin(options: ComponentTaggerOptions = {}): Plu
       if (!filePath || filePath === id) {
         return null;
       }
-      return tagger.transformCode(await readFile(filePath, "utf8"), id, { parse: parserOf(this) });
+      let source: string;
+      try {
+        source = await readFile(filePath, "utf8");
+      } catch (error) {
+        // A route file deleted while a page still uses it. Vite's own loader
+        // treats a missing file as not found and answers 404; thrown from
+        // here, it was a 500 that Vite also logs in every open page as
+        // "[vite] Internal Server Error ENOENT".
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      }
+      return tagger.transformCode(source, id, { parse: parserOf(this) });
     },
 
     // Plugins listed earlier may have changed the code already (TanStack

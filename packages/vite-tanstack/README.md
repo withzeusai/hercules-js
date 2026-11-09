@@ -34,14 +34,15 @@ Plugins, in order:
 
 1. `hercules:hold-pages-during-reload` (dev server only): after a change that reloads the Worker, page requests wait until file changes go quiet, the first one warms the Worker alone, and the rest follow. Without it the first render after a reload can fail with "Invalid hook call". Page requests also wait while a write to a module the Worker loaded is still settling (`awaitWriteFinish` on Hercules dev machines), so a page requested right after an edit renders the edited code instead of failing hydration against it. A request is never held longer than 3 seconds.
 2. `hercules:reload-after-missing-import` (dev server only): when the Worker fails to import a file that does not exist yet, the next file created re-transforms the importer and reloads the Worker. Without it, an import written before its file leaves every page answering 500 until the importer changes again.
-3. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
-4. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
-5. `@tailwindcss/vite`
-6. `@usehercules/vite` (component tagger and visual editor endpoints; dev server only). Its own dependency pre-bundling is off, since plugin 3 covers both environments.
-7. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
-8. `@tanstack/react-start`
-9. `@vitejs/plugin-react`
-10. Any plugins you pass
+3. `hercules:skip-deleted-route-updates` (dev server only): when a file that only the route tree imports is deleted, such as a route the agent removed or moved under a layout, the browser and the Worker are not told to load it again. That import could only fail, and the preview reported it as a bug ("[vite] Failed to reload", "[vite] Internal Server Error ENOENT") just before TanStack Router rewrote the route tree and reloaded the page anyway.
+4. `hercules:prebundle-dependencies` (dev server only): pre-bundles the app's dependencies up front, see below. It runs after the other plugins so it can honor their `optimizeDeps.exclude`.
+5. `@tanstack/devtools-vite`, with console piping and enhanced logs off: server logs already reach the terminal, and piping them into the browser prints each line twice.
+6. `@tailwindcss/vite`
+7. `@usehercules/vite` (component tagger and visual editor endpoints; dev server only). Its own dependency pre-bundling is off, since plugin 4 covers both environments.
+8. `@cloudflare/vite-plugin`, targeting the `ssr` environment so the server runs in workerd during dev and builds to a Worker
+9. `@tanstack/react-start`
+10. `@vitejs/plugin-react`
+11. Any plugins you pass
 
 Base config:
 
