@@ -1,0 +1,47 @@
+{
+  "name": "@usehercules/mcp",
+  "version": "0.0.0",
+  "description": "Serve an MCP server from a Hercules app, with Hercules Auth deciding who is calling",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./convex": "./dist/convex.mjs",
+    "./package.json": "./package.json"
+  },
+  "author": "Hercules Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withzeusai/hercules-js.git",
+    "directory": "packages/mcp"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.json",
+    "tsdown.config.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "convex": "^1.29.0"
+  },
+  "peerDependenciesMeta": {
+    "convex": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "convex": "^1.47.0",
+    "tsdown": "^0.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

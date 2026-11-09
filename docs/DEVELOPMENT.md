@@ -38,6 +38,7 @@ Published packages live under `packages/`:
 - `@usehercules/analytics`
 - `@usehercules/auth`
 - `@usehercules/eslint-plugin`
+- `@usehercules/mcp`
 - `@usehercules/vite`
 - `@usehercules/vite-tanstack`
 
