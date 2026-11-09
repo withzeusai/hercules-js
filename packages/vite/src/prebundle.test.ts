@@ -83,6 +83,12 @@ describe("optimizerEntriesPlugin", () => {
     ]);
   });
 
+  it("leaves native addon files out of the optimizer", () => {
+    expect(config(optimizerEntriesPlugin())?.optimizeDeps?.rolldownOptions?.plugins).toEqual([
+      expect.objectContaining({ name: "hercules:native-addons-external" }),
+    ]);
+  });
+
   it.each([
     ["app/main.ts", ["app/main.ts"]],
     [

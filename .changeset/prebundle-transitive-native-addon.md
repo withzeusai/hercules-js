@@ -3,4 +3,4 @@
 "@usehercules/vite-tanstack": patch
 ---
 
-Leave a dependency out of pre-bundling when one of its own dependencies loads a native addon. `ssh2-sftp-client` is plain JavaScript, but its `ssh2` dependency requires `cpu-features`, whose addon pnpm does not build by default. Pre-bundling it failed with "Could not resolve '../build/Release/cpufeatures.node'", so the dev server exited on every start and the Hercules dev machine shut down with it. Only the first level is checked, so packages that reach build tooling further down, such as `@tanstack/react-start`, are still pre-bundled.
+Keep native addon files out of dependency pre-bundling. `ssh2-sftp-client` is plain JavaScript, but its `ssh2` dependency loads `cpu-features`, which requires `../build/Release/cpufeatures.node`, an addon pnpm does not build by default. Pre-bundling failed with "Could not resolve '../build/Release/cpufeatures.node'", so the dev server exited on every start. The optimizer now leaves such files to be loaded when the code runs, so the package is still pre-bundled in the browser and the Worker.

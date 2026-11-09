@@ -144,6 +144,17 @@ describe("prebundleDependencies", () => {
     }
   });
 
+  it("leaves native addon files out of the optimizer in both environments", () => {
+    const plugin = prebundleDependencies(options(appRoot({})));
+    for (const environment of ["client", "ssr"]) {
+      const plugins = configEnvironment(plugin, environment)?.optimizeDeps?.rolldownOptions
+        ?.plugins;
+      expect(plugins).toEqual([
+        expect.objectContaining({ name: "hercules:native-addons-external" }),
+      ]);
+    }
+  });
+
   it("drops what another plugin excludes, by entry or by package", () => {
     const root = appRoot(
       { "@tanstack/react-router": "*", papaparse: "*", "start-lib": "*" },
