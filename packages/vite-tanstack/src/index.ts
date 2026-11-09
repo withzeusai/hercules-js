@@ -21,6 +21,7 @@ import { herculesAliases } from "./aliases";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 import { reloadAfterMissingImport } from "./reload-after-missing-import";
+import { skipDeletedRouteUpdates } from "./skip-deleted-route-updates";
 
 export type { Alias } from "vite";
 export {
@@ -32,6 +33,7 @@ export {
 export { herculesAliases, type AliasDirs } from "./aliases";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export { reloadAfterMissingImport } from "./reload-after-missing-import";
+export { skipDeletedRouteUpdates } from "./skip-deleted-route-updates";
 export {
   PREBUNDLED_ENTRIES,
   PREBUNDLED_EXPORT_MAPS,
@@ -193,6 +195,7 @@ async function buildPlugins(
 
   if (options.holdPagesDuringReload !== false) plugins.push(holdPagesDuringReload());
   plugins.push(reloadAfterMissingImport());
+  plugins.push(skipDeletedRouteUpdates());
 
   plugins.push(
     prebundleDependencies({
