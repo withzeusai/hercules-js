@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -131,14 +131,47 @@ function hasJsRootEntry(manifest: Manifest, packageDir: string): boolean {
   return existsSync(path.join(packageDir, "index.js"));
 }
 
-/** Whether the package loads a compiled `.node` addon. */
-function hasNativeAddon(manifest: Manifest): boolean {
-  if (manifest.gypfile === true || manifest.binary !== undefined) return true;
-  const dependencies = [
+function dependencyNames(manifest: Manifest): string[] {
+  return [
     ...Object.keys(manifest.dependencies ?? {}),
     ...Object.keys(manifest.optionalDependencies ?? {}),
   ];
-  return dependencies.some((name) => NATIVE_ADDON_LOADERS.has(name) || PLATFORM_PACKAGE.test(name));
+}
+
+/** Whether the package loads a compiled `.node` addon. */
+function hasNativeAddon(manifest: Manifest): boolean {
+  if (manifest.gypfile === true || manifest.binary !== undefined) return true;
+  return dependencyNames(manifest).some(
+    (name) => NATIVE_ADDON_LOADERS.has(name) || PLATFORM_PACKAGE.test(name),
+  );
+}
+
+/** The installed package `name` as Node finds it from `fromDir`. */
+function findPackageDir(fromDir: string, name: string): string | undefined {
+  for (let dir = fromDir; ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, "node_modules", name);
+    if (existsSync(path.join(candidate, "package.json"))) return candidate;
+    if (path.dirname(dir) === dir) return undefined;
+  }
+}
+
+/**
+ * Whether the package or one of its own dependencies loads a native addon.
+ * `ssh2-sftp-client` is plain JavaScript, but its `ssh2` dependency requires
+ * `cpu-features`, whose addon is missing when pnpm skips its build script, and
+ * the dev server then exits on every start. Deeper levels are not checked:
+ * build tooling sits there (`@tanstack/react-start` reaches `lightningcss`),
+ * so the packages every app uses would never be pre-bundled.
+ */
+function loadsNativeAddon(manifest: Manifest, packageDir: string): boolean {
+  if (hasNativeAddon(manifest)) return true;
+  // pnpm links a package's dependencies next to its real directory.
+  const realDir = realpathSync(packageDir);
+  return dependencyNames(manifest).some((name) => {
+    const dir = findPackageDir(realDir, name);
+    const dependency = dir === undefined ? undefined : readManifest(path.join(dir, "package.json"));
+    return dependency !== undefined && hasNativeAddon(dependency);
+  });
 }
 
 /** Extensions a bare-name lookup from the project root tries. */
@@ -179,7 +212,7 @@ export function dependenciesToPrebundle(root: string, never: ReadonlySet<string>
     const packageDir = path.join(root, "node_modules", name);
     const manifest = readManifest(path.join(packageDir, "package.json"));
     if (!manifest) return false;
-    return hasJsRootEntry(manifest, packageDir) && !hasNativeAddon(manifest);
+    return hasJsRootEntry(manifest, packageDir) && !loadsNativeAddon(manifest, packageDir);
   });
 }
 

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import {
   sourceEntries,
   withoutExcluded,
 } from "./dependencies";
-import { appRoot, lib } from "./testing";
+import { appRoot, install, lib } from "./testing";
 
 const none: ReadonlySet<string> = new Set();
 
@@ -89,6 +89,34 @@ describe("dependenciesToPrebundle", () => {
         "native-loader": { main: "index.js", dependencies: { "node-gyp-build": "*" } },
         sharp: { main: "lib/index.js", optionalDependencies: { "@img/sharp-linux-x64": "*" } },
       },
+    );
+    expect(dependenciesToPrebundle(root, none)).toEqual([]);
+  });
+
+  it("leaves out a package whose own dependency loads a native addon", () => {
+    const root = appRoot(
+      { "ssh2-sftp-client": "*", tooling: "*" },
+      {
+        "ssh2-sftp-client": { main: "src/index.js", dependencies: { ssh2: "*" } },
+        ssh2: { main: "lib/index.js", optionalDependencies: { "cpu-features": "*", nan: "*" } },
+        // Two levels down is not checked, so packages that reach build tooling stay bundled.
+        tooling: { main: "index.js", dependencies: { "plugin-core": "*" } },
+        "plugin-core": { main: "index.js", dependencies: { lightningcss: "*" } },
+        lightningcss: { main: "index.js", optionalDependencies: { "lightningcss-linux-x64": "*" } },
+      },
+    );
+    expect(dependenciesToPrebundle(root, none)).toEqual(["tooling"]);
+  });
+
+  it("finds a dependency next to the real directory of a pnpm package", () => {
+    const root = appRoot({ "ssh2-sftp-client": "*" });
+    const store = path.join(root, "node_modules/.pnpm/ssh2-sftp-client@12.1.1");
+    install(store, "ssh2-sftp-client", { main: "src/index.js", dependencies: { ssh2: "*" } });
+    install(store, "ssh2", { main: "lib/index.js", optionalDependencies: { nan: "*" } });
+    mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    symlinkSync(
+      path.join(store, "node_modules/ssh2-sftp-client"),
+      path.join(root, "node_modules/ssh2-sftp-client"),
     );
     expect(dependenciesToPrebundle(root, none)).toEqual([]);
   });
