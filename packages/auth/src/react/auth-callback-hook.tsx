@@ -3,7 +3,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAuth, hasAuthParams, type ErrorContext } from "react-oidc-context";
 import { ConvexError } from "convex/values";
-import * as z from "zod";
 
 const DEFAULT_TIMEOUT_MS = 20000; // 20 second timeout
 // Once the tokens are saved, the backend confirming them (such as a Convex
@@ -12,9 +11,10 @@ const MIN_TIMEOUT_AFTER_TOKENS_MS = 60_000;
 const MISSING_STATE_MESSAGE = "No matching state found in storage";
 const MISSING_STATE_RETRY_KEY = "hercules-auth:missing-state-retry";
 
-const convexErrorSchema = z.object({
-  message: z.string(),
-});
+function convexErrorMessage(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null || !("message" in data)) return undefined;
+  return typeof data.message === "string" ? data.message : undefined;
+}
 
 function claimMissingStateRetry(error: ErrorContext): boolean {
   if (error.source !== "signinCallback" || error.message !== MISSING_STATE_MESSAGE) return false;
@@ -274,10 +274,10 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
 
         if (err instanceof ConvexError) {
           // try to extract the error message from the convex error
-          const parseResult = convexErrorSchema.safeParse(err.data);
-          if (parseResult.success) {
+          const message = convexErrorMessage(err.data);
+          if (message !== undefined) {
             setStatus("error");
-            setError(parseResult.data.message);
+            setError(message);
             return;
           }
         }

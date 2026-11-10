@@ -70,9 +70,6 @@ importers:
       react-oidc-context:
         specifier: ^3.3.1
         version: 3.3.1(oidc-client-ts@3.5.0)(react@19.3.1)
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^7.0.1
