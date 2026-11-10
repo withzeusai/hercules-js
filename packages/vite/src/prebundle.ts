@@ -3,6 +3,7 @@ import {
   BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle,
   isHerculesDevMachine,
+  nativeAddonsExternal,
   sourceEntries,
   watchDependencies,
   withoutExcluded,
@@ -28,7 +29,8 @@ const NEVER_PREBUNDLED: ReadonlySet<string> = new Set(["react", "react-dom"]);
  * colocated in src (src/server/**, *.server.*) are excluded so their Node-only
  * imports never become optimizer roots. Vite and its plugins are excluded, so
  * a Node script in src that imports them, such as a prerender runner, does not
- * pull them into the browser bundle.
+ * pull them into the browser bundle. Native addon files a dependency loads
+ * are left out too, so they cannot fail the whole run.
  */
 export function optimizerEntriesPlugin(): Plugin {
   return {
@@ -54,6 +56,7 @@ export function optimizerEntriesPlugin(): Plugin {
         optimizeDeps: {
           entries: [...inputEntries, "**/*.html", ...sourceEntries("src", { serverFiles: false })],
           exclude: [...BUILD_TOOL_PACKAGES],
+          rolldownOptions: { plugins: [nativeAddonsExternal()] },
         },
       };
     },
