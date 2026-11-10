@@ -371,6 +371,34 @@ describe("useAuthCallback", () => {
 
       expect(result.current.error).toBe("Sync boom");
     });
+
+    it("shows the message from a ConvexError thrown by onSync", async () => {
+      const { ConvexError } = await import("convex/values");
+      const onSync = vi.fn().mockRejectedValue(new ConvexError({ message: "Account disabled" }));
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const { result } = renderHook(() =>
+        useAuthCallback({ isBackendAuthenticated: true, onSync }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.error).toBe("Account disabled");
+      });
+    });
+
+    it("falls back to the error message when ConvexError data has no string message", async () => {
+      const { ConvexError } = await import("convex/values");
+      const onSync = vi.fn().mockRejectedValue(new ConvexError({ message: 42 }));
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const { result } = renderHook(() =>
+        useAuthCallback({ isBackendAuthenticated: true, onSync }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.error).toBe("ConvexError");
+      });
+    });
   });
 
   describe("waiting for backend", () => {
