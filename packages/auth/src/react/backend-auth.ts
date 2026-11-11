@@ -1,42 +1,13 @@
 "use client";
 
 import { jwtDecode } from "jwt-decode";
-import { ErrorResponse } from "oidc-client-ts";
 import { useCallback, useContext, useMemo, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { HerculesAuthProviderContext } from "../internal/auth-context";
 import { withRefreshLock } from "../internal/refresh-lock";
+import { renewWithRetry } from "../internal/renew";
 
 const REFRESH_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
-const RETRY_DELAYS_MS = [1_000, 3_000];
-const OFFLINE_WAIT_MS = 30_000;
-
-// A backend reads a null token as signed out (Convex then never asks again), so only
-// the server's verdict (an OAuth error or other 4xx) may end the session. A dropped
-// connection, timeout, or 5xx is retried.
-function isTransientRefreshError(err: unknown): boolean {
-  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
-  if (err instanceof ErrorResponse) {
-    return err.error === "server_error" || err.error === "temporarily_unavailable";
-  }
-  if (!(err instanceof Error)) return false;
-  return err instanceof TypeError || err.name === "ErrorTimeout" || /\(5\d\d\)/.test(err.message);
-}
-
-// Waits out the backoff, or while offline until the browser reports `online`.
-function waitBeforeRetry(ms: number): Promise<void> {
-  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      window.removeEventListener("online", done);
-      resolve();
-    };
-    const timer = setTimeout(done, offline ? OFFLINE_WAIT_MS : ms);
-    if (offline) window.addEventListener("online", done);
-  });
-}
-
 function tokenExpiresWithin(token: string, ms: number): boolean {
   try {
     const payload = jwtDecode(token);
@@ -100,22 +71,14 @@ export function useBackendAuth() {
         if (tokenAfterLock != null && !tokenExpiresWithin(tokenAfterLock, REFRESH_THRESHOLD_MS)) {
           return tokenAfterLock;
         }
+        // A backend reads a null token as signed out (Convex then never asks again),
+        // so a transient failure is retried before it gives up.
         const manager = userManagerRef.current;
-        for (let attempt = 0; ; attempt++) {
-          try {
-            const refreshed = await (manager ? manager.signinSilent() : signinSilentRef.current());
-            return refreshed?.id_token ?? null;
-          } catch (err) {
-            const delay = RETRY_DELAYS_MS[attempt];
-            if (delay !== undefined && isTransientRefreshError(err)) {
-              await waitBeforeRetry(delay);
-              continue;
-            }
-            // Record the failure in auth state, as react-oidc-context's wrapper does.
-            void manager?.events._raiseSilentRenewError(err as Error);
-            return null;
-          }
-        }
+        const refreshed = await renewWithRetry(
+          () => (manager ? manager.signinSilent() : signinSilentRef.current()),
+          manager,
+        );
+        return refreshed?.id_token ?? null;
       }).finally(() => {
         inFlightRefresh.current = null;
       });
