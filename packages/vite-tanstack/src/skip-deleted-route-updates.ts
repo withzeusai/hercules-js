@@ -3,7 +3,7 @@ import type { EnvironmentModuleNode, Plugin } from "vite";
 // The route tree TanStack Router generates from the routes directory, under
 // its default name. It imports every route file and is rewritten without the
 // deleted one.
-const GENERATED_ROUTE_TREE = /(^|\/)routeTree\.gen\.[cm]?[jt]s$/;
+export const GENERATED_ROUTE_TREE = /(^|\/)routeTree\.gen\.[cm]?[jt]s$/;
 
 /**
  * Whether nothing outside the deleted file loads it, other than the route

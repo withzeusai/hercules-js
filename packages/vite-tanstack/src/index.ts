@@ -18,6 +18,7 @@ import type { PluginConfig as CloudflarePluginConfig } from "@cloudflare/vite-pl
 import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
 import type { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { herculesAliases } from "./aliases";
+import { exactRouteTreeImports } from "./exact-route-tree-imports";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
 import { reloadAfterMissingImport } from "./reload-after-missing-import";
@@ -31,6 +32,7 @@ export {
   isHerculesDevServer,
 } from "@usehercules/vite-common";
 export { herculesAliases, type AliasDirs } from "./aliases";
+export { exactRouteTreeImports } from "./exact-route-tree-imports";
 export { holdPagesDuringReload } from "./hold-pages-during-reload";
 export { reloadAfterMissingImport } from "./reload-after-missing-import";
 export { skipDeletedRouteUpdates } from "./skip-deleted-route-updates";
@@ -196,6 +198,7 @@ async function buildPlugins(
   if (options.holdPagesDuringReload !== false) plugins.push(holdPagesDuringReload());
   plugins.push(reloadAfterMissingImport());
   plugins.push(skipDeletedRouteUpdates());
+  plugins.push(exactRouteTreeImports());
 
   plugins.push(
     prebundleDependencies({
