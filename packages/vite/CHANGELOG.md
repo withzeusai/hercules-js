@@ -1,5 +1,13 @@
 # @usehercules/vite
 
+## 2.0.3
+
+### Patch Changes
+
+- [#234](https://github.com/withzeusai/hercules-js/pull/234) [`68610ea`](https://github.com/withzeusai/hercules-js/commit/68610ea583fdd45771855e1cedcfad084fce17a2) Thanks [@delbyte](https://github.com/delbyte)! - Keep native addon files out of dependency pre-bundling. `ssh2-sftp-client` is plain JavaScript, but its `ssh2` dependency loads `cpu-features`, which requires `../build/Release/cpufeatures.node`, an addon pnpm does not build by default. Pre-bundling failed with "Could not resolve '../build/Release/cpufeatures.node'", so the dev server exited on every start. The optimizer now leaves such files to be loaded when the code runs, so the package is still pre-bundled in the browser and the Worker.
+
+- [#232](https://github.com/withzeusai/hercules-js/pull/232) [`bb02af3`](https://github.com/withzeusai/hercules-js/commit/bb02af3fc075efdbaa4f1812e33fad6ffd87dab8) Thanks [@grant0417](https://github.com/grant0417)! - Answer 404, as Vite does, when a page asks for a TanStack route split module (`?tsr-split=component`) whose route file was deleted. The component tagger read the file itself and threw, so the request failed with a 500 that Vite also logged in every open page as "[vite] Internal Server Error ENOENT".
+
 ## 2.0.2
 
 ### Patch Changes

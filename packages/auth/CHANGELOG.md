@@ -1,5 +1,11 @@
 # @usehercules/auth
 
+## 1.3.1
+
+### Patch Changes
+
+- [#236](https://github.com/withzeusai/hercules-js/pull/236) [`a839065`](https://github.com/withzeusai/hercules-js/commit/a8390653b2fec4aae7eb899aebe630061d418811) Thanks [@delbyte](https://github.com/delbyte)! - Drop the `zod` dependency. `useAuthCallback` used it for one check, reading the `message` string from a `ConvexError`, and the namespace import pulled about 25 KB gzipped of zod into every app's first page load. A plain type check now does the same job.
+
 ## 1.3.0
 
 ### Minor Changes
