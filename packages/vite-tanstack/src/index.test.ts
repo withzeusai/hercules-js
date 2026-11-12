@@ -128,6 +128,7 @@ describe("defineConfig", () => {
     expect(names.some((n) => n.includes("tanstack"))).toBe(true);
     expect(names.some((n) => n.startsWith("vite:react"))).toBe(true);
     expect(names).toContain("hercules:skip-deleted-route-updates");
+    expect(names).toContain("hercules:exact-route-tree-imports");
   });
 
   it("holds page requests during reloads unless turned off", async () => {
