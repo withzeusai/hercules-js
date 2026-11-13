@@ -1,5 +1,17 @@
 # @usehercules/vite-tanstack
 
+## 1.0.3
+
+### Patch Changes
+
+- [#234](https://github.com/withzeusai/hercules-js/pull/234) [`68610ea`](https://github.com/withzeusai/hercules-js/commit/68610ea583fdd45771855e1cedcfad084fce17a2) Thanks [@delbyte](https://github.com/delbyte)! - Keep native addon files out of dependency pre-bundling. `ssh2-sftp-client` is plain JavaScript, but its `ssh2` dependency loads `cpu-features`, which requires `../build/Release/cpufeatures.node`, an addon pnpm does not build by default. Pre-bundling failed with "Could not resolve '../build/Release/cpufeatures.node'", so the dev server exited on every start. The optimizer now leaves such files to be loaded when the code runs, so the package is still pre-bundled in the browser and the Worker.
+
+- [#238](https://github.com/withzeusai/hercules-js/pull/238) [`85394fc`](https://github.com/withzeusai/hercules-js/commit/85394fc5aaeca01e902c190898ef74b9614ae7bb) Thanks [@delbyte](https://github.com/delbyte)! - Stop the dev server from failing every page with "Duplicate routes found with id" after a route file is turned into a folder, such as `routes/feria.tsx` replaced by `routes/feria/index.tsx`. The route tree imports routes without their extension, so a page requested in the moment between deleting `feria.tsx` and TanStack Router rewriting the route tree resolved `./routes/feria` to `routes/feria/index.tsx`, and the index route became its own child. The rewritten tree did not undo that, so every page answered 500 until the dev server restarted. The route tree's imports now resolve to route files only; the stale import fails like any missing file, and the rewritten tree loads cleanly.
+
+- [#232](https://github.com/withzeusai/hercules-js/pull/232) [`bb02af3`](https://github.com/withzeusai/hercules-js/commit/bb02af3fc075efdbaa4f1812e33fad6ffd87dab8) Thanks [@grant0417](https://github.com/grant0417)! - Stop reporting a deleted route file as a bug in the Hercules preview. Vite handled a deleted file like an edited one: the browser was told to import the route again and logged "[vite] Failed to reload" and "[vite] Internal Server Error ENOENT", and the Worker reloaded with the old route tree and logged "Failed to load url /src/routes/... in routeTree.gen.ts", all in the second before TanStack Router rewrote the route tree and reloaded the page. On Hercules dev machines this came up whenever the agent removed a route or moved the home page under a layout, and was about 30% of the preview's automatic reloads on November 8. A deleted file that only the route tree imports now gets no update; one that other modules still import is left to Vite, so the broken import still shows.
+- Updated dependencies [[`68610ea`](https://github.com/withzeusai/hercules-js/commit/68610ea583fdd45771855e1cedcfad084fce17a2), [`bb02af3`](https://github.com/withzeusai/hercules-js/commit/bb02af3fc075efdbaa4f1812e33fad6ffd87dab8)]:
+  - @usehercules/vite@2.0.3
+
 ## 1.0.2
 
 ### Patch Changes
