@@ -1,14 +1,345 @@
 # @usehercules/agents
 
-Hercules agents in a Hercules app. This release covers app tools: declare
-tools next to your backend functions, serve them to Hercules agents as an MCP
-server, and let Hercules Auth decide who is calling them.
+Hercules agents in a Hercules app:
 
-The package has no runtime dependencies. It verifies tokens with Web Crypto
-and speaks MCP over stateless Streamable HTTP, so it fits in a Convex HTTP
-action.
+- **Talk to an agent** from a Convex app. The app's backend starts runs,
+  Hercules delivers what they do into the app's own database, and the page
+  streams the reply as it is written.
+- **Serve the app's tools** to agents over MCP, with Hercules Auth deciding
+  who is calling them.
 
-## Convex
+The package has no runtime dependencies. It verifies tokens with Web Crypto,
+so it fits in a Convex HTTP action.
+
+| Entry point                         | What                                                                |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `@usehercules/agents/convex.config` | The `herculesAgents` Convex component                               |
+| `@usehercules/agents/convex`        | `HerculesAgents`, and `defineTools`, `tool`, `ToolError`            |
+| `@usehercules/agents/react`         | `useAgentThread`                                                    |
+| `@usehercules/agents`               | Backend-neutral: API types, `followRun`, the token verifier and MCP |
+
+## Talking to an agent
+
+```ts
+// convex/convex.config.ts
+import { defineApp } from "convex/server";
+import herculesAgents from "@usehercules/agents/convex.config";
+
+const app = defineApp();
+app.use(herculesAgents);
+export default app;
+```
+
+```ts
+// convex/agent.ts
+import { HerculesAgents } from "@usehercules/agents/convex";
+import { components, internal } from "./_generated/api";
+
+// Keep the `: HerculesAgents` annotation.
+export const support: HerculesAgents = new HerculesAgents(components.herculesAgents, {
+  agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T", // The agent's id, a ULID.
+  onRunFinished: internal.orders.onAgentRunFinished,
+  limits: { runsPerUserPerHour: 20 },
+});
+
+// send, thread, cancel, claimPageAction and deleteThread, for the page.
+export const { send, thread, cancel, claimPageAction, deleteThread } = support.api();
+```
+
+The annotation on `support` is needed: `internal` is typed from every
+module's exports, `support` included, so without it TypeScript cannot infer
+`support` from an initializer that names `internal`, and the app's type-check
+fails with TS7022.
+
+```ts
+// convex/http.ts
+import { httpRouter } from "convex/server";
+import { support } from "./agent";
+
+const http = httpRouter();
+support.registerRoutes(http); // POST /hercules/agents/events
+export default http;
+```
+
+To shape the functions yourself, call the methods from your own:
+
+```ts
+export const send = mutation({
+  args: { threadId: v.optional(v.string()), text: v.string() },
+  handler: (ctx, args) => support.send(ctx, args),
+});
+export const thread = query({
+  args: { threadId: v.string() },
+  handler: (ctx, { threadId }) => support.readThread(ctx, { threadId }),
+});
+```
+
+### How it works
+
+1. `send` runs in a mutation. It reads the signed-in user from `ctx.auth`,
+   checks their hourly limit and that no run is going on the thread, writes
+   their message and the run, and schedules the call that starts the run at
+   Hercules with the app's `HERCULES_API_KEY`. All in one transaction.
+2. Hercules delivers the run's events to `POST /hercules/agents/events`,
+   signed by the app's Hercules Auth tenant. Each batch is applied in one
+   mutation, and each event once. Streamed text is kept in chunks and merged
+   when the message completes; a message too large for one document is
+   stored in several.
+3. The page reads the thread with `thread`, a Convex query, and streams the
+   reply from Hercules with the run's read-only token until the completed
+   message lands in Convex.
+4. When a run ends, `onRunFinished` is called after the last write.
+
+If nothing has been delivered for a run in three minutes, the component asks
+Hercules for the run and then its events itself, so a delivery that never
+arrives only delays a reply. While Hercules says the run is still going it
+asks less and less often (after 3, 6, 12 minutes, up to every 30), and any
+delivered event starts that over. The same check sends a run again if the call
+that starts it was lost, asks again for a cancel that did not get through,
+and records a run's ending only once every event before it is applied. The
+check is started by a mutation that reschedules itself, which Convex never
+loses, so a run is not left open and its thread busy. A run that cannot be
+settled within a day is failed, so its thread is free again.
+
+A start Hercules cannot answer is not a refusal. On a 503, any other 5xx, a
+timeout or a network error the run stays open and is sent again under the
+same id, as told by `Retry-After` and then further apart, until Hercules
+answers with the run or refuses it: Hercules may have the run already, and
+says so in the 503 it answers while it cannot confirm the run started. A run
+it never takes is failed after a day.
+
+A run Hercules does not take fails with Hercules's own code. One of them is
+the app's setup, not the conversation: `agent_not_found` means Hercules has
+no agent with the id in `convex/agent.ts` for this app, or the agents API is
+not turned on for it. A new chat will not help; fix the id.
+
+A run Hercules refuses over a limit (`end_user_rate_limited`,
+`agent_daily_limit_reached`) fails at once with that code. The thread's
+`latestRun.error` then carries `retryAfterSeconds`, counted from
+`latestRun.finished_at`.
+
+### Methods
+
+| Method                                                  | Where              | Does                                                                     |
+| ------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| `send(ctx, { threadId?, text, context? })`              | mutation           | Sends the caller's message and starts a run                              |
+| `run(ctx, { threadId?, text, context? })`               | mutation or action | Starts a run as the app's own job, for no end user                       |
+| `readThread(ctx, { threadId, limit? })`                 | query              | The caller's thread: its newest messages, the run going, its live stream |
+| `readThreadDetails(ctx, { threadId, limit? })`          | query, internal    | A thread as stored, with tool results. For the app's backend             |
+| `cancel(ctx, { threadId })`                             | mutation           | Stops the run going on the caller's thread                               |
+| `deleteThread(ctx, { threadId })`                       | mutation           | Deletes the thread here and at Hercules. Irreversible                    |
+| `claimPageAction(ctx, { threadId, runId, toolCallId })` | mutation           | Takes a page action for one tab to run                                   |
+| `registerRoutes(http)`                                  | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents         |
+
+The caller is the signed-in user, from `ctx.auth`. There are no anonymous
+visitors: without a signed-in user `send` throws `sign_in_required`, and the
+other methods answer `null` or `false`. A thread answers only to the user who
+opened it: anyone else reads `null`.
+Failures throw a `ConvexError` whose `data` is `{ code, message,
+retryAfterSeconds? }`, with `code` one of `sign_in_required`, `not_found`,
+`thread_busy`, `end_user_rate_limited`, `message_too_long` and
+`invalid_request`.
+
+### When a run finishes
+
+```ts
+// convex/orders.ts
+import { runFinishedValidator } from "@usehercules/agents/convex";
+
+export const onAgentRunFinished = internalMutation({
+  args: runFinishedValidator.fields,
+  handler: async (ctx, run) => {
+    // run.status is completed, failed, cancelled or capped; run.output is the reply.
+  },
+});
+```
+
+### What the page sees of tools
+
+A thread goes to the user's browser, so by default it leaves out what the
+agent's tools did in detail:
+
+- A Hercules tool call (a built-in or a connector) is named `tool`, with the
+  summary `Used a tool`, or `Couldn't use a tool` when it failed.
+- No tool call carries its result. The app's own tools and page actions keep
+  their names and summaries: they are the app's.
+
+Hercules does the same to the run's live stream, so what streams and what is
+stored read alike. Set `exposeToolDetails: true` to show the page the tool
+calls as they are: Hercules's tool names and summaries in the thread, and
+those plus the results of the app's tools in the live stream.
+
+The component stores everything as delivered either way. The app's backend
+reads it with `readThreadDetails`, which returns the thread unhidden with
+`toolCalls`, each with its `resultJson`:
+
+```ts
+// convex/audit.ts
+export const toolCallsOf = internalQuery({
+  args: { threadId: v.string() },
+  handler: async (ctx, { threadId }) =>
+    (await support.readThreadDetails(ctx, { threadId }))?.toolCalls ?? [],
+});
+```
+
+`readThreadDetails` does not read `ctx.auth` and answers for any user's
+thread of this agent. Call it from an internal function, or check who is
+asking first, and do not return it to a page.
+
+### Page actions
+
+A page action is the agent's command to the page, such as opening a record.
+List its name in `pageActions`, and give the page a handler for it (below).
+One open tab claims each call with `claimPageAction` and runs it. A page
+action can be claimed once Hercules has delivered it to the app, and only
+while it is less than two minutes old by the time the agent called it. The
+claim decides that on the server's clock, so a browser's clock plays no part.
+
+One that came too late is not run, and the page is told: `thread.pageActions`
+lists the page actions no tab has run (the twenty that have waited longest),
+each with `status: "pending"` or `"expired"`, for ten minutes from when it
+arrived. The status is as of the thread's last update: a Convex query is not
+run again as time passes, so a page sees `expired` with the next update of
+the thread. A claim that is refused as too late is such an update. Show the expired ones, so
+the user is not left waiting for something that will not happen:
+
+```tsx
+const late = thread?.pageActions.filter((action) => action.status === "expired") ?? [];
+// "The assistant tried to open something for you, but it arrived too late."
+```
+
+### Deleting a thread
+
+`deleteThread` removes the thread from the app at once. Its other rows are
+purged in batches, and Hercules is asked to delete its copy until it confirms:
+it answers `thread_busy` while the thread's run is still stopping, and the
+component asks again as told, for up to a day. A 404 counts as "gone" only
+once it has been the answer for an hour, since Hercules also answers 404
+while the agents API is off for the app. Both are driven by a mutation
+that reschedules itself, so neither stops halfway.
+
+### Several agents
+
+An app can have several `HerculesAgents`, each with its own functions. A
+thread belongs to the agent it was started with: the other agents' `thread`,
+`cancel`, `claimPageAction` and `deleteThread` answer as if it did not exist,
+so one agent's `exposeToolDetails` never shows another agent's tool calls.
+
+### The events route
+
+`support.registerRoutes(http)` routes `POST /hercules/agents/events`. Hercules
+signs each delivery for `https://<deployment>.convex.site/hercules/agents/events`,
+so the route takes a token for that path on `CONVEX_SITE_URL`, and on the
+`.convex.site` origin that goes with `CONVEX_CLOUD_URL`. A deployment that
+points `CONVEX_SITE_URL` at a custom domain keeps working. A deployment that
+overrides both variables with custom domains cannot be delivered to: the
+route would answer 401 to every delivery, which Hercules reads as the whole
+deployment refusing it. It then stops delivering to the deployment and comes
+back to try after 30 seconds, 2 minutes, 10 minutes, then every hour. Leave
+`CONVEX_CLOUD_URL` as Convex sets it.
+
+Hercules acts on the status the route answers, so the route is careful with
+them: 401 and 403 only for a token that was checked and is not Hercules's for
+this route; 503 with `Retry-After` while the issuer's keys cannot be fetched;
+500 while the app's environment is not set, or when one event cannot be
+applied (tried again for a day); 413 when a batch of several events cannot be
+applied (Hercules sends half). Event types and fields the package does not
+know are accepted and skipped.
+
+### Configuration
+
+| Option                      | Default                                             |
+| --------------------------- | --------------------------------------------------- |
+| `apiKey`                    | `HERCULES_API_KEY`                                  |
+| `apiUrl`                    | `HERCULES_API_URL`, then `https://api.hercules.app` |
+| `issuer`                    | `HERCULES_OIDC_AUTHORITY`                           |
+| `pageActions`               | none: the page actions every run may call           |
+| `exposeToolDetails`         | `false`: see "What the page sees of tools"          |
+| `limits.runsPerUserPerHour` | no limit                                            |
+
+A component cannot read the app's environment, so the app key travels to the
+component's scheduled functions as an argument. It never reaches a browser,
+and is sent only to an `https` API URL (or `http://localhost`). A run's
+stuck-run check keeps the key it was scheduled with, so a run that is going
+while the key is rotated is settled by delivery, not by the check.
+
+## In React
+
+```tsx
+import { useAgentThread } from "@usehercules/agents/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+// The chat is for signed-in users. Render it once Convex knows who is asking:
+// before that the thread reads as null, and a message is refused with
+// `sign_in_required`.
+function ChatGate() {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated) return <p>Sign in to chat.</p>;
+  return <Chat />;
+}
+
+function Chat() {
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const chat = useAgentThread({
+    threadId,
+    thread: useQuery(api.agent.thread, threadId === null ? "skip" : { threadId }),
+    send: useMutation(api.agent.send),
+    cancel: useMutation(api.agent.cancel),
+    claimPageAction: useMutation(api.agent.claimPageAction),
+    pageActions: {
+      open_order: ({ orderId }) => navigate(`/orders/${orderId}`),
+    },
+  });
+
+  async function submit(text: string) {
+    const started = await chat.send(text);
+    if (started !== null) setThreadId(started.threadId);
+  }
+  // chat.messages, chat.status ("loading" | "ready" | "submitted" | "streaming"),
+  // chat.cancel(), chat.error
+}
+```
+
+The reply streams from the run's live URL, resuming with `Last-Event-ID`
+after a dropped connection, until Convex has the completed message. Page
+actions are one-way: one open tab claims each and runs it, and nothing goes
+back to the run. The hook takes them from `thread.pageActions`, so one runs
+when Hercules has delivered it.
+
+`thread` returns the thread's newest messages: 100 unless `limit` is a whole
+number of at least one, at most 200, and fewer when they come to more than about 4 MiB.
+`thread.hasMore` says there are older ones.
+
+`chat.error` is one of three things, or null:
+
+- An `AgentError` with a `code`. The message was not sent (one of `send`'s
+  codes), or the latest run failed (the run's code, such as `out_of_credits`
+  or `agent_daily_limit_reached`). For a limit it also has
+  `retryAfterSeconds`. `agent_not_found` is the app's setup, not the chat.
+- A `RunStreamError`, only while a run is going. The live view of the reply
+  could not be read: Hercules refused the stream, or kept answering 429
+  because more than ten streams of the run are open (an eleventh tab). The
+  run is not affected. The reply still arrives through `thread`, without the
+  typing effect, and the error clears when the run is over. Do not show it as
+  a failed message.
+- Any other `Error` a mutation threw, such as a lost connection.
+
+```tsx
+import { AgentError, RunStreamError } from "@usehercules/agents/react";
+
+if (chat.error instanceof RunStreamError) {
+  // Nothing to tell the user: the reply is on its way through Convex.
+} else if (chat.error instanceof AgentError && chat.error.code === "agent_not_found") {
+  // The app is set up wrong. Starting a new chat will not help.
+}
+```
+
+## App tools
+
+Declare tools next to your backend functions, serve them to Hercules agents
+as an MCP server, and let Hercules Auth decide who is calling them.
 
 ```ts
 // convex/tools.ts
@@ -45,7 +376,7 @@ export default http;
 
 The tools are served at `https://<deployment>.convex.site/mcp`.
 
-## Who is calling
+### Who is calling
 
 A tool handler has no `ctx.auth`. The package checks the bearer token itself,
 so the token is worth nothing on the app's other functions. The verified
@@ -89,7 +420,7 @@ list_open_hours: tool({
 
 A caller never sees, and cannot call, a tool that does not accept them.
 
-## Arguments and results
+### Arguments and results
 
 - `args` are checked before the handler runs. Unknown fields are refused, and
   the model is told which field was wrong.
@@ -102,13 +433,13 @@ A caller never sees, and cannot call, a tool that does not accept them.
   a string, a union) is enforced the same way and sent as text.
 - `v.int64()` travels as a decimal string and `v.bytes()` as base64.
 
-## Errors
+### Errors
 
 Throw `ToolError` or a `ConvexError` with a string to tell the model what
 went wrong in words it can act on. Any other error is logged and reaches the
 model as a generic failure, so internal detail does not leak.
 
-## Several servers
+### Several servers
 
 Name each set of tools when the app splits them by data or risk. Each is its
 own MCP server with its own URL, and a token issued for one is refused by the
@@ -119,7 +450,7 @@ export const supportTools = defineTools({ name: "support", tools: { ... } }); //
 export const billingTools = defineTools({ name: "billing", tools: { ... } }); // /mcp/billing
 ```
 
-## How tokens are checked
+### How tokens are checked
 
 A request must carry an RS256 JWT signed by the app's Hercules Auth
 (`HERCULES_OIDC_AUTHORITY`), issued for this server's own URL, and not
@@ -142,12 +473,12 @@ overrides both variables must pass `audiences` to `defineTools` with its
 
 Pass `issuer` or `audiences` to `defineTools` to override either.
 
-## Other backends
+### Other backends
 
 `@usehercules/agents` exports the backend-neutral core (`createMcpHandler`,
 `createTokenVerifier`): a function from a web `Request` to a `Response`. An
 adapter supplies the tools and the context their handlers receive.
 
-## Not supported yet
+### Not supported yet
 
 Server-sent events, resources, prompts, sampling and elicitation.

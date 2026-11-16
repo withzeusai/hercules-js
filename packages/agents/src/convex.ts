@@ -1,6 +1,11 @@
 /**
- * The Convex adapter: declare tools with Convex validators and serve them
- * from the app's HTTP router.
+ * Hercules agents in a Convex app. Two halves:
+ *
+ * - App tools: declare tools with Convex validators and serve them to agents
+ *   from the app's HTTP router (`defineTools`, `tool`).
+ * - Talking to an agent: `HerculesAgents` starts runs from the app's
+ *   functions and keeps their threads in the `herculesAgents` component
+ *   (`@usehercules/agents/convex.config`).
  *
  * ```ts
  * // convex/tools.ts
@@ -463,3 +468,21 @@ export function defineTools(definition: ToolsDefinition): DefinedTools {
     },
   };
 }
+
+export {
+  HerculesAgents,
+  runFinishedValidator,
+  type ActiveRun,
+  type AgentErrorCode,
+  type AgentErrorData,
+  type AgentThread,
+  type AgentThreadDetails,
+  type HerculesAgentsOptions,
+  type PendingPageAction,
+  type RunFinished,
+  type SendArgs,
+  type StoredToolCall,
+  type ThreadArgs,
+  type ThreadMessage,
+} from "./agents";
+export type { ComponentApi } from "./component/_generated/component";
