@@ -130,6 +130,17 @@ A run Hercules refuses over a limit (`end_user_rate_limited`,
 `latestRun.error` then carries `retryAfterSeconds`, counted from
 `latestRun.finished_at`.
 
+`cancel` asks Hercules to stop the run. Until Hercules has, the run is still
+the thread's: `activeRun.stopping` is true, and `send` throws `thread_busy`.
+That is a second or so as a rule. The component then reads what the run wrote
+before it stopped and records the run as `cancelled`. Hercules stores a
+reply's text in checkpoints (at the end of each block of text, before each
+tool call, and every 2,000 characters), so a reply that was stopped while it
+was written is kept up to its last checkpoint, as a message with the status
+`incomplete`. A run that was asked to stop and that Hercules ends as `failed`
+with the code `run_failed` is recorded as `cancelled` too; a failure with a
+code of its own, such as `out_of_credits`, stays a failure.
+
 ### Methods
 
 | Method                                                  | Where              | Does                                                                     |
@@ -498,7 +509,23 @@ call itself, so TanStack never runs one or starts a second run.
 - `useThreadSync` returns the thread: `thread.activeRun?.progress` is the
   run's latest progress label. Each also comes to `useChat`'s
   `onCustomEvent` as `hercules.progress` with `{ label }`.
-- `chat.stop()` stops the run with the app's `cancel` mutation.
+- `chat.stop()` stops the run with the app's `cancel` mutation. The chat is
+  free at once, and the run takes a moment longer to end. A message sent in
+  that moment waits for the run to end (for `settleTimeoutMs` at most) and is
+  then sent. `thread.activeRun?.stopping` says a stop is on its way, for a
+  page that would rather hold its Send button.
+- A reply that was stopped while it was written stays in the chat as far as
+  this page streamed it, with `metadata.hercules.status` set to
+  `"incomplete"`. The thread keeps it up to its last checkpoint only, so a
+  reload, or another tab, can show less of it, or none of it.
+- `chat.error` is not kept across a reload. To say why the last message got
+  no reply after one, read the thread: when `thread.latestRun.status` is
+  `"failed"`, `thread.latestRun.error.code` is the run's code.
+- `chat.isLoading` is about this page's stream. A run Convex still has going
+  when it is false (`thread.activeRun` is not null) is one this page is not
+  streaming: it was started in another tab, or its ending has not been
+  delivered to the app yet. A message sent then fails with `thread_busy`, so
+  hold Send, or say that the reply is still finishing.
 - The chat is for signed-in users: gate it with `useConvexAuth()`, as
   `AgentChat` does above. Without a signed-in user every message fails with
   `sign_in_required`.
@@ -653,7 +680,7 @@ caller is the handler's third argument:
 | `caller.principal` | Who                               | Fields                                                                                                                                                           |
 | ------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `"user"`           | A signed-in end user of the app   | `tokenIdentifier` (the same `<issuer>\|<subject>` the app stores for their web session), `issuer`, `subject`, and `agentId` when a Hercules agent calls for them |
-| `"agent"`          | A Hercules agent with no end user | `agentId`, and `visitorId` for a public agent's anonymous visitor                                                                                                |
+| `"agent"`          | A Hercules agent with no end user | `agentId`. `visitorId` is deprecated: agents no longer take anonymous visitors, so it is null except on a thread a visitor opened before that                    |
 
 Pass the caller to an internal function explicitly. Never take a user id from
 the tool's arguments: the model writes those.

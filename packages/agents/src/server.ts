@@ -28,9 +28,9 @@ export type ToolPrincipal = "user" | "agent";
  * - `user`: a signed-in end user of the app. `tokenIdentifier` is the same
  *   `<issuer>|<subject>` string the app stores for that user's web session.
  *   `agentId` is set when a Hercules agent makes the call on their behalf.
- * - `agent`: a Hercules agent acting for nobody in particular (a run the
- *   organization, a schedule, or an anonymous visitor started). There is no
- *   end user, so a tool only receives it after opting in with `principals`.
+ * - `agent`: a Hercules agent acting for nobody the app knows (a run the
+ *   organization, a schedule, or the app's own job started). There is no end
+ *   user, so a tool only receives it after opting in with `principals`.
  */
 export type ToolCaller =
   | {
@@ -40,7 +40,18 @@ export type ToolCaller =
       subject: string;
       agentId: string | null;
     }
-  | { principal: "agent"; agentId: string; visitorId: string | null };
+  | {
+      principal: "agent";
+      agentId: string;
+      /**
+       * @deprecated Hercules agents no longer take anonymous visitors, so
+       * this is null on every new run. It is still set on a run in a thread
+       * a visitor opened before that: treat a caller with one as an
+       * anonymous member of the public, never as the app's own job. It will
+       * be removed once Hercules no longer sends it.
+       */
+      visitorId: string | null;
+    };
 
 /** A failure the calling model should read and can act on. Its message is sent as is. */
 export class ToolError extends Error {

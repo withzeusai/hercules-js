@@ -502,6 +502,23 @@ async function pullEvents(
 }
 
 /**
+ * Records the ending Hercules gave a run it was asked to stop. What the run
+ * wrote before it stopped is read first, as the stuck-run check does: the
+ * answer to a cancel can come before delivery has brought the run's last
+ * events, and a run that is over is never checked again. A read that fails
+ * does not hold the ending back: once the run has stopped, the thread is free.
+ */
+async function recordStopped(
+  ctx: ActionCtx,
+  config: ApiConfig,
+  run: LoadedRun,
+  outcome: RunOutcome,
+): Promise<void> {
+  await pullEvents(ctx, config, run);
+  await ctx.runMutation(internal.hercules.recordRun, { runId: run.runId, outcome });
+}
+
+/**
  * Stops a run at Hercules that a cancel is waiting for. A run Hercules never
  * got is ended here. True when the run is over.
  */
@@ -519,7 +536,7 @@ async function cancelAtHercules(
     const current = readRun(response.body);
     const outcome = current === null ? null : outcomeFromRun(current);
     if (outcome === null) return false;
-    await ctx.runMutation(internal.hercules.recordRun, { runId: run.runId, outcome });
+    await recordStopped(ctx, config, run, outcome);
     return true;
   }
   if (response.status === 404 && !run.accepted) {
@@ -720,12 +737,24 @@ export const cancelRun = internalAction({
       `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
     );
     if (response.ok) {
-      const run = readRun(response.body);
-      if (run !== null) {
-        await ctx.runMutation(internal.hercules.recordRun, {
-          runId: args.runId,
-          outcome: outcomeFromRun(run),
-        });
+      const current = readRun(response.body);
+      const outcome = current === null ? null : outcomeFromRun(current);
+      if (outcome !== null) {
+        const run = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
+        if (run !== null && !isFinalStatus(run.status)) {
+          await recordStopped(ctx, args.api, run, outcome);
+        }
+        return null;
+      }
+      // Hercules took the stop, and the run had not ended when it answered.
+      // Asked again soon, so the thread is free when it has, without waiting
+      // for the ending to be delivered or for the stuck-run check.
+      if (current !== null && args.attempt + 1 < MAX_CANCEL_ATTEMPTS) {
+        await ctx.scheduler.runAfter(
+          retryDelayMs(args.attempt, null),
+          internal.hercules.cancelRun,
+          { ...args, attempt: args.attempt + 1 },
+        );
       }
       return null;
     }

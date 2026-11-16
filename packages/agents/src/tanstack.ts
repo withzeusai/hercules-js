@@ -37,7 +37,14 @@ import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai/client";
 import { useQuery } from "convex/react";
 import type { FunctionReference } from "convex/server";
 import { useEffect, useRef } from "react";
-import { notSentChunk, RunChunks, runIdOf, threadToUIMessages, transcriptKey } from "./ag-ui";
+import {
+  keepCutOffReplies,
+  notSentChunk,
+  RunChunks,
+  runIdOf,
+  threadToUIMessages,
+  transcriptKey,
+} from "./ag-ui";
 import type { AgentThread } from "./agents";
 import { AgentError, toAgentError } from "./errors";
 import { createPageActionRunner, type PageActionHandlers } from "./page-actions";
@@ -109,7 +116,9 @@ export interface HerculesConnectionOptions {
   /**
    * How long to wait, after the live stream ends, for Convex to record that
    * the run is over before the chat takes a new message. Until it has, a new
-   * message would find the thread busy. Defaults to 10 seconds.
+   * message would find the thread busy. Also how long a message sent right
+   * after `chat.stop()` waits for the stopped run to end before it is
+   * refused as `thread_busy`. Defaults to 10 seconds.
    */
   settleTimeoutMs?: number;
 }
@@ -265,7 +274,9 @@ function watchThread(
  * - `connect` sends the message with the app's `send` mutation, then streams
  *   the run's live events from Hercules as AG-UI chunks, resuming with
  *   `Last-Event-ID`. It ends once Convex has the run's end, so the next
- *   message never finds the thread busy. The stream is read only until then:
+ *   message never finds the thread busy. A message sent right after
+ *   `chat.stop()`, while the stopped run is still ending, waits for it to
+ *   end and is then sent. The stream is read only until then:
  *   when Convex has the run's end first, or the stream cannot be read at all
  *   (refused, or too many tabs streaming the run), the reply comes from
  *   Convex. A live view that fails is not an error of the chat.
@@ -304,6 +315,51 @@ export function herculesConnection(
 
   function threadArgs(threadId: string, limit?: number): ThreadQueryArgs {
     return { threadId, ...(limit !== undefined && { limit }) };
+  }
+
+  /**
+   * Whether the thread is free again after a stop: true once the run that
+   * was stopping is over. False when no stop is why the thread is busy (a
+   * run nobody stopped is going), and when the stop did not land in time.
+   */
+  async function stopLanded(threadId: string, signal: AbortSignal | undefined): Promise<boolean> {
+    const watch = watchThread(convex, api.thread, threadArgs(threadId));
+    try {
+      const free = await watch.until(
+        (thread) => {
+          if (thread === null) return false;
+          if (thread.activeRun === null) return true;
+          return thread.activeRun.stopping ? undefined : false;
+        },
+        signal,
+        settleTimeoutMs,
+      );
+      return free === true;
+    } catch {
+      // The thread cannot be read: the refusal stands.
+      return false;
+    } finally {
+      watch.stop();
+    }
+  }
+
+  /**
+   * Sends the message. One refused as `thread_busy` while the thread's run
+   * is stopping (the user pressed Stop and sent at once) waits for the stop
+   * to land and is sent once more. Any other refusal is thrown as it came.
+   */
+  async function send(
+    args: SendArgs & { threadId: string },
+    signal: AbortSignal | undefined,
+  ): Promise<{ threadId: string; runId: string }> {
+    try {
+      return await convex.mutation(api.send, args);
+    } catch (error) {
+      const failure = toAgentError(error);
+      if (!(failure instanceof AgentError) || failure.code !== "thread_busy") throw error;
+      if (!(await stopLanded(args.threadId, signal))) throw error;
+      return await convex.mutation(api.send, args);
+    }
   }
 
   async function* runStream(
@@ -392,11 +448,10 @@ export function herculesConnection(
       const context = contextOf(data);
       let started: { threadId: string; runId: string };
       try {
-        started = await convex.mutation(api.send, {
-          threadId: runContext.threadId,
-          text,
-          ...(context !== undefined && { context }),
-        });
+        started = await send(
+          { threadId: runContext.threadId, text, ...(context !== undefined && { context }) },
+          abortSignal,
+        );
       } catch (error) {
         const failure = toAgentError(error);
         // A run that never started ends here, with the reason's code on `chat.error`.
@@ -465,7 +520,10 @@ export interface SyncableChat {
 /**
  * Puts the thread as Convex has it into the chat, when it reads differently
  * from what the chat shows and no reply is streaming here. Returns whether
- * it did. Messages older than the thread's window stay as they are.
+ * it did. Messages older than the thread's window stay as they are. So does
+ * what this page streamed of a reply that was stopped while it was written,
+ * when the thread holds less of it: it is kept with
+ * `metadata.hercules.status` set to `"incomplete"`.
  */
 export function syncThread(chat: SyncableChat, thread: ThreadValue | undefined): boolean {
   if (thread === null || thread === undefined) return false;
@@ -481,6 +539,7 @@ export function syncThread(chat: SyncableChat, thread: ThreadValue | undefined):
     const index = chat.messages.findIndex((message) => message.id === first.id);
     if (index > 0) next = [...(chat.messages.slice(0, index) as UIMessage[]), ...next];
   }
+  next = keepCutOffReplies(chat.messages, next, thread);
   if (transcriptKey(next) === transcriptKey(chat.messages)) return false;
   chat.setMessages(next);
   return true;

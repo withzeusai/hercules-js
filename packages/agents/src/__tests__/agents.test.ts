@@ -830,7 +830,9 @@ describe("cancel", () => {
     expect(await support.cancel(h.appCtx(BOB), { threadId })).toBe(false);
     expect(await support.cancel(h.appCtx(ALICE), { threadId })).toBe(true);
     await h.runDue();
-    expect(api.requests.at(-1)?.path).toBe(`/v1/agents/runs/${runId}/cancel`);
+    expect(api.requests.map((r) => `${r.method} ${r.path}`)).toContain(
+      `POST /v1/agents/runs/${runId}/cancel`,
+    );
     const thread = await read(support, threadId);
     expect(thread.activeRun).toBeNull();
     expect(thread.latestRun?.status).toBe("cancelled");
@@ -838,6 +840,167 @@ describe("cancel", () => {
     await deliver(support, event(runId, threadId, 9, "run.cancelled", { usage: { credits: 0.5 } }));
     await h.runDue();
     expect(finished).toHaveLength(1);
+  });
+
+  it("says the run is stopping until Hercules has stopped it, and asks again soon", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect((await read(support, threadId)).activeRun?.stopping).toBe(false);
+    let cancels = 0;
+    api.answerWith((request) => {
+      if (request.path !== `/v1/agents/runs/${runId}/cancel`) return undefined;
+      // The run had not ended yet when Hercules answered the first stop.
+      return ++cancels === 1 ? Response.json({ id: runId, status: "running" }) : undefined;
+    });
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    expect((await read(support, threadId)).activeRun).toMatchObject({ id: runId, stopping: true });
+    await h.runDue();
+    // Still going, so a new message is refused, and the page can say why.
+    expect((await read(support, threadId)).activeRun?.stopping).toBe(true);
+    await expect(support.send(h.appCtx(ALICE), { threadId, text: "Next" })).rejects.toSatisfy(
+      (error) => errorCode(error) === "thread_busy",
+    );
+    // Asked again within a second, not at the stuck-run check three minutes on.
+    await h.runUntil(h.now + 1000);
+    expect(cancels).toBe(2);
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun?.status).toBe("cancelled");
+    await support.send(h.appCtx(ALICE), { threadId, text: "Next" });
+  });
+
+  it("reads what the run wrote before it records the stop", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Delivery is behind, or down: the checkpoint is only at Hercules.
+    api.answerWith((request) =>
+      request.path.startsWith(`/v1/agents/runs/${runId}/events`)
+        ? Response.json({
+            data: [
+              event(runId, threadId, 2, "run.started"),
+              event(runId, threadId, 3, "message.appended", {
+                message_id: "msg_1",
+                text: "Here is the first part",
+              }),
+              event(runId, threadId, 4, "run.cancelled", { usage: { credits: 0.5 } }),
+            ],
+            has_more: false,
+          })
+        : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    const thread = await read(support, threadId);
+    expect(thread.latestRun?.status).toBe("cancelled");
+    expect(thread.messages[1]).toMatchObject({
+      id: "msg_1",
+      status: "incomplete",
+      parts: [{ type: "text", text: "Here is the first part" }],
+    });
+    expect(finished).toHaveLength(1);
+  });
+
+  it("records the stop even when what the run wrote cannot be read", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      request.path.startsWith(`/v1/agents/runs/${runId}/events`)
+        ? new Response("down", { status: 503 })
+        : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun?.status).toBe("cancelled");
+  });
+
+  it("keeps a checkpoint delivered after the stop as an incomplete reply", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    expect((await read(support, threadId)).latestRun?.status).toBe("cancelled");
+    // The answer to the cancel came first: delivery brings the reply's text after it.
+    await deliver(
+      support,
+      event(runId, threadId, 3, "message.appended", { message_id: "msg_1", text: "Here is " }),
+      event(runId, threadId, 5, "message.appended", {
+        message_id: "msg_1",
+        text: "the first part",
+      }),
+      event(runId, threadId, 6, "run.cancelled", { usage: { credits: 0.5 } }),
+    );
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    // Nothing is still writing it, so it does not read as `streaming`.
+    expect(thread.messages[1]).toMatchObject({
+      id: "msg_1",
+      status: "incomplete",
+      parts: [{ type: "text", text: "Here is the first part" }],
+    });
+    expect(finished).toHaveLength(1);
+  });
+
+  it("records a stopped run that Hercules ends as failed as cancelled", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Hercules ends a run stopped in its first step as failed, with no code of its own.
+    api.answerWith((request) =>
+      request.path === `/v1/agents/runs/${runId}/cancel`
+        ? Response.json({
+            id: runId,
+            status: "failed",
+            error: { code: "run_failed", message: "The run failed before it finished." },
+            usage: { credits: 0 },
+          })
+        : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    const thread = await read(support, threadId);
+    expect(thread.latestRun).toMatchObject({ status: "cancelled", error: null });
+    expect(finished).toEqual([expect.objectContaining({ status: "cancelled", error: null })]);
+  });
+
+  it("keeps a failure with a code of its own, stop or no stop", async () => {
+    const support = agents();
+    const first = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      request.path.endsWith("/cancel") ? Response.json({ id: "x", status: "running" }) : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId: first.threadId });
+    await deliver(
+      support,
+      event(first.runId, first.threadId, 3, "run.failed", {
+        error: { code: "out_of_credits", message: "The organization is out of credits." },
+        usage: null,
+      }),
+    );
+    expect((await read(support, first.threadId)).latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "out_of_credits" },
+    });
+
+    // And a run nobody stopped that fails with `run_failed` stays failed.
+    const second = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await deliver(
+      support,
+      event(second.runId, second.threadId, 3, "run.failed", {
+        error: { code: "run_failed", message: "The run failed before it finished." },
+        usage: null,
+      }),
+    );
+    expect((await read(support, second.threadId)).latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "run_failed" },
+    });
   });
 });
 
@@ -1329,7 +1492,11 @@ describe("a start call that was lost", () => {
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     await support.cancel(h.appCtx(ALICE), { threadId });
     await runOnly(notStart, h.now + 3 * 60 * 1000);
-    expect(api.requests.map((r) => r.path)).toEqual([`/v1/agents/runs/${runId}/cancel`]);
+    // Stopped, then read for what it wrote before the stop.
+    expect(api.requests.map((r) => r.path)).toEqual([
+      `/v1/agents/runs/${runId}/cancel`,
+      `/v1/agents/runs/${runId}/events?after=0&limit=100`,
+    ]);
     expect((await read(support, threadId)).latestRun?.status).toBe("cancelled");
   });
 

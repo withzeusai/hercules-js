@@ -73,6 +73,7 @@ type Thread = {
     live: { token: string; url: string } | null;
     progress: string | null;
     status: "queued" | "running";
+    stopping: boolean;
   } | null;
   agentId: string;
   hasMore: boolean;
