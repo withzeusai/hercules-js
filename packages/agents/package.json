@@ -19,6 +19,7 @@
   "files": [
     "dist",
     "src",
+    "!src/__tests__",
     "tsconfig.json",
     "tsdown.config.ts"
   ],
