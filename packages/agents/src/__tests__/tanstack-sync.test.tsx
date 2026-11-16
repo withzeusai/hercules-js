@@ -132,6 +132,104 @@ describe("useThreadSync", () => {
     expect(texts(result.current.chat.messages)).toEqual(["Open my order", "Opening order 123."]);
     expect(app.callsTo("agent:send")).toHaveLength(1);
   });
+
+  it("keeps the reply it streamed when the run is stopped before Convex has all of it", async () => {
+    const app = createApp(settledThread([]));
+    const { result } = renderChat(app);
+    await waitFor(() => expect(result.current.chat.isHydrating).toBe(false));
+    app.push(
+      frame(1, "run.started"),
+      frame(2, "message.delta", { message_id: "msg_1", text: "Here is the first part" }),
+      frame(3, "tool_call.started", { tool_call_id: "call_1", name: "tool", kind: "hercules" }),
+    );
+    let sending!: Promise<void>;
+    act(() => {
+      sending = result.current.chat.sendMessage("Write a report");
+    });
+    await waitFor(() =>
+      expect(result.current.chat.messages[1]?.parts).toContainEqual(
+        expect.objectContaining({ type: "tool-call", id: "call_1" }),
+      ),
+    );
+    act(() => result.current.chat.stop());
+    await act(async () => {
+      await sending;
+    });
+    expect(result.current.chat.isLoading).toBe(false);
+
+    // The run ends with no checkpoint of the reply: the thread has the user's message only.
+    const stopped = { id: RUN, status: "cancelled", error: null, cappedReason: null } as const;
+    act(() => {
+      app.setThread(
+        settledThread([userMessage("Write a report")], { ...stopped, finished_at: null }),
+      );
+    });
+    await waitFor(() =>
+      expect(result.current.chat.messages[1]?.metadata).toMatchObject({
+        hercules: { runId: RUN, status: "incomplete" },
+      }),
+    );
+    expect(texts(result.current.chat.messages)).toEqual([
+      "Write a report",
+      "Here is the first part",
+    ]);
+    // The tool call the stop cut off is not left running.
+    expect(result.current.chat.messages[1]?.parts).toEqual([
+      { type: "text", content: "Here is the first part" },
+    ]);
+
+    // A checkpoint delivered after the stop holds less than the page streamed.
+    act(() => {
+      app.setThread(
+        settledThread(
+          [
+            userMessage("Write a report"),
+            assistantMessage("msg_1", [{ type: "text", text: "Here is" }], "incomplete"),
+          ],
+          { ...stopped, finished_at: null },
+        ),
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(texts(result.current.chat.messages)).toEqual([
+      "Write a report",
+      "Here is the first part",
+    ]);
+
+    // It keeps its place when another tab's run adds to the thread.
+    act(() => {
+      app.setThread(
+        settledThread(
+          [
+            userMessage("Write a report"),
+            assistantMessage("msg_1", [{ type: "text", text: "Here is" }], "incomplete"),
+            userMessage("Never mind", OTHER_RUN),
+            assistantMessage(
+              "msg_2",
+              [{ type: "text", text: "All right." }],
+              "completed",
+              OTHER_RUN,
+            ),
+          ],
+          {
+            id: OTHER_RUN,
+            status: "completed",
+            error: null,
+            cappedReason: null,
+            finished_at: null,
+          },
+        ),
+      );
+    });
+    await waitFor(() =>
+      expect(texts(result.current.chat.messages)).toEqual([
+        "Write a report",
+        "Here is the first part",
+        "Never mind",
+        "All right.",
+      ]),
+    );
+  });
 });
 
 function chatWith(messages: SyncableChat["messages"], extra: Partial<SyncableChat> = {}) {
@@ -171,6 +269,56 @@ describe("syncThread", () => {
       },
     ]);
     expect(syncThread(chat, runningThread(thread.messages))).toBe(false);
+  });
+
+  const streamed = (text: string, status?: string) => ({
+    id: "msg_1",
+    role: "assistant",
+    parts: [{ type: "text", content: text }],
+    metadata: { hercules: { runId: RUN, ...(status !== undefined && { status }) } },
+  });
+  const userPart = { id: "local-1", role: "user", parts: [{ type: "text", content: "Hi" }] };
+
+  it("takes Convex's copy of a reply that completed, whatever the page streamed of it", () => {
+    // A step Hercules retried streamed its text twice, and the page then stopped reading.
+    const { chat, setMessages } = chatWith([userPart, streamed("Hello!Hello!")]);
+    expect(syncThread(chat, thread)).toBe(true);
+    expect(texts(setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello!"]);
+  });
+
+  it("takes Convex's copy of a cut-off reply that holds as much as the page's", () => {
+    const stored = settledThread(
+      [
+        userMessage("Hi"),
+        assistantMessage("msg_1", [{ type: "text", text: "Hello" }], "incomplete"),
+      ],
+      { id: RUN, status: "cancelled", error: null, cappedReason: null, finished_at: null },
+    );
+    const { chat, setMessages } = chatWith([userPart, streamed("Hello")]);
+    // Only to mark it: the text is the same.
+    expect(syncThread(chat, stored)).toBe(true);
+    expect(setMessages.mock.calls[0]?.[0][1]).toMatchObject({
+      parts: [{ type: "text", content: "Hello" }],
+      metadata: { hercules: { runId: RUN, status: "incomplete" } },
+    });
+    const marked = chatWith([userPart, streamed("Hello", "incomplete")]);
+    expect(syncThread(marked.chat, stored)).toBe(false);
+  });
+
+  it("does not keep a reply that finished here, or one that is not how Convex's begins", () => {
+    const stored = settledThread(
+      [
+        userMessage("Hi"),
+        assistantMessage("msg_1", [{ type: "text", text: "Hello" }], "incomplete"),
+      ],
+      { id: RUN, status: "failed", error: null, cappedReason: null, finished_at: null },
+    );
+    const finishedHere = chatWith([userPart, streamed("Hello there, how", "completed")]);
+    expect(syncThread(finishedHere.chat, stored)).toBe(true);
+    expect(texts(finishedHere.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello"]);
+    const another = chatWith([userPart, streamed("Good morning, how")]);
+    expect(syncThread(another.chat, stored)).toBe(true);
+    expect(texts(another.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello"]);
   });
 
   it("keeps messages older than the thread's window", () => {

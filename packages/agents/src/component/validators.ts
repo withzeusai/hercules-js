@@ -137,6 +137,12 @@ export const vActiveRun = v.object({
   /** The last event sequence number this app has applied. */
   lastSeq: v.number(),
   created_at: v.string(),
+  /**
+   * A stop was asked for (`cancel`) and the run has not ended yet. It ends
+   * within a few seconds as a rule; until then a new message is refused as
+   * `thread_busy`.
+   */
+  stopping: v.boolean(),
 });
 
 /** How the thread's latest run stands, going or not: it says why a reply is missing. */

@@ -74,6 +74,7 @@ export function runningThread(messages: AgentThread["messages"], runId = RUN): A
       live: { url: LIVE_URL, token: "run-token" },
       lastSeq: 0,
       created_at: AT,
+      stopping: false,
     },
     latestRun: { id: runId, status: "running", error: null, cappedReason: null, finished_at: null },
     pageActions: [],
@@ -215,6 +216,10 @@ export function createApp(initial: AgentThread | null = null) {
     watching: () => watchers.size,
     failSendWith(code: string, message: string) {
       sendError = new ConvexError({ code, message });
+    },
+    /** Takes messages again, after `failSendWith`. */
+    acceptSends() {
+      sendError = null;
     },
     answerStreamWith(answer: () => Response) {
       fetchAnswer = answer;

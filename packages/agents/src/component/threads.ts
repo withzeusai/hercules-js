@@ -232,11 +232,18 @@ async function threadView(
   // number of at least one (NaN and Infinity among them) reads as the default.
   const asked = limit !== undefined && Number.isFinite(limit) && limit >= 1 ? limit : null;
   const count = Math.min(MAX_MESSAGE_LIMIT, Math.floor(asked ?? DEFAULT_MESSAGE_LIMIT));
-  const { messages, hasMore } = await readMessages(ctx, thread.threadId, count, hideTools);
+  const active = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
+  const run = active === null || isFinalStatus(active.status) ? null : active;
+  const { messages, hasMore } = await readMessages(
+    ctx,
+    thread.threadId,
+    count,
+    hideTools,
+    run?.runId ?? null,
+  );
 
-  const run = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
   const activeRun =
-    run === null || isFinalStatus(run.status)
+    run === null
       ? null
       : {
           id: run.runId,
@@ -248,6 +255,7 @@ async function threadView(
               : null,
           lastSeq: run.lastSeq,
           created_at: isoTime(run._creationTime),
+          stopping: run.cancelRequested,
         };
 
   const latest = await ctx.db
@@ -394,7 +402,11 @@ export const readDetails = query({
   },
 });
 
-/** Stops the thread's run, if one is going. True when there was one to stop. */
+/**
+ * Stops the thread's run, if one is going. True when there was one to stop.
+ * The run is only marked here (`cancelRequested`, which the thread reports
+ * as `activeRun.stopping`): it ends when Hercules says it has stopped.
+ */
 export const cancel = mutation({
   args: { threadId: v.string(), agentId: v.string(), owner: v.string(), api: vApi },
   returns: v.boolean(),

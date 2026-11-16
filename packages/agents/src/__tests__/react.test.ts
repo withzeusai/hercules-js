@@ -63,6 +63,7 @@ function runningThread(overrides: Partial<AgentThread> = {}): AgentThread {
       live: { url: "https://api.hercules.test/v1/agents/runs/run_1/events", token: "run-token" },
       lastSeq: 0,
       created_at: "2026-11-15T12:00:00.000Z",
+      stopping: false,
     },
     latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
     pageActions: [],

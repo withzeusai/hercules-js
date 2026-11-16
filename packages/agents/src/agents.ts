@@ -319,7 +319,11 @@ export class HerculesAgents {
     });
   }
 
-  /** Stops the run going on the caller's thread. True when there was one. */
+  /**
+   * Stops the run going on the caller's thread. True when there was one.
+   * The run ends a moment later, once Hercules has stopped it: until then
+   * the thread's `activeRun.stopping` is true and `send` throws `thread_busy`.
+   */
   async cancel(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
     const owner = await this.ownerFor(ctx);
     if (owner === null) return false;

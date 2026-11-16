@@ -20,6 +20,8 @@ import {
   type App,
 } from "./tanstack-harness";
 
+const STOPPED_RUN = "0f4e3d2c-1b0a-4987-8654-3210fedcba98";
+
 const REPLY = assistantMessage("msg_1", [
   { type: "text", text: "Opening order 123." },
   {
@@ -449,6 +451,68 @@ describe("herculesConnection", () => {
     expect(app.callsTo("agent:cancel")[0]?.args).toEqual({ threadId: THREAD });
     await vi.waitFor(() => expect(chat.getIsLoading()).toBe(false));
     await vi.waitFor(() => expect(app.watching()).toBe(0));
+  });
+
+  it("sends a message that follows a stop once the stopped run has ended", async () => {
+    const stopped = runningThread([userMessage("Write a report", STOPPED_RUN)], STOPPED_RUN);
+    const app = createApp({ ...stopped, activeRun: { ...stopped.activeRun!, stopping: true } });
+    app.failSendWith("thread_busy", "The agent is still answering in this thread.");
+    const { chat } = chatFor(app);
+    const sending = chat.sendMessage("Never mind");
+    await vi.waitFor(() => expect(app.callsTo("agent:send")).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Refused, and waiting for the stop to land: not an error of the chat.
+    expect(chat.getIsLoading()).toBe(true);
+    expect(chat.getError()).toBeUndefined();
+    expect(app.callsTo("agent:send")).toHaveLength(1);
+
+    const reply = assistantMessage("msg_2", [{ type: "text", text: "All right." }]);
+    app.push(
+      frame(1, "run.started"),
+      frame(2, "message.completed", { message: reply }),
+      frame(3, "run.completed", { output: "All right.", usage: null }),
+    );
+    // The stopped run ends, and the thread takes messages again.
+    app.acceptSends();
+    app.setThread(
+      settledThread([userMessage("Write a report", STOPPED_RUN)], {
+        id: STOPPED_RUN,
+        status: "cancelled",
+        error: null,
+        cappedReason: null,
+        finished_at: null,
+      }),
+    );
+    await vi.waitFor(() => expect(app.callsTo("agent:send")).toHaveLength(2));
+    app.setThread(
+      settledThread([userMessage("Write a report", STOPPED_RUN), userMessage("Never mind"), reply]),
+    );
+    await sending;
+    expect(chat.getError()).toBeUndefined();
+    expect(chat.getMessages().at(-1)?.parts).toEqual([{ type: "text", content: "All right." }]);
+    expect(app.watching()).toBe(0);
+  });
+
+  it("reports thread_busy at once when no stop is why the thread is busy", async () => {
+    // Another tab's run is going, and nobody stopped it.
+    const app = createApp(runningThread([userMessage("Write a report", STOPPED_RUN)], STOPPED_RUN));
+    app.failSendWith("thread_busy", "The agent is still answering in this thread.");
+    const { chat } = chatFor(app);
+    await chat.sendMessage("Never mind");
+    expect(agentErrorCode(chat.getError())).toBe("thread_busy");
+    expect(app.callsTo("agent:send")).toHaveLength(1);
+    expect(app.watching()).toBe(0);
+  });
+
+  it("reports thread_busy when the stop does not land within the settle timeout", async () => {
+    const stopped = runningThread([userMessage("Write a report", STOPPED_RUN)], STOPPED_RUN);
+    const app = createApp({ ...stopped, activeRun: { ...stopped.activeRun!, stopping: true } });
+    app.failSendWith("thread_busy", "The agent is still answering in this thread.");
+    const { chat } = chatFor(app, { settleTimeoutMs: 30 });
+    await chat.sendMessage("Never mind");
+    expect(agentErrorCode(chat.getError())).toBe("thread_busy");
+    expect(app.callsTo("agent:send")).toHaveLength(1);
+    expect(app.watching()).toBe(0);
   });
 
   it("hydrates a thread for persistence, runs a page action left waiting, and joins the run going", async () => {

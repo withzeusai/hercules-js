@@ -668,12 +668,117 @@ export function runIdOf(message: { metadata?: Record<string, any> | undefined })
   return typeof runId === "string" ? runId : null;
 }
 
+/** What `metadata.hercules.status` says of a reply this page streamed and its run did not finish here. */
+const CUT_OFF_STATUSES: ReadonlySet<unknown> = new Set([
+  // Streamed until the page stopped the run: the stream never said how it ended.
+  undefined,
+  "incomplete",
+  "cancelled",
+  "failed",
+]);
+
+/** A message as the chat shows it: what `useChat` returns, read loosely. */
+interface ShownMessage {
+  id: string;
+  role: string;
+  parts: ReadonlyArray<unknown>;
+  metadata?: Record<string, any> | undefined;
+}
+
+function shownText(parts: ReadonlyArray<unknown>): string {
+  return parts
+    .map((part) => {
+      const p = part as { type?: unknown; content?: unknown };
+      return p.type === "text" && typeof p.content === "string" ? p.content : "";
+    })
+    .join("");
+}
+
+/** A tool call the stream started and never answered: its run ended first. */
+function isUnansweredToolCall(part: unknown): boolean {
+  const p = part as { type?: unknown; output?: unknown };
+  return p.type === "tool-call" && p.output === undefined;
+}
+
 /**
- * What a reader sees of a transcript: roles, text, and each tool call's
- * name, state and output. Two transcripts that read the same need no update.
+ * `next`, the thread as Convex has it, with what this page streamed of a
+ * reply its run's end cut off put back in.
+ *
+ * Hercules stores a reply's text in checkpoints. When a run is stopped while
+ * it writes, the thread holds the reply up to its last checkpoint
+ * (`incomplete`), or nothing of it, and the page has streamed further. The
+ * page's copy is kept, marked `incomplete`, for as long as the page lives; a
+ * reload shows what the thread has.
+ *
+ * Kept narrowly, because a completed reply in Convex is the truth: only the
+ * last message the page shows of a run, only when that run did not finish
+ * here with the reply whole, and only when the thread holds less of the same
+ * reply (its text is how the page's begins) or none of it.
+ */
+export function keepCutOffReplies(
+  shown: ReadonlyArray<ShownMessage>,
+  next: UIMessage[],
+  thread: AgentThread,
+): UIMessage[] {
+  const lastOfRun = new Map<string, ShownMessage>();
+  for (const message of shown) {
+    const runId = runIdOf(message);
+    if (runId !== null) lastOfRun.set(runId, message);
+  }
+  let kept = next;
+  for (const [runId, message] of lastOfRun) {
+    if (message.role !== "assistant" || runId === thread.activeRun?.id) continue;
+    if (!CUT_OFF_STATUSES.has(message.metadata?.["hercules"]?.status)) continue;
+    const stored = thread.messages.filter((entry) => entry.run_id === runId);
+    const last = stored[stored.length - 1];
+    // A run older than the thread's window: its messages are not Convex's to replace.
+    if (last === undefined) continue;
+    const parts = message.parts.filter((part) => !isUnansweredToolCall(part));
+    const text = shownText(parts);
+    if (text.length === 0) continue;
+    const cutOff = last.role === "assistant" && last.status === "incomplete" ? last : null;
+    if (cutOff !== null) {
+      const held = textOf(cutOff.parts);
+      if (text.length <= held.length || !text.startsWith(held)) continue;
+    } else if (
+      // The thread has this reply, under its id or by its text.
+      stored.some(
+        (entry) =>
+          entry.id === message.id ||
+          (entry.role === "assistant" && textOf(entry.parts).startsWith(text)),
+      )
+    ) {
+      continue;
+    }
+    const reply = {
+      ...message,
+      parts,
+      metadata: { ...message.metadata, hercules: { runId, status: "incomplete" } },
+    } as UIMessage;
+    const replaced = cutOff === null ? -1 : kept.findIndex((entry) => entry.id === cutOff.id);
+    if (replaced !== -1) {
+      kept = [...kept.slice(0, replaced), reply, ...kept.slice(replaced + 1)];
+      continue;
+    }
+    // After the run's last message in the thread: its input, or an earlier reply.
+    let after = kept.length - 1;
+    while (after >= 0 && runIdOf(kept[after] as UIMessage) !== runId) after--;
+    if (after !== -1) kept = [...kept.slice(0, after + 1), reply, ...kept.slice(after + 1)];
+  }
+  return kept;
+}
+
+/**
+ * What a reader sees of a transcript: roles, text, each tool call's name,
+ * state and output, and whether a reply is marked as cut off. Two
+ * transcripts that read the same need no update.
  */
 export function transcriptKey(
-  messages: ReadonlyArray<{ role: string; parts: ReadonlyArray<unknown> }>,
+  messages: ReadonlyArray<{
+    role: string;
+    parts: ReadonlyArray<unknown>;
+    metadata?: Record<string, any> | undefined;
+  }>,
 ): string {
   return JSON.stringify(
     messages.map((message) => [
@@ -684,6 +789,7 @@ export function transcriptKey(
         if (p.type === "tool-call") return [["tool", p["id"], p["name"], p["state"], p["output"]]];
         return [];
       }),
+      message.metadata?.["hercules"]?.status === "incomplete",
     ]),
   );
 }

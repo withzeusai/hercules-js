@@ -327,6 +327,20 @@ export type RunProgress = Partial<
 >;
 
 /**
+ * How a run that was asked to stop ended. Hercules can end one it stopped
+ * before its first step finished as `failed` with the code `run_failed`,
+ * which says nothing went wrong but the stop: that is recorded as
+ * `cancelled`. A failure with a code of its own (`out_of_credits`, a limit)
+ * stays the failure it is.
+ */
+export function stoppedOutcome(cancelRequested: boolean, outcome: RunOutcome): RunOutcome {
+  if (!cancelRequested || outcome.status !== "failed" || outcome.error?.code !== "run_failed") {
+    return outcome;
+  }
+  return { ...outcome, status: "cancelled", error: null };
+}
+
+/**
  * Records how a run ended, once: a second ending for the same run changes
  * nothing. Replies left mid-stream are kept as `incomplete`. Then the app's
  * `onRunFinished` is scheduled, after this write. `also` goes into the same
@@ -335,10 +349,11 @@ export type RunProgress = Partial<
 export async function finishRun(
   ctx: MutationCtx,
   run: Doc<"runs">,
-  outcome: RunOutcome,
+  ending: RunOutcome,
   also: RunProgress = {},
 ): Promise<boolean> {
   if (isFinalStatus(run.status)) return false;
+  const outcome = stoppedOutcome(run.cancelRequested, ending);
   const now = Date.now();
   await ctx.db.patch(run._id, {
     ...also,
@@ -414,12 +429,18 @@ export function documentBytes(doc: Record<string, unknown>): number {
  * when they come to more than `READ_BUDGET_BYTES` (always at least one).
  * With `hideTools`, as a page may see them: `hercules` tool calls without
  * their names.
+ *
+ * Only the run that is going (`activeRunId`) is still writing. A reply left
+ * `streaming` by any other run reads as `incomplete`: a stop is recorded as
+ * soon as Hercules confirms it, and a checkpoint of the reply delivered
+ * after that has no ending left to close it.
  */
 export async function readMessages(
   ctx: QueryCtx,
   threadId: string,
   limit: number,
   hideTools: boolean,
+  activeRunId: string | null,
 ) {
   const groups: Doc<"messages">[][] = [];
   let hasMore = false;
@@ -459,7 +480,8 @@ export async function readMessages(
       role: head.role,
       parts,
       created_at: head.createdAt,
-      status: head.status,
+      status:
+        head.status === "streaming" && head.runId !== activeRunId ? "incomplete" : head.status,
     });
   }
   return { messages, hasMore };

@@ -330,6 +330,7 @@ describe("RunChunks", () => {
         live: null,
         lastSeq: 0,
         created_at: AT,
+        stopping: false,
       },
     };
     // Its reply is stored and whole: the run finished.
@@ -415,6 +416,7 @@ describe("RunChunks, when a step was retried", () => {
         live: { url: "https://api.hercules.test/x", token: "t" },
         lastSeq: 0,
         created_at: AT,
+        stopping: false,
       },
       latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
       pageActions: [],
