@@ -35,6 +35,7 @@ pnpm test
 
 Published packages live under `packages/`:
 
+- `@usehercules/agents`
 - `@usehercules/analytics`
 - `@usehercules/auth`
 - `@usehercules/eslint-plugin`
