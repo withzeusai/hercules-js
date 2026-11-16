@@ -40,9 +40,17 @@ export default defineSchema({
     remoteDeletedAt: v.union(v.number(), v.null()),
     /** When asking Hercules was given up: after a day, or on an answer that cannot change. */
     remoteGaveUpAt: v.union(v.number(), v.null()),
+    /**
+     * When Hercules first answered 404 to the delete. It answers 404 on
+     * every route while the agents API is off for the app, so a 404 counts
+     * as "gone" only once it has been the answer for an hour.
+     */
+    remoteMissingSince: v.union(v.number(), v.null()),
     /** How many times Hercules was asked, and the earliest time to ask again. */
     attempts: v.number(),
     nextAttemptAt: v.number(),
+    /** When a purge batch last ran. The purge is started again only when this is stale. */
+    purgeProgressAt: v.number(),
   }).index("by_thread_id", ["threadId"]),
 
   /**
@@ -74,6 +82,12 @@ export default defineSchema({
     nextStartAt: v.union(v.number(), v.null()),
     /** When Hercules first answered that it has no such run. Null once it answers otherwise. */
     missingSince: v.union(v.number(), v.null()),
+    /**
+     * How many stuck-run checks in a row found the run still going at
+     * Hercules. Each doubles the wait for the next. Any delivered event
+     * resets it.
+     */
+    quietChecks: v.number(),
     /** The highest event sequence number applied. Events at or below it are duplicates. */
     lastSeq: v.number(),
     /** When an event was last applied, or the run was created. The stuck-run check reads it. */

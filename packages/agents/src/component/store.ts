@@ -31,6 +31,11 @@ export const MAX_MESSAGE_LIMIT = 200;
  */
 export const READ_BUDGET_BYTES = 4 * 1024 * 1024;
 
+/** A delay with up to a tenth more, so things that start together do not come back together. */
+export function jittered(ms: number): number {
+  return Math.floor(ms * (1 + Math.random() * 0.1));
+}
+
 export const APP_OWNER = "app";
 
 export function ownerOf(endUser: EndUser | null): string {
@@ -298,7 +303,7 @@ export interface RunOutcome {
 
 /** The fields of a run an event batch moves along. */
 export type RunProgress = Partial<
-  Pick<Doc<"runs">, "accepted" | "lastSeq" | "lastEventAt" | "progress">
+  Pick<Doc<"runs">, "accepted" | "lastSeq" | "lastEventAt" | "progress" | "quietChecks">
 >;
 
 /**

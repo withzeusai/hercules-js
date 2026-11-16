@@ -14,7 +14,6 @@ import {
   type RunOutcome,
   type RunProgress,
 } from "./store.js";
-import { isFinalStatus } from "./protocol.js";
 import { vWireEvent } from "./validators.js";
 
 type WireEvent = Infer<typeof vWireEvent>;
@@ -152,9 +151,9 @@ async function applyOne(
  * redelivery and is skipped. Events of runs this app does not know are
  * skipped too, so a deleted thread's last events cannot stall delivery.
  *
- * A run's ending is the exception: it is taken whatever its number, once.
- * Hercules numbers the ending of a run it had to end itself after what it
- * had stored, which can be below a checkpoint already delivered.
+ * That holds for a run's ending as well: Hercules numbers every ending above
+ * everything it stored for the run, so an ending is never at or below an
+ * event already applied here.
  *
  * The run document is read once and written once per run in the batch,
  * however many events the batch holds.
@@ -171,11 +170,9 @@ export async function applyEvents(ctx: MutationCtx, events: readonly WireEvent[]
     let lastSeq = run.lastSeq;
     let started = false;
     let ending: RunOutcome | null = null;
-    let took = 0;
     const progress: RunProgress = {};
     for (const event of list) {
-      const endsRun = event.data.kind === "final" && !isFinalStatus(run.status) && ending === null;
-      if (event.seq <= lastSeq && !endsRun) {
+      if (event.seq <= lastSeq) {
         skipped++;
         continue;
       }
@@ -184,13 +181,19 @@ export async function applyEvents(ctx: MutationCtx, events: readonly WireEvent[]
       ending ??= ended;
       // Any event after `run.queued` means the run started.
       if (event.type !== "run.queued" && ended === null) started = true;
-      lastSeq = Math.max(lastSeq, event.seq);
-      took++;
+      lastSeq = event.seq;
+      applied++;
     }
-    applied += took;
-    if (took === 0) continue;
-    // Any event means Hercules has the run.
-    const also: RunProgress = { ...progress, accepted: true, lastSeq, lastEventAt: Date.now() };
+    if (lastSeq === run.lastSeq) continue;
+    // Any event means Hercules has the run, and that delivery works: the
+    // stuck-run check goes back to its shortest wait.
+    const also: RunProgress = {
+      ...progress,
+      accepted: true,
+      lastSeq,
+      lastEventAt: Date.now(),
+      quietChecks: 0,
+    };
     if (ending !== null && (await finishRun(ctx, run, ending, also))) continue;
     await ctx.db.patch(run._id, {
       ...also,

@@ -320,6 +320,46 @@ describe("useAgentThread", () => {
     expect(result.current.messages.at(-1)?.parts).toEqual([{ type: "text", text: "Here it is." }]);
   });
 
+  it("does not bring one run's stream failure back with the next run", async () => {
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ code: "invalid_run_token" }), { status: 401 }),
+    ) as unknown as typeof fetch;
+    const options: UseAgentThreadOptions = {
+      threadId: THREAD,
+      thread: runningThread(),
+      send: vi.fn(),
+      fetch: fetchFn,
+    };
+    const { result, rerender } = renderHook(
+      (props: UseAgentThreadOptions) => useAgentThread(props),
+      { initialProps: options },
+    );
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(RunStreamError));
+
+    // That run ends, and the user sends again. The new run is queued:
+    // Hercules has not answered with its live stream yet.
+    const next = runningThread();
+    rerender({ ...options, thread: { ...next, activeRun: null } });
+    expect(result.current.error).toBeNull();
+    rerender({
+      ...options,
+      thread: {
+        ...next,
+        activeRun: { ...next.activeRun!, id: "run_2", status: "queued", live: null },
+        latestRun: {
+          id: "run_2",
+          status: "queued",
+          error: null,
+          cappedReason: null,
+          finished_at: null,
+        },
+      },
+    });
+    // Nothing has failed for this run. The old error stayed, since nothing cleared it.
+    expect(result.current.error).toBeNull();
+    expect(result.current.status).toBe("submitted");
+  });
+
   it("shows the message as pending while it is sent, and reports why it was not", async () => {
     let reject!: (error: unknown) => void;
     const send = vi.fn(

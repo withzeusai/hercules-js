@@ -122,7 +122,12 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   const [pending, setPending] = useState<PendingInput[]>([]);
   const [sending, setSending] = useState(0);
   const [error, setError] = useState<Error | null>(null);
-  const [streamError, setStreamError] = useState<RunStreamError | null>(null);
+  // The stream failure of one run. It is shown only while that run is going,
+  // so it never comes back with the next run.
+  const [streamFailure, setStreamFailure] = useState<{
+    runId: string;
+    error: RunStreamError;
+  } | null>(null);
   const [, setVersion] = useState(0);
   const live = useRef<LiveRun | null>(null);
   const renderQueued = useRef(false);
@@ -157,7 +162,7 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
     const run =
       live.current?.runId === activeRunId ? live.current : new LiveRun(activeRunId, liveThreadId);
     live.current = run;
-    setStreamError(null);
+    setStreamFailure(null);
     const controller = new AbortController();
     async function follow() {
       try {
@@ -174,7 +179,7 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
       } catch (failure) {
         // Convex still gets the reply; only the live view stops.
         if (!controller.signal.aborted && failure instanceof RunStreamError) {
-          setStreamError(failure);
+          setStreamFailure({ runId: run.runId, error: failure });
         }
       }
     }
@@ -273,6 +278,12 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
     cancel,
     // A stream that failed matters only while its run is going: once Convex
     // has the run's end, the reply is there and the live view is not needed.
-    error: error ?? (activeRun === null ? runError : streamError),
+    error:
+      error ??
+      (activeRun === null
+        ? runError
+        : streamFailure?.runId === activeRun.id
+          ? streamFailure.error
+          : null),
   };
 }

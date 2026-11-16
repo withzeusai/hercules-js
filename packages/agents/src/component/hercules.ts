@@ -20,7 +20,7 @@ import {
   type Run,
   type WireEvent,
 } from "./protocol.js";
-import { STUCK_AFTER_MS, finishRun, runById, type RunOutcome } from "./store.js";
+import { STUCK_AFTER_MS, finishRun, jittered, runById, type RunOutcome } from "./store.js";
 import {
   vApi,
   vCappedReason,
@@ -35,7 +35,12 @@ import {
 const REQUEST_TIMEOUT_MS = 30_000;
 const FIRST_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 10 * 60 * 1000;
-const MAX_START_ATTEMPTS = 8;
+/** How many times a start refused as `rate_limited` is sent before the run fails with that. */
+const MAX_RATE_LIMITED_STARTS = 8;
+/** The longest wait between two tries of a start Hercules could not answer. */
+const START_RETRY_CAP_MS = 2 * 60 * 1000;
+/** The longest wait between two checks of a run Hercules says is still going. */
+const MAX_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const MAX_CANCEL_ATTEMPTS = 6;
 /** A run that could not be settled for this long is given up on. */
 const GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -49,6 +54,8 @@ const DELETE_GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000;
 const DELETE_FIRST_RETRY_MS = 5 * 1000;
 /** How often a deleted thread whose rows are not purged yet is looked at again. */
 const PURGE_WATCH_MS = 60 * 1000;
+/** A purge with no batch for this long has stopped, and is started again. */
+const PURGE_STALLED_AFTER_MS = 2 * 60 * 1000;
 const MAX_EVENT_PAGES = 20;
 const EVENT_PAGE_SIZE = 100;
 /**
@@ -77,6 +84,8 @@ type HerculesResponse =
       message: string;
       retryable: boolean;
       retryAfterMs: number | null;
+      /** The run Hercules says it has, in a refusal's `details.run_id`. */
+      detailsRunId: string | null;
     };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,6 +140,7 @@ export async function callHercules(
       message: error instanceof Error ? error.message : "Hercules could not be reached.",
       retryable: true,
       retryAfterMs: null,
+      detailsRunId: null,
     };
   } finally {
     clearTimeout(timer);
@@ -157,14 +167,29 @@ export async function callHercules(
     message,
     retryable: isRetryable(response.status, code),
     retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
+    detailsRunId:
+      isRecord(problem["details"]) && typeof problem["details"]["run_id"] === "string"
+        ? problem["details"]["run_id"]
+        : null,
   };
 }
 
-/** Full jitter on a delay that starts at a second and doubles up to ten minutes. */
-export function retryDelayMs(attempt: number, retryAfter: number | null): number {
-  if (retryAfter !== null) return Math.min(retryAfter, MAX_RETRY_MS);
-  const ceiling = Math.min(FIRST_RETRY_MS * 2 ** attempt, MAX_RETRY_MS);
-  return Math.floor(Math.random() * ceiling);
+/**
+ * How long to wait before the next try. Never less than Hercules asked
+ * (`retryAfter`), and otherwise a backoff that starts at a second and
+ * doubles up to `capMs`. Always jittered, so callers that failed together do
+ * not come back together: the wait is spread over the upper half of the
+ * backoff, or over a tenth of what Hercules asked when that is more.
+ */
+export function retryDelayMs(
+  attempt: number,
+  retryAfter: number | null,
+  capMs = MAX_RETRY_MS,
+): number {
+  const backoff = Math.min(FIRST_RETRY_MS * 2 ** attempt, capMs);
+  const asked = Math.min(retryAfter ?? 0, MAX_RETRY_MS);
+  const least = Math.max(asked, backoff / 2);
+  return Math.floor(least + Math.random() * Math.max(backoff / 2, asked / 10));
 }
 
 function outcomeFromRun(run: Run): RunOutcome | null {
@@ -251,6 +276,7 @@ const vLoadedRun = v.object({
   cancelRequested: v.boolean(),
   nextStartAt: v.union(v.number(), v.null()),
   missingSince: v.union(v.number(), v.null()),
+  quietChecks: v.number(),
   lastSeq: v.number(),
   lastEventAt: v.number(),
   createdAt: v.number(),
@@ -287,6 +313,7 @@ export const loadRun = internalQuery({
       cancelRequested: run.cancelRequested,
       nextStartAt: run.nextStartAt,
       missingSince: run.missingSince,
+      quietChecks: run.quietChecks,
       lastSeq: run.lastSeq,
       lastEventAt: run.lastEventAt,
       createdAt: run._creationTime,
@@ -372,6 +399,27 @@ export const noteMissing = internalMutation({
   },
 });
 
+/**
+ * Notes that a check found the run still going at Hercules, with nothing new
+ * to apply: the next check waits twice as long. A delivered event resets it.
+ */
+export const noteStillGoing = internalMutation({
+  args: { runId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await runById(ctx, args.runId);
+    if (run !== null && !isFinalStatus(run.status)) {
+      await ctx.db.patch(run._id, { quietChecks: run.quietChecks + 1 });
+    }
+    return null;
+  },
+});
+
+/** How long a run must have been quiet before it is checked: 3 minutes, doubling to 30. */
+function checkIntervalMs(quietChecks: number): number {
+  return Math.min(STUCK_AFTER_MS * 2 ** Math.min(quietChecks, 10), MAX_CHECK_INTERVAL_MS);
+}
+
 /** Drops a run's live token: an hour after the run ended, Hercules no longer takes it. */
 export const clearLive = internalMutation({
   args: { runId: v.string() },
@@ -426,6 +474,8 @@ async function pullEvents(
   ctx: ActionCtx,
   config: ApiConfig,
   run: LoadedRun,
+  /** Set to true when an event was applied. */
+  seen: { applied: boolean } = { applied: false },
 ): Promise<"done" | "more" | "failed"> {
   let after = run.lastSeq;
   for (let page = 0; page < MAX_EVENT_PAGES; page++) {
@@ -441,6 +491,7 @@ async function pullEvents(
       .filter((event): event is WireEvent => event !== null && event.runId === run.runId);
     if (events.length > 0) {
       if (!(await applyPulled(ctx, events))) return "failed";
+      seen.applied = true;
       after = Math.max(after, ...events.map((event) => event.seq));
     }
     if (response.body["has_more"] !== true) return "done";
@@ -544,9 +595,29 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
     return { kind: "done" };
   }
 
-  if (run.accepted) {
-    // Hercules has the run, and only its live token was being asked for.
-    // The run goes on without it: the stuck-run check asks again.
+  // "Start unconfirmed": Hercules has the run (its id is in the refusal) and
+  // could not say yet that it started. The run is its now: delivered events
+  // and the stuck-run check settle it, whatever the retries below bring.
+  let accepted = run.accepted;
+  if (!accepted && response.detailsRunId === run.runId) {
+    accepted = true;
+    const cancelWaiting = await ctx.runMutation(internal.hercules.recordAccepted, {
+      runId: run.runId,
+      status: null,
+      live: null,
+    });
+    if (cancelWaiting) {
+      await ctx.scheduler.runAfter(0, internal.hercules.cancelRun, {
+        runId: run.runId,
+        api: config,
+        attempt: 0,
+      });
+    }
+  }
+  if (accepted) {
+    // Hercules has the run, and only its live token is still wanted. A
+    // refusal never ends the run: it goes on without the token.
+    if (response.retryable) return { kind: "retry", response };
     console.error(
       `Hercules did not answer for run ${run.runId}'s live stream: ${response.status ?? "network"} ${response.code}`,
     );
@@ -608,17 +679,23 @@ export const startRun = internalAction({
           api: args.api,
           attempt: Math.max(args.attempt, 1),
           busySince,
-          delayMs: Math.min(Math.max(waited, FIRST_RETRY_MS), THREAD_BUSY_MAX_DELAY_MS),
+          delayMs: jittered(Math.min(Math.max(waited, FIRST_RETRY_MS), THREAD_BUSY_MAX_DELAY_MS)),
         });
         return null;
       }
-    } else if (args.attempt + 1 < MAX_START_ATTEMPTS) {
+    } else if (step.response.status !== 429 || args.attempt + 1 < MAX_RATE_LIMITED_STARTS) {
+      // A 5xx, a timeout or a network error says nothing about the run:
+      // Hercules may have it, and answers 503 while it cannot tell. So the
+      // run stays open and the same run id is sent again, as told and then
+      // further and further apart, until Hercules answers with the run or
+      // refuses it. A run it never takes is failed by the tick after a day.
+      // Only `rate_limited`, which is an answer, runs out of tries.
       await ctx.runMutation(internal.hercules.retryStart, {
         runId: run.runId,
         api: args.api,
         attempt: args.attempt + 1,
         ...(args.busySince !== undefined && { busySince: args.busySince }),
-        delayMs: retryDelayMs(args.attempt, step.response.retryAfterMs),
+        delayMs: retryDelayMs(args.attempt, step.response.retryAfterMs, START_RETRY_CAP_MS),
       });
       return null;
     }
@@ -686,11 +763,20 @@ export const deleteThread = internalAction({
       "DELETE",
       `/v1/agents/threads/${encodeURIComponent(args.threadId)}`,
     );
-    // A thread Hercules never saw is already gone there.
-    if (response.ok || response.status === 404) {
+    if (response.ok) {
       await ctx.runMutation(internal.hercules.noteDelete, {
         threadId: args.threadId,
         outcome: "deleted",
+      });
+      return null;
+    }
+    // A thread Hercules never saw is gone there. But it also answers 404 on
+    // every route while the agents API is off for the app, so one 404 is not
+    // taken for it: it must still be the answer an hour later.
+    if (response.status === 404) {
+      await ctx.runMutation(internal.hercules.noteDelete, {
+        threadId: args.threadId,
+        outcome: "missing",
       });
       return null;
     }
@@ -707,13 +793,11 @@ export const deleteThread = internalAction({
     }
     // Anything else may pass: Hercules answers 409 `thread_busy` while the
     // thread's run is still stopping, and says when to ask again.
-    if (response.retryAfterMs !== null) {
-      await ctx.runMutation(internal.hercules.noteDelete, {
-        threadId: args.threadId,
-        outcome: "later",
-        waitMs: Math.min(response.retryAfterMs, MAX_RETRY_MS),
-      });
-    }
+    await ctx.runMutation(internal.hercules.noteDelete, {
+      threadId: args.threadId,
+      outcome: "later",
+      waitMs: Math.min(response.retryAfterMs ?? 0, MAX_RETRY_MS),
+    });
     return null;
   },
 });
@@ -722,7 +806,12 @@ export const deleteThread = internalAction({
 export const noteDelete = internalMutation({
   args: {
     threadId: v.string(),
-    outcome: v.union(v.literal("deleted"), v.literal("refused"), v.literal("later")),
+    outcome: v.union(
+      v.literal("deleted"),
+      v.literal("missing"),
+      v.literal("refused"),
+      v.literal("later"),
+    ),
     waitMs: v.optional(v.number()),
   },
   returns: v.null(),
@@ -732,10 +821,22 @@ export const noteDelete = internalMutation({
     const now = Date.now();
     if (args.outcome === "deleted") await ctx.db.patch(row._id, { remoteDeletedAt: now });
     else if (args.outcome === "refused") await ctx.db.patch(row._id, { remoteGaveUpAt: now });
-    else {
+    else if (args.outcome === "missing") {
+      const since = row.remoteMissingSince ?? now;
+      await ctx.db.patch(
+        row._id,
+        now - since >= MISSING_FINAL_AFTER_MS
+          ? { remoteDeletedAt: now }
+          : { remoteMissingSince: since },
+      );
+    } else {
       // Not before Hercules said, and not sooner than the tick had planned.
+      // It answered something other than 404, so the thread is there.
       const until = now + (args.waitMs ?? 0);
-      if (until > row.nextAttemptAt) await ctx.db.patch(row._id, { nextAttemptAt: until });
+      await ctx.db.patch(row._id, {
+        remoteMissingSince: null,
+        ...(until > row.nextAttemptAt && { nextAttemptAt: until }),
+      });
     }
     return null;
   },
@@ -769,14 +870,19 @@ export const deleteTick = internalMutation({
       if (!remoteDone) await ctx.db.patch(row._id, { remoteGaveUpAt: now });
       return null;
     }
-    // A purge batch that was lost or failed is started again.
-    if (!purged && now - row.deletedAt >= PURGE_WATCH_MS) {
+    // A purge whose last batch was lost or failed is started again. One that
+    // is still going stamps its progress with every batch, and is left alone:
+    // a second chain beside it would only double the work.
+    if (!purged && now - row.purgeProgressAt >= PURGE_STALLED_AFTER_MS) {
+      await ctx.db.patch(row._id, { purgeProgressAt: now });
       await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: args.threadId });
     }
     let next = PURGE_WATCH_MS;
     if (!remoteDone) {
       if (now >= row.nextAttemptAt) {
-        const wait = Math.min(DELETE_FIRST_RETRY_MS * 2 ** row.attempts, MAX_RETRY_MS);
+        const wait = jittered(
+          Math.min(DELETE_FIRST_RETRY_MS * 2 ** Math.min(row.attempts, 10), MAX_RETRY_MS),
+        );
         await ctx.db.patch(row._id, { attempts: row.attempts + 1, nextAttemptAt: now + wait });
         await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, args);
         next = wait;
@@ -808,12 +914,14 @@ export const tickRun = internalMutation({
     if (run === null || isFinalStatus(run.status)) return null;
     const now = Date.now();
     const age = now - run._creationTime;
-    if (!run.accepted && age > GIVE_UP_AFTER_MS) {
-      await finishRun(ctx, run, failed("run_failed", "The run could not be started within a day."));
-      return null;
-    }
-    if (age > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS) {
-      await finishRun(ctx, run, failed("run_failed", "The run could not be settled within a day."));
+    const gaveUp = !run.accepted
+      ? age > GIVE_UP_AFTER_MS && "The run could not be started within a day."
+      : age > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS && "The run could not be settled within a day.";
+    if (gaveUp !== false) {
+      await finishRun(ctx, run, failed("run_failed", gaveUp));
+      // The thread is free here. Hercules may still have the run going and
+      // hold the thread there, so it is asked to stop it, as well as can be.
+      await ctx.scheduler.runAfter(0, internal.hercules.cancelRun, { ...args, attempt: 0 });
       return null;
     }
 
@@ -823,16 +931,21 @@ export const tickRun = internalMutation({
     const needsStart = (!run.accepted || run.liveToken === null) && !startPending;
     // A cancel is asked again until the run is over: the call that carries it can give up.
     const needsCancel = run.cancelRequested && run.accepted;
-    const quiet = run.accepted && quietFor >= STUCK_AFTER_MS;
+    // A run Hercules keeps saying is going is looked at less and less often.
+    const interval = checkIntervalMs(run.quietChecks);
+    const quiet = run.accepted && quietFor >= interval;
     if (needsStart || needsCancel || quiet) {
       await ctx.scheduler.runAfter(0, internal.hercules.checkRun, args);
     }
-    // Back when the run would have been quiet for long enough, or in a full interval.
-    const next =
-      run.accepted && !quiet && !needsCancel
-        ? Math.max(MORE_EVENTS_DELAY_MS, STUCK_AFTER_MS - quietFor)
-        : STUCK_AFTER_MS;
-    await ctx.scheduler.runAfter(next, internal.hercules.tickRun, args);
+    let next = STUCK_AFTER_MS;
+    if (run.accepted && !needsStart && !needsCancel) {
+      // Back when the run will have been quiet for long enough. After a check
+      // that finds the run still going, that is the doubled wait; after one
+      // that was lost, it is this same wait again.
+      next = quiet ? interval : Math.max(MORE_EVENTS_DELAY_MS, interval - quietFor);
+    }
+    // Jittered, so runs that were sent together do not tick together.
+    await ctx.scheduler.runAfter(jittered(next), internal.hercules.tickRun, args);
     return null;
   },
 });
@@ -857,11 +970,20 @@ export const checkRun = internalAction({
     if (run === null || isFinalStatus(run.status)) return null;
     const now = Date.now();
     const tooOld = now - run.createdAt > GIVE_UP_AFTER_MS;
-    async function giveUp(message: string) {
+    async function giveUp(message: string, stillGoing = false) {
       await ctx.runMutation(internal.hercules.endRun, {
         runId: args.runId,
         outcome: failed("run_failed", message),
       });
+      // The thread is free here. If Hercules still has the run going it holds
+      // the thread there, so it is asked to stop it, as well as can be.
+      if (stillGoing) {
+        await callHercules(
+          args.api,
+          "POST",
+          `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
+        );
+      }
       return null;
     }
 
@@ -875,7 +997,7 @@ export const checkRun = internalAction({
     } else if (run.cancelRequested) {
       if (await cancelAtHercules(ctx, args.api, run)) return null;
     }
-    if (now - run.lastEventAt < STUCK_AFTER_MS) return null;
+    if (now - run.lastEventAt < checkIntervalMs(run.quietChecks)) return null;
 
     // The run first, then its events: an ending is recorded only when the
     // events read after the run was seen over are complete. Read the other
@@ -891,7 +1013,8 @@ export const checkRun = internalAction({
       }
       const current = readRun(response.body);
       const outcome = current === null ? null : outcomeFromRun(current);
-      const pulled = await pullEvents(ctx, args.api, run);
+      const seen = { applied: false };
+      const pulled = await pullEvents(ctx, args.api, run, seen);
       if (pulled === "more") {
         // More events than one pass reads. Soon, if this is not lost; at the next tick if it is.
         await ctx.scheduler.runAfter(MORE_EVENTS_DELAY_MS, internal.hercules.checkRun, args);
@@ -901,13 +1024,17 @@ export const checkRun = internalAction({
         await ctx.runMutation(internal.hercules.recordRun, { runId: run.runId, outcome });
         return null;
       }
-      // Still going, or over with events that could not be read yet.
-      if (!tooOld) return null;
-      return giveUp(
-        outcome === null
-          ? "The run was still going at Hercules after a day."
-          : "The run ended at Hercules, but its events could not be read for a day.",
-      );
+      if (tooOld) {
+        return outcome === null
+          ? giveUp("The run was still going at Hercules after a day.", true)
+          : giveUp("The run ended at Hercules, but its events could not be read for a day.");
+      }
+      // Still going with nothing new: the next check waits longer. (Events it
+      // just applied reset the wait, as delivered ones do.)
+      if (outcome === null && pulled === "done" && !seen.applied) {
+        await ctx.runMutation(internal.hercules.noteStillGoing, { runId: run.runId });
+      }
+      return null;
     }
     if (response.status === 404) {
       const since = run.missingSince ?? now;

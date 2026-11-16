@@ -424,7 +424,8 @@ export class HerculesAgents {
    *   thread's delivery.
    * - 401, 403: only for a token that was checked and is not Hercules's for
    *   this route. Hercules takes either as the whole deployment refusing it
-   *   and stops delivering for an hour.
+   *   and stops delivering to it, coming back to try after 30 seconds, 2
+   *   minutes, 10 minutes, then every hour.
    * - 503 with `Retry-After`: the issuer's keys cannot be fetched. That says
    *   nothing about the token.
    * - 500: the app's environment is not set, or one event could not be

@@ -14,6 +14,7 @@ import {
   documentBytes,
   inputMessageId,
   isoTime,
+  jittered,
   newId,
   ownerOf,
   readMessages,
@@ -151,6 +152,7 @@ export const send = mutation({
       cancelRequested: false,
       nextStartAt: null,
       missingSince: null,
+      quietChecks: 0,
       lastSeq: 0,
       lastEventAt: now,
       finishedAt: null,
@@ -185,7 +187,8 @@ export const send = mutation({
       attempt: 0,
     });
     // The stuck-run check is driven by a mutation, which cannot be lost.
-    await ctx.scheduler.runAfter(STUCK_AFTER_MS, internal.hercules.tickRun, {
+    // Jittered, so runs sent in a burst do not all tick at the same moment.
+    await ctx.scheduler.runAfter(jittered(STUCK_AFTER_MS), internal.hercules.tickRun, {
       runId,
       api: args.api,
     });
@@ -203,10 +206,10 @@ async function threadView(
   limit: number | undefined,
   hideTools: boolean,
 ): Promise<Infer<typeof vThread>> {
-  const count = Math.min(
-    MAX_MESSAGE_LIMIT,
-    Math.max(1, Math.floor(limit ?? DEFAULT_MESSAGE_LIMIT)),
-  );
+  // A caller's `limit` is its own to send: anything that is not a whole
+  // number of at least one (NaN and Infinity among them) reads as the default.
+  const asked = limit !== undefined && Number.isFinite(limit) && limit >= 1 ? limit : null;
+  const count = Math.min(MAX_MESSAGE_LIMIT, Math.floor(asked ?? DEFAULT_MESSAGE_LIMIT));
   const { messages, hasMore } = await readMessages(ctx, thread.threadId, count, hideTools);
 
   const run = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
@@ -246,33 +249,26 @@ async function threadView(
   // it came too late. A query is not rerun as time passes: the claim, on
   // the server's clock, has the last word, and marks what it refuses.
   const now = Date.now();
-  const arrived = await ctx.db
-    .query("tool_calls")
-    .withIndex("by_thread", (q) =>
-      q
-        .eq("threadId", thread.threadId)
-        .eq("kind", "page")
-        .gt("_creationTime", now - PAGE_ACTION_LISTED_MS),
-    )
-    .order("desc")
-    .take(MAX_LISTED_PAGE_ACTIONS);
-  const pageActions = arrived.reverse().flatMap((call) =>
-    call.claimedAt === null && call.argumentsJson !== null
-      ? [
-          {
-            toolCallId: call.toolCallId,
-            runId: call.runId,
-            name: call.name,
-            argumentsJson: call.argumentsJson,
-            created_at: isoTime(call.createdAt),
-            status:
-              !call.expired && isPageActionFresh(call.createdAt, now)
-                ? ("pending" as const)
-                : ("expired" as const),
-          },
-        ]
-      : [],
-  );
+  const pageActions: Infer<typeof vThread>["pageActions"] = [];
+  // Oldest first, and the cap counts only what no tab has run: the ones a
+  // tab already took must not push a waiting one off the list.
+  for await (const call of ctx.db.query("tool_calls").withIndex("by_thread", (q) =>
+    q
+      .eq("threadId", thread.threadId)
+      .eq("kind", "page")
+      .gt("_creationTime", now - PAGE_ACTION_LISTED_MS),
+  )) {
+    if (call.claimedAt !== null || call.argumentsJson === null) continue;
+    pageActions.push({
+      toolCallId: call.toolCallId,
+      runId: call.runId,
+      name: call.name,
+      argumentsJson: call.argumentsJson,
+      created_at: isoTime(call.createdAt),
+      status: !call.expired && isPageActionFresh(call.createdAt, now) ? "pending" : "expired",
+    });
+    if (pageActions.length === MAX_LISTED_PAGE_ACTIONS) break;
+  }
 
   return {
     id: thread.threadId,
@@ -425,8 +421,10 @@ export const remove = mutation({
       purgedAt: null,
       remoteDeletedAt: null,
       remoteGaveUpAt: null,
+      remoteMissingSince: null,
       attempts: 0,
       nextAttemptAt: now,
+      purgeProgressAt: now,
     });
     await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: thread.threadId });
     await ctx.scheduler.runAfter(0, internal.hercules.deleteTick, {
@@ -457,6 +455,12 @@ export const purge = internalMutation({
   returns: v.null(),
   handler: async (ctx, { threadId }) => {
     const tables = ["runs", "run_requests", "message_chunks", "messages", "tool_calls"] as const;
+    const deleted = await ctx.db
+      .query("deleted_threads")
+      .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
+      .first();
+    // Says the purge is alive, so the tick does not start a second one.
+    if (deleted !== null) await ctx.db.patch(deleted._id, { purgeProgressAt: Date.now() });
     let rows = 0;
     let bytes = 0;
     for (const table of tables) {
@@ -479,10 +483,6 @@ export const purge = internalMutation({
         }
       }
     }
-    const deleted = await ctx.db
-      .query("deleted_threads")
-      .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
-      .first();
     if (deleted !== null && deleted.purgedAt === null) {
       await ctx.db.patch(deleted._id, { purgedAt: Date.now() });
     }

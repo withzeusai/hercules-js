@@ -92,12 +92,21 @@ export const thread = query({
 
 If nothing has been delivered for a run in three minutes, the component asks
 Hercules for the run and then its events itself, so a delivery that never
-arrives only delays a reply. The same check sends a run again if the call
+arrives only delays a reply. While Hercules says the run is still going it
+asks less and less often (after 3, 6, 12 minutes, up to every 30), and any
+delivered event starts that over. The same check sends a run again if the call
 that starts it was lost, asks again for a cancel that did not get through,
 and records a run's ending only once every event before it is applied. The
 check is started by a mutation that reschedules itself, which Convex never
 loses, so a run is not left open and its thread busy. A run that cannot be
 settled within a day is failed, so its thread is free again.
+
+A start Hercules cannot answer is not a refusal. On a 503, any other 5xx, a
+timeout or a network error the run stays open and is sent again under the
+same id, as told by `Retry-After` and then further apart, until Hercules
+answers with the run or refuses it: Hercules may have the run already, and
+says so in the 503 it answers while it cannot confirm the run started. A run
+it never takes is failed after a day.
 
 A run Hercules does not take fails with Hercules's own code. One of them is
 the app's setup, not the conversation: `agent_not_found` means Hercules has
@@ -187,8 +196,11 @@ while it is less than two minutes old by the time the agent called it. The
 claim decides that on the server's clock, so a browser's clock plays no part.
 
 One that came too late is not run, and the page is told: `thread.pageActions`
-lists each page action no tab has run with `status: "pending"` or
-`"expired"`, for ten minutes from when it arrived. Show the expired ones, so
+lists the page actions no tab has run (the twenty that have waited longest),
+each with `status: "pending"` or `"expired"`, for ten minutes from when it
+arrived. The status is as of the thread's last update: a Convex query is not
+run again as time passes, so a page sees `expired` with the next update of
+the thread. A claim that is refused as too late is such an update. Show the expired ones, so
 the user is not left waiting for something that will not happen:
 
 ```tsx
@@ -201,7 +213,9 @@ const late = thread?.pageActions.filter((action) => action.status === "expired")
 `deleteThread` removes the thread from the app at once. Its other rows are
 purged in batches, and Hercules is asked to delete its copy until it confirms:
 it answers `thread_busy` while the thread's run is still stopping, and the
-component asks again as told, for up to a day. Both are driven by a mutation
+component asks again as told, for up to a day. A 404 counts as "gone" only
+once it has been the answer for an hour, since Hercules also answers 404
+while the agents API is off for the app. Both are driven by a mutation
 that reschedules itself, so neither stops halfway.
 
 ### Several agents
@@ -220,7 +234,9 @@ so the route takes a token for that path on `CONVEX_SITE_URL`, and on the
 points `CONVEX_SITE_URL` at a custom domain keeps working. A deployment that
 overrides both variables with custom domains cannot be delivered to: the
 route would answer 401 to every delivery, which Hercules reads as the whole
-deployment refusing it. Leave `CONVEX_CLOUD_URL` as Convex sets it.
+deployment refusing it. It then stops delivering to the deployment and comes
+back to try after 30 seconds, 2 minutes, 10 minutes, then every hour. Leave
+`CONVEX_CLOUD_URL` as Convex sets it.
 
 Hercules acts on the status the route answers, so the route is careful with
 them: 401 and 403 only for a token that was checked and is not Hercules's for
@@ -292,8 +308,8 @@ actions are one-way: one open tab claims each and runs it, and nothing goes
 back to the run. The hook takes them from `thread.pageActions`, so one runs
 when Hercules has delivered it.
 
-`thread` returns the thread's newest messages: 100 unless `limit` says
-otherwise, at most 200, and fewer when they come to more than about 4 MiB.
+`thread` returns the thread's newest messages: 100 unless `limit` is a whole
+number of at least one, at most 200, and fewer when they come to more than about 4 MiB.
 `thread.hasMore` says there are older ones.
 
 `chat.error` is one of three things, or null:
