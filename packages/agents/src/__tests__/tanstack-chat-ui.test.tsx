@@ -7,7 +7,12 @@
 import { useChat, type UIMessage } from "@tanstack/ai-react";
 import { createChatUI } from "@tanstack/ai-react/ui";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ConvexProvider, useConvex, type ConvexReactClient } from "convex/react";
+import {
+  ConvexProviderWithAuth,
+  useConvex,
+  useConvexAuth,
+  type ConvexReactClient,
+} from "convex/react";
 import { createElement, useEffect, useState, type ComponentType, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { herculesConnection, useThreadSync, type PageActionHandlers } from "../tanstack";
@@ -47,15 +52,21 @@ function ChatMessage({ message }: { message: UIMessage }): ReactElement {
   return createElement("p", { "data-role": message.role }, text);
 }
 
-function AgentChat({
-  threadId,
-  fetch,
-  pageActions,
-}: {
+interface ChatProps {
   threadId: string;
   fetch: typeof globalThis.fetch;
   pageActions: PageActionHandlers;
-}) {
+}
+
+// The gate the README shows: the chat mounts once Convex knows who is asking.
+function AgentChat(props: ChatProps) {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated) return createElement("p", null, "Sign in to chat.");
+  return createElement(SignedInChat, props);
+}
+
+function SignedInChat({ threadId, fetch, pageActions }: ChatProps) {
   const convex = useConvex();
   const [connection] = useState(() => herculesConnection(convex, api.agent, { fetch }));
   const chat = useChat({ ...chatOptions, connection, threadId });
@@ -76,12 +87,34 @@ function AgentChat({
   );
 }
 
+/** How the app's auth provider reports the user to Convex. */
+interface Session {
+  isLoading: boolean;
+  isAuthenticated: boolean;
+}
+const SIGNED_IN: Session = { isLoading: false, isAuthenticated: true };
+
+/** The app's Convex client, as far as auth goes: it takes the token and says it is good. */
+function withAuth(app: App): ConvexReactClient {
+  return {
+    ...app.client,
+    setAuth(fetchToken: () => Promise<unknown>, onChange: (isAuthenticated: boolean) => void) {
+      void fetchToken().then((token) => onChange(token !== null));
+    },
+    clearAuth() {},
+  } as unknown as ConvexReactClient;
+}
+
 /** One open tab of the app. */
-function renderTab(app: App, pageActions: PageActionHandlers) {
+function renderTab(app: App, pageActions: PageActionHandlers, session: Session = SIGNED_IN) {
+  const useAuth = () => ({
+    ...session,
+    fetchAccessToken: async () => (session.isAuthenticated ? "token" : null),
+  });
   return render(
     createElement(
-      ConvexProvider,
-      { client: app.client as unknown as ConvexReactClient },
+      ConvexProviderWithAuth,
+      { client: withAuth(app), useAuth },
       createElement(AgentChat, { threadId: THREAD, fetch: app.fetch, pageActions }),
     ),
   );
@@ -102,6 +135,18 @@ const REPLY = assistantMessage("msg_1", [
 afterEach(cleanup);
 
 describe("the README's chat", () => {
+  it("does not mount the chat, or read the thread, until Convex has a signed-in user", async () => {
+    const app = createApp(settledThread([userMessage("Open my order"), REPLY]));
+    const signedOut = renderTab(app, {}, { isLoading: false, isAuthenticated: false });
+    expect(await screen.findByText("Sign in to chat.")).toBeTruthy();
+    signedOut.unmount();
+    renderTab(app, {}, { isLoading: true, isAuthenticated: false });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A thread read now would be read as no one, and come back empty for good.
+    expect(app.calls).toEqual([]);
+    expect(screen.queryByText("Send")).toBeNull();
+  });
+
   it("sends with the app's own client, shows the reply, and runs the page action", async () => {
     const app = createApp(null);
     const openOrder = vi.fn();

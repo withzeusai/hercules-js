@@ -202,6 +202,67 @@ describe("herculesConnection", () => {
     chat.dispose();
   });
 
+  it("finishes from Convex when the live stream stalls without the run's ending", async () => {
+    const app = createApp();
+    const { chat, chunks } = chatFor(app);
+    // The stream brings part of the reply and then nothing: no ending, and it stays open.
+    app.push(
+      frame(1, "run.queued"),
+      frame(2, "run.started"),
+      frame(3, "message.delta", { message_id: "msg_1", text: "Opening " }),
+    );
+    const sending = chat.sendMessage("Open my order");
+    await vi.waitFor(() =>
+      expect(chunks.some((c) => c.type === "TEXT_MESSAGE_CONTENT")).toBe(true),
+    );
+    expect(chat.getIsLoading()).toBe(true);
+
+    // Hercules delivered the reply and the run's end to the app meanwhile.
+    const startedAt = Date.now();
+    deliverEnd(app);
+    await sending;
+    // At once: not after ten failed reconnects, and with no settle timeout.
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(chunks.at(-1)).toMatchObject({ type: "RUN_FINISHED", runId: RUN });
+    expect(chat.getStatus()).toBe("ready");
+    expect(chat.getError()).toBeUndefined();
+    const reply = chat.getMessages().at(-1);
+    expect(reply?.parts[0]).toEqual({ type: "text", content: "Opening order 123." });
+    expect(app.watching()).toBe(0);
+    expect(app.fetchUrls).toHaveLength(1);
+  });
+
+  it("takes the run's ending from the stream though it is numbered below what was read", async () => {
+    const app = createApp();
+    const { chat, chunks } = chatFor(app);
+    const reply = assistantMessage("msg_1", [{ type: "text", text: "Opening" }]);
+    app.push(
+      frame(1, "run.queued"),
+      frame(2, "run.started"),
+      frame(9, "message.delta", { message_id: "msg_1", text: "Opening" }),
+      // Hercules ended the run itself, and numbered what it stored after the
+      // last event it had stored, which is below what the stream had sent.
+      frame(5, "message.completed", { message: reply }),
+      frame(6, "run.failed", { error: { code: "run_failed", message: "The run was ended." } }),
+    );
+    const sending = chat.sendMessage("Open my order");
+    // The ending was read off the stream: the chat only waits for Convex to have it.
+    await vi.waitFor(() => expect(app.fetchUrls).toHaveLength(1));
+    app.setThread(
+      settledThread([userMessage("Open my order"), reply], {
+        id: RUN,
+        status: "failed",
+        error: { code: "run_failed", message: "The run was ended." },
+        cappedReason: null,
+        finished_at: null,
+      }),
+    );
+    await sending;
+    expect(chunks.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "run_failed" });
+    expect(agentErrorCode(chat.getError())).toBe("run_failed");
+    expect(chat.getMessages().at(-1)?.parts[0]).toEqual({ type: "text", content: "Opening" });
+  });
+
   it("does not claim or run a page action the thread lists as expired", async () => {
     const app = createApp({
       ...settledThread([userMessage("Open my order"), REPLY]),

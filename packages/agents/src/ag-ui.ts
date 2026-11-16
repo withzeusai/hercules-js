@@ -11,6 +11,7 @@
 import { EventType, type StreamChunk, type UIMessage } from "@tanstack/ai/client";
 import type { AgentThread, ThreadMessage } from "./agents";
 import {
+  isFinalEvent,
   isFinalStatus,
   type AgentEvent,
   type CappedReason,
@@ -406,10 +407,17 @@ export class RunChunks {
     return chunks;
   }
 
-  /** Turns one event into chunks. An event already seen, or another run's, gives none. */
+  /**
+   * Turns one event into chunks. An event already seen, or another run's,
+   * gives none. A run's ending and a completed message are taken whatever
+   * their sequence number: Hercules can number the ending of a run it had to
+   * end itself at or below an event already streamed.
+   */
   apply(event: AgentEvent): StreamChunk[] {
-    if (this.finished || event.run_id !== this.runId || event.seq <= this.lastSeq) return [];
-    this.lastSeq = event.seq;
+    if (this.finished || event.run_id !== this.runId) return [];
+    const always = isFinalEvent(event) || event.type === "message.completed";
+    if (event.seq <= this.lastSeq && !always) return [];
+    this.lastSeq = Math.max(this.lastSeq, event.seq);
     switch (event.type) {
       case "message.delta": {
         const message = this.message(event.data.message_id);

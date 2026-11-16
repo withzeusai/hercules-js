@@ -205,6 +205,41 @@ describe("RunChunks", () => {
     expect(chunks[0]).toMatchObject({ delta: "lo there" });
   });
 
+  it("takes a run's ending and a completed message numbered below what it has seen", () => {
+    seq = 0;
+    const run = new RunChunks(THREAD, RUN);
+    const message = {
+      id: "m",
+      thread_id: THREAD,
+      run_id: RUN,
+      role: "assistant",
+      parts: [{ type: "text", text: "Hello there" }],
+      created_at: AT,
+    };
+    // Built by hand: these are numbered below the delta that came before them.
+    const at = (number: number, type: string, data: unknown) => {
+      seq = number - 1;
+      return ev(type, data);
+    };
+    const chunks = [
+      ...run.apply(at(9, "message.delta", { message_id: "m", text: "Hel" })),
+      ...run.apply(at(4, "message.completed", { message })),
+      ...run.apply(at(5, "run.failed", { error: { code: "run_failed", message: "Ended." } })),
+      // Any other event at or below the last one seen is a repeat.
+      ...run.apply(at(8, "message.delta", { message_id: "m", text: "again" })),
+      ...run.finish(),
+    ];
+    expect(chunks.map((c) => c.type)).toEqual([
+      "TEXT_MESSAGE_START",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_END",
+      "RUN_ERROR",
+    ]);
+    expect(chunks[2]).toMatchObject({ delta: "lo there" });
+    expect(chunks.at(-1)).toMatchObject({ code: "run_failed", message: "Ended." });
+  });
+
   it("skips the user's own message and events it has seen", () => {
     seq = 0;
     const run = new RunChunks(THREAD, RUN);

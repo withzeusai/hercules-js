@@ -22,6 +22,10 @@
  * `threadId` is the page's: a UUID it makes for a new chat
  * (`crypto.randomUUID()`), and keeps, in the URL say. The first message
  * opens the thread under it.
+ *
+ * The chat is for signed-in users. Render it once `useConvexAuth()` says
+ * Convex has one: it reads its thread when it mounts, and a thread read as
+ * no one comes back empty.
  */
 import type {
   ChatHydrateOptions,
@@ -261,7 +265,10 @@ function watchThread(
  * - `connect` sends the message with the app's `send` mutation, then streams
  *   the run's live events from Hercules as AG-UI chunks, resuming with
  *   `Last-Event-ID`. It ends once Convex has the run's end, so the next
- *   message never finds the thread busy.
+ *   message never finds the thread busy. The stream is read only until then:
+ *   when Convex has the run's end first, or the stream cannot be read at all
+ *   (refused, or too many tabs streaming the run), the reply comes from
+ *   Convex. A live view that fails is not an error of the chat.
  * - `hydrate` reads the thread once, for `persistence: true`.
  * - `joinRun` replays a run still going from its start, after a reload.
  * - `cancelRun` stops the run with the app's `cancel` mutation.
@@ -320,19 +327,36 @@ export function herculesConnection(
       );
       if (signal?.aborted) return;
       if (live !== undefined && live !== null) {
+        // The stream is read until its final event, or until Convex has the
+        // run's end, whichever comes first: a stream that stalls, or never
+        // sends the ending, must not hold the chat while the reply is there.
+        const stream = new AbortController();
+        const stopStream = () => stream.abort();
+        signal?.addEventListener("abort", stopStream, { once: true });
+        void watch
+          .until(
+            (thread) => (thread === null || thread.activeRun?.id !== runId ? true : undefined),
+            stream.signal,
+          )
+          .then(stopStream, stopStream);
         try {
           for await (const event of followRun({
             url: live.url,
             token: live.token,
-            ...(signal !== undefined && { signal }),
+            signal: stream.signal,
             ...(options.fetch !== undefined && { fetch: options.fetch }),
             ...(options.retry !== undefined && { retry: options.retry }),
           })) {
             yield* chunks.apply(event);
           }
         } catch (error) {
-          // Hercules refused the stream; Convex still gets the run, so it is read from there.
+          // The live view failed (Hercules refused the stream, or kept
+          // answering 429 because too many tabs stream the run). The run did
+          // not: Convex still gets it, so it is read from there.
           if (!(error instanceof RunStreamError)) throw error;
+        } finally {
+          signal?.removeEventListener("abort", stopStream);
+          stream.abort();
         }
         if (signal?.aborted) return;
       }

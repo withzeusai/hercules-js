@@ -306,7 +306,7 @@ import { useState, type ComponentType, type FormEvent } from "react";
 import { useChat, type UIMessage, type UseChatReturn } from "@tanstack/ai-react";
 import { createChatUI, TextPart } from "@tanstack/ai-react/ui";
 import { agentErrorCode, herculesConnection, useThreadSync } from "@usehercules/agents/tanstack";
-import { useConvex } from "convex/react";
+import { useConvex, useConvexAuth } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -314,13 +314,23 @@ import { Textarea } from "@/components/ui/textarea";
 const chatOptions = { persistence: true } as const;
 
 // The chat's components, once at module scope. The connection is not made
-// here: it needs the app's signed-in Convex client, which `AgentChat` reads.
+// here: it needs the app's signed-in Convex client, which `SignedInChat` reads.
 const { Chat, useChatContext } = createChatUI(chatOptions, {
   components: { layout: ChatLayout, message: ChatMessage },
   partsComponents: {},
 });
 
+// The chat is for signed-in users. Render it once Convex knows who is asking:
+// the chat reads its thread when it mounts, and before that the thread reads
+// as empty and a message is refused with `sign_in_required`.
 export function AgentChat({ threadId }: { threadId: string }) {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated) return <p>Sign in to chat.</p>;
+  return <SignedInChat threadId={threadId} />;
+}
+
+function SignedInChat({ threadId }: { threadId: string }) {
   // The client the app's ConvexProvider holds, signed in as the user.
   const convex = useConvex();
   // Once per chat: `useChat` keeps the first connection it gets.
@@ -430,13 +440,13 @@ export const Route = createFileRoute("/chat/$threadId")({
 
 A page action is an agent's command to the page, such as opening a record.
 List its name in `pageActions` in `convex/agent.ts`, and register its handler
-on the connection in `AgentChat`. One open tab claims each call through the
+on the connection in `SignedInChat`. One open tab claims each call through the
 app's `claimPageAction` mutation, from `support.api()`, and runs it. It runs
 when Hercules has delivered the call to the app, a moment after it shows in
-the chat, and not at all once it is two minutes old.
+the chat, and not at all once it is two minutes old by the server's clock.
 
 ```tsx
-// In AgentChat, after useChat. useNavigate is TanStack Router's.
+// In SignedInChat, after useChat. useNavigate is TanStack Router's.
 const navigate = useNavigate();
 useEffect(() => {
   connection.setPageActions({
@@ -469,11 +479,24 @@ call itself, so TanStack never runs one or starts a second run.
   `agent_daily_limit_reached`. For a run that failed over a limit,
   `thread.latestRun.error.retryAfterSeconds` says how long it lasts, counted
   from `thread.latestRun.finished_at`.
+- Two codes are not the user's to fix by starting over. `agent_not_found`
+  is the app's setup: Hercules has no agent with the id in `convex/agent.ts`
+  for this app, or the agents API is not turned on for it. `not_found` from
+  `send` is a thread that is not this user's or not this agent's.
+- A live view that fails is not an error here. If Hercules refuses the run's
+  stream, or keeps answering 429 because more than ten tabs stream the same
+  run, the connection reads the reply from Convex instead: it arrives whole,
+  without the typing effect, and `chat.error` stays unset. The connection
+  also stops waiting on the stream as soon as Convex has the run's end.
+- A page action that reached the app too late is not run. `useThreadSync`
+  returns the thread, and `thread.pageActions` lists it with
+  `status: "expired"` for ten minutes, for the page to tell the user.
 - `useThreadSync` returns the thread: `thread.activeRun?.progress` is the
   run's latest progress label. Each also comes to `useChat`'s
   `onCustomEvent` as `hercules.progress` with `{ label }`.
 - `chat.stop()` stops the run with the app's `cancel` mutation.
-- The chat is for signed-in users. Without one, every message fails with
+- The chat is for signed-in users: gate it with `useConvexAuth()`, as
+  `AgentChat` does above. Without a signed-in user every message fails with
   `sign_in_required`.
 
 ### How it maps
@@ -606,10 +629,12 @@ export const tools = defineTools({
 ```ts
 // convex/http.ts
 import { httpRouter } from "convex/server";
+import { support } from "./agent";
 import { tools } from "./tools";
 
 const http = httpRouter();
-tools.registerRoutes(http);
+support.registerRoutes(http); // If the app also talks to an agent: its events.
+tools.registerRoutes(http); // The app's tools, at /mcp.
 export default http;
 ```
 
