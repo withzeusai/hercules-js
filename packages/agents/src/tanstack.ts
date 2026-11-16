@@ -5,13 +5,17 @@
  * kit; Convex keeps the thread.
  *
  * ```tsx
- * const connection = herculesConnection(convex, api.agent, {
- *   pageActions: { open_order: ({ orderId }) => navigate(`/orders/${orderId}`) },
- * });
- *
- * function Chat({ threadId }: { threadId: string }) {
+ * function AgentChat({ threadId }: { threadId: string }) {
+ *   // The app's own client, signed in as the user.
+ *   const convex = useConvex();
+ *   // Once per chat: `useChat` keeps the first connection it gets.
+ *   const [connection] = useState(() => herculesConnection(convex, api.agent));
  *   const chat = useChat({ connection, threadId, persistence: true });
  *   useThreadSync(chat, api.agent.thread, { threadId });
+ *   useEffect(() => {
+ *     connection.setPageActions({ open_order: ({ orderId }) => openOrder(orderId) });
+ *     return () => connection.setPageActions(undefined);
+ *   }, [connection]);
  * }
  * ```
  *
@@ -73,7 +77,11 @@ export interface HerculesAgentApi {
   >;
 }
 
-/** What the adapter needs of the app's Convex client: a `ConvexReactClient` has it. */
+/**
+ * What the adapter needs of the app's Convex client: a `ConvexReactClient`
+ * has it. Pass the app's own, from `useConvex()`: a second client is not
+ * signed in.
+ */
 export interface HerculesConvexClient {
   mutation(mutation: FunctionReference<"mutation">, args: any): Promise<any>;
   query(query: FunctionReference<"query">, args: any): Promise<any>;
@@ -113,7 +121,10 @@ export interface HerculesConnection extends ConnectConnectionAdapter {
   hydrate: (threadId: string, options?: ChatHydrateOptions) => Promise<ChatHydrationResult>;
   joinRun: (runId: string, abortSignal?: AbortSignal) => AsyncIterable<StreamChunk>;
   cancelRun: (run: { runId: string; threadId: string }) => Promise<void>;
-  /** Replaces the page's actions, for handlers that change with the page. */
+  /**
+   * Replaces the page's actions, for handlers that change with the page:
+   * set them in an effect, and clear them with `undefined` in its cleanup.
+   */
   setPageActions: (pageActions: PageActionHandlers | undefined) => void;
 }
 
@@ -236,8 +247,11 @@ function watchThread(
 
 /**
  * A TanStack AI connection to a Hercules agent through the app's Convex
- * functions. Make it once, outside the component (`useChat` keeps the first
- * connection it gets for a thread):
+ * functions. Make it once per chat, in the component, from the app's own
+ * client: `const convex = useConvex()`, then
+ * `useState(() => herculesConnection(convex, api.agent))`. `useChat` keeps
+ * the first connection it gets for a thread, and a client made outside the
+ * app's `ConvexProvider` is not signed in.
  *
  * - `connect` sends the message with the app's `send` mutation, then streams
  *   the run's live events from Hercules as AG-UI chunks, resuming with
