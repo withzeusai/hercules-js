@@ -300,6 +300,16 @@ describe("useAuthCallback", () => {
       expect(result.current.error).toBe("No matching state found in storage");
     });
 
+    it("re-arms the restart once a sign-in completes", () => {
+      window.sessionStorage.setItem("hercules-auth:missing-state-retry", "1");
+      setAuthState({ isLoading: false, isAuthenticated: true });
+
+      const { result } = renderHook(() => useAuthCallback({ isBackendAuthenticated: false }));
+
+      expect(result.current.status).toBe("waiting-backend");
+      expect(window.sessionStorage.getItem("hercules-auth:missing-state-retry")).toBeNull();
+    });
+
     it("shows the error when the restarted sign-in fails to start", () => {
       setAuthState({ isLoading: false, error: missingStateError() });
 

@@ -35,6 +35,16 @@ function claimMissingStateRetry(error: ErrorContext): boolean {
   return true;
 }
 
+// A finished sign-in re-arms the retry, so a later stale callback in the same
+// tab (Back to the sign-in page, then Continue) restarts sign-in again.
+function releaseMissingStateRetry(): void {
+  try {
+    window.sessionStorage.removeItem(MISSING_STATE_RETRY_KEY);
+  } catch {
+    // Storage is unavailable, so the retry was never claimed.
+  }
+}
+
 /**
  * Authentication callback status states
  * @public
@@ -220,6 +230,7 @@ export function useAuthCallback(options: UseAuthCallbackOptions = {}): UseAuthCa
 
     // OIDC is done loading and authenticated - move to waiting for backend
     if (!isAuthLoading && isOidcAuthenticated && status === "processing-oauth") {
+      releaseMissingStateRetry();
       setStatus("waiting-backend");
       return;
     }
