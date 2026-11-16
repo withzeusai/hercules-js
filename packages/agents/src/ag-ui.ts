@@ -508,6 +508,23 @@ export class RunChunks {
             ? { status: "capped", cappedReason: latest.cappedReason }
             : { status: latest.status };
     }
+    // The thread has moved on to a newer run (the app started a follow-up, or
+    // another tab sent), so `latestRun` is not this run. This run is over,
+    // and its reply is stored: that is a run that finished, not one to
+    // report as failed for want of an ending.
+    if (
+      this.ending === null &&
+      latest?.id !== this.runId &&
+      thread.activeRun?.id !== this.runId &&
+      thread.messages.some(
+        (message) =>
+          message.run_id === this.runId &&
+          message.role === "assistant" &&
+          message.status !== "streaming",
+      )
+    ) {
+      this.ending = { status: "completed" };
+    }
     return chunks;
   }
 

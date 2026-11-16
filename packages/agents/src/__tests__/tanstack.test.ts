@@ -232,6 +232,40 @@ describe("herculesConnection", () => {
     expect(app.fetchUrls).toHaveLength(1);
   });
 
+  it("ends a run that finished as finished when the thread already has a newer run", async () => {
+    const app = createApp();
+    const { chat, chunks } = chatFor(app);
+    // The stream brings the reply but not yet the ending when Convex has both.
+    app.push(
+      frame(1, "run.queued"),
+      frame(2, "run.started"),
+      frame(3, "message.delta", { message_id: "msg_1", text: "Opening order 123." }),
+    );
+    const sending = chat.sendMessage("Open my order");
+    await vi.waitFor(() =>
+      expect(chunks.some((c) => c.type === "TEXT_MESSAGE_CONTENT")).toBe(true),
+    );
+    // The run is over in Convex, and the app's `onRunFinished` has already
+    // started a follow-up on the thread: `latestRun` is that one.
+    const followUp = "7c1f2c1e-8a8b-4c3f-9d55-0b6f1d2e3a4c";
+    app.setThread({
+      ...runningThread(
+        [userMessage("Open my order"), REPLY, userMessage("Summarize it", followUp)],
+        followUp,
+      ),
+    });
+    await sending;
+    // It used to end with RUN_ERROR "The run ended without saying how."
+    expect(chunks.at(-1)).toMatchObject({ type: "RUN_FINISHED", runId: RUN });
+    expect(chunks.some((c) => c.type === "RUN_ERROR")).toBe(false);
+    expect(chat.getError()).toBeUndefined();
+    expect(chat.getStatus()).toBe("ready");
+    expect(chat.getMessages()[1]?.parts[0]).toEqual({
+      type: "text",
+      content: "Opening order 123.",
+    });
+  });
+
   it("takes the run's ending from the stream though it is numbered below what was read", async () => {
     const app = createApp();
     const { chat, chunks } = chatFor(app);

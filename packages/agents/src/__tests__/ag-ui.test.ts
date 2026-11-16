@@ -312,6 +312,55 @@ describe("RunChunks", () => {
     expect(chunks.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
   });
 
+  it("finds a run's ending by the run when the thread's latest run is a newer one", () => {
+    const thread = settledThread();
+    const newer: AgentThread = {
+      ...thread,
+      latestRun: {
+        id: "newer",
+        status: "running",
+        error: null,
+        cappedReason: null,
+        finished_at: null,
+      },
+      activeRun: {
+        id: "newer",
+        status: "running",
+        progress: null,
+        live: null,
+        lastSeq: 0,
+        created_at: AT,
+      },
+    };
+    // Its reply is stored and whole: the run finished.
+    const done = new RunChunks(THREAD, RUN);
+    const chunks = [...done.reconcile(newer), ...done.finish()];
+    expect(chunks.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+
+    // No reply of this run is stored: nothing says it finished.
+    const unknown = new RunChunks(THREAD, RUN);
+    const without = { ...newer, messages: newer.messages.filter((m) => m.role === "user") };
+    expect([...unknown.reconcile(without), ...unknown.finish()].at(-1)).toMatchObject({
+      type: "RUN_ERROR",
+    });
+    // A run that really failed is still reported as failed.
+    const failed = new RunChunks(THREAD, RUN);
+    const ended = {
+      ...thread,
+      latestRun: {
+        id: RUN,
+        status: "failed" as const,
+        error: { code: "out_of_credits", message: "Out." },
+        cappedReason: null,
+        finished_at: null,
+      },
+    };
+    expect([...failed.reconcile(ended), ...failed.finish()].at(-1)).toMatchObject({
+      type: "RUN_ERROR",
+      code: "out_of_credits",
+    });
+  });
+
   it("takes a failed run's error from Convex", () => {
     const run = new RunChunks(THREAD, RUN);
     run.reconcile({

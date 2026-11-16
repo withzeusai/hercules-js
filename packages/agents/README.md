@@ -483,6 +483,10 @@ call itself, so TanStack never runs one or starts a second run.
   is the app's setup: Hercules has no agent with the id in `convex/agent.ts`
   for this app, or the agents API is not turned on for it. `not_found` from
   `send` is a thread that is not this user's or not this agent's.
+- A run's ending is found by the run, not only by the thread's latest run.
+  When the thread already has a newer run (the app's `onRunFinished` started
+  a follow-up, or another tab sent a message) and this run's reply is stored,
+  the chat ends the run as finished.
 - A live view that fails is not an error here. If Hercules refuses the run's
   stream, or keeps answering 429 because more than ten tabs stream the same
   run, the connection reads the reply from Convex instead: it arrives whole,
