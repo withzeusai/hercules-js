@@ -42,15 +42,18 @@ export function ownerOf(endUser: EndUser | null): string {
   return endUser === null ? APP_OWNER : `user:${endUser.tokenIdentifier}`;
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/i;
+// Exactly what Hercules stores an id under. It takes a ULID in uppercase
+// only, and keeps a UUID in lowercase whatever case it was sent in: an id
+// in any other form would name a different thread there than here.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
-/** Whether `id` can name a new thread: the API takes ULIDs or UUIDs for run and thread ids. */
+/** Whether `id` can name a new thread: a UUID in lowercase, or a ULID in uppercase. */
 export function isThreadId(id: string): boolean {
   return UUID_PATTERN.test(id) || ULID_PATTERN.test(id);
 }
 
-/** A random UUID: the API takes ULIDs or UUIDs for run and thread ids. */
+/** A random UUID in lowercase: the API takes ULIDs or UUIDs for run and thread ids. */
 export function newId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -181,6 +184,15 @@ export async function threadById(ctx: QueryCtx, threadId: string) {
     .query("threads")
     .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
     .unique();
+}
+
+/** Whether a thread under this id was deleted. A deleted thread's id is never used again. */
+export async function wasDeleted(ctx: QueryCtx, threadId: string): Promise<boolean> {
+  const tombstone = await ctx.db
+    .query("deleted_threads")
+    .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
+    .first();
+  return tombstone !== null;
 }
 
 export async function runById(ctx: QueryCtx, runId: string) {

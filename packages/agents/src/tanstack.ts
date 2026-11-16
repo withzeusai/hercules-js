@@ -163,6 +163,8 @@ function contextOf(data: Record<string, any> | undefined): Record<string, any> |
 type ThreadValue = AgentThread | null;
 
 interface ThreadWatch {
+  /** The thread as Convex has it now, or undefined while it loads or cannot be read. */
+  current(): ThreadValue | undefined;
   /** Calls `listener` with the thread as it is now, and each time it changes. */
   each(listener: (thread: ThreadValue) => void): void;
   /** Resolves with the first value `pick` returns for the thread, or undefined on abort or timeout. */
@@ -184,17 +186,20 @@ function watchThread(
   const unsubscribe = watch.onUpdate(() => {
     for (const listener of [...listeners]) listener();
   });
+  function current(): ThreadValue | undefined {
+    try {
+      return watch.localQueryResult() as ThreadValue | undefined;
+    } catch {
+      // `until` reports a thread that cannot be read.
+      return undefined;
+    }
+  }
   return {
+    current,
     each(listener) {
       function check() {
-        let thread: unknown;
-        try {
-          thread = watch.localQueryResult();
-        } catch {
-          // `until` reports a thread that cannot be read.
-          return;
-        }
-        if (thread !== undefined) listener(thread as ThreadValue);
+        const thread = current();
+        if (thread !== undefined) listener(thread);
       }
       listeners.add(check);
       check();
@@ -263,7 +268,13 @@ function watchThread(
  *
  * Page actions are one-way: each comes to TanStack as a tool call with the
  * result "sent to the page", so TanStack never starts a run of its own, and
- * the adapter runs the page's handler.
+ * the adapter runs the page's handler. It runs it once Hercules has
+ * delivered the call to the app (the thread query then lists it), after
+ * claiming it, and skips one that is two minutes old.
+ *
+ * A message that completes as something other than what streamed of it (a
+ * step Hercules retried streams its text twice) replaces the chat's messages
+ * with the thread as Convex has it and the message as it completed.
  */
 export function herculesConnection(
   convex: HerculesConvexClient,
@@ -293,13 +304,15 @@ export function herculesConnection(
     runId: string,
     signal: AbortSignal | undefined,
   ): AsyncGenerator<StreamChunk> {
-    const chunks = new RunChunks(threadId, runId);
+    let watching: ThreadWatch | null = null;
+    const chunks = new RunChunks(threadId, runId, { thread: () => watching?.current() });
     yield chunks.started();
     const watch = watchThread(convex, api.thread, threadArgs(threadId));
-    // Page actions run from the thread, once Hercules has delivered them: the
-    // live stream below only shows them in the chat.
-    watch.each(runPendingPageActions);
+    watching = watch;
     try {
+      // Page actions run from the thread, once Hercules has delivered them: the
+      // live stream below only shows them in the chat.
+      watch.each(runPendingPageActions);
       // The run can be streamed once Hercules took it. It may also end first.
       const live = await watch.until(
         (thread) => (thread?.activeRun?.id === runId ? (thread.activeRun.live ?? undefined) : null),

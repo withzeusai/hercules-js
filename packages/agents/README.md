@@ -9,8 +9,9 @@ Hercules agents in a Hercules app:
   who is calling them.
 
 The package has no runtime dependencies. It verifies tokens with Web Crypto,
-so it fits in a Convex HTTP action. Convex, React and TanStack AI are optional
-peers, needed only by the entry points that use them.
+so it fits in a Convex HTTP action. Convex, React and TanStack AI
+(`@tanstack/ai` and `@tanstack/ai-client`) are optional peers, needed only by
+the entry points that use them.
 
 | Entry point                         | What                                                                |
 | ----------------------------------- | ------------------------------------------------------------------- |
@@ -65,7 +66,7 @@ export default http;
 
 To shape the functions yourself, call the methods from your own. Keep the
 names and args `support.api()` gives them: the page's connection calls them
-by name, and sends `context` and `anonymousId` with a message.
+by name, and sends `context` with a message.
 
 ```ts
 export const send = mutation({
@@ -73,7 +74,6 @@ export const send = mutation({
     threadId: v.optional(v.string()),
     text: v.string(),
     context: v.optional(v.record(v.string(), v.any())),
-    anonymousId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const started = await support.send(ctx, args);
@@ -82,11 +82,7 @@ export const send = mutation({
   },
 });
 export const thread = query({
-  args: {
-    threadId: v.string(),
-    anonymousId: v.optional(v.string()),
-    limit: v.optional(v.number()),
-  },
+  args: { threadId: v.string(), limit: v.optional(v.number()) },
   handler: (ctx, args) => support.readThread(ctx, args),
 });
 ```
@@ -149,7 +145,11 @@ A run Hercules refuses over a limit (`end_user_rate_limited`,
 
 `send` opens a new thread when `threadId` is left out, or when it is a UUID or
 ULID no thread has yet: the page may choose its thread's id, as a TanStack AI
-chat does.
+chat does. The id must be in the form Hercules keeps it in: a UUID in
+lowercase, as `crypto.randomUUID()` makes, or a ULID in uppercase. Any other
+`threadId` that names no thread is refused with `invalid_request` before
+anything is written. A deleted thread's id is retired: `send` under it throws
+`thread_deleted`, so the page starts the next chat under a new id.
 
 The caller is the signed-in user, from `ctx.auth`. There are no anonymous
 visitors: without a signed-in user `send` throws `sign_in_required`, and the
@@ -157,8 +157,8 @@ other methods answer `null` or `false`. A thread answers only to the user who
 opened it: anyone else reads `null`.
 Failures throw a `ConvexError` whose `data` is `{ code, message,
 retryAfterSeconds? }`, with `code` one of `sign_in_required`, `not_found`,
-`thread_busy`, `end_user_rate_limited`, `message_too_long` and
-`invalid_request`.
+`thread_deleted`, `thread_busy`, `end_user_rate_limited`, `message_too_long`
+and `invalid_request`.
 
 ### When a run finishes
 
@@ -206,7 +206,7 @@ export const toolCallsOf = internalQuery({
 thread of this agent. Call it from an internal function, or check who is
 asking first, and do not return it to a page.
 
-### Page actions
+### When a page action runs
 
 A page action is the agent's command to the page, such as opening a record.
 List its name in `pageActions`, and give the page a handler for it (below).
@@ -296,7 +296,9 @@ npm install @tanstack/ai @tanstack/ai-client @tanstack/ai-react
 ```
 
 TanStack AI 1.x, from `@tanstack/ai` 1.2, `@tanstack/ai-client` 1.1 and
-`@tanstack/ai-react` 1.0.2.
+`@tanstack/ai-react` 1.0.2. The package's own peers are `@tanstack/ai` and
+`@tanstack/ai-client`, whose connection contract it implements. It never
+imports `@tanstack/ai-react`: that one is the app's, for `useChat`.
 
 ```tsx
 // src/components/agent-chat.tsx
@@ -351,7 +353,8 @@ function ChatMessage({ message }: { message: UIMessage }) {
       {message.parts.map((part, index) => {
         if (part.type === "text") return <TextPart key={index} content={part.content} />;
         // `part.output` is `{ kind, status, summary }` once the call ends,
-        // or "sent to the page" for a page action.
+        // or "sent to the page" for a page action. A Hercules tool is named
+        // "tool" here unless the app set `exposeToolDetails`.
         if (part.type === "tool-call" && part.output === undefined) {
           return <p key={index}>Working on it...</p>;
         }
@@ -428,7 +431,9 @@ export const Route = createFileRoute("/chat/$threadId")({
 A page action is an agent's command to the page, such as opening a record.
 List its name in `pageActions` in `convex/agent.ts`, and register its handler
 on the connection in `AgentChat`. One open tab claims each call through the
-app's `claimPageAction` mutation, from `support.api()`, and runs it.
+app's `claimPageAction` mutation, from `support.api()`, and runs it. It runs
+when Hercules has delivered the call to the app, a moment after it shows in
+the chat, and not at all once it is two minutes old.
 
 ```tsx
 // In AgentChat, after useChat. useNavigate is TanStack Router's.
@@ -458,21 +463,18 @@ call itself, so TanStack never runs one or starts a second run.
   `chat.sendMessage(text, { body: { context: { page: "/orders/123" } } })`.
 - `chat.error` is set when a message was not sent or a run failed. Read why
   with `agentErrorCode(chat.error)`: `sign_in_required`, `thread_busy`,
-  `end_user_rate_limited`, `message_too_long`, `invalid_request` and
-  `not_found` from `send`, or the run's own code, such as `out_of_credits`.
+  `thread_deleted`, `end_user_rate_limited`, `message_too_long`,
+  `invalid_request` and `not_found` from `send`, or the run's own code, such
+  as `out_of_credits`, `end_user_rate_limited` or
+  `agent_daily_limit_reached`. For a run that failed over a limit,
+  `thread.latestRun.error.retryAfterSeconds` says how long it lasts, counted
+  from `thread.latestRun.finished_at`.
 - `useThreadSync` returns the thread: `thread.activeRun?.progress` is the
   run's latest progress label. Each also comes to `useChat`'s
   `onCustomEvent` as `hercules.progress` with `{ label }`.
 - `chat.stop()` stops the run with the app's `cancel` mutation.
-- For a visitor who is not signed in (with `allowAnonymous: true`), keep an
-  id for them in the browser and pass it to the connection and to
-  `useThreadSync`:
-
-  ```tsx
-  const [anonymousId] = useState(visitorId); // From localStorage, say.
-  const [connection] = useState(() => herculesConnection(convex, api.agent, { anonymousId }));
-  useThreadSync(chat, api.agent.thread, { threadId, anonymousId });
-  ```
+- The chat is for signed-in users. Without one, every message fails with
+  `sign_in_required`.
 
 ### How it maps
 
@@ -486,6 +488,14 @@ call itself, so TanStack never runs one or starts a second run.
   with the messages, so a reloaded page action has none.
 - `joinRun` replays a run that is still going from its start.
 - If Hercules refuses the live stream, the reply is read from Convex.
+- A completed message is the truth. When Hercules retries a step, the step's
+  text streams a second time, and a stream can only add to a message. So when
+  a message completes as something other than what streamed plus more, the
+  adapter replaces the chat's messages with the thread as Convex has it and
+  the message as it completed (a `MESSAGES_SNAPSHOT`). It does not do this
+  for a thread longer than the read holds (`hasMore`), where a snapshot would
+  drop the older messages the chat shows: `useThreadSync` corrects that one
+  when the run is over.
 
 AG-UI and TanStack's shapes exist only in the browser. Hercules sends, and
 Convex keeps, the agents API's own events and messages.

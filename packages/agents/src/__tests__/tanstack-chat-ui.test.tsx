@@ -16,6 +16,7 @@ import {
   assistantMessage,
   createApp,
   frame,
+  pendingPageAction,
   RUN,
   settledThread,
   THREAD,
@@ -133,6 +134,9 @@ describe("the README's chat", () => {
     );
     fireEvent.click(screen.getByText("Send"));
     expect(await screen.findByText("Opening order 123.")).toBeTruthy();
+    // The page action runs once Hercules has delivered it to the app.
+    expect(openOrder).not.toHaveBeenCalled();
+    act(() => app.deliverPageAction(pendingPageAction("call_open", { orderId: "123" })));
     await waitFor(() => expect(openOrder).toHaveBeenCalledTimes(1));
     expect(openOrder).toHaveBeenCalledWith(
       { orderId: "123" },
@@ -150,15 +154,7 @@ describe("the README's chat", () => {
   it("runs a page action left waiting in one tab only, with handlers set in an effect", async () => {
     const app = createApp({
       ...settledThread([userMessage("Open my order"), REPLY]),
-      pageActions: [
-        {
-          toolCallId: "call_open",
-          runId: RUN,
-          name: "open_order",
-          argumentsJson: '{"orderId":"123"}',
-          created_at: "2026-11-15T12:00:00.000Z",
-        },
-      ],
+      pageActions: [pendingPageAction("call_open", { orderId: "123" })],
     });
     const firstTab = vi.fn();
     const secondTab = vi.fn();

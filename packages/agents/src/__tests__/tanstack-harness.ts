@@ -113,6 +113,7 @@ export function pendingPageAction(
     name: "open_order",
     argumentsJson: JSON.stringify(args),
     created_at: new Date().toISOString(),
+    status: "pending",
   };
 }
 

@@ -294,6 +294,310 @@ describe("RunChunks", () => {
   });
 });
 
+describe("RunChunks, when a step was retried", () => {
+  const user: AgentThread["messages"][number] = {
+    id: `${RUN}:input`,
+    thread_id: THREAD,
+    run_id: RUN,
+    role: "user",
+    parts: [{ type: "text", text: "Where is my order?" }],
+    created_at: AT,
+    status: "completed",
+  };
+  const earlier: AgentThread["messages"] = [
+    { ...user, id: "earlier:input", run_id: "earlier", parts: [{ type: "text", text: "Hello" }] },
+    {
+      id: "msg_0",
+      thread_id: THREAD,
+      run_id: "earlier",
+      role: "assistant",
+      parts: [{ type: "text", text: "Hi! How can I help?" }],
+      created_at: AT,
+      status: "completed",
+    },
+  ];
+
+  /** The thread as Convex has it while the run is going: its reply is not there yet. */
+  function goingThread(overrides: Partial<AgentThread> = {}): AgentThread {
+    return {
+      id: THREAD,
+      agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
+      hasMore: false,
+      messages: [...earlier, user],
+      activeRun: {
+        id: RUN,
+        status: "running",
+        progress: null,
+        live: { url: "https://api.hercules.test/x", token: "t" },
+        lastSeq: 0,
+        created_at: AT,
+      },
+      latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
+      pageActions: [],
+      ...overrides,
+    };
+  }
+
+  function reply(parts: unknown[]) {
+    return {
+      message: {
+        id: "msg_1",
+        thread_id: THREAD,
+        run_id: RUN,
+        role: "assistant",
+        parts,
+        created_at: AT,
+      },
+    };
+  }
+
+  /** What a chat that already showed the thread shows after the run's chunks. */
+  function chatAfter(thread: AgentThread, chunks: StreamChunk[]) {
+    const processor = new StreamProcessor();
+    processor.setMessages(threadToUIMessages(thread));
+    for (const chunk of chunks) processor.processChunk(chunk);
+    return processor;
+  }
+
+  function textOf(message: { parts: ReadonlyArray<{ type: string; content?: unknown }> }) {
+    return message.parts.map((part) => (part.type === "text" ? part.content : "")).join("");
+  }
+
+  it("makes the chat's text the completed message's, though its text streamed twice", () => {
+    seq = 0;
+    const thread = goingThread();
+    const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+    const chunks = [
+      run.started(),
+      ...run.apply(ev("run.started")),
+      // The step fails here, and Hercules runs it again from its start.
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order is on " })),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order " })),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "shipped today." })),
+    ];
+    // Until the message completes the chat shows what streamed, twice over.
+    expect(textOf(chatAfter(thread, chunks).getMessages().at(-1)!)).toBe(
+      "Your order is on Your order shipped today.",
+    );
+
+    const completed = run.apply(
+      ev("message.completed", reply([{ type: "text", text: "Your order shipped today." }])),
+    );
+    expect(completed.map((chunk) => chunk.type)).toEqual([
+      "MESSAGES_SNAPSHOT",
+      // TanStack is told again which run it is reading, and which message is the run's.
+      "RUN_STARTED",
+      "TEXT_MESSAGE_START",
+      "TEXT_MESSAGE_END",
+    ]);
+    chunks.push(...completed, ...run.apply(ev("run.completed", { output: "", usage: null })));
+    chunks.push(...run.finish());
+
+    const chat = chatAfter(thread, chunks);
+    const messages = chat.getMessages();
+    expect(messages.map((message) => [message.role, textOf(message)])).toEqual([
+      ["user", "Hello"],
+      ["assistant", "Hi! How can I help?"],
+      ["user", "Where is my order?"],
+      ["assistant", "Your order shipped today."],
+    ]);
+    // It reads exactly as a reload would.
+    const settled = goingThread({
+      messages: [
+        ...thread.messages,
+        {
+          id: "msg_1",
+          thread_id: THREAD,
+          run_id: RUN,
+          role: "assistant",
+          parts: [{ type: "text", text: "Your order shipped today." }],
+          created_at: AT,
+          status: "completed",
+        },
+      ],
+    });
+    expect(transcriptKey(messages)).toBe(transcriptKey(threadToUIMessages(settled)));
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "completed" });
+    // The run still ends once, and nothing is left for TanStack to run.
+    expect(chunks.filter((chunk) => chunk.type === "RUN_FINISHED")).toHaveLength(1);
+    expect(chunks.at(-1)?.type).toBe("RUN_FINISHED");
+    expect(chat.areAllToolsComplete()).toBe(true);
+  });
+
+  it("drops a tool call the failed try started, and keeps the ones the message lists", () => {
+    seq = 0;
+    const thread = goingThread();
+    const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+    const lookup = (id: string) => ({ tool_call_id: id, name: "lookup_order", kind: "app" });
+    const chunks = [
+      run.started(),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Let me check." })),
+      ...run.apply(ev("tool_call.started", lookup("call_first_try"))),
+      // The retry writes the same line and calls the tool under a new id.
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Let me check." })),
+      ...run.apply(ev("tool_call.started", lookup("call_lookup"))),
+      ...run.apply(
+        ev("tool_call.completed", {
+          ...lookup("call_lookup"),
+          status: "succeeded",
+          summary: "Looked up order 123",
+        }),
+      ),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: " It shipped." })),
+      ...run.apply(
+        ev(
+          "message.completed",
+          reply([
+            { type: "text", text: "Let me check." },
+            {
+              type: "tool_call",
+              id: "call_lookup",
+              name: "lookup_order",
+              kind: "app",
+              status: "succeeded",
+              summary: "Looked up order 123",
+            },
+            { type: "text", text: " It shipped." },
+          ]),
+        ),
+      ),
+      ...run.apply(ev("run.completed", { output: "", usage: null })),
+      ...run.finish(),
+    ];
+    const last = chatAfter(thread, chunks).getMessages().at(-1)!;
+    expect(last.parts.map((part) => (part.type === "tool-call" ? part.id : part.type))).toEqual([
+      "text",
+      "call_lookup",
+      "tool-result",
+      "text",
+    ]);
+    expect(textOf(last)).toBe("Let me check. It shipped.");
+    // The call that was dropped is not answered after it is gone.
+    expect(
+      JSON.stringify(chunks.slice(chunks.findIndex((c) => c.type === "MESSAGES_SNAPSHOT") + 1)),
+    ).not.toContain("call_first_try");
+  });
+
+  it("puts a failed run's end on the corrected reply, not on a new empty message", () => {
+    seq = 0;
+    const thread = goingThread();
+    const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+    const chunks = [
+      run.started(),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order is on " })),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order " })),
+      ...run.apply(ev("message.completed", reply([{ type: "text", text: "Your order " }]))),
+      ...run.apply(
+        ev("run.failed", { error: { code: "out_of_credits", message: "Out." }, usage: null }),
+      ),
+      ...run.finish(),
+    ];
+    expect(chunks.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "out_of_credits" });
+    const messages = chatAfter(thread, chunks).getMessages();
+    expect(messages.map((message) => [message.role, textOf(message)])).toEqual([
+      ["user", "Hello"],
+      ["assistant", "Hi! How can I help?"],
+      ["user", "Where is my order?"],
+      ["assistant", "Your order "],
+    ]);
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "failed" });
+  });
+
+  it("corrects from Convex's copy when the completed message never streamed", () => {
+    seq = 0;
+    const run = new RunChunks(THREAD, RUN);
+    const chunks = [
+      run.started(),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order is on " })),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order shipped." })),
+    ];
+    const settled = goingThread({
+      activeRun: null,
+      messages: [
+        ...earlier,
+        user,
+        {
+          id: "msg_1",
+          thread_id: THREAD,
+          run_id: RUN,
+          role: "assistant",
+          parts: [{ type: "text", text: "Your order shipped." }],
+          created_at: AT,
+          status: "completed",
+        },
+      ],
+      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finished_at: AT },
+    });
+    chunks.push(...run.reconcile(settled), ...run.finish());
+    expect(chunks.map((chunk) => chunk.type)).toContain("MESSAGES_SNAPSHOT");
+    const messages = chatAfter(goingThread(), chunks).getMessages();
+    expect(textOf(messages.at(-1)!)).toBe("Your order shipped.");
+    expect(messages).toHaveLength(4);
+  });
+
+  const lookup = { tool_call_id: "call_lookup", name: "lookup_order", kind: "app" };
+  const listed = [
+    {
+      type: "tool_call",
+      id: "call_lookup",
+      name: "lookup_order",
+      kind: "app",
+      status: "succeeded",
+      summary: null,
+    },
+    { type: "text", text: "It shipped." },
+  ];
+
+  it("adds to the chat, and replaces nothing, when the message is what streamed and more", () => {
+    seq = 0;
+    const thread = goingThread();
+    const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+    const chunks = [
+      run.started(),
+      // A tool call before the reply has written anything is the reply's first part.
+      ...run.apply(ev("tool_call.started", lookup)),
+      ...run.apply(ev("tool_call.completed", { ...lookup, status: "succeeded", summary: null })),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "It ship" })),
+      ...run.apply(ev("message.completed", reply(listed))),
+      ...run.finish(),
+    ];
+    expect(chunks.map((chunk) => chunk.type)).not.toContain("MESSAGES_SNAPSHOT");
+    expect(textOf(chatAfter(thread, chunks).getMessages().at(-1)!)).toBe("It shipped.");
+  });
+
+  it("replaces the chat when a tool call's answer would land behind the text after it", () => {
+    seq = 0;
+    const thread = goingThread();
+    const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+    const chunks = [
+      run.started(),
+      // The stream lost the call's `tool_call.completed`, and the text went on.
+      ...run.apply(ev("tool_call.started", lookup)),
+      ...run.apply(ev("message.delta", { message_id: "msg_1", text: "It ship" })),
+      ...run.apply(ev("message.completed", reply(listed))),
+      ...run.finish(),
+    ];
+    expect(chunks.map((chunk) => chunk.type)).toContain("MESSAGES_SNAPSHOT");
+    const last = chatAfter(thread, chunks).getMessages().at(-1)!;
+    expect(textOf(last)).toBe("It shipped.");
+    expect(last.parts.map((part) => part.type)).toEqual(["tool-call", "tool-result", "text"]);
+  });
+
+  it("does not replace a chat that may show older messages than the thread lists", () => {
+    seq = 0;
+    // A long thread: the read holds its newest messages only.
+    const thread = goingThread({ hasMore: true });
+    const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+    run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order is on " }));
+    run.apply(ev("message.delta", { message_id: "msg_1", text: "Your order shipped." }));
+    const completed = run.apply(
+      ev("message.completed", reply([{ type: "text", text: "Your order shipped." }])),
+    );
+    // A snapshot would drop the older messages, so this one is left to `useThreadSync`.
+    expect(completed.map((chunk) => chunk.type)).toEqual(["TEXT_MESSAGE_END"]);
+  });
+});
+
 describe("threadToUIMessages", () => {
   it("leaves out a reply that has written nothing yet, and marks failed tool calls", () => {
     const thread = settledThread();

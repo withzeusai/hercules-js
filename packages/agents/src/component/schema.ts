@@ -14,7 +14,7 @@ import {
 
 export default defineSchema({
   threads: defineTable({
-    /** The Hercules thread id, a UUID this component picks. */
+    /** The Hercules thread id: a UUID this component picks, or the UUID or ULID the page chose. */
     threadId: v.string(),
     agentId: v.string(),
     /** `user:<tokenIdentifier>` or `app`. */
@@ -30,6 +30,11 @@ export default defineSchema({
    * thread's own row is gone at once. Its other rows are purged in batches,
    * and Hercules is asked to delete its copy until it says it has, so both
    * are tracked here, where a tick that cannot be lost comes back to them.
+   *
+   * The row is kept for good, and retires the thread's id. A page may choose
+   * a thread's id, so without it a page could open a new thread under a
+   * deleted one's: the purge of the old rows, and Hercules's own delete,
+   * would then take the new thread's.
    */
   deleted_threads: defineTable({
     threadId: v.string(),

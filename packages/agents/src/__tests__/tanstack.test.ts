@@ -2,7 +2,7 @@ import { toolDefinition } from "@tanstack/ai";
 import type { StreamChunk } from "@tanstack/ai/client";
 import { ChatClient } from "@tanstack/ai-client";
 import { describe, expect, it, vi } from "vitest";
-import { PAGE_ACTION_OUTPUT } from "../ag-ui";
+import { PAGE_ACTION_OUTPUT, threadToUIMessages, transcriptKey } from "../ag-ui";
 import { AgentError } from "../errors";
 import { agentErrorCode, herculesConnection, type HerculesConnectionOptions } from "../tanstack";
 import {
@@ -139,6 +139,84 @@ describe("herculesConnection", () => {
       }),
     );
     expect(app.watching()).toBe(0);
+  });
+
+  it("shows the completed reply, once, when a retried step streamed its text twice", async () => {
+    const app = createApp(
+      settledThread(
+        [
+          userMessage("Hello", "run_earlier"),
+          assistantMessage("msg_0", [{ type: "text", text: "Hi!" }], "completed", "run_earlier"),
+        ],
+        {
+          id: "run_earlier",
+          status: "completed",
+          error: null,
+          cappedReason: null,
+          finished_at: null,
+        },
+      ),
+    );
+    const { chat, chunks } = chatFor(app, {}, { persistence: true });
+    chat.attach();
+    await vi.waitFor(() => expect(chat.getMessages()).toHaveLength(2));
+
+    const reply = assistantMessage("msg_1", [{ type: "text", text: "Your order shipped today." }]);
+    app.push(
+      frame(1, "run.queued"),
+      frame(2, "run.started"),
+      // The step fails here, and Hercules runs it again from its start.
+      frame(3, "message.delta", { message_id: "msg_1", text: "Your order is on " }),
+      frame(4, "message.delta", { message_id: "msg_1", text: "Your order shipped " }),
+      frame(5, "message.delta", { message_id: "msg_1", text: "today." }),
+      frame(6, "message.completed", { message: reply }),
+      frame(7, "run.completed", { output: "Your order shipped today.", usage: null }),
+    );
+    const sending = chat.sendMessage("Where is my order?");
+    const texts = () =>
+      chat
+        .getMessages()
+        .map((m) => m.parts.map((part) => (part.type === "text" ? part.content : "")).join(""));
+    // The completed message corrects the chat before Convex has the run's end.
+    await vi.waitFor(() =>
+      expect(texts()).toEqual(["Hello", "Hi!", "Where is my order?", "Your order shipped today."]),
+    );
+    expect(chat.getIsLoading()).toBe(true);
+    app.setThread(settledThread([...(app.thread()?.messages ?? []), reply]));
+    await sending;
+
+    expect(texts()).toEqual(["Hello", "Hi!", "Where is my order?", "Your order shipped today."]);
+    expect(chat.getMessages().map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(chat.getStatus()).toBe("ready");
+    expect(chat.getError()).toBeUndefined();
+    expect(chunks.filter((c) => c.type === "RUN_FINISHED" || c.type === "RUN_ERROR")).toHaveLength(
+      1,
+    );
+    // The chat reads as the thread does: there is nothing left for `useThreadSync` to fix.
+    expect(transcriptKey(chat.getMessages())).toBe(transcriptKey(threadToUIMessages(app.thread())));
+    chat.dispose();
+  });
+
+  it("does not claim or run a page action the thread lists as expired", async () => {
+    const app = createApp({
+      ...settledThread([userMessage("Open my order"), REPLY]),
+      // It reached the app more than two minutes after the agent called it.
+      pageActions: [{ ...pendingPageAction("call_late", {}), status: "expired" }],
+    });
+    const openOrder = vi.fn();
+    const connection = herculesConnection(app.client, api.agent, {
+      fetch: app.fetch,
+      pageActions: { open_order: openOrder },
+    });
+    await connection.hydrate(THREAD);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(app.callsTo("agent:claimPageAction")).toEqual([]);
+    expect(openOrder).not.toHaveBeenCalled();
   });
 
   it("sends the page's thread id and context, and streams from the run's live URL", async () => {

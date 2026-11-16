@@ -55,12 +55,51 @@ export function toolOutput(
 
 const TOOL_FAILED_TEXT = "Tool execution failed";
 
+/** What a message holds, in order: a stretch of text, or a tool call by its id. */
+type Piece = { text: string } | { toolCallId: string };
+
+/** A message's parts as pieces: text parts with no tool call between them are one stretch. */
+function piecesOf(parts: readonly MessagePart[]): Piece[] {
+  const pieces: Piece[] = [];
+  for (const part of parts) {
+    if (part.type !== "text") {
+      pieces.push({ toolCallId: part.id });
+      continue;
+    }
+    if (part.text.length === 0) continue;
+    const last = pieces[pieces.length - 1];
+    if (last !== undefined && "text" in last) last.text += part.text;
+    else pieces.push({ text: part.text });
+  }
+  return pieces;
+}
+
+/**
+ * Whether a chat that shows `sent` can be brought to `whole` by adding to
+ * it: `sent` is how `whole` begins, with at most its last stretch of text
+ * still unfinished.
+ */
+function canExtendTo(sent: readonly Piece[], whole: readonly Piece[]): boolean {
+  if (sent.length > whole.length) return false;
+  return sent.every((piece, index) => {
+    const target = whole[index] as Piece;
+    if ("toolCallId" in piece)
+      return "toolCallId" in target && target.toolCallId === piece.toolCallId;
+    if (!("text" in target)) return false;
+    return index === sent.length - 1
+      ? target.text.startsWith(piece.text)
+      : target.text === piece.text;
+  });
+}
+
 interface MessageState {
   id: string;
   deltaText: string;
   appendedText: string;
   /** The text sent to TanStack so far. */
   emitted: string;
+  /** What TanStack shows of the message so far, in order. */
+  sent: Piece[];
   /** TEXT_MESSAGE_START sent. */
   open: boolean;
   /** TEXT_MESSAGE_END sent: nothing more goes into it. */
@@ -77,11 +116,25 @@ interface ToolCallState {
   answered: boolean;
 }
 
+export interface RunChunksOptions {
+  /**
+   * The thread as Convex has it now. It is what the chat is rebuilt from
+   * when a completed message differs from what was streamed of it.
+   */
+  thread?: () => AgentThread | null | undefined;
+}
+
 /**
  * One run's events, turned into AG-UI chunks as they arrive. Starts with
  * RUN_STARTED, and `finish()` ends it with exactly one RUN_FINISHED or
  * RUN_ERROR. Text is sent once: `message.delta` and `message.appended` carry
  * the same reply, so only what goes past the text already sent is written.
+ *
+ * A completed message is the truth. A step Hercules retried streams its text
+ * a second time, so the chat can show more than the message holds, and an
+ * AG-UI stream can only add to a message. When a completed message is not
+ * what was streamed plus more, the chat's messages are replaced, with a
+ * MESSAGES_SNAPSHOT of the thread holding the message as it completed.
  */
 export class RunChunks {
   readonly threadId: string;
@@ -92,12 +145,18 @@ export class RunChunks {
   private finished = false;
   private readonly messages = new Map<string, MessageState>();
   private readonly toolCalls = new Map<string, ToolCallState>();
+  /** The run's replies that completed, as they completed. */
+  private readonly completed = new Map<string, ThreadMessage>();
   /** The message the stream wrote last: tool calls belong to it. */
   private current: MessageState | null = null;
+  /** Tool calls that started before the stream named a message: the next one's first parts. */
+  private unowned: Piece[] = [];
+  private readonly thread: (() => AgentThread | null | undefined) | undefined;
 
-  constructor(threadId: string, runId: string) {
+  constructor(threadId: string, runId: string, options: RunChunksOptions = {}) {
     this.threadId = threadId;
     this.runId = runId;
+    this.thread = options.thread;
   }
 
   private metadata(status?: string): { hercules: HerculesMessageMetadata } {
@@ -121,6 +180,7 @@ export class RunChunks {
         deltaText: "",
         appendedText: "",
         emitted: "",
+        sent: [],
         open: false,
         closed: false,
         toolSinceText: false,
@@ -138,6 +198,10 @@ export class RunChunks {
     if (text.length <= message.emitted.length || !text.startsWith(message.emitted)) return [];
     const delta = text.slice(message.emitted.length);
     message.emitted = text;
+    this.adopt(message);
+    const last = message.sent[message.sent.length - 1];
+    if (last !== undefined && "text" in last) last.text += delta;
+    else message.sent.push({ text: delta });
     const chunks: StreamChunk[] = [];
     if (!message.open || message.toolSinceText) {
       // A second START for the same message opens a new text part after its tool calls.
@@ -160,6 +224,13 @@ export class RunChunks {
     return chunks;
   }
 
+  /** Counts the tool calls that came before a message's first content as its first parts. */
+  private adopt(message: MessageState): void {
+    if (message.sent.length > 0 || this.unowned.length === 0) return;
+    message.sent.push(...this.unowned);
+    this.unowned = [];
+  }
+
   private close(message: MessageState): StreamChunk[] {
     if (message.closed) return [];
     message.closed = true;
@@ -178,7 +249,13 @@ export class RunChunks {
     if (this.toolCalls.has(id)) return [];
     this.toolCalls.set(id, { id, name, kind, ended: false, answered: false });
     const owner = parent ?? this.current;
-    if (owner !== null) owner.toolSinceText = true;
+    if (owner === null) {
+      this.unowned.push({ toolCallId: id });
+    } else {
+      this.adopt(owner);
+      owner.toolSinceText = true;
+      owner.sent.push({ toolCallId: id });
+    }
     return [
       {
         type: EventType.TOOL_CALL_START,
@@ -228,10 +305,91 @@ export class RunChunks {
     return chunks;
   }
 
-  /** A message as it stands in full: sends what of it was not sent, in part order, then ends it. */
-  private complete(id: string, parts: readonly MessagePart[]): StreamChunk[] {
+  /**
+   * The chat's messages, replaced: the thread as `thread` has it, with this
+   * run's completed replies as they completed. Null when it cannot be built:
+   * no thread is at hand, or the thread holds older messages than it lists,
+   * which the chat may show and a snapshot would drop.
+   */
+  private replace(thread: AgentThread | null | undefined): StreamChunk[] | null {
+    if (thread === null || thread === undefined || thread.hasMore) return null;
+    const messages = thread.messages.map((message) => this.completed.get(message.id) ?? message);
+    const listed = new Set(messages.map((message) => message.id));
+    for (const message of this.completed.values()) {
+      if (!listed.has(message.id)) messages.push(message);
+    }
+    // The snapshot holds every tool call with its answer, and no message is open after it.
+    for (const message of this.messages.values()) {
+      if (this.completed.has(message.id)) message.closed = true;
+    }
+    for (const call of this.toolCalls.values()) {
+      call.ended = true;
+      call.answered = true;
+    }
+    this.current = null;
+    const chunks: StreamChunk[] = [
+      {
+        type: EventType.MESSAGES_SNAPSHOT,
+        // TanStack takes its own `UIMessage`s in a snapshot as they are.
+        messages: threadToUIMessages({ ...thread, messages }) as never,
+        timestamp: Date.now(),
+      },
+      // A snapshot makes TanStack forget the run it is reading and which
+      // messages are the run's. Naming both again lets it put the run's end
+      // on the reply, where it would otherwise add an empty message for it.
+      this.started(),
+    ];
+    for (const message of this.completed.values()) {
+      chunks.push(
+        {
+          type: EventType.TEXT_MESSAGE_START,
+          messageId: message.id,
+          role: "assistant",
+          metadata: this.metadata(),
+          timestamp: Date.now(),
+        },
+        { type: EventType.TEXT_MESSAGE_END, messageId: message.id, timestamp: Date.now() },
+      );
+    }
+    return chunks;
+  }
+
+  /**
+   * A message as it stands in full. Sends what of it was not sent, in part
+   * order, then ends it. When what was sent is not how it begins, replaces
+   * the chat's messages instead, from `thread`.
+   */
+  private complete(
+    id: string,
+    parts: readonly MessagePart[],
+    createdAt: string,
+    thread: AgentThread | null | undefined,
+  ): StreamChunk[] {
     const message = this.message(id);
     if (message.closed) return [];
+    this.completed.set(id, {
+      id,
+      thread_id: this.threadId,
+      run_id: this.runId,
+      role: "assistant",
+      parts: [...parts],
+      created_at: createdAt,
+      status: "completed",
+    });
+    this.adopt(message);
+    // A tool call still to be answered must be the last thing sent: its answer
+    // is added at the end, and text sent after it would start over behind it.
+    const answersInPlace = message.sent.every(
+      (piece, index) =>
+        !("toolCallId" in piece) ||
+        index === message.sent.length - 1 ||
+        this.toolCalls.get(piece.toolCallId)?.answered === true,
+    );
+    if (!answersInPlace || !canExtendTo(message.sent, piecesOf(parts))) {
+      const replaced = this.replace(thread);
+      if (replaced !== null) return replaced;
+      // Nothing to rebuild from: what can be added is, and `useThreadSync` has the rest.
+    }
     const chunks: StreamChunk[] = [];
     let text = "";
     for (const part of parts) {
@@ -267,7 +425,12 @@ export class RunChunks {
         const completed = event.data.message;
         // The user's own message is on the page already.
         if (completed.role !== "assistant") return [];
-        return this.complete(completed.id, completed.parts);
+        return this.complete(
+          completed.id,
+          completed.parts,
+          completed.created_at || event.created_at,
+          this.thread?.(),
+        );
       }
       case "tool_call.started":
         return this.startToolCall(event.data.tool_call_id, event.data.name, event.data.kind, null);
@@ -322,7 +485,7 @@ export class RunChunks {
         // Convex holds only the text of a message still being written.
         chunks.push(...this.write(this.message(message.id), textOf(message.parts)));
       } else {
-        chunks.push(...this.complete(message.id, message.parts));
+        chunks.push(...this.complete(message.id, message.parts, message.created_at, thread));
       }
     }
     const latest = thread.latestRun;
