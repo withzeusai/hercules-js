@@ -3,10 +3,10 @@
  * from the app's HTTP router.
  *
  * ```ts
- * // convex/mcp.ts
- * import { defineMcpServer, tool } from "@usehercules/mcp/convex";
+ * // convex/tools.ts
+ * import { defineTools, tool } from "@usehercules/agents/convex";
  *
- * export const mcp = defineMcpServer({
+ * export const tools = defineTools({
  *   tools: {
  *     create_task: tool({
  *       description: "Creates a task for the signed-in user.",
@@ -21,7 +21,7 @@
  * });
  *
  * // convex/http.ts
- * mcp.registerRoutes(http);
+ * tools.registerRoutes(http);
  * ```
  *
  * A tool handler has no `ctx.auth`: the bearer token is checked here, not by
@@ -45,15 +45,15 @@ import {
 import { createTokenVerifier } from "./jwt";
 import {
   createMcpHandler,
-  McpToolError,
+  ToolError,
   type JsonSchema,
-  type McpCaller,
-  type McpPrincipal,
+  type ToolCaller,
+  type ToolPrincipal,
   type McpTool,
-  type McpToolAnnotations,
+  type ToolAnnotations,
 } from "./server";
 
-export { McpToolError, type McpCaller, type McpPrincipal, type McpToolAnnotations } from "./server";
+export { ToolError, type ToolCaller, type ToolPrincipal, type ToolAnnotations } from "./server";
 
 declare const process: { env: Record<string, string | undefined> } | undefined;
 
@@ -62,7 +62,7 @@ declare const process: { env: Record<string, string | undefined> } | undefined;
  * Convex's action context is offered, so a tool written here ports to another
  * backend's adapter unchanged.
  */
-export type McpToolCtx = Pick<
+export type ToolCtx = Pick<
   GenericActionCtx<GenericDataModel>,
   "runQuery" | "runMutation" | "runAction"
 >;
@@ -72,7 +72,7 @@ type Awaitable<T> = T | Promise<T>;
 export interface ToolDefinition<
   Args extends PropertyValidators,
   Returns extends GenericValidator | undefined,
-  Principal extends McpPrincipal,
+  Principal extends ToolPrincipal,
 > {
   /** What the tool does and when to use it, written for the calling model. */
   description: string;
@@ -83,21 +83,21 @@ export interface ToolDefinition<
    * fields an assistant may see.
    */
   returns?: Returns;
-  annotations?: McpToolAnnotations;
+  annotations?: ToolAnnotations;
   /**
    * Who may call the tool. Defaults to `["user"]`, signed-in end users only.
    * Add `"agent"` for a tool a Hercules agent may run with no end user.
    */
   principals?: readonly Principal[];
   handler: (
-    ctx: McpToolCtx,
+    ctx: ToolCtx,
     args: ObjectType<Args>,
-    caller: Extract<McpCaller, { principal: Principal }>,
+    caller: Extract<ToolCaller, { principal: Principal }>,
   ) => Awaitable<Returns extends GenericValidator ? Infer<Returns> : unknown>;
 }
 
-/** A tool ready to be listed in `defineMcpServer({ tools })`. */
-export type ConvexMcpTool = McpTool<McpToolCtx>;
+/** A tool ready to be listed in `defineTools({ tools })`. */
+export type ConvexTool = McpTool<ToolCtx>;
 
 type Direction = "input" | "output";
 
@@ -303,8 +303,8 @@ function fit(
 export function tool<
   Args extends PropertyValidators,
   Returns extends GenericValidator | undefined = undefined,
-  Principal extends McpPrincipal = "user",
->(definition: ToolDefinition<Args, Returns, Principal>): ConvexMcpTool {
+  Principal extends ToolPrincipal = "user",
+>(definition: ToolDefinition<Args, Returns, Principal>): ConvexTool {
   const returns = definition.returns;
   return {
     description: definition.description,
@@ -318,7 +318,7 @@ export function tool<
       } catch (error) {
         // The model wrote these arguments, so it gets to read what was wrong with them.
         if (error instanceof ShapeMismatch)
-          throw new McpToolError(`Invalid arguments. ${error.message}`);
+          throw new ToolError(`Invalid arguments. ${error.message}`);
         throw error;
       }
     },
@@ -327,11 +327,11 @@ export function tool<
       // generic failure and the detail goes to the app's logs.
       shapeResult: (value: unknown) => fit(returns, value, "result", "output"),
     }),
-    handler: definition.handler as ConvexMcpTool["handler"],
+    handler: definition.handler as ConvexTool["handler"],
   };
 }
 
-export interface McpServerDefinition {
+export interface ToolsDefinition {
   /**
    * The server's name. Leave it out for an app with one server. Name each
    * server when the app splits its tools by data or risk (`support`, `billing`).
@@ -341,7 +341,7 @@ export interface McpServerDefinition {
   path?: string;
   /** Guidance for the calling model on how to use this server's tools. */
   instructions?: string;
-  tools: Readonly<Record<string, ConvexMcpTool>>;
+  tools: Readonly<Record<string, ConvexTool>>;
   /** The app's Hercules Auth URL. Defaults to the `HERCULES_OIDC_AUTHORITY` environment variable. */
   issuer?: string;
   /**
@@ -352,13 +352,13 @@ export interface McpServerDefinition {
   audiences?: readonly string[];
 }
 
-export interface DefinedMcpServer {
+export interface DefinedTools {
   name: string;
   path: string;
   /** Routes the server on the app's HTTP router. Call it once in `convex/http.ts`. */
   registerRoutes(http: HttpRouter): void;
   /** Answers one MCP request. `registerRoutes` uses it; tests can call it directly. */
-  handle(ctx: McpToolCtx, request: Request): Promise<Response>;
+  handle(ctx: ToolCtx, request: Request): Promise<Response>;
 }
 
 const DEFAULT_SERVER_NAME = "default";
@@ -377,8 +377,11 @@ function describeConvexError(error: unknown): string | null {
   return null;
 }
 
-/** Declares an MCP server over the app's tools. Export it and route it from `convex/http.ts`. */
-export function defineMcpServer(definition: McpServerDefinition): DefinedMcpServer {
+/**
+ * Declares the app's tools, served as an MCP server. Export the result and
+ * route it from `convex/http.ts`.
+ */
+export function defineTools(definition: ToolsDefinition): DefinedTools {
   const name = definition.name ?? DEFAULT_SERVER_NAME;
   if (!SERVER_NAME_PATTERN.test(name)) {
     throw new Error(`MCP server name "${name}" must be lowercase letters, digits and dashes`);
@@ -390,7 +393,7 @@ export function defineMcpServer(definition: McpServerDefinition): DefinedMcpServ
   }
   const path = definition.path ?? (definition.name === undefined ? "/mcp" : `/mcp/${name}`);
 
-  let handler: ((request: Request, ctx: McpToolCtx) => Promise<Response>) | null = null;
+  let handler: ((request: Request, ctx: ToolCtx) => Promise<Response>) | null = null;
 
   // Built on the first request, not at import: environment variables are read
   // when the function runs, and the handler holds the key cache.
@@ -402,7 +405,7 @@ export function defineMcpServer(definition: McpServerDefinition): DefinedMcpServ
       definition.audiences ??
       (siteUrl === undefined ? [] : [`${siteUrl.replace(/\/+$/, "")}${path}`]);
     if (issuer === undefined || audiences.length === 0) return null;
-    handler = createMcpHandler<McpToolCtx>({
+    handler = createMcpHandler<ToolCtx>({
       name,
       tools: definition.tools,
       verifier: createTokenVerifier({ issuer, audiences }),
@@ -412,7 +415,7 @@ export function defineMcpServer(definition: McpServerDefinition): DefinedMcpServ
     return handler;
   }
 
-  async function handle(ctx: McpToolCtx, request: Request): Promise<Response> {
+  async function handle(ctx: ToolCtx, request: Request): Promise<Response> {
     const resolved = resolveHandler();
     if (resolved === null) {
       console.error(
@@ -424,7 +427,7 @@ export function defineMcpServer(definition: McpServerDefinition): DefinedMcpServ
       });
     }
     // Only the three calls, so nothing else on Convex's context can be reached from a tool.
-    const toolCtx: McpToolCtx = {
+    const toolCtx: ToolCtx = {
       runQuery: ctx.runQuery,
       runMutation: ctx.runMutation,
       runAction: ctx.runAction,

@@ -1,12 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  defineMcpServer,
-  McpToolError,
-  tool,
-  validatorToJsonSchema,
-  type McpToolCtx,
-} from "../convex";
+import { defineTools, ToolError, tool, validatorToJsonSchema, type ToolCtx } from "../convex";
 import { createTokenVerifier } from "../jwt";
 import { createMcpHandler } from "../server";
 import {
@@ -19,11 +13,11 @@ import {
   type TestIssuer,
 } from "./helpers";
 
-const ctx: McpToolCtx = {
+const ctx: ToolCtx = {
   runQuery: vi.fn(),
   runMutation: vi.fn(),
   runAction: vi.fn(),
-} as unknown as McpToolCtx;
+} as unknown as ToolCtx;
 
 const tools = {
   create_task: tool({
@@ -51,7 +45,7 @@ const tools = {
     description: "Fails with a message for the model.",
     args: {},
     handler: () => {
-      throw new McpToolError("That slot is taken. Offer another time.");
+      throw new ToolError("That slot is taken. Offer another time.");
     },
   }),
   fail_convex: tool({
@@ -98,7 +92,7 @@ async function rpc(token: string, method: string, params?: unknown): Promise<Rpc
 
 beforeEach(async () => {
   issuer = await createTestIssuer();
-  const handler = createMcpHandler<McpToolCtx>({
+  const handler = createMcpHandler<ToolCtx>({
     name: "tasks",
     tools,
     verifier: createTokenVerifier({
@@ -191,7 +185,7 @@ describe("tools over the handler", () => {
 
   it("converts a decimal string to a bigint for an int64 argument", async () => {
     const seen: unknown[] = [];
-    const handler = createMcpHandler<McpToolCtx>({
+    const handler = createMcpHandler<ToolCtx>({
       name: "tasks",
       tools: {
         echo: tool({
@@ -304,29 +298,29 @@ describe("an inspection token", () => {
   });
 });
 
-describe("defineMcpServer", () => {
+describe("defineTools", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
   it("routes a default server at /mcp and a named one at /mcp/<name>", () => {
-    expect(defineMcpServer({ tools: {} })).toMatchObject({ name: "default", path: "/mcp" });
-    expect(defineMcpServer({ name: "support", tools: {} })).toMatchObject({
+    expect(defineTools({ tools: {} })).toMatchObject({ name: "default", path: "/mcp" });
+    expect(defineTools({ name: "support", tools: {} })).toMatchObject({
       name: "support",
       path: "/mcp/support",
     });
-    expect(defineMcpServer({ name: "support", path: "/agents", tools: {} }).path).toBe("/agents");
+    expect(defineTools({ name: "support", path: "/agents", tools: {} }).path).toBe("/agents");
   });
 
   it("refuses names that would not route or list", () => {
-    expect(() => defineMcpServer({ name: "My Server", tools: {} })).toThrow(/server name/);
-    expect(() => defineMcpServer({ tools: { "bad name": tools.whoami } })).toThrow(/tool name/);
+    expect(() => defineTools({ name: "My Server", tools: {} })).toThrow(/server name/);
+    expect(() => defineTools({ tools: { "bad name": tools.whoami } })).toThrow(/tool name/);
   });
 
   it("registers POST and GET on the router", () => {
     const route = vi.fn();
-    defineMcpServer({ name: "support", tools: {} }).registerRoutes({ route } as never);
+    defineTools({ name: "support", tools: {} }).registerRoutes({ route } as never);
     expect(route.mock.calls.map(([spec]) => [spec.path, spec.method])).toEqual([
       ["/mcp/support", "POST"],
       ["/mcp/support", "GET"],
@@ -337,7 +331,7 @@ describe("defineMcpServer", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineMcpServer({ tools: { whoami: tools.whoami } });
+    const server = defineTools({ tools: { whoami: tools.whoami } });
 
     // `exp` is checked against the real clock here, so sign for the real now.
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -368,7 +362,7 @@ describe("defineMcpServer", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", "");
     vi.stubEnv("CONVEX_SITE_URL", "");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const server = defineMcpServer({ tools: {} });
+    const server = defineTools({ tools: {} });
     const response = await server.handle(ctx, rpcRequest(null, {}));
     expect(response.status).toBe(500);
     errors.mockRestore();
@@ -379,7 +373,7 @@ describe("defineMcpServer", () => {
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
     let seen: string[] = [];
-    const server = defineMcpServer({
+    const server = defineTools({
       tools: {
         peek: tool({
           description: "Records what its context offers.",
@@ -394,7 +388,7 @@ describe("defineMcpServer", () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const token = await issuer.sign(userClaims({ exp: nowSeconds + 600 }));
     await server.handle(
-      { ...ctx, auth: {}, storage: {}, scheduler: {} } as unknown as McpToolCtx,
+      { ...ctx, auth: {}, storage: {}, scheduler: {} } as unknown as ToolCtx,
       rpcRequest(token, { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "peek" } }),
     );
     expect(seen).toEqual(["runAction", "runMutation", "runQuery"]);

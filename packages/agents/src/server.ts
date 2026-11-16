@@ -12,7 +12,7 @@ import { bearerTokenOf, type TokenFailure, type TokenVerifier } from "./jwt";
 export type JsonSchema = Record<string, unknown>;
 
 /** Hints a client may show or act on. They describe the tool; they do not restrict it. */
-export interface McpToolAnnotations {
+export interface ToolAnnotations {
   title?: string;
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
@@ -20,7 +20,7 @@ export interface McpToolAnnotations {
   openWorldHint?: boolean;
 }
 
-export type McpPrincipal = "user" | "agent";
+export type ToolPrincipal = "user" | "agent";
 
 /**
  * Who is calling a tool, taken from the verified token.
@@ -32,7 +32,7 @@ export type McpPrincipal = "user" | "agent";
  *   organization, a schedule, or an anonymous visitor started). There is no
  *   end user, so a tool only receives it after opting in with `principals`.
  */
-export type McpCaller =
+export type ToolCaller =
   | {
       principal: "user";
       tokenIdentifier: string;
@@ -43,10 +43,10 @@ export type McpCaller =
   | { principal: "agent"; agentId: string; visitorId: string | null };
 
 /** A failure the calling model should read and can act on. Its message is sent as is. */
-export class McpToolError extends Error {
+export class ToolError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "McpToolError";
+    this.name = "ToolError";
   }
 }
 
@@ -55,14 +55,14 @@ export interface McpTool<Ctx> {
   description: string;
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
-  annotations?: McpToolAnnotations;
+  annotations?: ToolAnnotations;
   /** Who may call the tool. Defaults to signed-in users only. */
-  principals?: readonly McpPrincipal[];
-  /** Checks and converts the raw arguments. Throws `McpToolError` when they do not fit. */
+  principals?: readonly ToolPrincipal[];
+  /** Checks and converts the raw arguments. Throws `ToolError` when they do not fit. */
   parseArgs(raw: unknown): unknown;
   /** Checks the handler's result against what the tool declared it returns. */
   shapeResult?(value: unknown): unknown;
-  handler(ctx: Ctx, args: never, caller: McpCaller): unknown;
+  handler(ctx: Ctx, args: never, caller: ToolCaller): unknown;
 }
 
 export interface McpHandlerOptions<Ctx> {
@@ -83,7 +83,7 @@ export interface McpHandlerOptions<Ctx> {
 /** Newest first. The first entry answers a client that asks for a version we do not speak. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
 
-const DEFAULT_PRINCIPALS: readonly McpPrincipal[] = ["user"];
+const DEFAULT_PRINCIPALS: readonly ToolPrincipal[] = ["user"];
 /** On each tool of an inspection listing: who may call it. */
 export const PRINCIPALS_META_KEY = "hercules.app/principals";
 const MAX_BODY_BYTES = 1_000_000;
@@ -151,7 +151,7 @@ export function callerFromToken(token: {
   issuer: string;
   subject: string;
   claims: Record<string, unknown>;
-}): McpCaller | null {
+}): ToolCaller | null {
   const principal = stringClaim(token.claims, "hercules_principal") ?? "user";
   if (principal === "agent") {
     const agentId = agentIdOf(token.subject);
@@ -206,7 +206,7 @@ function toolFailure(text: string) {
   return { content: [{ type: "text", text }], isError: true };
 }
 
-function allows<Ctx>(tool: McpTool<Ctx>, caller: McpCaller): boolean {
+function allows<Ctx>(tool: McpTool<Ctx>, caller: ToolCaller): boolean {
   return (tool.principals ?? DEFAULT_PRINCIPALS).includes(caller.principal);
 }
 
@@ -217,7 +217,7 @@ function allows<Ctx>(tool: McpTool<Ctx>, caller: McpCaller): boolean {
 export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
   const tools = new Map(Object.entries(options.tools));
 
-  async function callTool(ctx: Ctx, caller: McpCaller, params: unknown) {
+  async function callTool(ctx: Ctx, caller: ToolCaller, params: unknown) {
     const name = isRecord(params) ? params["name"] : undefined;
     const tool = typeof name === "string" ? tools.get(name) : undefined;
     // A tool this caller may not use is reported like one that does not
@@ -232,7 +232,7 @@ export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
     } catch (error) {
       // A failed tool is a result the model reads and recovers from, not a
       // protocol error. Only messages written for the model are passed on.
-      if (error instanceof McpToolError) return toolFailure(error.message);
+      if (error instanceof ToolError) return toolFailure(error.message);
       return toolFailure(options.describeError?.(error) ?? GENERIC_TOOL_FAILURE);
     }
   }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createTokenVerifier } from "../jwt";
-import { callerFromToken, createMcpHandler, McpToolError, type McpTool } from "../server";
+import { callerFromToken, createMcpHandler, ToolError, type McpTool } from "../server";
 import {
   AUDIENCE,
   createTestIssuer,
@@ -34,7 +34,7 @@ beforeEach(async () => {
       refuse: {
         ...echo,
         parseArgs: () => {
-          throw new McpToolError("Invalid arguments.");
+          throw new ToolError("Invalid arguments.");
         },
       },
     },

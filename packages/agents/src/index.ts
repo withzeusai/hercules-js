@@ -10,13 +10,13 @@ export {
 export {
   callerFromToken,
   createMcpHandler,
-  McpToolError,
+  ToolError,
   PRINCIPALS_META_KEY,
   SUPPORTED_PROTOCOL_VERSIONS,
   type JsonSchema,
-  type McpCaller,
+  type ToolCaller,
   type McpHandlerOptions,
-  type McpPrincipal,
+  type ToolPrincipal,
   type McpTool,
-  type McpToolAnnotations,
+  type ToolAnnotations,
 } from "./server";

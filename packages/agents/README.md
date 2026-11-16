@@ -1,7 +1,8 @@
-# @usehercules/mcp
+# @usehercules/agents
 
-Serve an MCP server from a Hercules app. Declare tools next to your backend
-functions, and Hercules Auth decides who is calling them.
+Hercules agents in a Hercules app. This release covers app tools: declare
+tools next to your backend functions, serve them to Hercules agents as an MCP
+server, and let Hercules Auth decide who is calling them.
 
 The package has no runtime dependencies. It verifies tokens with Web Crypto
 and speaks MCP over stateless Streamable HTTP, so it fits in a Convex HTTP
@@ -10,12 +11,12 @@ action.
 ## Convex
 
 ```ts
-// convex/mcp.ts
-import { defineMcpServer, tool } from "@usehercules/mcp/convex";
+// convex/tools.ts
+import { defineTools, tool } from "@usehercules/agents/convex";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 
-export const mcp = defineMcpServer({
+export const tools = defineTools({
   tools: {
     create_task: tool({
       description: "Creates a task for the signed-in user.",
@@ -35,14 +36,14 @@ export const mcp = defineMcpServer({
 ```ts
 // convex/http.ts
 import { httpRouter } from "convex/server";
-import { mcp } from "./mcp";
+import { tools } from "./tools";
 
 const http = httpRouter();
-mcp.registerRoutes(http);
+tools.registerRoutes(http);
 export default http;
 ```
 
-The server is at `https://<deployment>.convex.site/mcp`.
+The tools are served at `https://<deployment>.convex.site/mcp`.
 
 ## Who is calling
 
@@ -99,18 +100,19 @@ A caller never sees, and cannot call, a tool that does not accept them.
 
 ## Errors
 
-Throw `McpToolError` or a `ConvexError` with a string to tell the model what
+Throw `ToolError` or a `ConvexError` with a string to tell the model what
 went wrong in words it can act on. Any other error is logged and reaches the
 model as a generic failure, so internal detail does not leak.
 
 ## Several servers
 
-Name each server when the app splits its tools by data or risk. Each gets its
-own URL, and a token issued for one is refused by the others.
+Name each set of tools when the app splits them by data or risk. Each is its
+own MCP server with its own URL, and a token issued for one is refused by the
+others.
 
 ```ts
-export const support = defineMcpServer({ name: "support", tools: { ... } }); // /mcp/support
-export const billing = defineMcpServer({ name: "billing", tools: { ... } }); // /mcp/billing
+export const support = defineTools({ name: "support", tools: { ... } }); // /mcp/support
+export const billing = defineTools({ name: "billing", tools: { ... } }); // /mcp/billing
 ```
 
 ## How tokens are checked
@@ -120,11 +122,11 @@ A request must carry an RS256 JWT signed by the app's Hercules Auth
 (`CONVEX_SITE_URL` plus the path), and not expired. Keys come from the
 issuer's OpenID discovery document and are cached for five minutes.
 
-Pass `issuer` or `audiences` to `defineMcpServer` to override either.
+Pass `issuer` or `audiences` to `defineTools` to override either.
 
 ## Other backends
 
-`@usehercules/mcp` exports the backend-neutral core (`createMcpHandler`,
+`@usehercules/agents` exports the backend-neutral core (`createMcpHandler`,
 `createTokenVerifier`): a function from a web `Request` to a `Response`. An
 adapter supplies the tools and the context their handlers receive.
 

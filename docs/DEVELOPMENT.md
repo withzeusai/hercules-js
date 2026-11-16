@@ -35,10 +35,10 @@ pnpm test
 
 Published packages live under `packages/`:
 
+- `@usehercules/agents`
 - `@usehercules/analytics`
 - `@usehercules/auth`
 - `@usehercules/eslint-plugin`
-- `@usehercules/mcp`
 - `@usehercules/vite`
 - `@usehercules/vite-tanstack`
 
