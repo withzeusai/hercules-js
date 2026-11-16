@@ -1,5 +1,11 @@
 # @usehercules/auth
 
+## 1.3.2
+
+### Patch Changes
+
+- [#245](https://github.com/withzeusai/hercules-js/pull/245) [`0310d45`](https://github.com/withzeusai/hercules-js/commit/0310d4573493281980ea4e121d2061b95fd2a277) Thanks [@delbyte](https://github.com/delbyte)! - Restart sign-in after a stale callback every time a sign-in completes, not once per tab. Going Back to the sign-in page and tapping Continue no longer shows "No matching state found in storage" after the first time.
+
 ## 1.3.1
 
 ### Patch Changes
