@@ -1,6 +1,7 @@
 export {
   bearerTokenOf,
   createTokenVerifier,
+  deploymentOrigins,
   type TokenFailure,
   type TokenResult,
   type TokenVerifier,

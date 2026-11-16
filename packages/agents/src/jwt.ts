@@ -46,6 +46,11 @@ interface Jwk {
 const KEY_SET_TTL_MS = 5 * 60 * 1000;
 /** The least time between two fetches, so unknown `kid`s cannot make us hammer the issuer. */
 const KEY_SET_MIN_REFETCH_MS = 30 * 1000;
+/**
+ * How long one request to the issuer may take. Two are made (discovery, then
+ * the keys), and a caller that waits ten seconds for its answer must get one.
+ */
+const ISSUER_FETCH_TIMEOUT_MS = 4 * 1000;
 /** Clock difference tolerated between the issuer and this server. */
 const CLOCK_SKEW_SECONDS = 30;
 
@@ -84,6 +89,27 @@ function audiencesOf(claim: unknown): string[] {
   return [];
 }
 
+/**
+ * The origins a Convex deployment's HTTP actions are reached at, for the
+ * audiences of the tokens Hercules signs. Hercules always signs for the
+ * deployment's own `https://<name>.convex.site`. `CONVEX_SITE_URL` is that
+ * unless the app points it at a custom domain, so the `.convex.site` origin
+ * that goes with `CONVEX_CLOUD_URL` is taken as well.
+ */
+export function deploymentOrigins(
+  siteUrl: string | undefined,
+  cloudUrl: string | undefined,
+): string[] {
+  const origins: string[] = [];
+  if (siteUrl !== undefined) origins.push(siteUrl.replace(/\/+$/, ""));
+  const cloud = cloudUrl?.replace(/\/+$/, "") ?? "";
+  if (/^https:\/\/[a-z0-9.-]+\.convex\.cloud$/i.test(cloud)) {
+    const derived = cloud.replace(/\.convex\.cloud$/i, ".convex.site");
+    if (!origins.includes(derived)) origins.push(derived);
+  }
+  return origins;
+}
+
 /** The bearer token of a request, or null when it carries none. */
 export function bearerTokenOf(request: Request): string | null {
   const header = request.headers.get("authorization");
@@ -103,16 +129,25 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
 
   let keySet: { keys: Jwk[]; loadedAtMs: number } | null = null;
   let lastFetchAtMs = Number.NEGATIVE_INFINITY;
+  /** The last fetch did not bring the issuer's keys. */
+  let lastFetchFailed = false;
   let loading: Promise<Jwk[] | null> | null = null;
 
   async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ISSUER_FETCH_TIMEOUT_MS);
     try {
-      const response = await fetchFn(url, { headers: { accept: "application/json" } });
+      const response = await fetchFn(url, {
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
       if (!response.ok) return null;
       const body: unknown = await response.json();
       return isRecord(body) ? body : null;
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -134,6 +169,7 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
     lastFetchAtMs = now();
     const attempt = fetchKeys()
       .then((keys) => {
+        lastFetchFailed = keys === null;
         if (keys !== null) keySet = { keys, loadedAtMs: now() };
         return keys;
       })
@@ -144,6 +180,12 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
     return attempt;
   }
 
+  /**
+   * The issuer's key with this `kid`. Null only when the issuer's keys were
+   * fetched and it is not among them: that token is refused. "unavailable"
+   * whenever the keys could not be fetched, which says nothing about the
+   * token: the caller should come back, and is told so.
+   */
   async function findKey(kid: string): Promise<Jwk | "unavailable" | null> {
     const fresh = keySet !== null && now() - keySet.loadedAtMs < KEY_SET_TTL_MS;
     const cached = keySet?.keys.find((key) => key.kid === kid);
@@ -151,10 +193,12 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
     // An unknown `kid` may be a key published after our last fetch, so look
     // again, but not more often than the refetch floor allows.
     if (now() - lastFetchAtMs < KEY_SET_MIN_REFETCH_MS && loading === null) {
-      return cached ?? null;
+      // Keys we already hold stay good while the issuer cannot be reached.
+      if (cached) return cached;
+      // Within the floor after a failed fetch the keys are still not known.
+      return lastFetchFailed ? "unavailable" : null;
     }
     const keys = await loadKeys();
-    // Keys we already hold stay good while the issuer cannot be reached.
     if (keys === null) return cached ?? "unavailable";
     return keys.find((key) => key.kid === kid) ?? null;
   }

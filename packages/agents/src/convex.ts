@@ -42,7 +42,7 @@ import {
   type ObjectType,
   type PropertyValidators,
 } from "convex/values";
-import { createTokenVerifier } from "./jwt";
+import { createTokenVerifier, deploymentOrigins } from "./jwt";
 import {
   createMcpHandler,
   ToolError,
@@ -346,10 +346,10 @@ export interface ToolsDefinition {
   /**
    * The server's name. Leave it out for an app with one server. Name each
    * server when the app splits its tools by data or risk (`support`, `billing`).
+   * It decides where the server is routed: `/mcp`, or `/mcp/<name>` for a
+   * named server. Those are the only paths Hercules calls.
    */
   name?: string;
-  /** Where the server is routed. Defaults to `/mcp`, or `/mcp/<name>` for a named server. */
-  path?: string;
   /** Guidance for the calling model on how to use this server's tools. */
   instructions?: string;
   tools: Readonly<Record<string, ConvexTool>>;
@@ -357,8 +357,11 @@ export interface ToolsDefinition {
   issuer?: string;
   /**
    * The URLs this server is reached at; a token must be issued for one of
-   * them. Defaults to this deployment's own URL for the server
-   * (`CONVEX_SITE_URL` plus the path).
+   * them. Defaults to this deployment's own URLs for the server: the path on
+   * `CONVEX_SITE_URL`, and on the `.convex.site` origin that goes with
+   * `CONVEX_CLOUD_URL`. Hercules signs for the deployment's `.convex.site`
+   * URL, so the second keeps a deployment whose `CONVEX_SITE_URL` is a
+   * custom domain working.
    */
   audiences?: readonly string[];
 }
@@ -402,7 +405,7 @@ export function defineTools(definition: ToolsDefinition): DefinedTools {
       throw new Error(`MCP tool name "${toolName}" must be letters, digits, "_" and "-"`);
     }
   }
-  const path = definition.path ?? (definition.name === undefined ? "/mcp" : `/mcp/${name}`);
+  const path = definition.name === undefined ? "/mcp" : `/mcp/${name}`;
 
   let handler: ((request: Request, ctx: ToolCtx) => Promise<Response>) | null = null;
 
@@ -411,10 +414,11 @@ export function defineTools(definition: ToolsDefinition): DefinedTools {
   function resolveHandler() {
     if (handler !== null) return handler;
     const issuer = definition.issuer ?? env("HERCULES_OIDC_AUTHORITY");
-    const siteUrl = env("CONVEX_SITE_URL");
     const audiences =
       definition.audiences ??
-      (siteUrl === undefined ? [] : [`${siteUrl.replace(/\/+$/, "")}${path}`]);
+      deploymentOrigins(env("CONVEX_SITE_URL"), env("CONVEX_CLOUD_URL")).map(
+        (origin) => `${origin}${path}`,
+      );
     if (issuer === undefined || audiences.length === 0) return null;
     handler = createMcpHandler<ToolCtx>({
       name,
@@ -429,6 +433,7 @@ export function defineTools(definition: ToolsDefinition): DefinedTools {
   async function handle(ctx: ToolCtx, request: Request): Promise<Response> {
     const resolved = resolveHandler();
     if (resolved === null) {
+      // 500, which a caller tries again: the environment may only not be set yet.
       console.error(
         "MCP server is not configured: HERCULES_OIDC_AUTHORITY or CONVEX_SITE_URL is unset",
       );

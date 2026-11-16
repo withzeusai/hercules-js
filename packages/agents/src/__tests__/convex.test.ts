@@ -475,7 +475,10 @@ describe("defineTools", () => {
       name: "support",
       path: "/mcp/support",
     });
-    expect(defineTools({ name: "support", path: "/agents", tools: {} }).path).toBe("/agents");
+    // Those are the only paths Hercules calls, so there is no other to choose.
+    expect(defineTools({ name: "support", path: "/agents", tools: {} } as never).path).toBe(
+      "/mcp/support",
+    );
   });
 
   it("refuses names that would not route or list", () => {
@@ -521,6 +524,44 @@ describe("defineTools", () => {
       rpcRequest(elsewhere, { jsonrpc: "2.0", id: 1, method: "tools/list" }),
     );
     expect(refused.status).toBe(401);
+  });
+
+  it("takes a token for the deployment's .convex.site URL behind a custom domain", async () => {
+    vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
+    // The app serves its HTTP actions from its own domain.
+    vi.stubEnv("CONVEX_SITE_URL", "https://api.example.com");
+    vi.stubEnv("CONVEX_CLOUD_URL", "https://happy-otter-123.convex.cloud");
+    vi.stubGlobal("fetch", issuer.fetch);
+    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
+    // Hercules signs for the deployment's own URL, whatever domain the app added.
+    for (const aud of ["https://happy-otter-123.convex.site/mcp", "https://api.example.com/mcp"]) {
+      const token = await issuer.sign(userClaims({ aud, iat: nowSeconds, exp: nowSeconds + 600 }));
+      expect((await server.handle(ctx, rpcRequest(token, call))).status).toBe(200);
+    }
+    const other = await issuer.sign(
+      userClaims({ aud: "https://sad-otter-999.convex.site/mcp", exp: nowSeconds + 600 }),
+    );
+    expect((await server.handle(ctx, rpcRequest(other, call))).status).toBe(401);
+  });
+
+  it("answers 503, not 401, to every request while the issuer's keys cannot be fetched", async () => {
+    vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
+    vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
+    vi.stubGlobal("fetch", issuer.fetch);
+    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const token = await issuer.sign(userClaims({ iat: nowSeconds, exp: nowSeconds + 600 }));
+    const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
+    issuer.setReachable(false);
+    // The first request finds the issuer down, and the second comes before
+    // the keys may be fetched again: neither says anything about the token.
+    for (let request = 0; request < 2; request++) {
+      const response = await server.handle(ctx, rpcRequest(token, call));
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("5");
+    }
   });
 
   it("answers 500 when the deployment has no auth configured", async () => {

@@ -115,17 +115,27 @@ own MCP server with its own URL, and a token issued for one is refused by the
 others.
 
 ```ts
-export const support = defineTools({ name: "support", tools: { ... } }); // /mcp/support
-export const billing = defineTools({ name: "billing", tools: { ... } }); // /mcp/billing
+export const supportTools = defineTools({ name: "support", tools: { ... } }); // /mcp/support
+export const billingTools = defineTools({ name: "billing", tools: { ... } }); // /mcp/billing
 ```
 
 ## How tokens are checked
 
 A request must carry an RS256 JWT signed by the app's Hercules Auth
-(`HERCULES_OIDC_AUTHORITY`), issued for this server's own URL
-(`CONVEX_SITE_URL` plus the path), and not expired. It must say who is
-calling in its `hercules_principal` claim: a token without one is refused. Keys come from the
-issuer's OpenID discovery document and are cached for five minutes.
+(`HERCULES_OIDC_AUTHORITY`), issued for this server's own URL, and not
+expired. It must say who is calling in its `hercules_principal` claim: a
+token without one is refused. Keys come from the issuer's OpenID discovery
+document and are cached for five minutes. While they cannot be fetched the
+server answers 503 with `Retry-After`, never 401: that says nothing about the
+token.
+
+Hercules calls a server at `/mcp`, or `/mcp/<name>` for a named one, on the
+deployment's own `https://<name>.convex.site`, and signs its tokens for that
+URL. So the server takes a token for its path on `CONVEX_SITE_URL`, and on
+the `.convex.site` origin that goes with `CONVEX_CLOUD_URL`: a deployment that
+points `CONVEX_SITE_URL` at a custom domain keeps working. A deployment that
+overrides both variables must pass `audiences` to `defineTools` with its
+`https://<name>.convex.site/mcp` URL, or every call is refused with 401.
 
 Pass `issuer` or `audiences` to `defineTools` to override either.
 
