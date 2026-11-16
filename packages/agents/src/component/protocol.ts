@@ -143,6 +143,9 @@ export function hideToolDetails(part: MessagePart): MessagePart {
 /** A page action is run only while its event is younger than this. Part of the contract. */
 export const PAGE_ACTION_TTL_MS = 2 * 60 * 1000;
 
+/** How long after it arrived a page action no tab ran stays listed on its thread. */
+export const PAGE_ACTION_LISTED_MS = 10 * 60 * 1000;
+
 /** Whether a page action whose event was written at `createdAt` may still be run at `nowMs`. */
 export function isPageActionFresh(createdAt: string | number, nowMs: number): boolean {
   const at = typeof createdAt === "number" ? createdAt : Date.parse(createdAt);

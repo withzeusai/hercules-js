@@ -291,6 +291,26 @@ export function createHarness(options: HarnessOptions = {}) {
   let scheduled: ScheduledJob[] = [];
   const appFunctions = options.appFunctions ?? {};
   const appCalls: { name: string; args: unknown }[] = [];
+  /** Scheduled actions that threw. Convex logs such a failure and runs nothing in its place. */
+  const failedActions: { name: string; error: unknown }[] = [];
+
+  /**
+   * Runs a scheduled job as Convex does: an action that throws is over, with
+   * nothing run in its place, so the test goes on. A mutation that throws is
+   * a bug in the component, and fails the test.
+   */
+  async function runJob(job: ScheduledJob): Promise<void> {
+    const { fn } = resolve(job.ref);
+    if (fn === null || !fn.isAction) {
+      await call(job.ref, job.args);
+      return;
+    }
+    try {
+      await call(job.ref, job.args);
+    } catch (error) {
+      failedActions.push({ name: job.name, error });
+    }
+  }
 
   function resolve(ref: unknown): { name: string; fn: Registered | null } {
     const address = getFunctionAddress(ref);
@@ -385,6 +405,8 @@ export function createHarness(options: HarnessOptions = {}) {
       return scheduled;
     },
     appCalls,
+    failedActions,
+    runJob,
     clock,
     advance(ms: number) {
       setNow(now + ms);
@@ -417,7 +439,7 @@ export function createHarness(options: HarnessOptions = {}) {
         const due = scheduled.filter((job) => job.at <= now).sort((a, b) => a.at - b.at)[0];
         if (due === undefined) return;
         scheduled = scheduled.filter((job) => job !== due);
-        await call(due.ref, due.args);
+        await runJob(due);
       }
       throw new Error("runDue: too many jobs");
     },
@@ -431,7 +453,7 @@ export function createHarness(options: HarnessOptions = {}) {
         }
         setNow(Math.max(now, next.at));
         scheduled = scheduled.filter((job) => job !== next);
-        await call(next.ref, next.args);
+        await runJob(next);
       }
       throw new Error("runUntil: too many jobs");
     },

@@ -26,7 +26,13 @@ import {
 } from "./component/protocol";
 import { ownerOf } from "./component/store";
 import { vThread, type EndUser, type RunFinished } from "./component/validators";
-import { bearerTokenOf, createTokenVerifier, type TokenFailure, type TokenVerifier } from "./jwt";
+import {
+  bearerTokenOf,
+  createTokenVerifier,
+  deploymentOrigins,
+  type TokenFailure,
+  type TokenVerifier,
+} from "./jwt";
 
 declare const process: { env: Record<string, string | undefined> } | undefined;
 
@@ -142,19 +148,6 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
   });
-}
-
-/**
- * Whether applying a batch failed because it was too much for one Convex
- * transaction (bytes or documents read or written, a value too large, the
- * time a mutation may take), as opposed to a fault a smaller batch would hit
- * too. Hercules halves the batch on 413 and sends it again.
- */
-export function isTransactionLimitError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /too many (bytes|documents|reads|writes|function calls)|too large|maximum size|execution timed out|limit: \d/i.test(
-    message,
-  );
 }
 
 function tokenRejection(reason: TokenFailure): Response {
@@ -278,6 +271,12 @@ export class HerculesAgents {
    *
    * It is what a page shows, so without `exposeToolDetails` its Hercules
    * tool calls are named "tool", and no tool call carries a result.
+   *
+   * It holds the thread's newest messages: 100 unless `limit` says
+   * otherwise, at most 200, and fewer when they come to more than about
+   * 4 MiB. `hasMore` says there are older ones. `pageActions` lists the page
+   * actions no tab has run, `pending` or `expired`. Only this agent's
+   * threads are read: another agent's thread is null here.
    */
   async readThread(
     ctx: AuthCtx & RunQueryCtx,
@@ -287,6 +286,7 @@ export class HerculesAgents {
     if (owner === null) return null;
     return await ctx.runQuery(this.component.threads.read, {
       threadId: args.threadId,
+      agentId: this.options.agentId,
       owner,
       ...(args.limit !== undefined && { limit: args.limit }),
       ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
@@ -319,6 +319,7 @@ export class HerculesAgents {
     if (owner === null) return false;
     return await ctx.runMutation(this.component.threads.cancel, {
       threadId: args.threadId,
+      agentId: this.options.agentId,
       owner,
       api: this.apiConfig(),
     });
@@ -330,6 +331,7 @@ export class HerculesAgents {
     if (owner === null) return false;
     return await ctx.runMutation(this.component.threads.remove, {
       threadId: args.threadId,
+      agentId: this.options.agentId,
       owner,
       api: this.apiConfig(),
     });
@@ -338,8 +340,9 @@ export class HerculesAgents {
   /**
    * Takes a page action for the calling tab to run. True for the first tab
    * that asks; every other gets false and must not run it. False too for a
-   * page action whose event is two minutes old or more, and for a tool call
-   * the run did not make.
+   * tool call the run did not make, and for a page action whose event is two
+   * minutes old or more by the server's clock: that one is then listed on
+   * the thread with `status: "expired"`.
    */
   async claimPageAction(
     ctx: AuthCtx & RunMutationCtx,
@@ -349,6 +352,7 @@ export class HerculesAgents {
     if (owner === null) return false;
     return await ctx.runMutation(this.component.threads.claimPageAction, {
       threadId: args.threadId,
+      agentId: this.options.agentId,
       runId: args.runId,
       toolCallId: args.toolCallId,
       owner,
@@ -397,11 +401,13 @@ export class HerculesAgents {
   private eventsVerifier(): TokenVerifier | null {
     if (this.verifier !== null) return this.verifier;
     const issuer = this.options.issuer ?? env("HERCULES_OIDC_AUTHORITY");
-    const siteUrl = env("CONVEX_SITE_URL");
-    if (issuer === undefined || siteUrl === undefined) return null;
+    // Hercules signs for the deployment's own `.convex.site` URL, which
+    // `CONVEX_SITE_URL` is unless the app points it at a custom domain.
+    const origins = deploymentOrigins(env("CONVEX_SITE_URL"), env("CONVEX_CLOUD_URL"));
+    if (issuer === undefined || origins.length === 0) return null;
     this.verifier = createTokenVerifier({
       issuer,
-      audiences: [`${siteUrl.replace(/\/+$/, "")}${EVENTS_PATH}`],
+      audiences: origins.map((origin) => `${origin}${EVENTS_PATH}`),
     });
     return this.verifier;
   }
@@ -409,8 +415,23 @@ export class HerculesAgents {
   /**
    * Answers one delivery from Hercules: checks its token, then applies the
    * batch in one mutation. `registerRoutes` routes it; tests can call it.
-   * 413 when the batch is more than one transaction holds, so Hercules sends
-   * a smaller one; 500 for any other failure to apply it.
+   *
+   * Hercules reads the status as a verdict, so each is chosen for what it
+   * does there:
+   *
+   * - 2xx: applied. Events of a type this package does not know, and entries
+   *   it cannot read, are skipped, so what Hercules adds later never stops a
+   *   thread's delivery.
+   * - 401, 403: only for a token that was checked and is not Hercules's for
+   *   this route. Hercules takes either as the whole deployment refusing it
+   *   and stops delivering for an hour.
+   * - 503 with `Retry-After`: the issuer's keys cannot be fetched. That says
+   *   nothing about the token.
+   * - 500: the app's environment is not set, or one event could not be
+   *   applied. Tried again, with backoff, for a day.
+   * - 413: a batch of several events could not be applied. Hercules sends
+   *   half of it, down to the one event that fails, which then gets a 500.
+   * - 400: a body that is not `{ events: [...] }` at all.
    */
   async handleEvents(ctx: RunMutationCtx, request: Request, verifier?: TokenVerifier) {
     const tokens = verifier ?? this.eventsVerifier();
@@ -443,19 +464,25 @@ export class HerculesAgents {
         : undefined;
     if (!Array.isArray(raw)) return json(400, { error: "invalid_request" });
     const events: WireEvent[] = [];
-    for (const [index, entry] of raw.entries()) {
+    // An entry without a run, a sequence number and a type cannot be placed.
+    // It is skipped, not refused: a refusal would hold up the whole thread.
+    let unreadable = 0;
+    for (const entry of raw) {
       const event = readWireEvent(entry);
-      if (event === null) return json(400, { error: "invalid_event", index });
-      events.push(event);
+      if (event === null) unreadable++;
+      else events.push(event);
     }
-    if (events.length === 0) return json(200, { applied: 0, skipped: 0 });
+    if (events.length === 0) return json(200, { applied: 0, skipped: unreadable });
     try {
       const result = await ctx.runMutation(this.component.events.apply, { events });
-      return json(200, result);
+      return json(200, { applied: result.applied, skipped: result.skipped + unreadable });
     } catch (error) {
       console.error("Applying Hercules agent events failed", error);
-      // Too much for one transaction: a smaller batch fits, and 413 asks for one.
-      if (isTransactionLimitError(error)) return json(413, { error: "batch_too_large" });
+      // Several events: whatever went wrong (most often more than one Convex
+      // transaction holds), half the batch may pass, and 413 asks for half.
+      // No error text is read to decide. One event: nothing smaller to send,
+      // and a 413 for it would shelve the thread, so it is a plain failure.
+      if (events.length > 1) return json(413, { error: "batch_too_large" });
       return json(500, { error: "apply_failed" });
     }
   }

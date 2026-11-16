@@ -98,6 +98,7 @@ type Thread = {
     created_at: string;
     name: string;
     runId: string;
+    status: "pending" | "expired";
     toolCallId: string;
   }>;
 };
@@ -149,21 +150,27 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     cancel: FunctionReference<
       "mutation",
       "internal",
-      { api: Api; owner: string; threadId: string },
+      { agentId: string; api: Api; owner: string; threadId: string },
       boolean,
       Name
     >;
     claimPageAction: FunctionReference<
       "mutation",
       "internal",
-      { owner: string; runId: string; threadId: string; toolCallId: string },
+      { agentId: string; owner: string; runId: string; threadId: string; toolCallId: string },
       boolean,
       Name
     >;
     read: FunctionReference<
       "query",
       "internal",
-      { exposeToolDetails?: boolean; limit?: number; owner: string; threadId: string },
+      {
+        agentId: string;
+        exposeToolDetails?: boolean;
+        limit?: number;
+        owner: string;
+        threadId: string;
+      },
       Thread | null,
       Name
     >;
@@ -177,7 +184,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     remove: FunctionReference<
       "mutation",
       "internal",
-      { api: Api; owner: string; threadId: string },
+      { agentId: string; api: Api; owner: string; threadId: string },
       boolean,
       Name
     >;

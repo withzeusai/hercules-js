@@ -23,7 +23,13 @@ export interface RunStreamOptions {
   retry?: { initialMs?: number; maxMs?: number; maxAttempts?: number };
 }
 
-/** The stream was refused: a bad or expired token, or a run that is gone. Retrying will not help. */
+/**
+ * The run's live stream could not be read: Hercules refused it (a bad or
+ * expired token, a run that is gone), or it kept failing, for example with
+ * 429 `rate_limited` while more than ten streams of the run are open. It is
+ * the live view that failed, not the run: the reply still reaches the app
+ * through Convex.
+ */
 export class RunStreamError extends Error {
   readonly status: number | null;
   readonly code: string | null;
@@ -126,6 +132,10 @@ async function problemCode(response: Response): Promise<string | null> {
  * run's final event arrives or `signal` aborts. Each event comes once, in
  * order. Throws `RunStreamError` when Hercules refuses the stream, and after
  * `maxAttempts` failed connections in a row.
+ *
+ * A run's final event and a `message.completed` are passed on whatever their
+ * sequence number: Hercules can number the ending of a run it had to end
+ * itself at or below an event already streamed, and it must not be dropped.
  */
 export async function* followRun(options: RunStreamOptions): AsyncGenerator<AgentEvent> {
   const fetchFn = options.fetch ?? fetch;
@@ -134,9 +144,12 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
   const maxAttempts = options.retry?.maxAttempts ?? 10;
   let lastSeq = Math.max(0, options.after ?? 0);
   let failures = 0;
+  /** The last answer that was not a stream, for the error if it never becomes one. */
+  let lastRefusal: { status: number; code: string | null } | null = null;
 
   while (!options.signal?.aborted) {
     let waitMs: number | null = null;
+    lastRefusal = null;
     try {
       const url = new URL(options.url);
       if (lastSeq > 0) url.searchParams.set("after", String(lastSeq));
@@ -158,9 +171,9 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
             code,
           );
         }
-        await response.body?.cancel().catch(() => undefined);
         const retryAfter = Number(response.headers.get("retry-after"));
         waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null;
+        lastRefusal = { status: response.status, code: await problemCode(response) };
         throw new Error(`The run's live stream answered ${response.status}`);
       }
       let received = false;
@@ -172,12 +185,14 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
           continue;
         }
         const event = readAgentEvent(parsed);
-        if (event === null || event.seq <= lastSeq) continue;
-        lastSeq = event.seq;
+        if (event === null) continue;
+        const final = isFinalEvent(event);
+        if (event.seq <= lastSeq && !final && event.type !== "message.completed") continue;
+        lastSeq = Math.max(lastSeq, event.seq);
         failures = 0;
         received = true;
         yield event;
-        if (isFinalEvent(event)) return;
+        if (final) return;
       }
       // The stream closed before the run's final event: pick up where it stopped.
       if (!received) throw new Error("The run's live stream closed with nothing new");
@@ -188,8 +203,8 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
       if (failures >= maxAttempts) {
         throw new RunStreamError(
           error instanceof Error ? error.message : "The run's live stream failed",
-          null,
-          null,
+          lastRefusal?.status ?? null,
+          lastRefusal?.code ?? null,
         );
       }
     }

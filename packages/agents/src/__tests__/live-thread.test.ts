@@ -146,6 +146,23 @@ describe("mergeThread", () => {
     expect(mergeThread(thread(), null, [{ ...pending[0]!, runId: RUN }])).toHaveLength(1);
   });
 
+  it("takes a run's ending and a completed message numbered below what it has seen", () => {
+    const live = new LiveRun(RUN, THREAD);
+    live.apply(event(7, "message.delta", { message_id: "msg_1", text: "Hel" }));
+    // Hercules ended the run itself and numbered these after what it had stored.
+    expect(live.apply(event(4, "message.completed", { message: completed }))).toBe(true);
+    expect(
+      live.apply(event(5, "run.failed", { error: { code: "run_failed", message: "x" } })),
+    ).toBe(true);
+    expect(live.finished).toBe(true);
+    expect(live.lastSeq).toBe(7);
+    expect(live.view(() => "")[0]).toMatchObject({ status: "completed", parts: completed.parts });
+    // Any other event below the last one seen is a repeat.
+    expect(live.apply(event(6, "message.delta", { message_id: "msg_1", text: "again" }))).toBe(
+      false,
+    );
+  });
+
   it("ignores events of other runs and repeats", () => {
     const live = new LiveRun(RUN, THREAD);
     expect(live.apply(event(2, "message.delta", { message_id: "m", text: "a" }))).toBe(true);

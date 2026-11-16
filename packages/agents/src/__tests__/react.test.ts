@@ -2,7 +2,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentThread } from "../agents";
-import { useAgentThread, type UseAgentThreadOptions } from "../react";
+import { RunStreamError, useAgentThread, type UseAgentThreadOptions } from "../react";
 
 const RUN = "run_1";
 const THREAD = "thread_1";
@@ -71,13 +71,19 @@ function runningThread(overrides: Partial<AgentThread> = {}): AgentThread {
 }
 
 describe("useAgentThread", () => {
-  function pending(toolCallId: string, createdAt: string, args: unknown = {}) {
+  function pageAction(
+    toolCallId: string,
+    status: "pending" | "expired" = "pending",
+    args: unknown = {},
+  ): AgentThread["pageActions"][number] {
     return {
       toolCallId,
       runId: RUN,
       name: "open_order",
       argumentsJson: JSON.stringify(args),
-      created_at: createdAt,
+      // The browser's clock plays no part: this one is long past, and still pending.
+      created_at: "2026-11-15T12:00:00.000Z",
+      status,
     };
   }
 
@@ -131,7 +137,7 @@ describe("useAgentThread", () => {
     expect(claimPageAction).not.toHaveBeenCalled();
 
     const delivered = runningThread({
-      pageActions: [pending("call_1", new Date().toISOString(), { orderId: "123" })],
+      pageActions: [pageAction("call_1", "pending", { orderId: "123" })],
     });
     rerender({ ...options, thread: delivered });
     await waitFor(() => expect(openOrder).toHaveBeenCalledTimes(1));
@@ -183,21 +189,17 @@ describe("useAgentThread", () => {
     stream.close();
   });
 
-  it("skips a page action that is two minutes old without claiming it", async () => {
+  it("leaves an expired page action to the page to report, and runs the pending one", async () => {
     const openOrder = vi.fn();
     const claimPageAction = vi.fn(async (_args: { toolCallId: string }) => true);
-    const old = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    const thread = runningThread({
+      activeRun: null,
+      // One that reached the app too late, and one in time.
+      pageActions: [pageAction("call_late", "expired"), pageAction("call_new")],
+    });
     renderHook(() =>
       useAgentThread({
-        thread: runningThread({
-          activeRun: null,
-          // One delivered long after it was written, one with no time, and one in time.
-          pageActions: [
-            pending("call_old", old),
-            pending("call_undated", ""),
-            pending("call_new", new Date().toISOString()),
-          ],
-        }),
+        thread,
         send: vi.fn(),
         claimPageAction,
         pageActions: { open_order: openOrder },
@@ -205,6 +207,32 @@ describe("useAgentThread", () => {
     );
     await waitFor(() => expect(openOrder).toHaveBeenCalledTimes(1));
     expect(claimPageAction.mock.calls.map(([args]) => args.toolCallId)).toEqual(["call_new"]);
+    // The app reads the one that was not run off the thread, to tell the user.
+    expect(thread.pageActions.filter((action) => action.status === "expired")).toHaveLength(1);
+  });
+
+  it("does not run a page action whose claim the server refused as too old", async () => {
+    const openOrder = vi.fn();
+    // The thread was read while it was pending; by the server's clock it no longer is.
+    const claimPageAction = vi.fn(async () => false);
+    const options = {
+      thread: runningThread({ activeRun: null, pageActions: [pageAction("call_1")] }),
+      send: vi.fn(),
+      claimPageAction,
+      pageActions: { open_order: openOrder },
+    };
+    const { rerender } = renderHook((props: UseAgentThreadOptions) => useAgentThread(props), {
+      initialProps: options,
+    });
+    await waitFor(() => expect(claimPageAction).toHaveBeenCalledTimes(1));
+    // The refusal marked it, and the thread reads again with it expired.
+    rerender({
+      ...options,
+      thread: runningThread({ activeRun: null, pageActions: [pageAction("call_1", "expired")] }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claimPageAction).toHaveBeenCalledTimes(1);
+    expect(openOrder).not.toHaveBeenCalled();
   });
 
   it("does not run a page action another tab claimed, and tries again after a failed claim", async () => {
@@ -218,7 +246,7 @@ describe("useAgentThread", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const thread = runningThread({
       activeRun: null,
-      pageActions: [pending("call_1", new Date().toISOString())],
+      pageActions: [pageAction("call_1")],
     });
     const options = {
       thread,
@@ -239,6 +267,57 @@ describe("useAgentThread", () => {
     expect(claimPageAction).toHaveBeenCalledTimes(2);
     expect(openOrder).not.toHaveBeenCalled();
     errors.mockRestore();
+  });
+
+  it("reports a live view that failed while the run goes on, and drops it when the reply is there", async () => {
+    // Hercules refuses the run's live stream for good.
+    const fetchFn = vi.fn(
+      async () => new Response(JSON.stringify({ code: "invalid_run_token" }), { status: 401 }),
+    ) as unknown as typeof fetch;
+    const options: UseAgentThreadOptions = {
+      threadId: THREAD,
+      thread: runningThread(),
+      send: vi.fn(),
+      fetch: fetchFn,
+    };
+    const { result, rerender } = renderHook(
+      (props: UseAgentThreadOptions) => useAgentThread(props),
+      { initialProps: options },
+    );
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(RunStreamError));
+    expect(result.current.error).toMatchObject({ status: 401, code: "invalid_run_token" });
+    // It is the live view that failed. The run is still going.
+    expect(result.current.status).toBe("submitted");
+
+    // Convex has the reply and the run's end: nothing is wrong any more.
+    rerender({
+      ...options,
+      thread: runningThread({
+        activeRun: null,
+        latestRun: {
+          id: RUN,
+          status: "completed",
+          error: null,
+          cappedReason: null,
+          finished_at: "2026-11-15T12:00:05.000Z",
+        },
+        messages: [
+          ...runningThread().messages,
+          {
+            id: "msg_1",
+            thread_id: THREAD,
+            run_id: RUN,
+            role: "assistant",
+            parts: [{ type: "text", text: "Here it is." }],
+            created_at: "2026-11-15T12:00:01.000Z",
+            status: "completed",
+          },
+        ],
+      }),
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.status).toBe("ready");
+    expect(result.current.messages.at(-1)?.parts).toEqual([{ type: "text", text: "Here it is." }]);
   });
 
   it("shows the message as pending while it is sent, and reports why it was not", async () => {

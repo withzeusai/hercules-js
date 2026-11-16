@@ -11,6 +11,7 @@ import {
   DEFAULT_MESSAGE_LIMIT,
   MAX_MESSAGE_LIMIT,
   STUCK_AFTER_MS,
+  documentBytes,
   inputMessageId,
   isoTime,
   newId,
@@ -23,7 +24,7 @@ import {
 } from "./store.js";
 import {
   MAX_INPUT_CHARS,
-  PAGE_ACTION_TTL_MS,
+  PAGE_ACTION_LISTED_MS,
   isFinalStatus,
   isPageActionFresh,
   runInputText,
@@ -183,13 +184,17 @@ export const send = mutation({
       api: args.api,
       attempt: 0,
     });
-    await ctx.scheduler.runAfter(STUCK_AFTER_MS, internal.hercules.checkRun, {
+    // The stuck-run check is driven by a mutation, which cannot be lost.
+    await ctx.scheduler.runAfter(STUCK_AFTER_MS, internal.hercules.tickRun, {
       runId,
       api: args.api,
     });
     return { ok: true, threadId: thread.threadId, runId };
   },
 });
+
+/** The most page actions a thread lists. Each can hold 256 KiB of arguments. */
+const MAX_LISTED_PAGE_ACTIONS = 20;
 
 /** What a read returns of a thread, to its owner or to the app's backend. */
 async function threadView(
@@ -236,20 +241,23 @@ async function threadView(
           finished_at: latest.finishedAt === null ? null : isoTime(latest.finishedAt),
         };
 
-  // By the event's own time. A query is not rerun as time passes, so the
-  // page checks the age again, and the claim has the last word.
+  // The page actions that arrived lately and no tab has run. One whose
+  // event is two minutes old is listed as expired, so the page can say that
+  // it came too late. A query is not rerun as time passes: the claim, on
+  // the server's clock, has the last word, and marks what it refuses.
   const now = Date.now();
-  const pending = await ctx.db
+  const arrived = await ctx.db
     .query("tool_calls")
     .withIndex("by_thread", (q) =>
       q
         .eq("threadId", thread.threadId)
         .eq("kind", "page")
-        .gt("createdAt", now - PAGE_ACTION_TTL_MS),
+        .gt("_creationTime", now - PAGE_ACTION_LISTED_MS),
     )
-    .take(50);
-  const pageActions = pending.flatMap((call) =>
-    call.claimedAt === null && call.argumentsJson !== null && isPageActionFresh(call.createdAt, now)
+    .order("desc")
+    .take(MAX_LISTED_PAGE_ACTIONS);
+  const pageActions = arrived.reverse().flatMap((call) =>
+    call.claimedAt === null && call.argumentsJson !== null
       ? [
           {
             toolCallId: call.toolCallId,
@@ -257,6 +265,10 @@ async function threadView(
             name: call.name,
             argumentsJson: call.argumentsJson,
             created_at: isoTime(call.createdAt),
+            status:
+              !call.expired && isPageActionFresh(call.createdAt, now)
+                ? ("pending" as const)
+                : ("expired" as const),
           },
         ]
       : [],
@@ -274,6 +286,22 @@ async function threadView(
 }
 
 /**
+ * The thread, when it is this caller's and this agent's. An app can have
+ * several agents: each reaches only its own threads, so one agent's
+ * settings (what a page may see of tools) never apply to another's thread.
+ */
+async function ownThread(
+  ctx: QueryCtx,
+  args: { threadId: string; agentId: string; owner: string },
+): Promise<Doc<"threads"> | null> {
+  const thread = await threadById(ctx, args.threadId);
+  if (thread === null || thread.owner !== args.owner || thread.agentId !== args.agentId) {
+    return null;
+  }
+  return thread;
+}
+
+/**
  * A thread as its owner sees it: the latest messages, the run that is going
  * with what the browser needs to stream it, and page actions waiting for a
  * tab. Null for a thread that does not exist or is not the caller's.
@@ -285,14 +313,15 @@ async function threadView(
 export const read = query({
   args: {
     threadId: v.string(),
+    agentId: v.string(),
     owner: v.string(),
     limit: v.optional(v.number()),
     exposeToolDetails: v.optional(v.boolean()),
   },
   returns: v.union(vThread, v.null()),
   handler: async (ctx, args): Promise<Infer<typeof vThread> | null> => {
-    const thread = await threadById(ctx, args.threadId);
-    if (thread === null || thread.owner !== args.owner) return null;
+    const thread = await ownThread(ctx, args);
+    if (thread === null) return null;
     return await threadView(ctx, thread, args.limit, args.exposeToolDetails !== true);
   },
 });
@@ -349,19 +378,18 @@ export const readDetails = query({
 
 /** Stops the thread's run, if one is going. True when there was one to stop. */
 export const cancel = mutation({
-  args: { threadId: v.string(), owner: v.string(), api: vApi },
+  args: { threadId: v.string(), agentId: v.string(), owner: v.string(), api: vApi },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const thread = await threadById(ctx, args.threadId);
-    if (thread === null || thread.owner !== args.owner || thread.activeRunId === null) {
-      return false;
-    }
+    const thread = await ownThread(ctx, args);
+    if (thread === null || thread.activeRunId === null) return false;
     const run = await runById(ctx, thread.activeRunId);
     if (run === null || isFinalStatus(run.status)) return false;
     if (!run.cancelRequested) await ctx.db.patch(run._id, { cancelRequested: true });
     // Not taken yet: the start call sees the request and never sends the run,
     // and the stuck-run check sees it if the start call was lost.
     if (!run.accepted) return true;
+    // If this call gives up, the stuck-run check asks again.
     await ctx.scheduler.runAfter(0, internal.hercules.cancelRun, {
       runId: run.runId,
       api: args.api,
@@ -374,53 +402,90 @@ export const cancel = mutation({
 /**
  * Deletes a thread: here at once, and at Hercules, which also stops its run
  * and revokes its live tokens. Irreversible. True when there was one to delete.
+ *
+ * What is left to do is kept in `deleted_threads`: the thread's other rows
+ * are purged in batches, and Hercules is asked until it confirms.
  */
 export const remove = mutation({
-  args: { threadId: v.string(), owner: v.string(), api: vApi },
+  args: { threadId: v.string(), agentId: v.string(), owner: v.string(), api: vApi },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const thread = await threadById(ctx, args.threadId);
-    if (thread === null || thread.owner !== args.owner) return false;
+    const thread = await ownThread(ctx, args);
+    if (thread === null) return false;
     // The token of a run still going is dropped now, not when its rows are purged.
     const active = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
     if (active !== null && active.liveToken !== null) {
       await ctx.db.patch(active._id, { liveUrl: null, liveToken: null });
     }
+    const now = Date.now();
     await ctx.db.delete(thread._id);
+    await ctx.db.insert("deleted_threads", {
+      threadId: thread.threadId,
+      deletedAt: now,
+      purgedAt: null,
+      remoteDeletedAt: null,
+      remoteGaveUpAt: null,
+      attempts: 0,
+      nextAttemptAt: now,
+    });
     await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: thread.threadId });
-    await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, {
+    await ctx.scheduler.runAfter(0, internal.hercules.deleteTick, {
       threadId: thread.threadId,
       api: args.api,
-      attempt: 0,
     });
     return true;
   },
 });
 
-const PURGE_BATCH = 200;
+/** The most rows one purge batch deletes. */
+const PURGE_BATCH_ROWS = 200;
+/**
+ * The most bytes one purge batch reads. A row can be close to 1 MiB (a
+ * message segment, a chunk, a tool result), so rows are read a few at a time
+ * and the batch stops once it is past this: far below what a mutation may read.
+ */
+const PURGE_BATCH_BYTES = 3 * 1024 * 1024;
+const PURGE_STEP_ROWS = 2;
 
-/** Deletes a removed thread's rows, a batch at a time. */
+/**
+ * Deletes a removed thread's rows, a batch at a time, by bytes as well as by
+ * count. When none is left it says so on the thread's `deleted_threads` row.
+ * `hercules.deleteTick` starts it again if a batch is lost or fails.
+ */
 export const purge = internalMutation({
   args: { threadId: v.string() },
   returns: v.null(),
   handler: async (ctx, { threadId }) => {
-    let left = PURGE_BATCH;
-    const batches = [
-      // Runs first: they hold the live tokens.
-      ctx.db.query("runs").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
-      ctx.db.query("run_requests").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
-      ctx.db.query("message_chunks").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
-      ctx.db.query("messages").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
-      ctx.db.query("tool_calls").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
-    ];
-    for (const rows of batches) {
-      if (left === 0) break;
-      for (const row of await rows.take(left)) {
-        await ctx.db.delete(row._id);
-        left--;
+    const tables = ["runs", "run_requests", "message_chunks", "messages", "tool_calls"] as const;
+    let rows = 0;
+    let bytes = 0;
+    for (const table of tables) {
+      for (;;) {
+        if (rows >= PURGE_BATCH_ROWS || bytes >= PURGE_BATCH_BYTES) {
+          await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId });
+          return null;
+        }
+        // Runs first: they hold the live tokens. What is deleted is gone from
+        // the next read, so the rows still there are where the purge stands.
+        const step = await ctx.db
+          .query(table)
+          .withIndex("by_thread", (q) => q.eq("threadId", threadId))
+          .take(PURGE_STEP_ROWS);
+        if (step.length === 0) break;
+        for (const row of step) {
+          bytes += documentBytes(row);
+          rows++;
+          await ctx.db.delete(row._id);
+        }
       }
     }
-    if (left === 0) await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId });
+    const deleted = await ctx.db
+      .query("deleted_threads")
+      .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
+      .first();
+    if (deleted !== null && deleted.purgedAt === null) {
+      await ctx.db.patch(deleted._id, { purgedAt: Date.now() });
+    }
     return null;
   },
 });
@@ -429,24 +494,29 @@ export const purge = internalMutation({
  * Takes a page action for one tab to run. True for the first tab to ask.
  * False for every other, for a call the run did not make (only a delivered
  * `page_action` can be claimed), and for one whose event is two minutes old
- * or more: its moment has passed, however late it was delivered.
+ * or more: its moment has passed, however late it was delivered. That one is
+ * marked expired, which the thread then says of it.
  */
 export const claimPageAction = mutation({
   args: {
     threadId: v.string(),
+    agentId: v.string(),
     owner: v.string(),
     runId: v.string(),
     toolCallId: v.string(),
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    const thread = await threadById(ctx, args.threadId);
-    if (thread === null || thread.owner !== args.owner) return false;
+    const thread = await ownThread(ctx, args);
+    if (thread === null) return false;
     const call = await toolCallById(ctx, args.runId, args.toolCallId);
     if (call === null || call.threadId !== thread.threadId) return false;
-    if (call.kind !== "page" || call.claimedAt !== null) return false;
+    if (call.kind !== "page" || call.claimedAt !== null || call.expired) return false;
     const now = Date.now();
-    if (!isPageActionFresh(call.createdAt, now)) return false;
+    if (!isPageActionFresh(call.createdAt, now)) {
+      await ctx.db.patch(call._id, { expired: true });
+      return false;
+    }
     await ctx.db.patch(call._id, { claimedAt: now });
     return true;
   },

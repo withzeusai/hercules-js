@@ -157,6 +157,13 @@ export const vPendingPageAction = v.object({
   argumentsJson: v.string(),
   /** When the agent called it. A page action older than two minutes is not run. */
   created_at: v.string(),
+  /**
+   * `pending`: waiting for a tab to claim and run it. `expired`: it reached
+   * the app, or a tab, more than two minutes after the agent called it, so
+   * it was not run and will not be. Listed for ten minutes, for the page to
+   * say so.
+   */
+  status: v.union(v.literal("pending"), v.literal("expired")),
 });
 
 export const vThread = v.object({

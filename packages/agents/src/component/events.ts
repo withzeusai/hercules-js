@@ -14,6 +14,7 @@ import {
   type RunOutcome,
   type RunProgress,
 } from "./store.js";
+import { isFinalStatus } from "./protocol.js";
 import { vWireEvent } from "./validators.js";
 
 type WireEvent = Infer<typeof vWireEvent>;
@@ -69,6 +70,7 @@ async function upsertToolCall(
       resultJson,
       argumentsJson,
       claimedAt: null,
+      expired: false,
       createdAt,
     });
     return;
@@ -150,6 +152,10 @@ async function applyOne(
  * redelivery and is skipped. Events of runs this app does not know are
  * skipped too, so a deleted thread's last events cannot stall delivery.
  *
+ * A run's ending is the exception: it is taken whatever its number, once.
+ * Hercules numbers the ending of a run it had to end itself after what it
+ * had stored, which can be below a checkpoint already delivered.
+ *
  * The run document is read once and written once per run in the batch,
  * however many events the batch holds.
  */
@@ -165,9 +171,11 @@ export async function applyEvents(ctx: MutationCtx, events: readonly WireEvent[]
     let lastSeq = run.lastSeq;
     let started = false;
     let ending: RunOutcome | null = null;
+    let took = 0;
     const progress: RunProgress = {};
     for (const event of list) {
-      if (event.seq <= lastSeq) {
+      const endsRun = event.data.kind === "final" && !isFinalStatus(run.status) && ending === null;
+      if (event.seq <= lastSeq && !endsRun) {
         skipped++;
         continue;
       }
@@ -176,10 +184,11 @@ export async function applyEvents(ctx: MutationCtx, events: readonly WireEvent[]
       ending ??= ended;
       // Any event after `run.queued` means the run started.
       if (event.type !== "run.queued" && ended === null) started = true;
-      lastSeq = event.seq;
-      applied++;
+      lastSeq = Math.max(lastSeq, event.seq);
+      took++;
     }
-    if (lastSeq === run.lastSeq) continue;
+    applied += took;
+    if (took === 0) continue;
     // Any event means Hercules has the run.
     const also: RunProgress = { ...progress, accepted: true, lastSeq, lastEventAt: Date.now() };
     if (ending !== null && (await finishRun(ctx, run, ending, also))) continue;

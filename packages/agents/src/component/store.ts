@@ -23,7 +23,13 @@ export const SEGMENT_MAX_BYTES = 512 * 1024;
 /** The longest run output and tool result kept. The full reply is in the messages. */
 export const MAX_STORED_TEXT_BYTES = 256 * 1024;
 export const DEFAULT_MESSAGE_LIMIT = 100;
-export const MAX_MESSAGE_LIMIT = 500;
+export const MAX_MESSAGE_LIMIT = 200;
+/**
+ * The most message text one read of a thread returns. A read stops at a
+ * whole message once it is past this, and says there are older ones: a
+ * Convex function may read 16 MiB.
+ */
+export const READ_BUDGET_BYTES = 4 * 1024 * 1024;
 
 export const APP_OWNER = "app";
 
@@ -373,9 +379,16 @@ export async function finishRun(
   return true;
 }
 
+/** About how many bytes a document takes of what a function may read. */
+export function documentBytes(doc: Record<string, unknown>): number {
+  return utf8Length(JSON.stringify(doc));
+}
+
 /**
- * The latest `limit` messages of a thread, oldest first. With `hideTools`,
- * as a page may see them: `hercules` tool calls without their names.
+ * The latest messages of a thread, oldest first: at most `limit`, and fewer
+ * when they come to more than `READ_BUDGET_BYTES` (always at least one).
+ * With `hideTools`, as a page may see them: `hercules` tool calls without
+ * their names.
  */
 export async function readMessages(
   ctx: QueryCtx,
@@ -385,20 +398,24 @@ export async function readMessages(
 ) {
   const groups: Doc<"messages">[][] = [];
   let hasMore = false;
+  let bytes = 0;
   for await (const row of ctx.db
     .query("messages")
     .withIndex("by_thread", (q) => q.eq("threadId", threadId))
     .order("desc")) {
     const group = groups[groups.length - 1];
     if (group !== undefined && group[0]?.messageId === row.messageId) {
+      // The rest of a message that is already taken: a message is read whole.
       group.unshift(row);
+      bytes += documentBytes(row);
       continue;
     }
-    if (groups.length === limit) {
+    if (groups.length === limit || bytes >= READ_BUDGET_BYTES) {
       hasMore = true;
       break;
     }
     groups.push([row]);
+    bytes += documentBytes(row);
   }
   groups.reverse();
   const messages = [];

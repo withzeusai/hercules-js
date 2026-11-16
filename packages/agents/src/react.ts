@@ -28,6 +28,7 @@ import { createPageActionRunner, type PageActionHandler } from "./page-actions";
 import { followRun, RunStreamError } from "./stream";
 
 export { AgentError } from "./errors";
+export { RunStreamError } from "./stream";
 export {
   LiveRun,
   mergeThread,
@@ -66,6 +67,8 @@ export interface UseAgentThreadOptions {
   /**
    * The page's actions, by name. One open tab runs each call, once Hercules
    * has delivered it to the app and while it is less than two minutes old.
+   * One that came later is not run: `thread.pageActions` lists it with
+   * `status: "expired"`, for the page to say so.
    */
   pageActions?: Readonly<Record<string, PageActionHandler>>;
   fetch?: typeof fetch;
@@ -89,7 +92,19 @@ export interface UseAgentThreadResult {
   ) => Promise<{ threadId: string; runId: string } | null>;
   /** Stops the reply being written. */
   cancel: () => Promise<void>;
-  error: Error | null;
+  /**
+   * What went wrong, or null:
+   *
+   * - An `AgentError` with a `code`: the message was not sent (`send`'s
+   *   codes), or the latest run failed (the run's code, such as
+   *   `out_of_credits`). For a limit it has `retryAfterSeconds`.
+   * - A `RunStreamError` while a run is going: the live view of the reply
+   *   could not be read, for example with `status` 429 when more than ten
+   *   tabs stream the same run. The run is not affected, and the reply still
+   *   arrives through `thread`. It clears when the run is over.
+   * - Any other `Error` a mutation threw, such as a lost connection.
+   */
+  error: AgentError | RunStreamError | Error | null;
 }
 
 let pendingCounter = 0;
@@ -107,7 +122,7 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   const [pending, setPending] = useState<PendingInput[]>([]);
   const [sending, setSending] = useState(0);
   const [error, setError] = useState<Error | null>(null);
-  const [streamError, setStreamError] = useState<Error | null>(null);
+  const [streamError, setStreamError] = useState<RunStreamError | null>(null);
   const [, setVersion] = useState(0);
   const live = useRef<LiveRun | null>(null);
   const renderQueued = useRef(false);
@@ -256,6 +271,8 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
     status,
     send,
     cancel,
-    error: error ?? streamError ?? (activeRun === null ? runError : null),
+    // A stream that failed matters only while its run is going: once Convex
+    // has the run's end, the reply is there and the live view is not needed.
+    error: error ?? (activeRun === null ? runError : streamError),
   };
 }

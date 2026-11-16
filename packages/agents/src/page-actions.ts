@@ -7,9 +7,10 @@
  * A page action is taken from the thread's `pageActions`, the ones Hercules
  * delivered to the app and no tab has claimed: the claim is on the delivered
  * call, so only a tool call the run really made can be run. It is run only
- * while its event is less than two minutes old.
+ * while its event is less than two minutes old. The claim decides that, on
+ * the server's clock, never the browser's: one that came too late is listed
+ * on the thread as `expired`, for the page to tell the user.
  */
-import { isPageActionFresh } from "./component/protocol";
 
 /** Runs a page action. What it returns goes nowhere: page actions are one-way. */
 export type PageActionHandler = (
@@ -35,6 +36,8 @@ export interface PendingPageActionCall {
   argumentsJson: string;
   /** When the agent called it. */
   created_at: string;
+  /** `expired` when it came more than two minutes after the agent called it: it is not run. */
+  status: "pending" | "expired";
 }
 
 export interface PageActionRunnerOptions {
@@ -44,7 +47,6 @@ export interface PageActionRunnerOptions {
   handlers: () => PageActionHandlers | undefined;
   /** Where a page with handlers but no `claim` is told it needs one. */
   name: string;
-  now?: () => number;
 }
 
 function parseArguments(json: string): unknown {
@@ -57,9 +59,9 @@ function parseArguments(json: string): unknown {
 
 /**
  * Runs each pending page action at most once in this page: only one the page
- * has a handler for, only while it is fresh, and only after this tab won the
- * claim. One that is too old is skipped without claiming it. A failing
- * handler is logged; it fails nothing else.
+ * has a handler for, and only after this tab won the claim. The claim is
+ * refused for one that is too old, which the thread then lists as `expired`.
+ * A failing handler is logged; it fails nothing else.
  */
 export function createPageActionRunner(options: PageActionRunnerOptions) {
   const taken = new Set<string>();
@@ -68,8 +70,7 @@ export function createPageActionRunner(options: PageActionRunnerOptions) {
   async function run(threadId: string, action: PendingPageActionCall): Promise<void> {
     const handler = options.handlers()?.[action.name];
     const key = `${action.runId}:${action.toolCallId}`;
-    if (handler === undefined || taken.has(key)) return;
-    if (!isPageActionFresh(action.created_at, (options.now ?? Date.now)())) return;
+    if (action.status !== "pending" || handler === undefined || taken.has(key)) return;
     const claim = options.claim();
     if (claim === undefined) {
       if (!warned) {

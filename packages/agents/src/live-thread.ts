@@ -4,12 +4,13 @@
  * `message.completed` lands in Convex. No React here, so it is tested alone.
  */
 import type { AgentThread, ThreadMessage } from "./agents";
-import type {
-  AgentEvent,
-  Message,
-  ToolCallPart,
-  ToolCallStatus,
-  ToolKind,
+import {
+  isFinalEvent,
+  type AgentEvent,
+  type Message,
+  type ToolCallPart,
+  type ToolCallStatus,
+  type ToolKind,
 } from "./component/protocol";
 
 /** A tool call as the page shows it: `running` until the live stream says how it went. */
@@ -82,10 +83,16 @@ export class LiveRun {
     this.toolCallHolder(createdAt).toolCalls.push(call);
   }
 
-  /** Folds in one event. Returns false for one already seen. */
+  /**
+   * Folds in one event. Returns false for one already seen. A run's ending
+   * and a completed message are taken whatever their sequence number:
+   * Hercules can number them at or below an event already streamed.
+   */
   apply(event: AgentEvent): boolean {
-    if (event.run_id !== this.runId || event.seq <= this.lastSeq) return false;
-    this.lastSeq = event.seq;
+    if (event.run_id !== this.runId) return false;
+    const always = isFinalEvent(event) || event.type === "message.completed";
+    if (event.seq <= this.lastSeq && !always) return false;
+    this.lastSeq = Math.max(this.lastSeq, event.seq);
     switch (event.type) {
       case "message.delta": {
         const message = this.message(event.data.message_id, event.created_at);

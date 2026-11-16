@@ -26,6 +26,26 @@ export default defineSchema({
     .index("by_owner", ["owner", "agentId", "updatedAt"]),
 
   /**
+   * One row per deleted thread: what is still to be done about it. The
+   * thread's own row is gone at once. Its other rows are purged in batches,
+   * and Hercules is asked to delete its copy until it says it has, so both
+   * are tracked here, where a tick that cannot be lost comes back to them.
+   */
+  deleted_threads: defineTable({
+    threadId: v.string(),
+    deletedAt: v.number(),
+    /** When the thread's last row here was purged. */
+    purgedAt: v.union(v.number(), v.null()),
+    /** When Hercules confirmed its copy is gone (it deleted it, or has none). */
+    remoteDeletedAt: v.union(v.number(), v.null()),
+    /** When asking Hercules was given up: after a day, or on an answer that cannot change. */
+    remoteGaveUpAt: v.union(v.number(), v.null()),
+    /** How many times Hercules was asked, and the earliest time to ask again. */
+    attempts: v.number(),
+    nextAttemptAt: v.number(),
+  }).index("by_thread_id", ["threadId"]),
+
+  /**
    * One row per run. Every delivered batch rewrites it, so it holds only
    * small fields: the request is in `run_requests`.
    */
@@ -126,9 +146,12 @@ export default defineSchema({
     argumentsJson: v.union(v.string(), v.null()),
     /** When a tab took the page action to run it. */
     claimedAt: v.union(v.number(), v.null()),
+    /** A tab asked for the page action after its two minutes: it will not be run. */
+    expired: v.boolean(),
     /** When Hercules wrote the call's first event: the event's own time, not its arrival. */
     createdAt: v.number(),
   })
     .index("by_run", ["runId", "toolCallId"])
-    .index("by_thread", ["threadId", "kind", "createdAt"]),
+    // Read by arrival (`_creationTime`), which every index ends with.
+    .index("by_thread", ["threadId", "kind"]),
 });

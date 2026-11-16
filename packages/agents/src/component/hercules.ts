@@ -10,6 +10,7 @@ import {
   internalMutation,
   internalQuery,
   type ActionCtx,
+  type QueryCtx,
 } from "./_generated/server.js";
 import {
   HERCULES_API_VERSION,
@@ -36,9 +37,18 @@ const FIRST_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 10 * 60 * 1000;
 const MAX_START_ATTEMPTS = 8;
 const MAX_CANCEL_ATTEMPTS = 6;
-const MAX_DELETE_ATTEMPTS = 10;
 /** A run that could not be settled for this long is given up on. */
 const GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long past that the check itself is given to end the run, with what it
+ * learned from Hercules, before the tick ends it without asking.
+ */
+const GIVE_UP_GRACE_MS = 30 * 60 * 1000;
+/** Hercules is asked to delete a thread for this long. */
+const DELETE_GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000;
+const DELETE_FIRST_RETRY_MS = 5 * 1000;
+/** How often a deleted thread whose rows are not purged yet is looked at again. */
+const PURGE_WATCH_MS = 60 * 1000;
 const MAX_EVENT_PAGES = 20;
 const EVENT_PAGE_SIZE = 100;
 /**
@@ -202,6 +212,13 @@ function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome
   const { status } = response;
   if (status === null || status === 408 || status >= 500) {
     return failed("run_failed", "Hercules could not be reached to start the run.");
+  }
+  if (status === 404) {
+    // Not a thread that is gone: the app is set up wrong, and a new chat will not help.
+    return failed(
+      "agent_not_found",
+      "Hercules has no agent with this id for this app, or the agents API is not turned on for it. Check the agent id the app was set up with.",
+    );
   }
   return failed(
     response.code,
@@ -648,8 +665,20 @@ export const cancelRun = internalAction({
   },
 });
 
+/** The `deleted_threads` row of a thread: what is left to do about it. */
+async function deletedThread(ctx: QueryCtx, threadId: string) {
+  return await ctx.db
+    .query("deleted_threads")
+    .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
+    .first();
+}
+
+/**
+ * Asks Hercules once to delete a thread, and records what it said. It does
+ * not try again itself: `deleteTick` does, and that cannot be lost.
+ */
 export const deleteThread = internalAction({
-  args: { threadId: v.string(), api: vApi, attempt: v.number() },
+  args: { threadId: v.string(), api: vApi },
   returns: v.null(),
   handler: async (ctx, args) => {
     const response = await callHercules(
@@ -658,111 +687,239 @@ export const deleteThread = internalAction({
       `/v1/agents/threads/${encodeURIComponent(args.threadId)}`,
     );
     // A thread Hercules never saw is already gone there.
-    if (response.ok || response.status === 404) return null;
-    if (response.retryable && args.attempt + 1 < MAX_DELETE_ATTEMPTS) {
-      await ctx.scheduler.runAfter(
-        retryDelayMs(args.attempt, response.retryAfterMs),
-        internal.hercules.deleteThread,
-        { ...args, attempt: args.attempt + 1 },
-      );
+    if (response.ok || response.status === 404) {
+      await ctx.runMutation(internal.hercules.noteDelete, {
+        threadId: args.threadId,
+        outcome: "deleted",
+      });
       return null;
     }
-    console.error(`Hercules did not delete thread ${args.threadId}: ${response.code}`);
+    // An answer that asking again cannot change: the request or the key is wrong.
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      console.error(
+        `Hercules refused to delete thread ${args.threadId}: ${response.status} ${response.code}`,
+      );
+      await ctx.runMutation(internal.hercules.noteDelete, {
+        threadId: args.threadId,
+        outcome: "refused",
+      });
+      return null;
+    }
+    // Anything else may pass: Hercules answers 409 `thread_busy` while the
+    // thread's run is still stopping, and says when to ask again.
+    if (response.retryAfterMs !== null) {
+      await ctx.runMutation(internal.hercules.noteDelete, {
+        threadId: args.threadId,
+        outcome: "later",
+        waitMs: Math.min(response.retryAfterMs, MAX_RETRY_MS),
+      });
+    }
+    return null;
+  },
+});
+
+/** Records Hercules's answer to a delete on the thread's `deleted_threads` row. */
+export const noteDelete = internalMutation({
+  args: {
+    threadId: v.string(),
+    outcome: v.union(v.literal("deleted"), v.literal("refused"), v.literal("later")),
+    waitMs: v.optional(v.number()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = await deletedThread(ctx, args.threadId);
+    if (row === null) return null;
+    const now = Date.now();
+    if (args.outcome === "deleted") await ctx.db.patch(row._id, { remoteDeletedAt: now });
+    else if (args.outcome === "refused") await ctx.db.patch(row._id, { remoteGaveUpAt: now });
+    else {
+      // Not before Hercules said, and not sooner than the tick had planned.
+      const until = now + (args.waitMs ?? 0);
+      if (until > row.nextAttemptAt) await ctx.db.patch(row._id, { nextAttemptAt: until });
+    }
     return null;
   },
 });
 
 /**
- * The stuck-run check. While a run is going it runs every few minutes, and
- * it always schedules itself again until the run is over, so no run is left
- * open for good.
+ * Sees a deleted thread through: asks Hercules to delete its copy until it
+ * confirms, and starts the purge of the thread's rows again if it stopped.
  *
- * - A run Hercules has not taken, whose start call is no longer trying (a
- *   scheduled action runs at most once, and can be lost): it sends the run
- *   itself, or stops it if a cancel is waiting. After a day it fails the run.
- * - A run with nothing delivered for `STUCK_AFTER_MS`: it reads the run's
- *   events from Hercules and applies what delivery missed. It records the
- *   run's ending only once every event before it is applied.
+ * It is a mutation that schedules itself, so it cannot be lost the way an
+ * action can: Convex runs a scheduled mutation exactly once. Each time it
+ * also schedules the one-shot action that calls Hercules. It ends when both
+ * are done, or after a day, with what is left logged.
+ */
+export const deleteTick = internalMutation({
+  args: { threadId: v.string(), api: vApi },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = await deletedThread(ctx, args.threadId);
+    if (row === null) return null;
+    const now = Date.now();
+    const remoteDone = row.remoteDeletedAt !== null || row.remoteGaveUpAt !== null;
+    const purged = row.purgedAt !== null;
+    if (remoteDone && purged) return null;
+    if (now - row.deletedAt > DELETE_GIVE_UP_AFTER_MS) {
+      console.error(
+        `Gave up on deleted thread ${args.threadId} after a day: ${
+          remoteDone ? "" : "Hercules did not confirm it deleted its copy. "
+        }${purged ? "" : "Its rows are not all purged."}`,
+      );
+      if (!remoteDone) await ctx.db.patch(row._id, { remoteGaveUpAt: now });
+      return null;
+    }
+    // A purge batch that was lost or failed is started again.
+    if (!purged && now - row.deletedAt >= PURGE_WATCH_MS) {
+      await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: args.threadId });
+    }
+    let next = PURGE_WATCH_MS;
+    if (!remoteDone) {
+      if (now >= row.nextAttemptAt) {
+        const wait = Math.min(DELETE_FIRST_RETRY_MS * 2 ** row.attempts, MAX_RETRY_MS);
+        await ctx.db.patch(row._id, { attempts: row.attempts + 1, nextAttemptAt: now + wait });
+        await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, args);
+        next = wait;
+      } else {
+        next = row.nextAttemptAt - now;
+      }
+    }
+    await ctx.scheduler.runAfter(next, internal.hercules.deleteTick, args);
+    return null;
+  },
+});
+
+/**
+ * The stuck-run tick. While a run is going it comes back every few minutes
+ * and, when the run needs looking at, starts `checkRun`.
+ *
+ * It is a mutation that schedules itself: Convex runs a scheduled mutation
+ * exactly once, where a scheduled action runs at most once and can be lost.
+ * So a lost check costs one tick, never the run: no run is left open for
+ * good, and no thread stays busy behind one. It ends with the run. A run
+ * nothing could settle in a day (and half an hour for the check to say why)
+ * is failed here.
+ */
+export const tickRun = internalMutation({
+  args: { runId: v.string(), api: vApi },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await runById(ctx, args.runId);
+    if (run === null || isFinalStatus(run.status)) return null;
+    const now = Date.now();
+    const age = now - run._creationTime;
+    if (!run.accepted && age > GIVE_UP_AFTER_MS) {
+      await finishRun(ctx, run, failed("run_failed", "The run could not be started within a day."));
+      return null;
+    }
+    if (age > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS) {
+      await finishRun(ctx, run, failed("run_failed", "The run could not be settled within a day."));
+      return null;
+    }
+
+    const quietFor = now - run.lastEventAt;
+    const startPending = run.nextStartAt !== null && now < run.nextStartAt + START_GRACE_MS;
+    // Hercules has not taken the run, or its live token never came, and no start call is trying.
+    const needsStart = (!run.accepted || run.liveToken === null) && !startPending;
+    // A cancel is asked again until the run is over: the call that carries it can give up.
+    const needsCancel = run.cancelRequested && run.accepted;
+    const quiet = run.accepted && quietFor >= STUCK_AFTER_MS;
+    if (needsStart || needsCancel || quiet) {
+      await ctx.scheduler.runAfter(0, internal.hercules.checkRun, args);
+    }
+    // Back when the run would have been quiet for long enough, or in a full interval.
+    const next =
+      run.accepted && !quiet && !needsCancel
+        ? Math.max(MORE_EVENTS_DELAY_MS, STUCK_AFTER_MS - quietFor)
+        : STUCK_AFTER_MS;
+    await ctx.scheduler.runAfter(next, internal.hercules.tickRun, args);
+    return null;
+  },
+});
+
+/**
+ * The stuck-run check, one pass. `tickRun` starts it; it schedules nothing
+ * that the run depends on.
+ *
+ * - A run Hercules has not taken, whose start call is no longer trying: it
+ *   sends the run itself, or stops it if a cancel is waiting.
+ * - A run with a cancel waiting: it asks Hercules to stop it again.
+ * - A run with nothing delivered for `STUCK_AFTER_MS`: it reads the run from
+ *   Hercules, then the run's events, and applies what delivery missed. It
+ *   records the run's ending only when the events it read after seeing the
+ *   run over were all of them: the reply is applied before the ending.
  */
 export const checkRun = internalAction({
   args: { runId: v.string(), api: vApi },
   returns: v.null(),
   handler: async (ctx, args) => {
-    // Whatever goes wrong below, the check comes back: a run is never left open for good.
-    let nextCheckMs: number | null = STUCK_AFTER_MS;
-    try {
-      nextCheckMs = await checkOnce(ctx, args.api, args.runId);
-    } catch (error) {
-      console.error(`Checking run ${args.runId} failed`, error);
+    const run = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
+    if (run === null || isFinalStatus(run.status)) return null;
+    const now = Date.now();
+    const tooOld = now - run.createdAt > GIVE_UP_AFTER_MS;
+    async function giveUp(message: string) {
+      await ctx.runMutation(internal.hercules.endRun, {
+        runId: args.runId,
+        outcome: failed("run_failed", message),
+      });
+      return null;
     }
-    if (nextCheckMs !== null) {
-      await ctx.scheduler.runAfter(nextCheckMs, internal.hercules.checkRun, args);
+
+    if (!run.accepted || !run.hasLive) {
+      const startPending = run.nextStartAt !== null && now < run.nextStartAt + START_GRACE_MS;
+      if (!startPending) {
+        if (run.cancelRequested) await cancelAtHercules(ctx, args.api, run);
+        else await sendRun(ctx, args.api, run);
+      }
+      if (!run.accepted) return null;
+    } else if (run.cancelRequested) {
+      if (await cancelAtHercules(ctx, args.api, run)) return null;
     }
+    if (now - run.lastEventAt < STUCK_AFTER_MS) return null;
+
+    // The run first, then its events: an ending is recorded only when the
+    // events read after the run was seen over are complete. Read the other
+    // way round, a reply written between the two reads would be missed.
+    const response = await callHercules(
+      args.api,
+      "GET",
+      `/v1/agents/runs/${encodeURIComponent(run.runId)}`,
+    );
+    if (response.ok) {
+      if (run.missingSince !== null) {
+        await ctx.runMutation(internal.hercules.noteMissing, { runId: run.runId, since: null });
+      }
+      const current = readRun(response.body);
+      const outcome = current === null ? null : outcomeFromRun(current);
+      const pulled = await pullEvents(ctx, args.api, run);
+      if (pulled === "more") {
+        // More events than one pass reads. Soon, if this is not lost; at the next tick if it is.
+        await ctx.scheduler.runAfter(MORE_EVENTS_DELAY_MS, internal.hercules.checkRun, args);
+        return null;
+      }
+      if (outcome !== null && pulled === "done") {
+        await ctx.runMutation(internal.hercules.recordRun, { runId: run.runId, outcome });
+        return null;
+      }
+      // Still going, or over with events that could not be read yet.
+      if (!tooOld) return null;
+      return giveUp(
+        outcome === null
+          ? "The run was still going at Hercules after a day."
+          : "The run ended at Hercules, but its events could not be read for a day.",
+      );
+    }
+    if (response.status === 404) {
+      const since = run.missingSince ?? now;
+      if (now - since >= MISSING_FINAL_AFTER_MS) {
+        return giveUp("Hercules has no record of this run.");
+      }
+      if (run.missingSince === null) {
+        await ctx.runMutation(internal.hercules.noteMissing, { runId: run.runId, since });
+      }
+      return null;
+    }
+    if (tooOld) return giveUp("Nothing was heard from Hercules about this run for a day.");
     return null;
   },
 });
-
-/** One pass of the stuck-run check. Returns how soon to check again, or null when the run is over. */
-async function checkOnce(ctx: ActionCtx, config: ApiConfig, runId: string): Promise<number | null> {
-  const run = await ctx.runQuery(internal.hercules.loadRun, { runId });
-  if (run === null || isFinalStatus(run.status)) return null;
-  const now = Date.now();
-  const tooOld = now - run.createdAt > GIVE_UP_AFTER_MS;
-  async function giveUp(message: string) {
-    await ctx.runMutation(internal.hercules.endRun, {
-      runId,
-      outcome: failed("run_failed", message),
-    });
-    return null;
-  }
-
-  if (!run.accepted || !run.hasLive) {
-    if (!run.accepted && tooOld) return giveUp("The run could not be started within a day.");
-    const startPending = run.nextStartAt !== null && now < run.nextStartAt + START_GRACE_MS;
-    if (!startPending) {
-      if (run.cancelRequested) await cancelAtHercules(ctx, config, run);
-      else await sendRun(ctx, config, run);
-    }
-    if (!run.accepted) return STUCK_AFTER_MS;
-  }
-
-  const quietFor = now - run.lastEventAt;
-  if (quietFor < STUCK_AFTER_MS) return STUCK_AFTER_MS - quietFor;
-
-  const pulled = await pullEvents(ctx, config, run);
-  if (pulled === "more") return MORE_EVENTS_DELAY_MS;
-
-  const response = await callHercules(
-    config,
-    "GET",
-    `/v1/agents/runs/${encodeURIComponent(run.runId)}`,
-  );
-  if (response.ok) {
-    if (run.missingSince !== null) {
-      await ctx.runMutation(internal.hercules.noteMissing, { runId, since: null });
-    }
-    const current = readRun(response.body);
-    const outcome = current === null ? null : outcomeFromRun(current);
-    if (outcome !== null && pulled === "done") {
-      await ctx.runMutation(internal.hercules.recordRun, { runId, outcome });
-      return null;
-    }
-    // Still going, or over with events that could not be read yet.
-    if (!tooOld) return STUCK_AFTER_MS;
-    return giveUp(
-      outcome === null
-        ? "The run was still going at Hercules after a day."
-        : "The run ended at Hercules, but its events could not be read for a day.",
-    );
-  }
-  if (response.status === 404) {
-    const since = run.missingSince ?? now;
-    if (now - since >= MISSING_FINAL_AFTER_MS) return giveUp("Hercules has no record of this run.");
-    if (run.missingSince === null) {
-      await ctx.runMutation(internal.hercules.noteMissing, { runId, since });
-    }
-    return STUCK_AFTER_MS;
-  }
-  if (tooOld) return giveUp("Nothing was heard from Hercules about this run for a day.");
-  return STUCK_AFTER_MS;
-}

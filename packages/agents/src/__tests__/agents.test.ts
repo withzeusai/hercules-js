@@ -1,7 +1,6 @@
 import { httpRouter, makeFunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isTransactionLimitError } from "../agents";
 import { HerculesAgents, type AgentThread } from "../convex";
 import { EVENTS_PATH, runInputText } from "../component/protocol";
 import {
@@ -506,6 +505,32 @@ describe("delivered events", () => {
     expect(finished).toHaveLength(1);
   });
 
+  it("takes a run's ending numbered below an event it already applied, once", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await deliver(
+      support,
+      event(runId, threadId, 2, "run.started"),
+      // A checkpoint of the reply, from the live stream's numbering.
+      event(runId, threadId, 9, "message.appended", { message_id: "msg_1", text: "Let me" }),
+    );
+    // Hercules ended the run itself, and numbered the ending after what it had stored.
+    const ending = event(runId, threadId, 4, "run.failed", {
+      error: { code: "run_failed", message: "The run was ended." },
+      usage: null,
+    });
+    expect(await deliver(support, ending)).toEqual({ applied: 1, skipped: 0 });
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({ status: "failed", error: { code: "run_failed" } });
+    expect(thread.messages[1]).toMatchObject({ status: "incomplete" });
+    expect(h.db.all("runs")[0]).toMatchObject({ lastSeq: 9 });
+    // Delivered again, it is a repeat like any other.
+    expect(await deliver(support, ending)).toEqual({ applied: 0, skipped: 1 });
+    await h.runDue();
+    expect(finished).toHaveLength(1);
+  });
+
   it("skips events of runs it does not know, so delivery never stalls", async () => {
     const support = agents();
     expect(await deliver(support, event("unknown", "t", 1, "run.started"))).toEqual({
@@ -655,19 +680,41 @@ describe("page actions", () => {
     }
   });
 
-  it("drops a page action no tab took within two minutes of its event", async () => {
+  it("lists a page action no tab took in two minutes as expired, and refuses its claim", async () => {
     const support = agents();
     const { threadId, runId } = await withPageAction(support);
+    const statuses = async () =>
+      (await read(support, threadId)).pageActions.map((action) => action.status);
     h.advance(2 * 60 * 1000 - 1);
-    expect((await read(support, threadId)).pageActions).toHaveLength(1);
+    expect(await statuses()).toEqual(["pending"]);
     h.advance(1);
-    expect((await read(support, threadId)).pageActions).toEqual([]);
+    expect(await statuses()).toEqual(["expired"]);
     expect(
       await support.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId: "call_page" }),
     ).toBe(false);
+    // The refusal is written down, so a thread that was read earlier reads again.
+    expect(h.db.all("tool_calls")[0]).toMatchObject({ expired: true, claimedAt: null });
+    // It stays listed for the page to say so, for ten minutes from when it arrived.
+    h.advance(8 * 60 * 1000 - 1);
+    expect(await statuses()).toEqual(["expired"]);
+    h.advance(2);
+    expect(await statuses()).toEqual([]);
   });
 
-  it("never offers a page action that was delivered late", async () => {
+  it("decides a claim on the server's clock, whatever the thread said when it was read", async () => {
+    const support = agents();
+    const { threadId, runId } = await withPageAction(support);
+    // The page read the thread while the action was pending, and asks later.
+    const stale = await read(support, threadId);
+    expect(stale.pageActions[0]?.status).toBe("pending");
+    h.advance(2 * 60 * 1000);
+    expect(
+      await support.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId: "call_page" }),
+    ).toBe(false);
+    expect((await read(support, threadId)).pageActions[0]?.status).toBe("expired");
+  });
+
+  it("lists a page action that was delivered late as expired, and never runs it", async () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Show my order" });
     await h.runDue();
@@ -695,7 +742,17 @@ describe("page actions", () => {
       ),
     );
     expect(h.db.all("tool_calls")).toHaveLength(2);
-    expect((await read(support, threadId)).pageActions).toEqual([]);
+    // The page is told, where it used to hear nothing of them.
+    expect(
+      (await read(support, threadId)).pageActions.map((action) => [
+        action.toolCallId,
+        action.name,
+        action.status,
+      ]),
+    ).toEqual([
+      ["call_late", "open_order", "expired"],
+      ["call_undated", "open_order", "expired"],
+    ]);
     for (const toolCallId of ["call_late", "call_undated"]) {
       expect(await support.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId })).toBe(
         false,
@@ -852,7 +909,7 @@ async function runOnly(keep: (name: string) => boolean, untilMs: number) {
       return;
     }
     h.advance(Math.max(0, next.at - h.now));
-    await h.call(next.ref as never, next.args);
+    await h.runJob(next);
   }
   throw new Error("runOnly: too many jobs");
 }
@@ -1092,8 +1149,8 @@ describe("a start call that was lost", () => {
     await h.runDue();
     // The first try ran and scheduled a retry, which is lost.
     expect(h.scheduled.map((job) => job.name).sort()).toEqual([
-      "hercules:checkRun",
       "hercules:startRun",
+      "hercules:tickRun",
     ]);
     await runOnly(notStart, h.now + 6 * 60 * 1000);
     expect(api.requests.filter(isStart)).toHaveLength(2);
@@ -1510,16 +1567,21 @@ describe("a batch the app cannot apply", () => {
     };
   }
 
-  it("answers 413 when it is more than one transaction holds, so Hercules halves it", async () => {
+  it("answers 413 for several events, so Hercules halves the batch down to the one that fails", async () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const restore = failPatches(
-      "Too many bytes written in a single function execution (limit: 16777216 bytes)",
-    );
-    const response = await postEvents(support, event(runId, threadId, 2, "run.started"));
-    expect(response.status).toBe(413);
-    restore();
+    // Whatever the error says: no text of Convex's is read to decide.
+    for (const message of ["Too many bytes written (limit: 16777216 bytes)", "something else"]) {
+      const restore = failPatches(message);
+      const response = await postEvents(
+        support,
+        event(runId, threadId, 2, "run.started"),
+        event(runId, threadId, 3, "run.progress", { label: "Thinking" }),
+      );
+      expect(response.status).toBe(413);
+      restore();
+    }
     // Nothing of the batch stayed, so the smaller one applies cleanly.
     expect(await deliver(support, event(runId, threadId, 2, "run.started"))).toEqual({
       applied: 1,
@@ -1528,27 +1590,39 @@ describe("a batch the app cannot apply", () => {
     errors.mockRestore();
   });
 
-  it("answers 500 for any other failure", async () => {
+  it("answers 500 for one event it cannot apply, which is tried again and not shelved", async () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const restore = failPatches("Cannot read properties of undefined");
-    const response = await postEvents(support, event(runId, threadId, 2, "run.started"));
-    expect(response.status).toBe(500);
-    restore();
+    for (const message of ["Too many bytes written (limit: 16777216 bytes)", "something else"]) {
+      const restore = failPatches(message);
+      const response = await postEvents(support, event(runId, threadId, 2, "run.started"));
+      expect(response.status).toBe(500);
+      restore();
+    }
     errors.mockRestore();
   });
 
-  it.each([
-    ["Too many bytes read in a single function execution (limit: 16777216 bytes)", true],
-    ["Too many documents read in a single function execution (limit: 32000)", true],
-    ["Too many writes in a single function execution (limit: 16000)", true],
-    ["Value is too large (1.2 MiB > maximum size 1 MiB)", true],
-    ["Function execution timed out (maximum duration: 1s)", true],
-    ["Validator error: Expected `string`, got `null`", false],
-    ["Uncaught TypeError: x is not a function", false],
-  ])("reads %s as a limit: %s", (message, limit) => {
-    expect(isTransactionLimitError(new Error(message))).toBe(limit);
+  it("takes event types and fields it does not know, and skips what it cannot place", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    const response = await postEvents(
+      support,
+      // A type added to the API later, with data and envelope fields of its own.
+      { ...event(runId, threadId, 2, "run.rerouted", { to: "eu" }), trace_id: "t1", attempt: 3 },
+      { ...event(runId, threadId, 3, "run.started"), delivered_by: "worker-7" },
+      // Nothing can be done with these: no sequence number, no run.
+      { run_id: runId, thread_id: threadId, type: "run.progress", data: { label: "x" } },
+      { seq: 9, type: "run.progress" },
+      "not an event",
+    );
+    // 2xx: a refusal here would hold up the thread until the app's next deploy.
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ applied: 2, skipped: 3 });
+    expect((await read(support, threadId)).activeRun).toMatchObject({
+      status: "running",
+      lastSeq: 3,
+    });
   });
 });
 
@@ -1651,7 +1725,7 @@ describe("the stuck-run check, when Hercules or the app cannot answer", () => {
     // It halved the batch down to the event that cannot be applied, applied what
     // came before it, and left the run open with the check still scheduled.
     expect(h.db.all("runs")[0]).toMatchObject({ status: "running", lastSeq: 2 });
-    expect(h.scheduled.map((job) => job.name)).toEqual(["hercules:checkRun"]);
+    expect(h.scheduled.map((job) => job.name)).toEqual(["hercules:tickRun"]);
     expect(finished).toEqual([]);
 
     db.insert = insert;
@@ -1680,11 +1754,489 @@ describe("the stuck-run check, when Hercules or the app cannot answer", () => {
     };
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     await h.runUntil(h.now + 3 * 60 * 1000);
-    expect(h.scheduled.map((job) => job.name)).toEqual(["hercules:checkRun"]);
+    // The check died. The tick that started it is a mutation, and comes back.
+    expect(h.failedActions.map((failure) => failure.name)).toEqual(["hercules:checkRun"]);
+    expect(h.scheduled.map((job) => job.name)).toEqual(["hercules:tickRun"]);
     db.patch = patch;
     await h.runUntil(h.now + 3 * 60 * 1000);
     errors.mockRestore();
     expect((await read(support, threadId)).latestRun?.status).toBe("completed");
+  });
+});
+
+/** A run at Hercules whose state the test changes while the component reads it. */
+function herculesRun(runId: string, threadId: string) {
+  const state = {
+    status: "running",
+    output: null as string | null,
+    events: [] as ReturnType<typeof event>[],
+    /** What was read, in order. */
+    reads: [] as string[],
+    /** Called before each read is answered: where the run moves on between two reads. */
+    beforeRead: (_reads: number) => {},
+    /** The reply, its message and the run's ending: the run is over. */
+    complete() {
+      state.status = "completed";
+      state.output = "Done.";
+      state.events = [
+        event(runId, threadId, 2, "run.started"),
+        event(runId, threadId, 8, "message.completed", {
+          message: {
+            id: "msg_1",
+            thread_id: threadId,
+            run_id: runId,
+            role: "assistant",
+            parts: [{ type: "text", text: "Done." }],
+            created_at: "2026-11-15T12:00:01.000Z",
+          },
+        }),
+        event(runId, threadId, 9, "run.completed", { output: "Done.", usage: { credits: 1 } }),
+      ];
+    },
+  };
+  api.answerWith((request) => {
+    if (request.method !== "GET" || !request.path.startsWith(`/v1/agents/runs/${runId}`)) {
+      return undefined;
+    }
+    state.beforeRead(state.reads.length);
+    if (request.path.includes("/events")) {
+      state.reads.push("events");
+      const after = Number(/after=(\d+)/.exec(request.path)?.[1] ?? 0);
+      return Response.json({
+        data: state.events.filter((entry) => entry.seq > after),
+        has_more: false,
+      });
+    }
+    state.reads.push("run");
+    return Response.json({ id: runId, status: state.status, output: state.output });
+  });
+  return state;
+}
+
+describe("the stuck-run check, against a run that moves on while it is read", () => {
+  it("reads the run, then its events, so a reply written between the two is not missed", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    // The run finishes at Hercules between the check's first read and its second.
+    run.beforeRead = (reads) => {
+      if (reads === 1) run.complete();
+    };
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    expect(run.reads).toEqual(["run", "events"]);
+    const thread = await read(support, threadId);
+    // Read the other way round, the check saw no events, then a finished run,
+    // and ended the run without its reply.
+    expect(thread.latestRun?.status).toBe("completed");
+    expect(thread.messages[1]?.parts).toEqual([{ type: "text", text: "Done." }]);
+    expect(finished).toEqual([expect.objectContaining({ runId, output: "Done." })]);
+  });
+
+  it("settles at the next tick a run that finishes just after it was read", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    // Still going at both reads of the first check, over right after.
+    run.beforeRead = (reads) => {
+      if (reads === 2) run.complete();
+    };
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    expect(run.reads).toEqual(["run", "events", "run", "events"]);
+    const thread = await read(support, threadId);
+    expect(thread.latestRun?.status).toBe("completed");
+    expect(thread.messages[1]?.parts).toEqual([{ type: "text", text: "Done." }]);
+  });
+
+  it("is started again by the next tick when a check is lost", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    run.complete();
+    // Convex runs a scheduled action at most once. The check the first tick
+    // started never ran; the tick is a mutation, and those are not lost.
+    await runOnly((name) => name !== "hercules:checkRun", h.now + 3 * 60 * 1000);
+    expect(run.reads).toEqual([]);
+    expect(h.scheduled.map((job) => job.name)).toEqual(["hercules:tickRun"]);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    expect((await read(support, threadId)).latestRun?.status).toBe("completed");
+    // The tick ends with the run.
+    await h.runUntil(h.now + 60 * 60 * 1000 + 1);
+    expect(h.scheduled).toEqual([]);
+  });
+
+  it("ends a run by itself when no check could settle it in a day", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const sentAt = h.now;
+    // Every check is lost, for a day.
+    await runOnly((name) => name !== "hercules:checkRun", sentAt + 24 * 60 * 60 * 1000);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await runOnly((name) => name !== "hercules:checkRun", sentAt + 24.6 * 60 * 60 * 1000);
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "run_failed", message: "The run could not be settled within a day." },
+    });
+    await support.send(h.appCtx(ALICE), { threadId, text: "Next" });
+  });
+
+  it("asks Hercules to stop a run again when the call that carried the cancel gave up", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    let cancels = 0;
+    api.answerWith((request) => {
+      if (request.path !== `/v1/agents/runs/${runId}/cancel`) return undefined;
+      // Down for every try the cancel call makes, and back after.
+      return ++cancels <= 6 ? new Response("down", { status: 503 }) : undefined;
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await support.cancel(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 60 * 1000);
+    expect(cancels).toBe(6);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    errors.mockRestore();
+    expect(cancels).toBe(7);
+    expect((await read(support, threadId)).latestRun?.status).toBe("cancelled");
+  });
+});
+
+describe("a start Hercules refuses", () => {
+  it("fails with run_id_conflict, once, when Hercules has the id with another body", async () => {
+    const support = agents();
+    api.answerWith((request) =>
+      isStart(request)
+        ? problem(409, "run_id_conflict", "A run with this id was started with another body.")
+        : undefined,
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runUntil(h.now + 60_000);
+    errors.mockRestore();
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    expect((await read(support, threadId)).latestRun?.error).toEqual({
+      code: "run_id_conflict",
+      message: "A run with this id was started with another body.",
+    });
+  });
+
+  it("reads a 404 as the app being set up wrong, not as a thread that is gone", async () => {
+    const support = agents();
+    // Hercules does not know the agent, or the agents API is off for the app.
+    api.answerWith((request) =>
+      isStart(request) ? problem(404, "not_found", "Not found.") : undefined,
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runUntil(h.now + 60_000);
+    errors.mockRestore();
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    const error = (await read(support, threadId)).latestRun?.error;
+    expect(error?.code).toBe("agent_not_found");
+    expect(error?.message).toMatch(/agent id/);
+  });
+
+  it("tries again after a 503, which is what Hercules answers while it cannot tell", async () => {
+    const support = agents();
+    let calls = 0;
+    api.answerWith((request) =>
+      isStart(request) && ++calls === 1
+        ? new Response(JSON.stringify({ code: "service_unavailable" }), {
+            status: 503,
+            headers: { "retry-after": "2" },
+          })
+        : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    const sentAt = h.now;
+    await h.runUntil(sentAt + 1_999);
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    await h.runUntil(sentAt + 2_000);
+    expect(api.requests.filter(isStart)).toHaveLength(2);
+    expect((await read(support, threadId)).activeRun?.live?.token).toBe(`token-${runId}`);
+  });
+
+  it("tries again after a 429 with no code, as a proxy in front of Hercules sends", async () => {
+    const support = agents();
+    let calls = 0;
+    api.answerWith((request) =>
+      isStart(request) && ++calls === 1
+        ? new Response("Too Many Requests", { status: 429, headers: { "retry-after": "3" } })
+        : undefined,
+    );
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runUntil(h.now + 3_000);
+    expect(api.requests.filter(isStart)).toHaveLength(2);
+    expect((await read(support, threadId)).activeRun?.live).not.toBeNull();
+  });
+});
+
+describe("deleting a thread at Hercules", () => {
+  const isDelete = (request: Recorded) => request.method === "DELETE";
+  const deletedRow = () => h.db.all("deleted_threads")[0];
+  const deleteJobs = () =>
+    h.scheduled.map((job) => job.name).filter((name) => /delete|purge/i.test(name));
+
+  it("asks again when Hercules says the thread's run is still stopping", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    let busy = 2;
+    const askedAt: number[] = [];
+    api.answerWith((request) => {
+      if (!isDelete(request)) return undefined;
+      askedAt.push(h.now);
+      // It waited for the run to stop, the run is still going, and nothing was deleted.
+      return busy-- > 0
+        ? problem(409, "thread_busy", "The thread's run is still going.", 5)
+        : undefined;
+    });
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    const deletedAt = h.now;
+    await h.runUntil(deletedAt + 60 * 1000);
+    expect(askedAt).toHaveLength(3);
+    // Not before the five seconds Hercules asked for.
+    expect((askedAt[1] as number) - (askedAt[0] as number)).toBeGreaterThanOrEqual(5_000);
+    expect((askedAt[2] as number) - (askedAt[1] as number)).toBeGreaterThanOrEqual(5_000);
+    expect(deletedRow()).toMatchObject({ threadId, remoteGaveUpAt: null });
+    expect(deletedRow()?.["remoteDeletedAt"]).toEqual(askedAt[2]);
+    expect(deletedRow()?.["purgedAt"]).not.toBeNull();
+    // Both done: nothing is left scheduled for the thread.
+    await h.runUntil(h.now + 60 * 60 * 1000);
+    expect(deleteJobs()).toEqual([]);
+  });
+
+  it("keeps asking through a long outage, for a day, then stops and says so", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      isDelete(request) ? new Response("down", { status: 503 }) : undefined,
+    );
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    const deletedAt = h.now;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await h.runUntil(deletedAt + 23 * 60 * 60 * 1000, 2000);
+    // Far more than the ten tries it used to give up after.
+    expect(api.requests.filter(isDelete).length).toBeGreaterThan(100);
+    expect(deletedRow()).toMatchObject({ remoteDeletedAt: null, remoteGaveUpAt: null });
+    expect(deleteJobs()).toContain("hercules:deleteTick");
+    await h.runUntil(deletedAt + 25 * 60 * 60 * 1000, 2000);
+    expect(deletedRow()?.["remoteGaveUpAt"]).not.toBeNull();
+    expect(errors.mock.calls.flat().join(" ")).toMatch(/Gave up on deleted thread/);
+    errors.mockRestore();
+    expect(deleteJobs()).toEqual([]);
+  });
+
+  it("makes the call again when it was lost", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    // The action that calls Hercules never ran.
+    await runOnly((name) => name !== "hercules:deleteThread", h.now + 1_000);
+    expect(api.requests.filter(isDelete)).toHaveLength(0);
+    await h.runUntil(h.now + 10_000);
+    expect(api.requests.filter(isDelete)).toHaveLength(1);
+    expect(deletedRow()?.["remoteDeletedAt"]).not.toBeNull();
+  });
+
+  it("stops at once on an answer that asking again cannot change", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      isDelete(request) ? problem(401, "invalid_api_key", "The key is not valid.") : undefined,
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    await h.runUntil(h.now + 60 * 60 * 1000);
+    errors.mockRestore();
+    expect(api.requests.filter(isDelete)).toHaveLength(1);
+    expect(deletedRow()?.["remoteGaveUpAt"]).not.toBeNull();
+    expect(deleteJobs()).toEqual([]);
+  });
+});
+
+describe("large threads", () => {
+  /** Rows as the component writes them for a streamed reply, each close to a document's limit. */
+  async function addChunks(threadId: string, runId: string, count: number, chars: number) {
+    for (let seq = 1; seq <= count; seq++) {
+      await h.db.insert("message_chunks", {
+        messageId: "msg_big",
+        threadId,
+        runId,
+        seq,
+        text: "x".repeat(chars),
+      });
+    }
+  }
+  const stored = (table: string) => JSON.stringify(h.db.all(table)).length;
+
+  it("purges in batches bounded by bytes, not only by rows", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // 30 rows of about 780 KB: far more than one mutation may read at once.
+    await addChunks(threadId, runId, 30, 780_000);
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+
+    const batches: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const jobs = h.takeScheduled();
+      const purge = jobs.find((job) => job.name === "threads:purge");
+      for (const job of jobs) if (job !== purge) h.scheduled.push(job);
+      if (purge === undefined) break;
+      const before = stored("message_chunks");
+      await h.runJob(purge);
+      batches.push(before - stored("message_chunks"));
+    }
+    expect(h.db.all("message_chunks")).toEqual([]);
+    expect(batches.length).toBeGreaterThan(5);
+    // A batch stops once it is past 3 MiB, having read at most two more rows.
+    expect(Math.max(...batches)).toBeLessThan(3 * 1024 * 1024 + 2 * 800_000);
+    expect(h.db.all("deleted_threads")[0]?.["purgedAt"]).not.toBeNull();
+    for (const table of ["runs", "run_requests", "messages", "tool_calls"]) {
+      expect(h.db.all(table)).toEqual([]);
+    }
+  });
+
+  it("starts the purge again when a batch was lost", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await addChunks(threadId, runId, 3, 1_000);
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    // The purge never ran.
+    await runOnly((name) => name !== "threads:purge", h.now + 30_000);
+    expect(h.db.all("message_chunks")).toHaveLength(3);
+    expect(h.db.all("deleted_threads")[0]).toMatchObject({ purgedAt: null });
+    await h.runUntil(h.now + 2 * 60 * 1000);
+    expect(h.db.all("message_chunks")).toEqual([]);
+    expect(h.db.all("deleted_threads")[0]?.["purgedAt"]).not.toBeNull();
+  });
+
+  it("reads a thread up to a byte budget and a capped count, and says there is more", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Twelve replies of 600 KB each: 7 MiB, more than one read should take.
+    for (let n = 0; n < 12; n++) {
+      await deliver(
+        support,
+        event(runId, threadId, 2 + n, "message.completed", {
+          message: {
+            id: `msg_${n}`,
+            thread_id: threadId,
+            run_id: runId,
+            role: "assistant",
+            parts: [{ type: "text", text: String(n).padStart(2, "0") + "x".repeat(600_000) }],
+            created_at: "2026-11-15T12:00:01.000Z",
+          },
+        }),
+      );
+    }
+    const thread = await read(support, threadId);
+    expect(thread.hasMore).toBe(true);
+    expect(thread.messages.length).toBeGreaterThan(3);
+    expect(thread.messages.length).toBeLessThan(10);
+    expect(JSON.stringify(thread.messages).length).toBeLessThan(5 * 1024 * 1024);
+    // The newest ones, each whole.
+    expect(thread.messages.at(-1)?.id).toBe("msg_11");
+    for (const message of thread.messages) {
+      expect(message.parts[0]).toMatchObject({ type: "text" });
+      expect(JSON.stringify(message.parts).length).toBeGreaterThan(600_000);
+    }
+  });
+
+  it("caps how many messages a caller may ask for", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    for (let n = 0; n < 230; n++) {
+      await h.db.insert("messages", {
+        messageId: `msg_${n}`,
+        threadId,
+        runId,
+        role: "assistant",
+        status: "completed",
+        parts: [{ type: "text", text: "ok" }],
+        segment: 0,
+        continuesText: false,
+        createdAt: "2026-11-15T12:00:01.000Z",
+        runOrder: h.now,
+        firstSeq: n + 1,
+      });
+    }
+    const thread = await support.readThread(h.appCtx(ALICE), { threadId, limit: 100_000 });
+    expect(thread?.messages).toHaveLength(200);
+    expect(thread?.hasMore).toBe(true);
+  });
+});
+
+describe("two agents in one app", () => {
+  const OTHER_AGENT = "01JDX5ZQ8W3J2K6M9N4P7R1S0V";
+
+  it("reach only their own threads, so one agent's settings never apply to another's", async () => {
+    const support = agents();
+    // The app's other agent shows tool details. This one does not.
+    const sales = agents({ agentId: OTHER_AGENT, exposeToolDetails: true });
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(runId, threadId, 3, "page_action", {
+        tool_call_id: "call_page",
+        name: "open_order",
+        arguments: {},
+      }),
+      event(runId, threadId, 4, "message.completed", {
+        message: {
+          id: "msg_1",
+          thread_id: threadId,
+          run_id: runId,
+          role: "assistant",
+          parts: [
+            {
+              type: "tool_call",
+              id: "call_search",
+              name: "web_search",
+              kind: "hercules",
+              status: "succeeded",
+              summary: "Searched the web for refund policy",
+            },
+          ],
+          created_at: "2026-11-15T12:00:01.000Z",
+        },
+      }),
+    );
+    // The same user, through the other agent's functions: the thread is not there.
+    expect(await sales.readThread(h.appCtx(ALICE), { threadId })).toBeNull();
+    expect(await sales.cancel(h.appCtx(ALICE), { threadId })).toBe(false);
+    expect(
+      await sales.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId: "call_page" }),
+    ).toBe(false);
+    expect(await sales.deleteThread(h.appCtx(ALICE), { threadId })).toBe(false);
+    const sent = await sales
+      .send(h.appCtx(ALICE), { threadId, text: "Hi" })
+      .catch((e: unknown) => e);
+    expect(errorCode(sent)).toBe("not_found");
+
+    const thread = await read(support, threadId);
+    expect(JSON.stringify(thread.messages)).not.toContain("web_search");
+    expect(thread.activeRun?.id).toBe(runId);
+    expect(
+      await support.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId: "call_page" }),
+    ).toBe(true);
   });
 });
 
@@ -1744,12 +2296,92 @@ describe("the events route", () => {
     ).toBe(403);
     const token = await issuer.sign(claims);
     expect((await post(support, token, "not json", verifier)).status).toBe(400);
-    expect(
-      (await post(support, token, { events: [{ type: "run.started" }] }, verifier)).status,
-    ).toBe(400);
+    expect((await post(support, token, { event: {} }, verifier)).status).toBe(400);
     const ok = await post(support, token, body, verifier);
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ applied: 0, skipped: 0 });
+  });
+
+  describe("with the deployment's own environment", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    /** A delivery token, good at the harness's clock. */
+    async function deliveryToken(
+      issuer: Awaited<ReturnType<typeof createTestIssuer>>,
+      aud: string,
+    ) {
+      const nowSeconds = Math.floor(h.now / 1000);
+      return issuer.sign({
+        iss: ISSUER,
+        aud,
+        sub: `agent:${AGENT_ID}`,
+        hercules_principal: "hercules",
+        iat: nowSeconds,
+        exp: nowSeconds + 600,
+      });
+    }
+    function request(token: string) {
+      return new Request(EVENTS_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ events: [] }),
+      });
+    }
+
+    it("answers 500, which is tried again, while its environment is not set", async () => {
+      vi.stubEnv("HERCULES_OIDC_AUTHORITY", "");
+      vi.stubEnv("CONVEX_SITE_URL", "");
+      vi.stubEnv("CONVEX_CLOUD_URL", "");
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const response = await agents().handleEvents(h.appCtx(), request("any"));
+      errors.mockRestore();
+      expect(response.status).toBe(500);
+    });
+
+    it("answers 503 to every delivery while the issuer's keys cannot be fetched, never 401", async () => {
+      vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
+      vi.stubEnv("CONVEX_SITE_URL", SITE);
+      const issuer = await createTestIssuer();
+      vi.stubGlobal("fetch", issuer.fetch);
+      const support = agents();
+      const token = await deliveryToken(issuer, EVENTS_URL);
+
+      issuer.setReachable(false);
+      // Hercules reuses one token for minutes, and reads a 401 as this whole
+      // deployment refusing it. The second delivery comes before the keys
+      // may be fetched again, and must not be told the token is bad.
+      for (let delivery = 0; delivery < 2; delivery++) {
+        const response = await support.handleEvents(h.appCtx(), request(token));
+        expect(response.status).toBe(503);
+        expect(response.headers.get("retry-after")).toBe("5");
+        h.advance(1_000);
+      }
+      issuer.setReachable(true);
+      h.advance(30_000);
+      expect((await support.handleEvents(h.appCtx(), request(token))).status).toBe(200);
+      // The same token again, as Hercules sends it: its `jti` repeating is fine.
+      expect((await support.handleEvents(h.appCtx(), request(token))).status).toBe(200);
+    });
+
+    it("takes a delivery for the deployment's .convex.site URL behind a custom domain", async () => {
+      vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
+      // The app serves HTTP actions from its own domain. Hercules still signs
+      // for the deployment's own URL, and a 401 would stop every delivery.
+      vi.stubEnv("CONVEX_SITE_URL", "https://api.example.com");
+      vi.stubEnv("CONVEX_CLOUD_URL", "https://happy-otter-123.convex.cloud");
+      const issuer = await createTestIssuer();
+      vi.stubGlobal("fetch", issuer.fetch);
+      const support = agents();
+      expect(
+        (await support.handleEvents(h.appCtx(), request(await deliveryToken(issuer, EVENTS_URL))))
+          .status,
+      ).toBe(200);
+      const elsewhere = await deliveryToken(
+        issuer,
+        `https://sad-otter-9.convex.site${EVENTS_PATH}`,
+      );
+      expect((await support.handleEvents(h.appCtx(), request(elsewhere))).status).toBe(401);
+    });
   });
 
   it("is routed once, however many agents the app has", () => {
