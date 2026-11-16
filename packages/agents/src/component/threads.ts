@@ -32,7 +32,7 @@ import {
   isPageActionFresh,
   runInputText,
 } from "./protocol.js";
-import { vApi, vEndUser, vThread, vThreadDetails } from "./validators.js";
+import { vApi, vEndUser, vThread, vThreadDetails, type StoredRunError } from "./validators.js";
 
 const vSendResult = v.union(
   v.object({ ok: v.literal(true), threadId: v.string(), runId: v.string() }),
@@ -221,12 +221,30 @@ export const send = mutation({
 /** The most page actions a thread lists. Each can hold 256 KiB of arguments. */
 const MAX_LISTED_PAGE_ACTIONS = 20;
 
-/** What a read returns of a thread, to its owner or to the app's backend. */
+/**
+ * What a page tells its user of a run that failed over the app's setup,
+ * which nothing they do can change, by the run's error code. The run keeps
+ * the message written for the app's developer: `readDetails` and
+ * `onRunFinished` give the app's backend that one.
+ */
+const PAGE_ERROR_MESSAGES: ReadonlyMap<string, string> = new Map([
+  ["hercules_auth_required", "The assistant is not available right now."],
+]);
+
+/** A run's error as a page reads it. Any code not named above reads as it is stored. */
+function pageError(error: StoredRunError | null): StoredRunError | null {
+  if (error === null) return null;
+  const message = PAGE_ERROR_MESSAGES.get(error.code);
+  return message === undefined ? error : { ...error, message };
+}
+
+/** What a read returns of a thread, to its owner's page or to the app's backend. */
 async function threadView(
   ctx: QueryCtx,
   thread: Doc<"threads">,
   limit: number | undefined,
   hideTools: boolean,
+  reader: "page" | "backend",
 ): Promise<Infer<typeof vThread>> {
   // A caller's `limit` is its own to send: anything that is not a whole
   // number of at least one (NaN and Infinity among them) reads as the default.
@@ -269,7 +287,7 @@ async function threadView(
       : {
           id: latest.runId,
           status: latest.status,
-          error: latest.error,
+          error: reader === "page" ? pageError(latest.error) : latest.error,
           cappedReason: latest.cappedReason,
           finished_at: latest.finishedAt === null ? null : isoTime(latest.finishedAt),
         };
@@ -348,7 +366,7 @@ export const read = query({
   handler: async (ctx, args): Promise<Infer<typeof vThread> | null> => {
     const thread = await ownThread(ctx, args);
     if (thread === null) return null;
-    return await threadView(ctx, thread, args.limit, args.exposeToolDetails !== true);
+    return await threadView(ctx, thread, args.limit, args.exposeToolDetails !== true, "page");
   },
 });
 
@@ -367,7 +385,7 @@ export const readDetails = query({
   handler: async (ctx, args): Promise<Infer<typeof vThreadDetails> | null> => {
     const thread = await threadById(ctx, args.threadId);
     if (thread === null || thread.agentId !== args.agentId) return null;
-    const view = await threadView(ctx, thread, args.limit, false);
+    const view = await threadView(ctx, thread, args.limit, false, "backend");
     const runIds = [...new Set(view.messages.map((message) => message.run_id))];
     const details: Doc<"tool_calls">[] = [];
     let resultBytes = 0;

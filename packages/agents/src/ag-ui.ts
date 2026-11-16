@@ -685,6 +685,40 @@ interface ShownMessage {
   metadata?: Record<string, any> | undefined;
 }
 
+/**
+ * Whether the chat shows something of the run `runId` that this page
+ * streamed and the thread does not hold yet, so the thread's copy would take
+ * some of it away.
+ *
+ * The run's id alone does not say so: a message put here from the thread (by
+ * `hydrate`, or by an earlier sync of a run another tab started) carries it
+ * too. `metadata.hercules.status` tells the two apart:
+ *
+ * - None: the live stream wrote the message, and has not said how the run
+ *   ended.
+ * - `streaming` or `incomplete`: where Convex has a message. Only a message
+ *   read from the thread says that.
+ * - `cancelled`, `capped` or `failed`: how a run ended. Only a message whose
+ *   run's stream ended on this page says that.
+ * - `completed` is said of both, so the thread decides: a message it holds
+ *   as completed is its own, and one it does not is ahead of it.
+ */
+export function showsStreamOf(
+  shown: ReadonlyArray<ShownMessage>,
+  thread: AgentThread,
+  runId: string,
+): boolean {
+  return shown.some((message) => {
+    if (runIdOf(message) !== runId) return false;
+    const status: unknown = message.metadata?.["hercules"]?.status;
+    if (status === "streaming" || status === "incomplete") return false;
+    if (status !== "completed") return true;
+    return !thread.messages.some(
+      (entry) => entry.id === message.id && entry.status === "completed",
+    );
+  });
+}
+
 function shownText(parts: ReadonlyArray<unknown>): string {
   return parts
     .map((part) => {

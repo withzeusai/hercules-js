@@ -4,7 +4,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { ConvexProvider, type ConvexReactClient } from "convex/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { herculesConnection, syncThread, useThreadSync, type SyncableChat } from "../tanstack";
+import {
+  herculesConnection,
+  syncThread,
+  useThreadSync,
+  type HerculesConnectionOptions,
+  type SyncableChat,
+} from "../tanstack";
 import {
   api,
   assistantMessage,
@@ -20,8 +26,8 @@ import {
 
 const OTHER_RUN = "0f4e3d2c-1b0a-4987-8654-3210fedcba98";
 
-function renderChat(app: App) {
-  const connection = herculesConnection(app.client, api.agent, { fetch: app.fetch });
+function renderChat(app: App, options: HerculesConnectionOptions = {}) {
+  const connection = herculesConnection(app.client, api.agent, { fetch: app.fetch, ...options });
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(ConvexProvider, { client: app.client as unknown as ConvexReactClient }, children);
   return renderHook(
@@ -89,6 +95,154 @@ describe("useThreadSync", () => {
         "It shipped.",
       ]),
     );
+  });
+
+  it("follows a run another tab started through every update of the thread", async () => {
+    // Two tabs on one thread: the first sends and streams, the second only reads Convex.
+    const app = createApp(settledThread([]));
+    const sender = renderChat(app).result;
+    const reader = renderChat(app).result;
+    await waitFor(() => expect(sender.current.chat.isHydrating).toBe(false));
+    await waitFor(() => expect(reader.current.chat.isHydrating).toBe(false));
+    app.push(
+      frame(1, "run.started"),
+      frame(2, "message.delta", { message_id: "msg_1", text: "Opening order 123. One moment." }),
+    );
+    let sending!: Promise<void>;
+    act(() => {
+      sending = sender.current.chat.sendMessage("Open my order");
+    });
+    await waitFor(() =>
+      expect(texts(sender.current.chat.messages)).toEqual([
+        "Open my order",
+        "Opening order 123. One moment.",
+      ]),
+    );
+    // The thread's first update of the run: the message that started it.
+    await waitFor(() => expect(texts(reader.current.chat.messages)).toEqual(["Open my order"]));
+    expect(reader.current.chat.isLoading).toBe(false);
+
+    // Then the reply, a checkpoint at a time.
+    const input = userMessage("Open my order");
+    for (const text of ["Opening", "Opening order 123."]) {
+      act(() => {
+        app.setThread(
+          runningThread([input, assistantMessage("msg_1", [{ type: "text", text }], "streaming")]),
+        );
+      });
+      await waitFor(() =>
+        expect(texts(reader.current.chat.messages)).toEqual(["Open my order", text]),
+      );
+    }
+    // The first message completes, and the run goes on to a second.
+    const first = assistantMessage("msg_1", [
+      { type: "text", text: "Opening order 123. One moment." },
+    ]);
+    act(() => app.setThread(runningThread([input, first])));
+    await waitFor(() =>
+      expect(texts(reader.current.chat.messages)).toEqual([
+        "Open my order",
+        "Opening order 123. One moment.",
+      ]),
+    );
+    act(() => {
+      app.setThread(
+        runningThread([
+          input,
+          first,
+          assistantMessage("msg_2", [{ type: "text", text: "It is" }], "streaming"),
+        ]),
+      );
+    });
+    await waitFor(() =>
+      expect(texts(reader.current.chat.messages)).toEqual([
+        "Open my order",
+        "Opening order 123. One moment.",
+        "It is",
+      ]),
+    );
+    // The tab that streams the run was ahead of Convex all along, and kept what it showed.
+    expect(texts(sender.current.chat.messages)).toEqual([
+      "Open my order",
+      "Opening order 123. One moment.",
+    ]);
+
+    const second = assistantMessage("msg_2", [{ type: "text", text: "It is open." }]);
+    app.push(
+      frame(3, "message.completed", { message: first }),
+      frame(4, "message.completed", { message: second }),
+      frame(5, "run.completed", { output: "It is open.", usage: null }),
+    );
+    act(() => app.setThread(settledThread([input, first, second])));
+    await act(async () => {
+      await sending;
+    });
+    const whole = ["Open my order", "Opening order 123. One moment.", "It is open."];
+    await waitFor(() => expect(texts(reader.current.chat.messages)).toEqual(whole));
+    expect(texts(sender.current.chat.messages)).toEqual(whole);
+    expect(app.callsTo("agent:send")).toHaveLength(1);
+  });
+
+  it("keeps what it streamed of a run that Convex still has going, stopped or ended here", async () => {
+    // Stopped here: the run is the thread's until Hercules has stopped it.
+    const stopped = createApp(settledThread([]));
+    const first = renderChat(stopped).result;
+    await waitFor(() => expect(first.current.chat.isHydrating).toBe(false));
+    stopped.push(
+      frame(1, "run.started"),
+      frame(2, "message.delta", { message_id: "msg_1", text: "Here is the first part" }),
+    );
+    let sending!: Promise<void>;
+    act(() => {
+      sending = first.current.chat.sendMessage("Write a report");
+    });
+    await waitFor(() => expect(first.current.chat.messages).toHaveLength(2));
+    act(() => first.current.chat.stop());
+    await act(async () => {
+      await sending;
+    });
+    expect(first.current.chat.isLoading).toBe(false);
+    const stopping = runningThread([
+      userMessage("Write a report"),
+      assistantMessage("msg_1", [{ type: "text", text: "Here is" }], "streaming"),
+    ]);
+    act(() => {
+      stopped.setThread({
+        ...stopping,
+        activeRun: stopping.activeRun && { ...stopping.activeRun, stopping: true },
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(texts(first.current.chat.messages)).toEqual([
+      "Write a report",
+      "Here is the first part",
+    ]);
+
+    // Ended here: the stream brought the run's end, and Convex is behind by
+    // more than the chat waits for it.
+    const lagging = createApp(settledThread([]));
+    const second = renderChat(lagging, { settleTimeoutMs: 10 }).result;
+    await waitFor(() => expect(second.current.chat.isHydrating).toBe(false));
+    const reply = assistantMessage("msg_1", [{ type: "text", text: "Opening order 123." }]);
+    lagging.push(
+      frame(1, "run.started"),
+      frame(2, "message.completed", { message: reply }),
+      frame(3, "run.completed", { output: "Opening order 123.", usage: null }),
+    );
+    await act(async () => {
+      await second.current.chat.sendMessage("Open my order");
+    });
+    expect(second.current.chat.isLoading).toBe(false);
+    act(() => {
+      lagging.setThread(
+        runningThread([
+          userMessage("Open my order"),
+          assistantMessage("msg_1", [{ type: "text", text: "Open" }], "streaming"),
+        ]),
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(texts(second.current.chat.messages)).toEqual(["Open my order", "Opening order 123."]);
   });
 
   it("leaves the chat alone while its own reply streams, and after it", async () => {
@@ -269,6 +423,57 @@ describe("syncThread", () => {
       },
     ]);
     expect(syncThread(chat, runningThread(thread.messages))).toBe(false);
+  });
+
+  it("takes every update of a run another tab started, which an earlier sync put here", () => {
+    const input = userMessage("Hi");
+    const synced = (message: (typeof thread.messages)[number]) => ({
+      id: message.id,
+      role: message.role,
+      parts: message.parts.map((part) => ({
+        type: "text",
+        content: part.type === "text" ? part.text : "",
+      })),
+      metadata: { hercules: { runId: message.run_id, status: message.status } },
+    });
+    // The message that started the run carries the run's id, and is Convex's copy.
+    const checkpoint = assistantMessage("msg_1", [{ type: "text", text: "Hel" }], "streaming");
+    const afterInput = chatWith([synced(input)]);
+    expect(syncThread(afterInput.chat, runningThread([input, checkpoint]))).toBe(true);
+    expect(texts(afterInput.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hel"]);
+    // So is a checkpoint of the reply, and a message of the run that completed.
+    const first = assistantMessage("msg_1", [{ type: "text", text: "Hello!" }]);
+    const afterCheckpoint = chatWith([synced(input), synced(checkpoint)]);
+    expect(syncThread(afterCheckpoint.chat, runningThread([input, first]))).toBe(true);
+    expect(texts(afterCheckpoint.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello!"]);
+    const next = assistantMessage("msg_2", [{ type: "text", text: "One" }], "streaming");
+    const afterFirst = chatWith([synced(input), synced(first)]);
+    expect(syncThread(afterFirst.chat, runningThread([input, first, next]))).toBe(true);
+    expect(texts(afterFirst.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello!", "One"]);
+  });
+
+  it("does not take Convex's copy of a run whose stream ended here before Convex has its end", () => {
+    const ended = (status: string) => ({
+      id: "msg_1",
+      role: "assistant",
+      parts: [{ type: "text", content: "Hello! How are you?" }],
+      metadata: { hercules: { runId: RUN, status } },
+    });
+    const behind = runningThread([
+      userMessage("Hi"),
+      assistantMessage("msg_1", [{ type: "text", text: "Hello!" }], "streaming"),
+    ]);
+    for (const status of ["completed", "cancelled", "capped", "failed"]) {
+      expect(syncThread(chatWith([ended(status)]).chat, behind)).toBe(false);
+      // Nor when Convex has nothing of the reply yet.
+      expect(syncThread(chatWith([ended(status)]).chat, runningThread([userMessage("Hi")]))).toBe(
+        false,
+      );
+    }
+    // A message Convex holds as completed is the truth, though the run is still its.
+    const caughtUp = chatWith([ended("completed")]);
+    expect(syncThread(caughtUp.chat, runningThread(thread.messages))).toBe(true);
+    expect(texts(caughtUp.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello!"]);
   });
 
   const streamed = (text: string, status?: string) => ({
