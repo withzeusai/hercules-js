@@ -23,7 +23,7 @@ function dropUnusedRuntime() {
 export default defineConfig((options) => [
   {
     ...options,
-    entry: ["src/index.ts", "src/convex.ts", "src/react.ts"],
+    entry: ["src/index.ts", "src/convex.ts", "src/react.ts", "src/tanstack.ts"],
     dts: true,
     sourcemap: true,
     ignoreWatch: [".turbo"],

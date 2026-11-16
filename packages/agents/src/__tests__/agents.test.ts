@@ -222,6 +222,47 @@ describe("send", () => {
     });
   });
 
+  it("opens a thread under the id the page chose, and sends in it after", async () => {
+    const support = agents();
+    const chosen = "9c2d7a10-55e1-4f0b-8d3c-2a1b0c9d8e7f";
+    const first = await support.send(h.appCtx(ALICE), { threadId: chosen, text: "Hi" });
+    expect(first.threadId).toBe(chosen);
+    await h.runDue();
+    expect(api.requests[0]?.body.thread_id).toBe(chosen);
+    expect((await read(support, chosen)).messages).toHaveLength(1);
+
+    // A ULID works too.
+    const ulid = "01JDX5ZQ8W3J2K6M9N4P7R1S0T";
+    expect((await support.send(h.appCtx(ALICE), { threadId: ulid, text: "Hi" })).threadId).toBe(
+      ulid,
+    );
+    // Someone else's thread still reads as one that does not exist.
+    const error = await support
+      .send(h.appCtx(BOB), { threadId: chosen, text: "Me too" })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("not_found");
+  });
+
+  it.each([
+    ["a name", "support-chat"],
+    // Hercules stores a UUID in lowercase and takes a ULID in uppercase only:
+    // in any other form the id would name a different thread there than here.
+    ["a UUID in uppercase", "9C2D7A10-55E1-4F0B-8D3C-2A1B0C9D8E7F"],
+    ["a ULID in lowercase", "01jdx5zq8w3j2k6m9n4p7r1s0t"],
+    ["a ULID past the largest time", "81JDX5ZQ8W3J2K6M9N4P7R1S0T"],
+    ["a UUID with no dashes", "9c2d7a1055e14f0b8d3c2a1b0c9d8e7f"],
+    ["nothing", ""],
+  ])("refuses %s as a new thread's id, before anything is written", async (_name, threadId) => {
+    const error = await agents()
+      .send(h.appCtx(ALICE), { threadId, text: "Hi" })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("invalid_request");
+    for (const table of ["threads", "runs", "run_requests", "messages"]) {
+      expect(h.db.all(table)).toHaveLength(0);
+    }
+    expect(h.scheduled).toEqual([]);
+  });
+
   it("refuses a caller who is not signed in, whatever else they send", async () => {
     const support = agents();
     const error = await support.send(h.appCtx(null), { text: "Hi" }).catch((e: unknown) => e);
@@ -827,6 +868,101 @@ describe("deleteThread", () => {
       applied: 0,
       skipped: 1,
     });
+  });
+});
+
+describe("a deleted thread's id", () => {
+  const CHOSEN = "11111111-1111-4111-8111-111111111111";
+
+  /** A thread with more rows than one purge batch deletes. */
+  async function longThread(support: HerculesAgents) {
+    const first = await support.send(h.appCtx(ALICE), { threadId: CHOSEN, text: "Hi" });
+    await h.runDue();
+    for (let batch = 0; batch < 3; batch++) {
+      const chunks = [];
+      for (let seq = 2 + batch * 100; seq < 102 + batch * 100; seq++) {
+        chunks.push(
+          event(first.runId, CHOSEN, seq, "message.appended", { message_id: "m1", text: "x" }),
+        );
+      }
+      await deliver(support, ...chunks);
+    }
+    return first;
+  }
+
+  it("cannot be used again, so the purge never takes a newer conversation", async () => {
+    const support = agents();
+    const first = await longThread(support);
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId: CHOSEN })).toBe(true);
+
+    // The first purge batch has run, and the rest of the old rows are still there.
+    const jobs = h.takeScheduled();
+    const purge = jobs.find((job) => job.name === "threads:purge")!;
+    await h.call(purge.ref as never, purge.args);
+    expect(h.db.all("message_chunks").length).toBeGreaterThan(0);
+
+    // The page kept its thread id and sends again.
+    const error = await support
+      .send(h.appCtx(ALICE), { threadId: CHOSEN, text: "A new conversation" })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("thread_deleted");
+    expect((error as ConvexError<{ message: string }>).data.message).toMatch(/new id/);
+    expect(h.db.all("threads")).toEqual([]);
+    expect(h.db.all("runs").every((row) => row["runId"] === first.runId)).toBe(true);
+
+    await h.runDue();
+    for (const table of ["threads", "runs", "run_requests", "messages", "message_chunks"]) {
+      expect(h.db.all(table)).toHaveLength(0);
+    }
+    // Refused for good, and for anyone: the id is retired.
+    for (const who of [ALICE, BOB]) {
+      const later = await support
+        .send(h.appCtx(who), { threadId: CHOSEN, text: "Again" })
+        .catch((e: unknown) => e);
+      expect(errorCode(later)).toBe("thread_deleted");
+    }
+    expect(await support.readThread(h.appCtx(ALICE), { threadId: CHOSEN })).toBeNull();
+  });
+
+  it("is all a late delete at Hercules can reach", async () => {
+    const support = agents();
+    await support.send(h.appCtx(ALICE), { threadId: CHOSEN, text: "Hi" });
+    await h.runDue();
+    // Hercules cannot be reached, so its delete is retried, for minutes.
+    let down = true;
+    api.answerWith((request) =>
+      down && request.method === "DELETE" ? new Response("down", { status: 503 }) : undefined,
+    );
+    await support.deleteThread(h.appCtx(ALICE), { threadId: CHOSEN });
+    await h.runDue();
+    expect(h.scheduled.map((job) => job.name)).toContain("hercules:deleteTick");
+
+    // Meanwhile the user starts over. Under the old id they cannot, so the
+    // delete still to come names no conversation that exists.
+    const reused = await support
+      .send(h.appCtx(ALICE), { threadId: CHOSEN, text: "Start over" })
+      .catch((e: unknown) => e);
+    expect(errorCode(reused)).toBe("thread_deleted");
+    const fresh = await support.send(h.appCtx(ALICE), {
+      threadId: "22222222-2222-4222-8222-222222222222",
+      text: "Start over",
+    });
+    down = false;
+    await h.runUntil(h.now + 20 * 60 * 1000);
+    const deletes = api.requests.filter((request) => request.method === "DELETE");
+    expect(deletes.length).toBeGreaterThan(1);
+    expect(new Set(deletes.map((request) => request.path))).toEqual(
+      new Set([`/v1/agents/threads/${CHOSEN}`]),
+    );
+    expect((await read(support, fresh.threadId)).messages).toHaveLength(1);
+  });
+
+  it("is not taken by a thread that was never there", async () => {
+    const support = agents();
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId: CHOSEN })).toBe(false);
+    expect((await support.send(h.appCtx(ALICE), { threadId: CHOSEN, text: "Hi" })).threadId).toBe(
+      CHOSEN,
+    );
   });
 });
 

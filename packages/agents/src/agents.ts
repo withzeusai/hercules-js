@@ -55,6 +55,7 @@ export type StoredToolCall = AgentThreadDetails["toolCalls"][number];
 export type AgentErrorCode =
   | "sign_in_required"
   | "not_found"
+  | "thread_deleted"
   | "thread_busy"
   | "end_user_rate_limited"
   | "message_too_long"
@@ -111,7 +112,12 @@ type RunQueryCtx = { runQuery: GenericActionCtx<GenericDataModel>["runQuery"] };
 type RunMutationCtx = { runMutation: GenericActionCtx<GenericDataModel>["runMutation"] };
 
 export interface SendArgs {
-  /** Leave out to start a new thread. */
+  /**
+   * The thread to send in. Leave out to start a new thread, or pass a new
+   * UUID (in lowercase, as `crypto.randomUUID()` makes) or ULID (in
+   * uppercase) to start one under that id, as a page using TanStack AI does.
+   * A deleted thread's id cannot be used again.
+   */
   threadId?: string;
   text: string;
   /** Named JSON values about the page, appended to the input. */
@@ -325,7 +331,10 @@ export class HerculesAgents {
     });
   }
 
-  /** Deletes the caller's thread, here and at Hercules. Irreversible. */
+  /**
+   * Deletes the caller's thread, here and at Hercules. Irreversible, and the
+   * thread's id is retired: `send` under it throws `thread_deleted`.
+   */
   async deleteThread(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
     const owner = await this.ownerFor(ctx);
     if (owner === null) return false;
