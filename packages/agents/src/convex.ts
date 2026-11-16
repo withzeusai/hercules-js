@@ -476,10 +476,12 @@ export {
   type AgentErrorCode,
   type AgentErrorData,
   type AgentThread,
+  type AgentThreadDetails,
   type HerculesAgentsOptions,
   type PendingPageAction,
   type RunFinished,
   type SendArgs,
+  type StoredToolCall,
   type ThreadArgs,
   type ThreadMessage,
 } from "./agents";

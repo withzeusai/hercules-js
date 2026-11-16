@@ -27,7 +27,16 @@ export const vToolCallStatus = v.union(
   v.literal("failed"),
   v.literal("sent"),
 );
-export const vRunError = v.object({ code: v.string(), message: v.string() });
+/**
+ * Why a run failed. `retryAfterSeconds` is set when Hercules refused the run
+ * over a limit: how long, from when the run ended, until one may start.
+ */
+export const vRunError = v.object({
+  code: v.string(),
+  message: v.string(),
+  retryAfterSeconds: v.optional(v.number()),
+});
+export type StoredRunError = Infer<typeof vRunError>;
 export const vUsage = v.object({ credits: v.number() });
 
 export const vTextPart = v.object({ type: v.literal("text"), text: v.string() });
@@ -51,13 +60,10 @@ export const vMessage = v.object({
 });
 
 /**
- * The end user a run acts for. Absent for the app's own runs.
- * `tokenIdentifier` is Convex's `<issuer>|<subject>` for a signed-in user.
+ * The end user a run acts for: a signed-in user, by Convex's
+ * `<issuer>|<subject>`. Absent for the app's own runs.
  */
-export const vEndUser = v.union(
-  v.object({ tokenIdentifier: v.string() }),
-  v.object({ anonymousId: v.string() }),
-);
+export const vEndUser = v.object({ tokenIdentifier: v.string() });
 export type EndUser = Infer<typeof vEndUser>;
 
 /** How the component reaches Hercules. The key is the app's `HERCULES_API_KEY`. */
@@ -139,6 +145,8 @@ export const vLatestRun = v.object({
   status: vRunStatus,
   error: v.union(vRunError, v.null()),
   cappedReason: v.union(vCappedReason, v.null()),
+  /** When the run ended. `error.retryAfterSeconds` counts from here. */
+  finished_at: v.union(v.string(), v.null()),
 });
 
 export const vPendingPageAction = v.object({
@@ -147,6 +155,7 @@ export const vPendingPageAction = v.object({
   name: v.string(),
   /** The arguments as JSON text. */
   argumentsJson: v.string(),
+  /** When the agent called it. A page action older than two minutes is not run. */
   created_at: v.string(),
 });
 
@@ -161,6 +170,30 @@ export const vThread = v.object({
   latestRun: v.union(vLatestRun, v.null()),
   /** Page actions no tab has claimed yet. */
   pageActions: v.array(vPendingPageAction),
+});
+
+/** A tool call as the component stores it, for the app's own backend. */
+export const vStoredToolCall = v.object({
+  toolCallId: v.string(),
+  runId: v.string(),
+  name: v.string(),
+  kind: vToolKind,
+  status: v.union(vToolCallStatus, v.null()),
+  summary: v.union(v.string(), v.null()),
+  /** An app tool's result as JSON text. Null for the other kinds. */
+  resultJson: v.union(v.string(), v.null()),
+  /** A page action's arguments as JSON text. */
+  argumentsJson: v.union(v.string(), v.null()),
+  created_at: v.string(),
+});
+
+/** What `threads.readDetails` returns: the thread as stored, with its tool calls. */
+export const vThreadDetails = v.object({
+  ...vThread.fields,
+  /** The tool calls of the runs whose messages are listed, oldest first. */
+  toolCalls: v.array(vStoredToolCall),
+  /** True when the results came to more than one read holds: the older runs' calls are left out. */
+  toolCallsTruncated: v.boolean(),
 });
 
 export const vRunFinished = v.object({

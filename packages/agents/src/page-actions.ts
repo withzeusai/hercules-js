@@ -1,0 +1,115 @@
+/**
+ * Page actions in the browser: an agent's command to the page, such as
+ * opening a record. They are one-way: one open tab claims each through the
+ * app's `claimPageAction` mutation and runs it, and nothing goes back to the
+ * run. No React or Convex imports.
+ *
+ * A page action is taken from the thread's `pageActions`, the ones Hercules
+ * delivered to the app and no tab has claimed: the claim is on the delivered
+ * call, so only a tool call the run really made can be run. It is run only
+ * while its event is less than two minutes old.
+ */
+import { isPageActionFresh } from "./component/protocol";
+
+/** Runs a page action. What it returns goes nowhere: page actions are one-way. */
+export type PageActionHandler = (
+  // The agent writes the arguments; check them before acting on them.
+  args: any,
+  info: { toolCallId: string; runId: string },
+) => void | Promise<void>;
+
+export type PageActionHandlers = Readonly<Record<string, PageActionHandler>>;
+
+export interface ClaimPageActionArgs {
+  threadId: string;
+  runId: string;
+  toolCallId: string;
+}
+
+/** A page action waiting for a tab, as the thread query lists it. */
+export interface PendingPageActionCall {
+  toolCallId: string;
+  runId: string;
+  name: string;
+  /** The arguments as JSON text. */
+  argumentsJson: string;
+  /** When the agent called it. */
+  created_at: string;
+}
+
+export interface PageActionRunnerOptions {
+  /** The app's `claimPageAction` mutation, read when an action arrives. Without it none runs. */
+  claim: () => ((args: ClaimPageActionArgs) => Promise<boolean>) | undefined;
+  /** The page's handlers, read when an action arrives. */
+  handlers: () => PageActionHandlers | undefined;
+  /** Where a page with handlers but no `claim` is told it needs one. */
+  name: string;
+  now?: () => number;
+}
+
+function parseArguments(json: string): unknown {
+  try {
+    return JSON.parse(json) as unknown;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Runs each pending page action at most once in this page: only one the page
+ * has a handler for, only while it is fresh, and only after this tab won the
+ * claim. One that is too old is skipped without claiming it. A failing
+ * handler is logged; it fails nothing else.
+ */
+export function createPageActionRunner(options: PageActionRunnerOptions) {
+  const taken = new Set<string>();
+  let warned = false;
+
+  async function run(threadId: string, action: PendingPageActionCall): Promise<void> {
+    const handler = options.handlers()?.[action.name];
+    const key = `${action.runId}:${action.toolCallId}`;
+    if (handler === undefined || taken.has(key)) return;
+    if (!isPageActionFresh(action.created_at, (options.now ?? Date.now)())) return;
+    const claim = options.claim();
+    if (claim === undefined) {
+      if (!warned) {
+        warned = true;
+        console.warn(
+          `${options.name}: the app's claimPageAction mutation is needed to run page actions`,
+        );
+      }
+      return;
+    }
+    taken.add(key);
+    let claimed: boolean;
+    try {
+      claimed = await claim({
+        threadId,
+        runId: action.runId,
+        toolCallId: action.toolCallId,
+      });
+    } catch (failure) {
+      // Not known to be taken: the next read of the thread may try again.
+      taken.delete(key);
+      console.error(`Page action ${action.name} could not be claimed`, failure);
+      return;
+    }
+    if (!claimed) return;
+    try {
+      await handler(parseArguments(action.argumentsJson), {
+        toolCallId: action.toolCallId,
+        runId: action.runId,
+      });
+    } catch (failure) {
+      console.error(`Page action ${action.name} failed`, failure);
+    }
+  }
+
+  /** Takes and runs the thread's pending page actions. Call it with each read of the thread. */
+  return function runPending(
+    thread: { id: string; pageActions: readonly PendingPageActionCall[] } | null | undefined,
+  ): void {
+    if (thread === null || thread === undefined) return;
+    for (const action of thread.pageActions) void run(thread.id, action);
+  };
+}

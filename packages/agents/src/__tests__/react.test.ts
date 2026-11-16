@@ -43,7 +43,7 @@ function liveStream() {
 function runningThread(overrides: Partial<AgentThread> = {}): AgentThread {
   return {
     id: THREAD,
-    agentId: "agt_1",
+    agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
     hasMore: false,
     messages: [
       {
@@ -64,13 +64,23 @@ function runningThread(overrides: Partial<AgentThread> = {}): AgentThread {
       lastSeq: 0,
       created_at: "2026-11-15T12:00:00.000Z",
     },
-    latestRun: { id: RUN, status: "running", error: null, cappedReason: null },
+    latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
     pageActions: [],
     ...overrides,
   };
 }
 
 describe("useAgentThread", () => {
+  function pending(toolCallId: string, createdAt: string, args: unknown = {}) {
+    return {
+      toolCallId,
+      runId: RUN,
+      name: "open_order",
+      argumentsJson: JSON.stringify(args),
+      created_at: createdAt,
+    };
+  }
+
   it("streams the reply, runs a claimed page action once, and settles on Convex's copy", async () => {
     const stream = liveStream();
     const openOrder = vi.fn();
@@ -110,6 +120,20 @@ describe("useAgentThread", () => {
       }),
     );
     expect(result.current.status).toBe("streaming");
+    // The live stream shows the page action in the chat. It runs once Hercules
+    // has delivered it to the app, which is when it can be claimed.
+    expect(result.current.messages[1]?.parts[1]).toMatchObject({
+      type: "tool_call",
+      id: "call_1",
+      kind: "page",
+      status: "sent",
+    });
+    expect(claimPageAction).not.toHaveBeenCalled();
+
+    const delivered = runningThread({
+      pageActions: [pending("call_1", new Date().toISOString(), { orderId: "123" })],
+    });
+    rerender({ ...options, thread: delivered });
     await waitFor(() => expect(openOrder).toHaveBeenCalledTimes(1));
     expect(openOrder).toHaveBeenCalledWith(
       { orderId: "123" },
@@ -121,21 +145,8 @@ describe("useAgentThread", () => {
       toolCallId: "call_1",
     });
 
-    // Convex now lists the same page action as pending: this tab already took it.
-    rerender({
-      ...options,
-      thread: runningThread({
-        pageActions: [
-          {
-            toolCallId: "call_1",
-            runId: RUN,
-            name: "open_order",
-            argumentsJson: "{}",
-            created_at: "",
-          },
-        ],
-      }),
-    });
+    // The thread is read again with the action still listed: this tab already took it.
+    rerender({ ...options, thread: { ...delivered } });
     expect(claimPageAction).toHaveBeenCalledTimes(1);
 
     // The run is over in Convex.
@@ -143,7 +154,13 @@ describe("useAgentThread", () => {
       ...options,
       thread: runningThread({
         activeRun: null,
-        latestRun: { id: RUN, status: "completed", error: null, cappedReason: null },
+        latestRun: {
+          id: RUN,
+          status: "completed",
+          error: null,
+          cappedReason: null,
+          finished_at: null,
+        },
         messages: [
           ...runningThread().messages,
           {
@@ -164,6 +181,64 @@ describe("useAgentThread", () => {
       [{ type: "text", text: "Opening it now." }],
     ]);
     stream.close();
+  });
+
+  it("skips a page action that is two minutes old without claiming it", async () => {
+    const openOrder = vi.fn();
+    const claimPageAction = vi.fn(async (_args: { toolCallId: string }) => true);
+    const old = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    renderHook(() =>
+      useAgentThread({
+        thread: runningThread({
+          activeRun: null,
+          // One delivered long after it was written, one with no time, and one in time.
+          pageActions: [
+            pending("call_old", old),
+            pending("call_undated", ""),
+            pending("call_new", new Date().toISOString()),
+          ],
+        }),
+        send: vi.fn(),
+        claimPageAction,
+        pageActions: { open_order: openOrder },
+      }),
+    );
+    await waitFor(() => expect(openOrder).toHaveBeenCalledTimes(1));
+    expect(claimPageAction.mock.calls.map(([args]) => args.toolCallId)).toEqual(["call_new"]);
+  });
+
+  it("does not run a page action another tab claimed, and tries again after a failed claim", async () => {
+    const openOrder = vi.fn();
+    const answers: Array<boolean | Error> = [new Error("offline"), false];
+    const claimPageAction = vi.fn(async () => {
+      const answer = answers.shift();
+      if (answer instanceof Error) throw answer;
+      return answer ?? true;
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const thread = runningThread({
+      activeRun: null,
+      pageActions: [pending("call_1", new Date().toISOString())],
+    });
+    const options = {
+      thread,
+      send: vi.fn(),
+      claimPageAction,
+      pageActions: { open_order: openOrder },
+    };
+    const { rerender } = renderHook((props: UseAgentThreadOptions) => useAgentThread(props), {
+      initialProps: options,
+    });
+    await waitFor(() => expect(claimPageAction).toHaveBeenCalledTimes(1));
+    // The claim could not be made: the next read of the thread tries again.
+    rerender({ ...options, thread: { ...thread } });
+    await waitFor(() => expect(claimPageAction).toHaveBeenCalledTimes(2));
+    // Another tab had it: this one never runs it, and does not ask again.
+    rerender({ ...options, thread: { ...thread } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claimPageAction).toHaveBeenCalledTimes(2);
+    expect(openOrder).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
 
   it("shows the message as pending while it is sent, and reports why it was not", async () => {
@@ -194,7 +269,7 @@ describe("useAgentThread", () => {
     await act(async () => {
       reject(
         Object.assign(new Error("ConvexError"), {
-          data: { code: "thread_busy", message: "Busy." },
+          data: { code: "end_user_rate_limited", message: "Slow down.", retryAfterSeconds: 90 },
         }),
       );
       await sent;
@@ -202,8 +277,9 @@ describe("useAgentThread", () => {
     expect(result.current.messages).toEqual([]);
     expect(result.current.error).toMatchObject({
       name: "AgentError",
-      code: "thread_busy",
-      message: "Busy.",
+      code: "end_user_rate_limited",
+      message: "Slow down.",
+      retryAfterSeconds: 90,
     });
   });
 
@@ -217,6 +293,7 @@ describe("useAgentThread", () => {
             status: "failed",
             error: { code: "out_of_credits", message: "Out of credits." },
             cappedReason: null,
+            finished_at: "2026-11-15T12:00:05.000Z",
           },
         }),
         send: vi.fn(),
@@ -224,5 +301,31 @@ describe("useAgentThread", () => {
     );
     expect(result.current.status).toBe("ready");
     expect(result.current.error).toMatchObject({ code: "out_of_credits" });
+  });
+
+  it("says how long a limit that failed the run lasts", () => {
+    const { result } = renderHook(() =>
+      useAgentThread({
+        thread: runningThread({
+          activeRun: null,
+          latestRun: {
+            id: RUN,
+            status: "failed",
+            error: {
+              code: "agent_daily_limit_reached",
+              message: "The agent's daily credit limit is reached.",
+              retryAfterSeconds: 20_000,
+            },
+            cappedReason: null,
+            finished_at: "2026-11-15T12:00:05.000Z",
+          },
+        }),
+        send: vi.fn(),
+      }),
+    );
+    expect(result.current.error).toMatchObject({
+      code: "agent_daily_limit_reached",
+      retryAfterSeconds: 20_000,
+    });
   });
 });

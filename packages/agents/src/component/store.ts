@@ -1,38 +1,34 @@
 /** Reads and writes shared by the component's functions. No functions are registered here. */
 import type { FunctionHandle } from "convex/server";
+import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import {
+  hideToolDetails,
   isFinalStatus,
   type CappedReason,
   type FinalRunStatus,
   type Message,
   type MessagePart,
-  type RunError,
   type Usage,
 } from "./protocol.js";
-import type { EndUser, RunFinished } from "./validators.js";
+import type { EndUser, RunFinished, StoredRunError } from "./validators.js";
 
 /** A run with no event for this long is checked against Hercules directly. */
 export const STUCK_AFTER_MS = 3 * 60 * 1000;
-/** A page action no tab took within this long is dropped: the moment has passed. */
-export const PAGE_ACTION_TTL_MS = 2 * 60 * 1000;
+/** A run's token reads its events until this long after the run ends. */
+export const LIVE_TOKEN_TTL_MS = 60 * 60 * 1000;
 /** Messages larger than this are stored in several documents (a document holds 1 MiB). */
 export const SEGMENT_MAX_BYTES = 512 * 1024;
 /** The longest run output and tool result kept. The full reply is in the messages. */
 export const MAX_STORED_TEXT_BYTES = 256 * 1024;
-/** The API's limit on input text plus context. */
-export const MAX_INPUT_CHARS = 262_144;
 export const DEFAULT_MESSAGE_LIMIT = 100;
 export const MAX_MESSAGE_LIMIT = 500;
 
 export const APP_OWNER = "app";
 
 export function ownerOf(endUser: EndUser | null): string {
-  if (endUser === null) return APP_OWNER;
-  return "tokenIdentifier" in endUser
-    ? `user:${endUser.tokenIdentifier}`
-    : `visitor:${endUser.anonymousId}`;
+  return endUser === null ? APP_OWNER : `user:${endUser.tokenIdentifier}`;
 }
 
 /** A random UUID: the API takes ULIDs or UUIDs for run and thread ids. */
@@ -175,6 +171,14 @@ export async function runById(ctx: QueryCtx, runId: string) {
     .unique();
 }
 
+/** A run's tool call. Tool call ids are the run's own, so they are looked up by run. */
+export async function toolCallById(ctx: QueryCtx, runId: string, toolCallId: string) {
+  return await ctx.db
+    .query("tool_calls")
+    .withIndex("by_run", (q) => q.eq("runId", runId).eq("toolCallId", toolCallId))
+    .unique();
+}
+
 async function messageRows(ctx: QueryCtx, messageId: string) {
   return await ctx.db
     .query("messages")
@@ -281,30 +285,43 @@ export async function appendText(
 export interface RunOutcome {
   status: FinalRunStatus;
   output: string | null;
-  error: RunError | null;
+  error: StoredRunError | null;
   cappedReason: CappedReason | null;
   usage: Usage | null;
 }
 
+/** The fields of a run an event batch moves along. */
+export type RunProgress = Partial<
+  Pick<Doc<"runs">, "accepted" | "lastSeq" | "lastEventAt" | "progress">
+>;
+
 /**
  * Records how a run ended, once: a second ending for the same run changes
  * nothing. Replies left mid-stream are kept as `incomplete`. Then the app's
- * `onRunFinished` is scheduled, after this write.
+ * `onRunFinished` is scheduled, after this write. `also` goes into the same
+ * write of the run, so a batch that ends a run writes it once.
  */
 export async function finishRun(
   ctx: MutationCtx,
   run: Doc<"runs">,
   outcome: RunOutcome,
+  also: RunProgress = {},
 ): Promise<boolean> {
   if (isFinalStatus(run.status)) return false;
   const now = Date.now();
   await ctx.db.patch(run._id, {
+    ...also,
     status: outcome.status,
     output: capText(outcome.output),
     error: outcome.error,
     cappedReason: outcome.cappedReason,
     usage: outcome.usage,
     finishedAt: now,
+    nextStartAt: null,
+  });
+  // The run's token is of no use once it has expired.
+  await ctx.scheduler.runAfter(LIVE_TOKEN_TTL_MS, internal.hercules.clearLive, {
+    runId: run.runId,
   });
 
   const rows = await ctx.db
@@ -356,7 +373,16 @@ export async function finishRun(
   return true;
 }
 
-export async function readMessages(ctx: QueryCtx, threadId: string, limit: number) {
+/**
+ * The latest `limit` messages of a thread, oldest first. With `hideTools`,
+ * as a page may see them: `hercules` tool calls without their names.
+ */
+export async function readMessages(
+  ctx: QueryCtx,
+  threadId: string,
+  limit: number,
+  hideTools: boolean,
+) {
   const groups: Doc<"messages">[][] = [];
   let hasMore = false;
   for await (const row of ctx.db
@@ -383,6 +409,7 @@ export async function readMessages(ctx: QueryCtx, threadId: string, limit: numbe
       const text = await chunkText(ctx, head.messageId);
       parts = text.length > 0 ? [{ type: "text", text }] : [];
     }
+    if (hideTools) parts = parts.map(hideToolDetails);
     messages.push({
       id: head.messageId,
       thread_id: head.threadId,

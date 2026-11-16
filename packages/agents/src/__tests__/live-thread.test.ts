@@ -21,7 +21,7 @@ function event(seq: number, type: string, data: unknown = {}): AgentEvent {
 function thread(overrides: Partial<AgentThread> = {}): AgentThread {
   return {
     id: THREAD,
-    agentId: "agt_1",
+    agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
     hasMore: false,
     messages: [
       {
@@ -42,7 +42,7 @@ function thread(overrides: Partial<AgentThread> = {}): AgentThread {
       lastSeq: 0,
       created_at: "2026-11-15T12:00:00.000Z",
     },
-    latestRun: { id: RUN, status: "running", error: null, cappedReason: null },
+    latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
     pageActions: [],
     ...overrides,
   };

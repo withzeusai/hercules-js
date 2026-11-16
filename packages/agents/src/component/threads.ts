@@ -5,12 +5,11 @@
  */
 import { v, type Infer } from "convex/values";
 import { internal } from "./_generated/api.js";
-import { internalMutation, mutation, query } from "./_generated/server.js";
+import type { Doc } from "./_generated/dataModel.js";
+import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
 import {
   DEFAULT_MESSAGE_LIMIT,
-  MAX_INPUT_CHARS,
   MAX_MESSAGE_LIMIT,
-  PAGE_ACTION_TTL_MS,
   STUCK_AFTER_MS,
   inputMessageId,
   isoTime,
@@ -19,9 +18,17 @@ import {
   readMessages,
   runById,
   threadById,
+  toolCallById,
+  utf8Length,
 } from "./store.js";
-import { isFinalStatus } from "./protocol.js";
-import { vApi, vEndUser, vThread } from "./validators.js";
+import {
+  MAX_INPUT_CHARS,
+  PAGE_ACTION_TTL_MS,
+  isFinalStatus,
+  isPageActionFresh,
+  runInputText,
+} from "./protocol.js";
+import { vApi, vEndUser, vThread, vThreadDetails } from "./validators.js";
 
 const vSendResult = v.union(
   v.object({ ok: v.literal(true), threadId: v.string(), runId: v.string() }),
@@ -52,6 +59,8 @@ export const send = mutation({
     runsPerHour: v.optional(v.number()),
     /** A function handle, called with `RunFinished` once the run is done. */
     onRunFinished: v.optional(v.string()),
+    /** Whether a page may see tool results and Hercules's own tool names. */
+    exposeToolDetails: v.optional(v.boolean()),
     api: vApi,
   },
   returns: vSendResult,
@@ -62,8 +71,8 @@ export const send = mutation({
     if (args.text.trim().length === 0) {
       return { ok: false, code: "invalid_request", message: "The message is empty." };
     }
-    const contextChars = args.context === undefined ? 0 : JSON.stringify(args.context).length;
-    if (args.text.length + contextChars > MAX_INPUT_CHARS) {
+    // Measured as Hercules measures it, so what it would refuse is never stored.
+    if (runInputText(args.text, args.context).length > MAX_INPUT_CHARS) {
       return {
         ok: false,
         code: "message_too_long",
@@ -129,9 +138,7 @@ export const send = mutation({
       owner,
       endUser: args.endUser,
       status: "queued",
-      input: args.text,
-      ...(args.context !== undefined && { context: args.context }),
-      ...(args.pageActions !== undefined && { pageActions: args.pageActions }),
+      exposeToolDetails: args.exposeToolDetails === true,
       output: null,
       error: null,
       cappedReason: null,
@@ -141,12 +148,21 @@ export const send = mutation({
       liveToken: null,
       accepted: false,
       cancelRequested: false,
+      nextStartAt: null,
+      missingSince: null,
       lastSeq: 0,
       lastEventAt: now,
       finishedAt: null,
       onRunFinished: args.onRunFinished ?? null,
     });
     const run = (await ctx.db.get(runDocId))!;
+    await ctx.db.insert("run_requests", {
+      runId,
+      threadId: thread.threadId,
+      input: args.text,
+      ...(args.context !== undefined && { context: args.context }),
+      ...(args.pageActions !== undefined && { pageActions: args.pageActions }),
+    });
     await ctx.db.insert("messages", {
       messageId: inputMessageId(runId),
       threadId: thread.threadId,
@@ -175,90 +191,159 @@ export const send = mutation({
   },
 });
 
+/** What a read returns of a thread, to its owner or to the app's backend. */
+async function threadView(
+  ctx: QueryCtx,
+  thread: Doc<"threads">,
+  limit: number | undefined,
+  hideTools: boolean,
+): Promise<Infer<typeof vThread>> {
+  const count = Math.min(
+    MAX_MESSAGE_LIMIT,
+    Math.max(1, Math.floor(limit ?? DEFAULT_MESSAGE_LIMIT)),
+  );
+  const { messages, hasMore } = await readMessages(ctx, thread.threadId, count, hideTools);
+
+  const run = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
+  const activeRun =
+    run === null || isFinalStatus(run.status)
+      ? null
+      : {
+          id: run.runId,
+          status: run.status as "queued" | "running",
+          progress: run.progress,
+          live:
+            run.liveUrl !== null && run.liveToken !== null
+              ? { url: run.liveUrl, token: run.liveToken }
+              : null,
+          lastSeq: run.lastSeq,
+          created_at: isoTime(run._creationTime),
+        };
+
+  const latest = await ctx.db
+    .query("runs")
+    .withIndex("by_thread", (q) => q.eq("threadId", thread.threadId))
+    .order("desc")
+    .first();
+  const latestRun =
+    latest === null
+      ? null
+      : {
+          id: latest.runId,
+          status: latest.status,
+          error: latest.error,
+          cappedReason: latest.cappedReason,
+          finished_at: latest.finishedAt === null ? null : isoTime(latest.finishedAt),
+        };
+
+  // By the event's own time. A query is not rerun as time passes, so the
+  // page checks the age again, and the claim has the last word.
+  const now = Date.now();
+  const pending = await ctx.db
+    .query("tool_calls")
+    .withIndex("by_thread", (q) =>
+      q
+        .eq("threadId", thread.threadId)
+        .eq("kind", "page")
+        .gt("createdAt", now - PAGE_ACTION_TTL_MS),
+    )
+    .take(50);
+  const pageActions = pending.flatMap((call) =>
+    call.claimedAt === null && call.argumentsJson !== null && isPageActionFresh(call.createdAt, now)
+      ? [
+          {
+            toolCallId: call.toolCallId,
+            runId: call.runId,
+            name: call.name,
+            argumentsJson: call.argumentsJson,
+            created_at: isoTime(call.createdAt),
+          },
+        ]
+      : [],
+  );
+
+  return {
+    id: thread.threadId,
+    agentId: thread.agentId,
+    messages,
+    hasMore,
+    activeRun,
+    latestRun,
+    pageActions,
+  };
+}
+
 /**
  * A thread as its owner sees it: the latest messages, the run that is going
  * with what the browser needs to stream it, and page actions waiting for a
  * tab. Null for a thread that does not exist or is not the caller's.
+ *
+ * It goes to a browser, so unless the app set `exposeToolDetails` a
+ * `hercules` tool call is named "tool" with a summary that says only whether
+ * it worked. No tool call carries its result either way.
  */
 export const read = query({
   args: {
     threadId: v.string(),
     owner: v.string(),
     limit: v.optional(v.number()),
+    exposeToolDetails: v.optional(v.boolean()),
   },
   returns: v.union(vThread, v.null()),
   handler: async (ctx, args): Promise<Infer<typeof vThread> | null> => {
     const thread = await threadById(ctx, args.threadId);
     if (thread === null || thread.owner !== args.owner) return null;
-    const limit = Math.min(
-      MAX_MESSAGE_LIMIT,
-      Math.max(1, Math.floor(args.limit ?? DEFAULT_MESSAGE_LIMIT)),
-    );
-    const { messages, hasMore } = await readMessages(ctx, thread.threadId, limit);
+    return await threadView(ctx, thread, args.limit, args.exposeToolDetails !== true);
+  },
+});
 
-    const run = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
-    const activeRun =
-      run === null || isFinalStatus(run.status)
-        ? null
-        : {
-            id: run.runId,
-            status: run.status as "queued" | "running",
-            progress: run.progress,
-            live:
-              run.liveUrl !== null && run.liveToken !== null
-                ? { url: run.liveUrl, token: run.liveToken }
-                : null,
-            lastSeq: run.lastSeq,
-            created_at: isoTime(run._creationTime),
-          };
+/** The most tool result text one `readDetails` returns. */
+const MAX_DETAIL_RESULT_BYTES = 4 * 1024 * 1024;
 
-    const latest = await ctx.db
-      .query("runs")
-      .withIndex("by_thread", (q) => q.eq("threadId", thread.threadId))
-      .order("desc")
-      .first();
-    const latestRun =
-      latest === null
-        ? null
-        : {
-            id: latest.runId,
-            status: latest.status,
-            error: latest.error,
-            cappedReason: latest.cappedReason,
-          };
-
-    const pending = await ctx.db
-      .query("tool_calls")
-      .withIndex("by_thread", (q) =>
-        q
-          .eq("threadId", thread.threadId)
-          .eq("kind", "page")
-          .gt("createdAt", Date.now() - PAGE_ACTION_TTL_MS),
-      )
-      .take(50);
-    const pageActions = pending.flatMap((call) =>
-      call.claimedAt === null && call.name !== null && call.argumentsJson !== null
-        ? [
-            {
-              toolCallId: call.toolCallId,
-              runId: call.runId,
-              name: call.name,
-              argumentsJson: call.argumentsJson,
-              created_at: isoTime(call.createdAt),
-            },
-          ]
-        : [],
-    );
-
-    return {
-      id: thread.threadId,
-      agentId: thread.agentId,
-      messages,
-      hasMore,
-      activeRun,
-      latestRun,
-      pageActions,
-    };
+/**
+ * A thread as the component stores it, for the app's own backend: tool calls
+ * under their own names, and the tool calls of the listed messages' runs with
+ * their results. It answers to no owner: the app decides who may ask, and
+ * must not hand it to a page.
+ */
+export const readDetails = query({
+  args: { threadId: v.string(), agentId: v.string(), limit: v.optional(v.number()) },
+  returns: v.union(vThreadDetails, v.null()),
+  handler: async (ctx, args): Promise<Infer<typeof vThreadDetails> | null> => {
+    const thread = await threadById(ctx, args.threadId);
+    if (thread === null || thread.agentId !== args.agentId) return null;
+    const view = await threadView(ctx, thread, args.limit, false);
+    const runIds = [...new Set(view.messages.map((message) => message.run_id))];
+    const details: Doc<"tool_calls">[] = [];
+    let resultBytes = 0;
+    let toolCallsTruncated = false;
+    // The newest runs first, so they are the ones a read that runs out of room has.
+    for (const runId of runIds.reverse()) {
+      const calls = await ctx.db
+        .query("tool_calls")
+        .withIndex("by_run", (q) => q.eq("runId", runId))
+        .collect();
+      resultBytes += calls.reduce((sum, call) => sum + utf8Length(call.resultJson ?? ""), 0);
+      if (resultBytes > MAX_DETAIL_RESULT_BYTES && details.length > 0) {
+        toolCallsTruncated = true;
+        break;
+      }
+      details.push(...calls);
+    }
+    // In the order the agent made them: by their events' time, then by arrival.
+    details.sort((a, b) => a.createdAt - b.createdAt || a._creationTime - b._creationTime);
+    const toolCalls = details.map((call) => ({
+      toolCallId: call.toolCallId,
+      runId: call.runId,
+      name: call.name,
+      kind: call.kind,
+      status: call.status,
+      summary: call.summary,
+      resultJson: call.resultJson,
+      argumentsJson: call.argumentsJson,
+      created_at: isoTime(call.createdAt),
+    }));
+    return { ...view, toolCalls, toolCallsTruncated };
   },
 });
 
@@ -274,7 +359,8 @@ export const cancel = mutation({
     const run = await runById(ctx, thread.activeRunId);
     if (run === null || isFinalStatus(run.status)) return false;
     if (!run.cancelRequested) await ctx.db.patch(run._id, { cancelRequested: true });
-    // Not sent yet: the start call sees the request and never sends it.
+    // Not taken yet: the start call sees the request and never sends the run,
+    // and the stuck-run check sees it if the start call was lost.
     if (!run.accepted) return true;
     await ctx.scheduler.runAfter(0, internal.hercules.cancelRun, {
       runId: run.runId,
@@ -295,6 +381,11 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const thread = await threadById(ctx, args.threadId);
     if (thread === null || thread.owner !== args.owner) return false;
+    // The token of a run still going is dropped now, not when its rows are purged.
+    const active = thread.activeRunId === null ? null : await runById(ctx, thread.activeRunId);
+    if (active !== null && active.liveToken !== null) {
+      await ctx.db.patch(active._id, { liveUrl: null, liveToken: null });
+    }
     await ctx.db.delete(thread._id);
     await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: thread.threadId });
     await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, {
@@ -315,10 +406,12 @@ export const purge = internalMutation({
   handler: async (ctx, { threadId }) => {
     let left = PURGE_BATCH;
     const batches = [
+      // Runs first: they hold the live tokens.
+      ctx.db.query("runs").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
+      ctx.db.query("run_requests").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
       ctx.db.query("message_chunks").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
       ctx.db.query("messages").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
       ctx.db.query("tool_calls").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
-      ctx.db.query("runs").withIndex("by_thread", (q) => q.eq("threadId", threadId)),
     ];
     for (const rows of batches) {
       if (left === 0) break;
@@ -333,9 +426,10 @@ export const purge = internalMutation({
 });
 
 /**
- * Takes a page action for one tab to run. True for the first tab to ask,
- * false for every other and for a page action whose moment has passed. A tab
- * reading the live stream may claim it before Hercules delivers it.
+ * Takes a page action for one tab to run. True for the first tab to ask.
+ * False for every other, for a call the run did not make (only a delivered
+ * `page_action` can be claimed), and for one whose event is two minutes old
+ * or more: its moment has passed, however late it was delivered.
  */
 export const claimPageAction = mutation({
   args: {
@@ -348,36 +442,12 @@ export const claimPageAction = mutation({
   handler: async (ctx, args) => {
     const thread = await threadById(ctx, args.threadId);
     if (thread === null || thread.owner !== args.owner) return false;
-    const run = await runById(ctx, args.runId);
-    if (run === null || run.threadId !== thread.threadId) return false;
-    if (args.toolCallId.length > 200) return false;
+    const call = await toolCallById(ctx, args.runId, args.toolCallId);
+    if (call === null || call.threadId !== thread.threadId) return false;
+    if (call.kind !== "page" || call.claimedAt !== null) return false;
     const now = Date.now();
-    const call = await ctx.db
-      .query("tool_calls")
-      .withIndex("by_tool_call", (q) => q.eq("toolCallId", args.toolCallId))
-      .unique();
-    if (call !== null) {
-      if (call.runId !== run.runId || call.kind !== "page" || call.claimedAt !== null) {
-        return false;
-      }
-      if (call.createdAt <= now - PAGE_ACTION_TTL_MS) return false;
-      await ctx.db.patch(call._id, { claimedAt: now });
-      return true;
-    }
-    if (run.finishedAt !== null && run.finishedAt <= now - PAGE_ACTION_TTL_MS) return false;
-    await ctx.db.insert("tool_calls", {
-      toolCallId: args.toolCallId,
-      threadId: thread.threadId,
-      runId: run.runId,
-      name: null,
-      kind: "page",
-      status: "sent",
-      summary: null,
-      resultJson: null,
-      argumentsJson: null,
-      claimedAt: now,
-      createdAt: now,
-    });
+    if (!isPageActionFresh(call.createdAt, now)) return false;
+    await ctx.db.patch(call._id, { claimedAt: now });
     return true;
   },
 });

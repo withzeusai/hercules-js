@@ -17,7 +17,13 @@ import {
 } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import type { ComponentApi } from "./component/_generated/component";
-import { DEFAULT_API_URL, EVENTS_PATH, readWireEvent, type WireEvent } from "./component/protocol";
+import {
+  DEFAULT_API_URL,
+  EVENTS_PATH,
+  isSafeApiUrl,
+  readWireEvent,
+  type WireEvent,
+} from "./component/protocol";
 import { ownerOf } from "./component/store";
 import { vThread, type EndUser, type RunFinished } from "./component/validators";
 import { bearerTokenOf, createTokenVerifier, type TokenFailure, type TokenVerifier } from "./jwt";
@@ -32,6 +38,9 @@ export type AgentThread = NonNullable<ComponentApi["threads"]["read"]["_returnTy
 export type ThreadMessage = AgentThread["messages"][number];
 export type ActiveRun = NonNullable<AgentThread["activeRun"]>;
 export type PendingPageAction = AgentThread["pageActions"][number];
+/** What `readThreadDetails` returns: the thread as stored, with its tool calls and their results. */
+export type AgentThreadDetails = NonNullable<ComponentApi["threads"]["readDetails"]["_returnType"]>;
+export type StoredToolCall = AgentThreadDetails["toolCalls"][number];
 
 /**
  * The `code` of a `ConvexError` from `send` and the other methods, for the
@@ -56,7 +65,7 @@ type RunFinishedHandler =
   | FunctionReference<"action", "internal" | "public", RunFinished>;
 
 export interface HerculesAgentsOptions {
-  /** The agent's id, `agt_...`. */
+  /** The agent's id: a ULID, such as `01JDX5ZQ8W3J2K6M9N4P7R1S0T`. */
   agentId: string;
   /**
    * Called once a run is over, after its last write, with `RunFinished`.
@@ -64,20 +73,27 @@ export interface HerculesAgentsOptions {
    */
   onRunFinished?: RunFinishedHandler;
   limits?: {
-    /** Runs one signed-in user or visitor may start in an hour. No limit when left out. */
+    /** Runs one signed-in user may start in an hour. No limit when left out. */
     runsPerUserPerHour?: number;
   };
   /**
-   * Lets visitors who are not signed in talk to the agent, by an
-   * `anonymousId` the page keeps. Hercules accepts them only when the agent's
-   * app access is public. Defaults to false.
+   * Lets the page see what the agent's tools did in full: the results of the
+   * app's own tools, and the names and summaries of Hercules's built-in and
+   * connector tools. Defaults to false: a page then sees every Hercules tool
+   * call as "tool" with the summary "Used a tool" (or "Couldn't use a tool"),
+   * and no tool results, in the thread and in the run's live stream alike.
+   * The app's backend reads the full record either way, with
+   * `readThreadDetails`.
    */
-  allowAnonymous?: boolean;
+  exposeToolDetails?: boolean;
   /** The page actions every run may call, by name. They must be declared on the agent. */
   pageActions?: readonly string[];
   /** Defaults to the `HERCULES_API_KEY` environment variable. Never send it to a browser. */
   apiKey?: string;
-  /** Defaults to `HERCULES_API_URL`, then `https://api.hercules.app`. */
+  /**
+   * Defaults to `HERCULES_API_URL`, then `https://api.hercules.app`. Must be
+   * https, or http to localhost: the app key is sent to it.
+   */
   apiUrl?: string;
   /** The app's Hercules Auth URL. Defaults to `HERCULES_OIDC_AUTHORITY`. */
   issuer?: string;
@@ -94,18 +110,14 @@ export interface SendArgs {
   text: string;
   /** Named JSON values about the page, appended to the input. */
   context?: Record<string, unknown>;
-  /** A visitor's id, used only when `allowAnonymous` is on and nobody is signed in. */
-  anonymousId?: string;
   /** Page actions for this run, in place of the ones in the options. */
   pageActions?: readonly string[];
 }
 
 export interface ThreadArgs {
   threadId: string;
-  anonymousId?: string;
 }
 
-const MAX_ANONYMOUS_ID_LENGTH = 128;
 /** The deliveries Hercules sends hold up to 1 MiB; anything far larger is not one. */
 const MAX_EVENTS_BODY_BYTES = 4 * 1024 * 1024;
 /** Routers that already have the events route: one serves every agent in the app. */
@@ -132,6 +144,19 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
   });
 }
 
+/**
+ * Whether applying a batch failed because it was too much for one Convex
+ * transaction (bytes or documents read or written, a value too large, the
+ * time a mutation may take), as opposed to a fault a smaller batch would hit
+ * too. Hercules halves the batch on 413 and sends it again.
+ */
+export function isTransactionLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /too many (bytes|documents|reads|writes|function calls)|too large|maximum size|execution timed out|limit: \d/i.test(
+    message,
+  );
+}
+
 function tokenRejection(reason: TokenFailure): Response {
   if (reason === "keys_unavailable") {
     return json(503, { error: "temporarily_unavailable" }, { "retry-after": "5" });
@@ -145,7 +170,7 @@ function tokenRejection(reason: TokenFailure): Response {
  * ```ts
  * // convex/agent.ts
  * export const support = new HerculesAgents(components.herculesAgents, {
- *   agentId: "agt_01J...",
+ *   agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
  *   onRunFinished: internal.orders.onAgentRunFinished,
  *   limits: { runsPerUserPerHour: 20 },
  * });
@@ -174,33 +199,30 @@ export class HerculesAgents {
     if (key === undefined) {
       throw new Error("HERCULES_API_KEY is not set, so the agent cannot be called");
     }
-    return { key, url: this.options.apiUrl ?? env("HERCULES_API_URL") ?? DEFAULT_API_URL };
-  }
-
-  /** The signed-in user, or a visitor when that is allowed, or null. */
-  private async endUserOf(ctx: AuthCtx, anonymousId: string | undefined): Promise<EndUser | null> {
-    const identity = await ctx.auth.getUserIdentity();
-    if (identity !== null) return { tokenIdentifier: identity.tokenIdentifier };
-    if (
-      this.options.allowAnonymous === true &&
-      anonymousId !== undefined &&
-      anonymousId.length > 0 &&
-      anonymousId.length <= MAX_ANONYMOUS_ID_LENGTH
-    ) {
-      return { anonymousId };
+    const url = this.options.apiUrl ?? env("HERCULES_API_URL") ?? DEFAULT_API_URL;
+    if (!isSafeApiUrl(url)) {
+      throw new Error(
+        "HERCULES_API_URL must be an https URL (or http://localhost): the app key is sent to it",
+      );
     }
-    return null;
+    return { key, url };
   }
 
-  private async ownerFor(ctx: AuthCtx, anonymousId: string | undefined): Promise<string | null> {
-    const endUser = await this.endUserOf(ctx, anonymousId);
+  /** The signed-in user, or null. */
+  private async endUserOf(ctx: AuthCtx): Promise<EndUser | null> {
+    const identity = await ctx.auth.getUserIdentity();
+    return identity === null ? null : { tokenIdentifier: identity.tokenIdentifier };
+  }
+
+  private async ownerFor(ctx: AuthCtx): Promise<string | null> {
+    const endUser = await this.endUserOf(ctx);
     return endUser === null ? null : ownerOf(endUser);
   }
 
   private async start(
     ctx: RunMutationCtx,
     endUser: EndUser | null,
-    args: Omit<SendArgs, "anonymousId">,
+    args: SendArgs,
   ): Promise<{ threadId: string; runId: string }> {
     const onRunFinished =
       this.options.onRunFinished === undefined
@@ -218,6 +240,7 @@ export class HerculesAgents {
       ...(pageActions !== undefined && { pageActions: [...pageActions] }),
       ...(runsPerHour !== undefined && { runsPerHour }),
       ...(onRunFinished !== undefined && { onRunFinished }),
+      ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
     });
     if (!result.ok) fail(result.code as AgentErrorCode, result.message, result.retryAfterSeconds);
     return { threadId: result.threadId, runId: result.runId };
@@ -225,12 +248,12 @@ export class HerculesAgents {
 
   /**
    * Sends the caller's message and starts a run, in a mutation. The caller
-   * is the signed-in user (`ctx.auth`), or a visitor when `allowAnonymous` is
-   * on. Checks the hourly limit in the same transaction. Throws a
-   * `ConvexError` with `AgentErrorData`.
+   * is the signed-in user (`ctx.auth`): without one it throws
+   * `sign_in_required`. Checks the hourly limit in the same transaction.
+   * Throws a `ConvexError` with `AgentErrorData`.
    */
   async send(ctx: AuthCtx & RunMutationCtx, args: SendArgs) {
-    const endUser = await this.endUserOf(ctx, args.anonymousId);
+    const endUser = await this.endUserOf(ctx);
     if (endUser === null) fail("sign_in_required", "Sign in to talk to the agent.");
     return await this.start(ctx, endUser, args);
   }
@@ -239,31 +262,56 @@ export class HerculesAgents {
    * Starts a run as the app's own job, for no end user: from a scheduled
    * function, say. Its thread is the app's and no user can read it.
    */
-  async run(ctx: RunMutationCtx, args: Omit<SendArgs, "anonymousId">) {
+  async run(ctx: RunMutationCtx, args: SendArgs) {
     return await this.start(ctx, null, args);
   }
 
   /**
    * The caller's thread, in a query: messages, the run that is going with
    * its live stream, and page actions waiting for a tab. Null for a thread
-   * that does not exist or is someone else's.
+   * that does not exist or is someone else's, and for a caller who is not
+   * signed in.
+   *
+   * It is what a page shows, so without `exposeToolDetails` its Hercules
+   * tool calls are named "tool", and no tool call carries a result.
    */
   async readThread(
     ctx: AuthCtx & RunQueryCtx,
     args: ThreadArgs & { limit?: number },
   ): Promise<AgentThread | null> {
-    const owner = await this.ownerFor(ctx, args.anonymousId);
+    const owner = await this.ownerFor(ctx);
     if (owner === null) return null;
     return await ctx.runQuery(this.component.threads.read, {
       threadId: args.threadId,
       owner,
+      ...(args.limit !== undefined && { limit: args.limit }),
+      ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
+    });
+  }
+
+  /**
+   * One of this agent's threads as the component stores it, for the app's
+   * own backend: every tool call under its own name, and `toolCalls` with
+   * the results of the app's tools. Null for a thread that does not exist.
+   *
+   * It does not read `ctx.auth` and answers for any user's thread, so call it
+   * from an internal function, or check who is asking first. Do not return
+   * it to a page: that is what `exposeToolDetails` is for.
+   */
+  async readThreadDetails(
+    ctx: RunQueryCtx,
+    args: ThreadArgs & { limit?: number },
+  ): Promise<AgentThreadDetails | null> {
+    return await ctx.runQuery(this.component.threads.readDetails, {
+      threadId: args.threadId,
+      agentId: this.options.agentId,
       ...(args.limit !== undefined && { limit: args.limit }),
     });
   }
 
   /** Stops the run going on the caller's thread. True when there was one. */
   async cancel(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
-    const owner = await this.ownerFor(ctx, args.anonymousId);
+    const owner = await this.ownerFor(ctx);
     if (owner === null) return false;
     return await ctx.runMutation(this.component.threads.cancel, {
       threadId: args.threadId,
@@ -274,7 +322,7 @@ export class HerculesAgents {
 
   /** Deletes the caller's thread, here and at Hercules. Irreversible. */
   async deleteThread(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
-    const owner = await this.ownerFor(ctx, args.anonymousId);
+    const owner = await this.ownerFor(ctx);
     if (owner === null) return false;
     return await ctx.runMutation(this.component.threads.remove, {
       threadId: args.threadId,
@@ -285,13 +333,15 @@ export class HerculesAgents {
 
   /**
    * Takes a page action for the calling tab to run. True for the first tab
-   * that asks; every other gets false and must not run it.
+   * that asks; every other gets false and must not run it. False too for a
+   * page action whose event is two minutes old or more, and for a tool call
+   * the run did not make.
    */
   async claimPageAction(
     ctx: AuthCtx & RunMutationCtx,
     args: ThreadArgs & { runId: string; toolCallId: string },
   ): Promise<boolean> {
-    const owner = await this.ownerFor(ctx, args.anonymousId);
+    const owner = await this.ownerFor(ctx);
     if (owner === null) return false;
     return await ctx.runMutation(this.component.threads.claimPageAction, {
       threadId: args.threadId,
@@ -307,35 +357,33 @@ export class HerculesAgents {
    * `@usehercules/agents/react` and `/tanstack` call them by these names.
    */
   api() {
-    const anonymousId = v.optional(v.string());
     return {
       send: mutationGeneric({
         args: {
           threadId: v.optional(v.string()),
           text: v.string(),
           context: v.optional(v.record(v.string(), v.any())),
-          anonymousId,
         },
         returns: v.object({ threadId: v.string(), runId: v.string() }),
         handler: (ctx, args) => this.send(ctx, args),
       }),
       thread: queryGeneric({
-        args: { threadId: v.string(), anonymousId, limit: v.optional(v.number()) },
+        args: { threadId: v.string(), limit: v.optional(v.number()) },
         returns: v.union(vThread, v.null()),
         handler: (ctx, args) => this.readThread(ctx, args),
       }),
       cancel: mutationGeneric({
-        args: { threadId: v.string(), anonymousId },
+        args: { threadId: v.string() },
         returns: v.boolean(),
         handler: (ctx, args) => this.cancel(ctx, args),
       }),
       claimPageAction: mutationGeneric({
-        args: { threadId: v.string(), runId: v.string(), toolCallId: v.string(), anonymousId },
+        args: { threadId: v.string(), runId: v.string(), toolCallId: v.string() },
         returns: v.boolean(),
         handler: (ctx, args) => this.claimPageAction(ctx, args),
       }),
       deleteThread: mutationGeneric({
-        args: { threadId: v.string(), anonymousId },
+        args: { threadId: v.string() },
         returns: v.boolean(),
         handler: (ctx, args) => this.deleteThread(ctx, args),
       }),
@@ -357,6 +405,8 @@ export class HerculesAgents {
   /**
    * Answers one delivery from Hercules: checks its token, then applies the
    * batch in one mutation. `registerRoutes` routes it; tests can call it.
+   * 413 when the batch is more than one transaction holds, so Hercules sends
+   * a smaller one; 500 for any other failure to apply it.
    */
   async handleEvents(ctx: RunMutationCtx, request: Request, verifier?: TokenVerifier) {
     const tokens = verifier ?? this.eventsVerifier();
@@ -400,6 +450,8 @@ export class HerculesAgents {
       return json(200, result);
     } catch (error) {
       console.error("Applying Hercules agent events failed", error);
+      // Too much for one transaction: a smaller batch fits, and 413 asks for one.
+      if (isTransactionLimitError(error)) return json(413, { error: "batch_too_large" });
       return json(500, { error: "apply_failed" });
     }
   }

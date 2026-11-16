@@ -8,8 +8,11 @@ import {
   appendText,
   finishRun,
   runById,
+  toolCallById,
   utf8Length,
   writeMessage,
+  type RunOutcome,
+  type RunProgress,
 } from "./store.js";
 import { vWireEvent } from "./validators.js";
 
@@ -27,10 +30,17 @@ function byRun(events: readonly WireEvent[]): Map<string, WireEvent[]> {
   return runs;
 }
 
+/** When an event was written, by its own clock. 0, which is long ago, when it does not say. */
+function eventTime(event: WireEvent): number {
+  const at = Date.parse(event.createdAt);
+  return Number.isFinite(at) ? at : 0;
+}
+
 async function upsertToolCall(
   ctx: MutationCtx,
   run: Doc<"runs">,
   toolCallId: string,
+  createdAt: number,
   fields: {
     name: string;
     kind: "hercules" | "app" | "page";
@@ -40,10 +50,8 @@ async function upsertToolCall(
     argumentsJson: string | null;
   },
 ) {
-  const existing = await ctx.db
-    .query("tool_calls")
-    .withIndex("by_tool_call", (q) => q.eq("toolCallId", toolCallId))
-    .unique();
+  // A tool call belongs to its run: another run's call with the same id is another call.
+  const existing = await toolCallById(ctx, run.runId, toolCallId);
   const resultJson =
     fields.resultJson !== null && utf8Length(fields.resultJson) > MAX_STORED_TEXT_BYTES
       ? null
@@ -61,12 +69,11 @@ async function upsertToolCall(
       resultJson,
       argumentsJson,
       claimedAt: null,
-      createdAt: Date.now(),
+      createdAt,
     });
     return;
   }
-  // A page action a tab claimed from the live stream keeps its claim and its clock.
-  if (existing.runId !== run.runId) return;
+  // The call keeps its claim, and the time of the first event that named it.
   await ctx.db.patch(existing._id, {
     name: fields.name,
     kind: fields.kind,
@@ -77,7 +84,17 @@ async function upsertToolCall(
   });
 }
 
-async function applyOne(ctx: MutationCtx, run: Doc<"runs">, event: WireEvent) {
+/**
+ * Applies one event's own rows. What it changes of the run goes into
+ * `progress`, and how it ended the run is returned: the caller writes the run
+ * document once for the whole batch.
+ */
+async function applyOne(
+  ctx: MutationCtx,
+  run: Doc<"runs">,
+  event: WireEvent,
+  progress: RunProgress,
+): Promise<RunOutcome | null> {
   const data = event.data;
   switch (data.kind) {
     case "text":
@@ -85,13 +102,13 @@ async function applyOne(ctx: MutationCtx, run: Doc<"runs">, event: WireEvent) {
       if (event.type === "message.appended") {
         await appendText(ctx, run, data.messageId, event.seq, data.text, event.createdAt);
       }
-      return;
+      return null;
     case "message":
       await writeMessage(ctx, run, data.message, "completed", event.seq);
-      return;
+      return null;
     case "tool_call":
       if (event.type === "tool_call.completed") {
-        await upsertToolCall(ctx, run, data.toolCallId, {
+        await upsertToolCall(ctx, run, data.toolCallId, eventTime(event), {
           name: data.name,
           kind: data.toolKind,
           status: data.status,
@@ -100,9 +117,9 @@ async function applyOne(ctx: MutationCtx, run: Doc<"runs">, event: WireEvent) {
           argumentsJson: null,
         });
       }
-      return;
+      return null;
     case "page_action":
-      await upsertToolCall(ctx, run, data.toolCallId, {
+      await upsertToolCall(ctx, run, data.toolCallId, eventTime(event), {
         name: data.name,
         kind: "page",
         status: "sent",
@@ -110,21 +127,20 @@ async function applyOne(ctx: MutationCtx, run: Doc<"runs">, event: WireEvent) {
         resultJson: null,
         argumentsJson: data.argumentsJson,
       });
-      return;
+      return null;
     case "progress":
-      await ctx.db.patch(run._id, { progress: data.label });
-      return;
+      progress.progress = data.label;
+      return null;
     case "final":
-      await finishRun(ctx, run, {
+      return {
         status: data.status,
         output: data.output,
         error: data.error,
         cappedReason: data.cappedReason,
         usage: data.usage,
-      });
-      return;
+      };
     case "none":
-      return;
+      return null;
   }
 }
 
@@ -133,32 +149,44 @@ async function applyOne(ctx: MutationCtx, run: Doc<"runs">, event: WireEvent) {
  * once: an event at or below the run's last applied sequence number is a
  * redelivery and is skipped. Events of runs this app does not know are
  * skipped too, so a deleted thread's last events cannot stall delivery.
+ *
+ * The run document is read once and written once per run in the batch,
+ * however many events the batch holds.
  */
 export async function applyEvents(ctx: MutationCtx, events: readonly WireEvent[]) {
   let applied = 0;
   let skipped = 0;
   for (const [runId, list] of byRun(events)) {
-    let run = await runById(ctx, runId);
+    const run = await runById(ctx, runId);
     if (run === null) {
       skipped += list.length;
       continue;
     }
+    let lastSeq = run.lastSeq;
+    let started = false;
+    let ending: RunOutcome | null = null;
+    const progress: RunProgress = {};
     for (const event of list) {
-      if (event.seq <= run.lastSeq) {
+      if (event.seq <= lastSeq) {
         skipped++;
         continue;
       }
-      // Any event means Hercules has the run, and any after `run.queued` that it started.
-      const started =
-        run.status === "queued" && event.type !== "run.queued" && event.data.kind !== "final";
-      if (!run.accepted || started) {
-        await ctx.db.patch(run._id, { accepted: true, ...(started && { status: "running" }) });
-      }
-      await applyOne(ctx, run, event);
-      await ctx.db.patch(run._id, { lastSeq: event.seq, lastEventAt: Date.now() });
+      const ended = await applyOne(ctx, run, event, progress);
+      // The first ending counts; a run ends once.
+      ending ??= ended;
+      // Any event after `run.queued` means the run started.
+      if (event.type !== "run.queued" && ended === null) started = true;
+      lastSeq = event.seq;
       applied++;
-      run = (await ctx.db.get(run._id))!;
     }
+    if (lastSeq === run.lastSeq) continue;
+    // Any event means Hercules has the run.
+    const also: RunProgress = { ...progress, accepted: true, lastSeq, lastEventAt: Date.now() };
+    if (ending !== null && (await finishRun(ctx, run, ending, also))) continue;
+    await ctx.db.patch(run._id, {
+      ...also,
+      ...(run.status === "queued" && started && { status: "running" as const }),
+    });
   }
   return { applied, skipped };
 }

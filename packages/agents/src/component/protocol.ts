@@ -121,6 +121,63 @@ export type AgentEvent = {
 
 export type AgentEventOf<Type extends AgentEventType> = Extract<AgentEvent, { type: Type }>;
 
+/**
+ * What a page is shown of a `hercules` tool call unless the app sets
+ * `exposeToolDetails`: this name, and one of these summaries. Hercules writes
+ * the same into the run's live stream, so the live and the stored views agree.
+ */
+export const HIDDEN_TOOL_NAME = "tool";
+export const HIDDEN_TOOL_SUMMARY = "Used a tool";
+export const HIDDEN_TOOL_FAILED_SUMMARY = "Couldn't use a tool";
+
+/** A message part as a page may see it when tool details are not exposed. */
+export function hideToolDetails(part: MessagePart): MessagePart {
+  if (part.type !== "tool_call" || part.kind !== "hercules") return part;
+  return {
+    ...part,
+    name: HIDDEN_TOOL_NAME,
+    summary: part.status === "failed" ? HIDDEN_TOOL_FAILED_SUMMARY : HIDDEN_TOOL_SUMMARY,
+  };
+}
+
+/** A page action is run only while its event is younger than this. Part of the contract. */
+export const PAGE_ACTION_TTL_MS = 2 * 60 * 1000;
+
+/** Whether a page action whose event was written at `createdAt` may still be run at `nowMs`. */
+export function isPageActionFresh(createdAt: string | number, nowMs: number): boolean {
+  const at = typeof createdAt === "number" ? createdAt : Date.parse(createdAt);
+  // A time that cannot be read is not known to be recent.
+  return Number.isFinite(at) && nowMs - at < PAGE_ACTION_TTL_MS;
+}
+
+/** The API's limit on a run's input text plus its context, in characters. */
+export const MAX_INPUT_CHARS = 262_144;
+
+/**
+ * A run's input as Hercules measures it against `MAX_INPUT_CHARS`: the text,
+ * then the context as indented JSON inside a `page_context` block.
+ */
+export function runInputText(text: string, context: Record<string, unknown> | undefined): string {
+  if (context === undefined || Object.keys(context).length === 0) return text;
+  return `${text}\n\n<page_context>\n${JSON.stringify(context, null, 2)}\n</page_context>`;
+}
+
+/**
+ * Whether `url` may be given the app key: https, or http to this machine for
+ * local development.
+ */
+export function isSafeApiUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === "https:") return true;
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  return parsed.protocol === "http:" && local;
+}
+
 /** Every run ends with exactly one of these. */
 export const FINAL_EVENT_TYPES = [
   "run.completed",

@@ -17,7 +17,7 @@ export default defineSchema({
     /** The Hercules thread id, a UUID this component picks. */
     threadId: v.string(),
     agentId: v.string(),
-    /** `user:<tokenIdentifier>`, `visitor:<anonymousId>` or `app`. */
+    /** `user:<tokenIdentifier>` or `app`. */
     owner: v.string(),
     activeRunId: v.union(v.string(), v.null()),
     updatedAt: v.number(),
@@ -25,6 +25,10 @@ export default defineSchema({
     .index("by_thread_id", ["threadId"])
     .index("by_owner", ["owner", "agentId", "updatedAt"]),
 
+  /**
+   * One row per run. Every delivered batch rewrites it, so it holds only
+   * small fields: the request is in `run_requests`.
+   */
   runs: defineTable({
     /** The Hercules run id, a UUID this component picks. Also the idempotency key. */
     runId: v.string(),
@@ -33,20 +37,23 @@ export default defineSchema({
     owner: v.string(),
     endUser: v.union(vEndUser, v.null()),
     status: vRunStatus,
-    /** The request, kept so a retry sends the same body. */
-    input: v.string(),
-    context: v.optional(v.any()),
-    pageActions: v.optional(v.array(v.string())),
+    /** The app's `exposeToolDetails` when the run was sent, so a retry sends the same. */
+    exposeToolDetails: v.boolean(),
     output: v.union(v.string(), v.null()),
     error: v.union(vRunError, v.null()),
     cappedReason: v.union(vCappedReason, v.null()),
     usage: v.union(vUsage, v.null()),
     progress: v.union(v.string(), v.null()),
     liveUrl: v.union(v.string(), v.null()),
+    /** The run's read-only token. Cleared an hour after the run ends, when it expires. */
     liveToken: v.union(v.string(), v.null()),
-    /** Hercules accepted the run. */
+    /** Hercules has the run: it answered the start call, or delivered one of its events. */
     accepted: v.boolean(),
     cancelRequested: v.boolean(),
+    /** When the start call's next try is due. Null when none is scheduled. */
+    nextStartAt: v.union(v.number(), v.null()),
+    /** When Hercules first answered that it has no such run. Null once it answers otherwise. */
+    missingSince: v.union(v.number(), v.null()),
     /** The highest event sequence number applied. Events at or below it are duplicates. */
     lastSeq: v.number(),
     /** When an event was last applied, or the run was created. The stuck-run check reads it. */
@@ -58,6 +65,17 @@ export default defineSchema({
     .index("by_run_id", ["runId"])
     .index("by_thread", ["threadId"])
     .index("by_owner", ["owner", "agentId"]),
+
+  /** What a run was started with, kept so a retried start sends the same body. */
+  run_requests: defineTable({
+    runId: v.string(),
+    threadId: v.string(),
+    input: v.string(),
+    context: v.optional(v.any()),
+    pageActions: v.optional(v.array(v.string())),
+  })
+    .index("by_run_id", ["runId"])
+    .index("by_thread", ["threadId"]),
 
   /**
    * One row per message, or several for a message too large for one document:
@@ -93,12 +111,12 @@ export default defineSchema({
     .index("by_message", ["messageId", "seq"])
     .index("by_thread", ["threadId"]),
 
+  /** The tool calls Hercules delivered, as delivered. A row exists only for a call a run made. */
   tool_calls: defineTable({
     toolCallId: v.string(),
     threadId: v.string(),
     runId: v.string(),
-    /** Null only on a page action a tab claimed from the live stream before it was delivered. */
-    name: v.union(v.string(), v.null()),
+    name: v.string(),
     kind: vToolKind,
     status: v.union(vToolCallStatus, v.null()),
     summary: v.union(v.string(), v.null()),
@@ -108,8 +126,9 @@ export default defineSchema({
     argumentsJson: v.union(v.string(), v.null()),
     /** When a tab took the page action to run it. */
     claimedAt: v.union(v.number(), v.null()),
+    /** When Hercules wrote the call's first event: the event's own time, not its arrival. */
     createdAt: v.number(),
   })
-    .index("by_tool_call", ["toolCallId"])
+    .index("by_run", ["runId", "toolCallId"])
     .index("by_thread", ["threadId", "kind", "createdAt"]),
 });

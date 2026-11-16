@@ -36,7 +36,7 @@ import { HerculesAgents } from "@usehercules/agents/convex";
 import { components, internal } from "./_generated/api";
 
 export const support = new HerculesAgents(components.herculesAgents, {
-  agentId: "agt_01J...",
+  agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T", // The agent's id, a ULID.
   onRunFinished: internal.orders.onAgentRunFinished,
   limits: { runsPerUserPerHour: 20 },
 });
@@ -86,21 +86,33 @@ export const thread = query({
 
 If nothing has been delivered for a run in three minutes, the component asks
 Hercules for the run and its events itself, so a delivery that never arrives
-only delays a reply.
+only delays a reply. The same check sends a run again if the call that
+starts it was lost, and it records a run's ending only once every event
+before it is applied. A run that cannot be settled within a day is failed, so
+its thread is free again.
+
+A run Hercules refuses over a limit (`end_user_rate_limited`,
+`agent_daily_limit_reached`) fails at once with that code. The thread's
+`latestRun.error` then carries `retryAfterSeconds`, counted from
+`latestRun.finished_at`.
 
 ### Methods
 
-| Method                                                       | Where              | Does                                                             |
-| ------------------------------------------------------------ | ------------------ | ---------------------------------------------------------------- |
-| `send(ctx, { threadId?, text, context?, anonymousId? })`     | mutation           | Sends the caller's message and starts a run                      |
-| `run(ctx, { threadId?, text, context? })`                    | mutation or action | Starts a run as the app's own job, for no end user               |
-| `readThread(ctx, { threadId, anonymousId?, limit? })`        | query              | The caller's thread: messages, the run going, its live stream    |
-| `cancel(ctx, { threadId, anonymousId? })`                    | mutation           | Stops the run going on the caller's thread                       |
-| `deleteThread(ctx, { threadId, anonymousId? })`              | mutation           | Deletes the thread here and at Hercules. Irreversible            |
-| `claimPageAction(ctx, { threadId, runId, toolCallId, ... })` | mutation           | Takes a page action for one tab to run                           |
-| `registerRoutes(http)`                                       | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents |
+| Method                                                  | Where              | Does                                                             |
+| ------------------------------------------------------- | ------------------ | ---------------------------------------------------------------- |
+| `send(ctx, { threadId?, text, context? })`              | mutation           | Sends the caller's message and starts a run                      |
+| `run(ctx, { threadId?, text, context? })`               | mutation or action | Starts a run as the app's own job, for no end user               |
+| `readThread(ctx, { threadId, limit? })`                 | query              | The caller's thread: messages, the run going, its live stream    |
+| `readThreadDetails(ctx, { threadId, limit? })`          | query, internal    | A thread as stored, with tool results. For the app's backend     |
+| `cancel(ctx, { threadId })`                             | mutation           | Stops the run going on the caller's thread                       |
+| `deleteThread(ctx, { threadId })`                       | mutation           | Deletes the thread here and at Hercules. Irreversible            |
+| `claimPageAction(ctx, { threadId, runId, toolCallId })` | mutation           | Takes a page action for one tab to run                           |
+| `registerRoutes(http)`                                  | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents |
 
-A thread answers only to the user who opened it: anyone else reads `null`.
+The caller is the signed-in user, from `ctx.auth`. There are no anonymous
+visitors: without a signed-in user `send` throws `sign_in_required`, and the
+other methods answer `null` or `false`. A thread answers only to the user who
+opened it: anyone else reads `null`.
 Failures throw a `ConvexError` whose `data` is `{ code, message,
 retryAfterSeconds? }`, with `code` one of `sign_in_required`, `not_found`,
 `thread_busy`, `end_user_rate_limited`, `message_too_long` and
@@ -120,12 +132,46 @@ export const onAgentRunFinished = internalMutation({
 });
 ```
 
-### Visitors
+### What the page sees of tools
 
-Set `allowAnonymous: true` to let visitors who are not signed in talk to the
-agent. The page keeps an `anonymousId` for the visitor and passes it to
-`send`, `thread` and the others. Hercules takes visitors only when the agent's
-app access is public.
+A thread goes to the user's browser, so by default it leaves out what the
+agent's tools did in detail:
+
+- A Hercules tool call (a built-in or a connector) is named `tool`, with the
+  summary `Used a tool`, or `Couldn't use a tool` when it failed.
+- No tool call carries its result. The app's own tools and page actions keep
+  their names and summaries: they are the app's.
+
+Hercules does the same to the run's live stream, so what streams and what is
+stored read alike. Set `exposeToolDetails: true` to show the page the tool
+calls as they are: Hercules's tool names and summaries in the thread, and
+those plus the results of the app's tools in the live stream.
+
+The component stores everything as delivered either way. The app's backend
+reads it with `readThreadDetails`, which returns the thread unhidden with
+`toolCalls`, each with its `resultJson`:
+
+```ts
+// convex/audit.ts
+export const toolCallsOf = internalQuery({
+  args: { threadId: v.string() },
+  handler: async (ctx, { threadId }) =>
+    (await support.readThreadDetails(ctx, { threadId }))?.toolCalls ?? [],
+});
+```
+
+`readThreadDetails` does not read `ctx.auth` and answers for any user's
+thread of this agent. Call it from an internal function, or check who is
+asking first, and do not return it to a page.
+
+### Page actions
+
+A page action is the agent's command to the page, such as opening a record.
+List its name in `pageActions`, and give the page a handler for it (below).
+One open tab claims each call with `claimPageAction` and runs it. A page
+action can be claimed once Hercules has delivered it to the app, and only
+while it is less than two minutes old by the time the agent called it: one
+that arrives later than that is never run.
 
 ### Configuration
 
@@ -135,10 +181,14 @@ app access is public.
 | `apiUrl`                    | `HERCULES_API_URL`, then `https://api.hercules.app` |
 | `issuer`                    | `HERCULES_OIDC_AUTHORITY`                           |
 | `pageActions`               | none: the page actions every run may call           |
+| `exposeToolDetails`         | `false`: see "What the page sees of tools"          |
 | `limits.runsPerUserPerHour` | no limit                                            |
 
 A component cannot read the app's environment, so the app key travels to the
-component's scheduled functions as an argument. It never reaches a browser.
+component's scheduled functions as an argument. It never reaches a browser,
+and is sent only to an `https` API URL (or `http://localhost`). A run's
+stuck-run check keeps the key it was scheduled with, so a run that is going
+while the key is rotated is settled by delivery, not by the check.
 
 ## In React
 
@@ -172,7 +222,12 @@ function Chat() {
 The reply streams from the run's live URL, resuming with `Last-Event-ID`
 after a dropped connection, until Convex has the completed message. Page
 actions are one-way: one open tab claims each and runs it, and nothing goes
-back to the run.
+back to the run. The hook takes them from `thread.pageActions`, so one runs
+when Hercules has delivered it, and one that is two minutes old is skipped.
+
+`chat.error` is an `AgentError` with the `code` of what went wrong: one of
+`send`'s codes, or the code the run failed with, such as `out_of_credits`
+or `agent_daily_limit_reached`. For a limit it also has `retryAfterSeconds`.
 
 ## App tools
 

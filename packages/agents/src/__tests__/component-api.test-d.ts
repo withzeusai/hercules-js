@@ -47,6 +47,12 @@ describe("ComponentApi", () => {
     expectTypeOf<FunctionReturnType<ComponentApi["threads"]["read"]>>().toEqualTypeOf<
       FunctionReturnType<Public["threads"]["read"]>
     >();
+    expectTypeOf<FunctionArgs<ComponentApi["threads"]["readDetails"]>>().toEqualTypeOf<
+      FunctionArgs<Public["threads"]["readDetails"]>
+    >();
+    expectTypeOf<FunctionReturnType<ComponentApi["threads"]["readDetails"]>>().toEqualTypeOf<
+      FunctionReturnType<Public["threads"]["readDetails"]>
+    >();
     expectTypeOf<FunctionArgs<ComponentApi["threads"]["cancel"]>>().toEqualTypeOf<
       FunctionArgs<Public["threads"]["cancel"]>
     >();

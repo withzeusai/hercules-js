@@ -11,7 +11,7 @@
 
 import type { FunctionReference } from "convex/server";
 
-type EndUser = { tokenIdentifier: string } | { anonymousId: string };
+type EndUser = { tokenIdentifier: string };
 type Api = { key: string; url: string };
 type MessagePart =
   | { text: string; type: "text" }
@@ -32,7 +32,7 @@ type Message = {
   thread_id: string;
 };
 type FinalRunStatus = "completed" | "failed" | "cancelled" | "capped";
-type RunError = { code: string; message: string };
+type RunError = { code: string; message: string; retryAfterSeconds?: number };
 type CappedReason = "steps" | "time" | "credits" | "output";
 type Usage = { credits: number };
 type WireEvent = {
@@ -79,6 +79,7 @@ type Thread = {
   latestRun: {
     cappedReason: CappedReason | null;
     error: RunError | null;
+    finished_at: string | null;
     id: string;
     status: "queued" | "running" | FinalRunStatus;
   } | null;
@@ -99,6 +100,28 @@ type Thread = {
     runId: string;
     toolCallId: string;
   }>;
+};
+
+type ThreadDetails = {
+  activeRun: Thread["activeRun"];
+  agentId: string;
+  hasMore: boolean;
+  id: string;
+  latestRun: Thread["latestRun"];
+  messages: Thread["messages"];
+  pageActions: Thread["pageActions"];
+  toolCalls: Array<{
+    argumentsJson: string | null;
+    created_at: string;
+    kind: "hercules" | "app" | "page";
+    name: string;
+    resultJson: string | null;
+    runId: string;
+    status: "succeeded" | "failed" | "sent" | null;
+    summary: string | null;
+    toolCallId: string;
+  }>;
+  toolCallsTruncated: boolean;
 };
 
 /**
@@ -140,8 +163,15 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     read: FunctionReference<
       "query",
       "internal",
-      { limit?: number; owner: string; threadId: string },
+      { exposeToolDetails?: boolean; limit?: number; owner: string; threadId: string },
       Thread | null,
+      Name
+    >;
+    readDetails: FunctionReference<
+      "query",
+      "internal",
+      { agentId: string; limit?: number; threadId: string },
+      ThreadDetails | null,
       Name
     >;
     remove: FunctionReference<
@@ -159,6 +189,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         api: Api;
         context?: Record<string, any>;
         endUser: EndUser | null;
+        exposeToolDetails?: boolean;
         onRunFinished?: string;
         pageActions?: Array<string>;
         runsPerHour?: number;

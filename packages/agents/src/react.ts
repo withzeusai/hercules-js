@@ -22,9 +22,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentThread } from "./agents";
+import { AgentError, toAgentError as toError } from "./errors";
 import { LiveRun, mergeThread, type PendingInput, type ViewMessage } from "./live-thread";
+import { createPageActionRunner, type PageActionHandler } from "./page-actions";
 import { followRun, RunStreamError } from "./stream";
 
+export { AgentError } from "./errors";
 export {
   LiveRun,
   mergeThread,
@@ -33,20 +36,13 @@ export {
   type ViewPart,
   type ViewToolCallPart,
 } from "./live-thread";
+export type { PageActionHandler } from "./page-actions";
 export type { AgentThread } from "./agents";
-
-/** Runs a page action. What it returns goes nowhere: page actions are one-way. */
-export type PageActionHandler = (
-  // The agent writes the arguments; check them before acting on them.
-  args: any,
-  info: { toolCallId: string; runId: string },
-) => void | Promise<void>;
 
 export interface SendMutationArgs {
   threadId?: string;
   text: string;
   context?: Record<string, unknown>;
-  anonymousId?: string;
 }
 
 export interface UseAgentThreadOptions {
@@ -60,18 +56,18 @@ export interface UseAgentThreadOptions {
   /** `useMutation(api.agent.send)`. */
   send: (args: SendMutationArgs) => Promise<{ threadId: string; runId: string }>;
   /** `useMutation(api.agent.cancel)`. */
-  cancel?: (args: { threadId: string; anonymousId?: string }) => Promise<boolean>;
+  cancel?: (args: { threadId: string }) => Promise<boolean>;
   /** `useMutation(api.agent.claimPageAction)`. Page actions run only with it. */
   claimPageAction?: (args: {
     threadId: string;
     runId: string;
     toolCallId: string;
-    anonymousId?: string;
   }) => Promise<boolean>;
-  /** The page's actions, by name. One open tab runs each call. */
+  /**
+   * The page's actions, by name. One open tab runs each call, once Hercules
+   * has delivered it to the app and while it is less than two minutes old.
+   */
   pageActions?: Readonly<Record<string, PageActionHandler>>;
-  /** A visitor's id, when the agent takes visitors who are not signed in. */
-  anonymousId?: string;
   fetch?: typeof fetch;
 }
 
@@ -82,17 +78,6 @@ export interface UseAgentThreadOptions {
  * - `ready`: nothing is going; a new message can be sent.
  */
 export type AgentThreadStatus = "loading" | "ready" | "submitted" | "streaming";
-
-/** A run that failed, or a message that could not be sent. */
-export class AgentError extends Error {
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "AgentError";
-    this.code = code;
-  }
-}
 
 export interface UseAgentThreadResult {
   messages: ViewMessage[];
@@ -105,27 +90,6 @@ export interface UseAgentThreadResult {
   /** Stops the reply being written. */
   cancel: () => Promise<void>;
   error: Error | null;
-}
-
-function toError(error: unknown): Error {
-  if (typeof error === "object" && error !== null && "data" in error) {
-    const data = (error as { data: unknown }).data;
-    if (typeof data === "object" && data !== null && "code" in data && "message" in data) {
-      const { code, message } = data as { code: unknown; message: unknown };
-      if (typeof code === "string" && typeof message === "string") {
-        return new AgentError(code, message);
-      }
-    }
-  }
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function parseArguments(json: string): unknown {
-  try {
-    return JSON.parse(json) as unknown;
-  } catch {
-    return {};
-  }
 }
 
 let pendingCounter = 0;
@@ -146,9 +110,13 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   const [streamError, setStreamError] = useState<Error | null>(null);
   const [, setVersion] = useState(0);
   const live = useRef<LiveRun | null>(null);
-  const attempted = useRef(new Set<string>());
   const renderQueued = useRef(false);
-  const warnedNoClaim = useRef(false);
+  const pageActionRunner = useRef<ReturnType<typeof createPageActionRunner> | null>(null);
+  pageActionRunner.current ??= createPageActionRunner({
+    name: "useAgentThread",
+    handlers: () => latest.current.pageActions,
+    claim: () => latest.current.claimPageAction,
+  });
 
   const queueRender = useCallback(() => {
     if (renderQueued.current) return;
@@ -160,34 +128,6 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(flush);
     else setTimeout(flush, 16);
   }, []);
-
-  const runPageAction = useCallback(
-    async (runThreadId: string, runId: string, toolCallId: string, name: string, args: unknown) => {
-      const { pageActions, claimPageAction, anonymousId } = latest.current;
-      const handler = pageActions?.[name];
-      if (handler === undefined || attempted.current.has(toolCallId)) return;
-      if (claimPageAction === undefined) {
-        if (!warnedNoClaim.current) {
-          warnedNoClaim.current = true;
-          console.warn("useAgentThread: pass claimPageAction to run page actions");
-        }
-        return;
-      }
-      attempted.current.add(toolCallId);
-      try {
-        const claimed = await claimPageAction({
-          threadId: runThreadId,
-          runId,
-          toolCallId,
-          ...(anonymousId !== undefined && { anonymousId }),
-        });
-        if (claimed) await handler(args, { toolCallId, runId });
-      } catch (failure) {
-        console.error(`Page action ${name} failed`, failure);
-      }
-    },
-    [],
-  );
 
   const activeRun = thread?.activeRun ?? null;
   const activeRunId = activeRun?.id ?? null;
@@ -214,15 +154,6 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
           ...(latest.current.fetch !== undefined && { fetch: latest.current.fetch }),
         })) {
           if (!run.apply(event)) continue;
-          if (event.type === "page_action") {
-            void runPageAction(
-              event.thread_id || run.threadId,
-              event.run_id,
-              event.data.tool_call_id,
-              event.data.name,
-              event.data.arguments,
-            );
-          }
           queueRender();
         }
       } catch (failure) {
@@ -234,21 +165,13 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
     }
     void follow();
     return () => controller.abort();
-  }, [activeRunId, liveUrl, liveToken, liveThreadId, queueRender, runPageAction]);
+  }, [activeRunId, liveUrl, liveToken, liveThreadId, queueRender]);
 
-  // Page actions no tab has run yet, such as those sent while this page was closed.
+  // The page actions Hercules delivered that no tab has taken yet. The live
+  // stream shows a page action in the chat; this is what runs it.
   useEffect(() => {
-    if (thread === null || thread === undefined) return;
-    for (const action of thread.pageActions) {
-      void runPageAction(
-        thread.id,
-        action.runId,
-        action.toolCallId,
-        action.name,
-        parseArguments(action.argumentsJson),
-      );
-    }
-  }, [thread, runPageAction]);
+    pageActionRunner.current?.(thread);
+  }, [thread]);
 
   // Messages Convex now shows are no longer pending.
   useEffect(() => {
@@ -269,13 +192,11 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
     setSending((count) => count + 1);
     setError(null);
     try {
-      const { anonymousId } = latest.current;
       const currentThreadId = threadIdRef.current;
       const started = await latest.current.send({
         ...(currentThreadId !== null && { threadId: currentThreadId }),
         text,
         ...(sendOptions?.context !== undefined && { context: sendOptions.context }),
-        ...(anonymousId !== undefined && { anonymousId }),
       });
       setPending((inputs) =>
         inputs.map((input) => (input.key === key ? { ...input, runId: started.runId } : input)),
@@ -291,14 +212,11 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   }, []);
 
   const cancel = useCallback(async () => {
-    const { cancel: cancelRun, anonymousId } = latest.current;
+    const { cancel: cancelRun } = latest.current;
     const currentThreadId = threadIdRef.current;
     if (cancelRun === undefined || currentThreadId === null) return;
     try {
-      await cancelRun({
-        threadId: currentThreadId,
-        ...(anonymousId !== undefined && { anonymousId }),
-      });
+      await cancelRun({ threadId: currentThreadId });
     } catch (failure) {
       setError(toError(failure));
     }
@@ -310,7 +228,11 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   const runError = useMemo(
     () =>
       latestRun !== null && latestRun.status === "failed" && latestRun.error !== null
-        ? new AgentError(latestRun.error.code, latestRun.error.message)
+        ? new AgentError(
+            latestRun.error.code,
+            latestRun.error.message,
+            latestRun.error.retryAfterSeconds,
+          )
         : null,
     // A new error only for another run or another failure.
     [latestRun?.id, latestRun?.status, latestRun?.error?.code],
