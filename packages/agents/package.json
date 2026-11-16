@@ -1,7 +1,7 @@
 {
   "name": "@usehercules/agents",
   "version": "0.0.0",
-  "description": "Hercules agents in a Hercules app: talk to an agent from a Convex app, and serve it the app's tools over MCP",
+  "description": "Hercules agents in a Hercules app: talk to an agent from a Convex app, with TanStack AI or React, and serve it the app's tools over MCP",
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -22,6 +22,7 @@
       "types": "./dist/component/_generated/component.d.ts"
     },
     "./react": "./dist/react.mjs",
+    "./tanstack": "./dist/tanstack.mjs",
     "./package.json": "./package.json"
   },
   "author": "Hercules Team",
@@ -47,10 +48,22 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
+    "@tanstack/ai": "^1.2.0",
+    "@tanstack/ai-client": "^1.1.0",
+    "@tanstack/ai-react": "^1.0.2",
     "convex": "^1.29.0",
     "react": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
+    "@tanstack/ai": {
+      "optional": true
+    },
+    "@tanstack/ai-client": {
+      "optional": true
+    },
+    "@tanstack/ai-react": {
+      "optional": true
+    },
     "convex": {
       "optional": true
     },
@@ -59,6 +72,9 @@
     }
   },
   "devDependencies": {
+    "@tanstack/ai": "1.2.0",
+    "@tanstack/ai-client": "1.1.0",
+    "@tanstack/ai-react": "1.0.2",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

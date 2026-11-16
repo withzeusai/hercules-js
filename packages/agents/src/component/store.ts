@@ -42,6 +42,14 @@ export function ownerOf(endUser: EndUser | null): string {
   return endUser === null ? APP_OWNER : `user:${endUser.tokenIdentifier}`;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/i;
+
+/** Whether `id` can name a new thread: the API takes ULIDs or UUIDs for run and thread ids. */
+export function isThreadId(id: string): boolean {
+  return UUID_PATTERN.test(id) || ULID_PATTERN.test(id);
+}
+
 /** A random UUID: the API takes ULIDs or UUIDs for run and thread ids. */
 export function newId(): string {
   const bytes = new Uint8Array(16);

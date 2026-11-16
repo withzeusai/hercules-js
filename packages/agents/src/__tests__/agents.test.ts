@@ -222,6 +222,36 @@ describe("send", () => {
     });
   });
 
+  it("opens a thread under the id the page chose, and sends in it after", async () => {
+    const support = agents();
+    const chosen = "9C2D7A10-55E1-4F0B-8D3C-2A1B0C9D8E7F";
+    const first = await support.send(h.appCtx(ALICE), { threadId: chosen, text: "Hi" });
+    expect(first.threadId).toBe(chosen);
+    await h.runDue();
+    expect(api.requests[0]?.body.thread_id).toBe(chosen);
+    expect((await read(support, chosen)).messages).toHaveLength(1);
+
+    // A ULID works too.
+    const ulid = "01JDX5ZQ8W3J2K6M9N4P7R1S0T";
+    expect((await support.send(h.appCtx(ALICE), { threadId: ulid, text: "Hi" })).threadId).toBe(
+      ulid,
+    );
+    // Someone else's thread still reads as one that does not exist.
+    const error = await support
+      .send(h.appCtx(BOB), { threadId: chosen, text: "Me too" })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("not_found");
+  });
+
+  it("refuses a new thread id that is not a UUID or a ULID", async () => {
+    const error = await agents()
+      .send(h.appCtx(ALICE), { threadId: "support-chat", text: "Hi" })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("invalid_request");
+    expect(h.db.all("threads")).toHaveLength(0);
+    expect(h.db.all("runs")).toHaveLength(0);
+  });
+
   it("refuses a caller who is not signed in, whatever else they send", async () => {
     const support = agents();
     const error = await support.send(h.appCtx(null), { text: "Hi" }).catch((e: unknown) => e);

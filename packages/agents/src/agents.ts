@@ -111,7 +111,10 @@ type RunQueryCtx = { runQuery: GenericActionCtx<GenericDataModel>["runQuery"] };
 type RunMutationCtx = { runMutation: GenericActionCtx<GenericDataModel>["runMutation"] };
 
 export interface SendArgs {
-  /** Leave out to start a new thread. */
+  /**
+   * The thread to send in. Leave out to start a new thread, or pass a new
+   * UUID or ULID to start one under that id, as a page using TanStack AI does.
+   */
   threadId?: string;
   text: string;
   /** Named JSON values about the page, appended to the input. */

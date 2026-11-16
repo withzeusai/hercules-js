@@ -13,6 +13,7 @@ import {
   STUCK_AFTER_MS,
   documentBytes,
   inputMessageId,
+  isThreadId,
   isoTime,
   jittered,
   newId,
@@ -45,9 +46,10 @@ type SendResult = Infer<typeof vSendResult>;
 
 /**
  * Starts a run: writes the user's message and the run, then schedules the
- * call to Hercules. On a new thread when `threadId` is left out. Fails, with
- * nothing written, when the thread is not the caller's, a run is still going
- * on it, or the caller is over `runsPerHour`.
+ * call to Hercules. On a new thread when `threadId` is left out, or is a new
+ * UUID or ULID: the page may choose its thread's id, as TanStack AI's chat
+ * does. Fails, with nothing written, when the thread is not the caller's, a
+ * run is still going on it, or the caller is over `runsPerHour`.
  */
 export const send = mutation({
   args: {
@@ -83,9 +85,18 @@ export const send = mutation({
     }
 
     let thread = args.threadId === undefined ? null : await threadById(ctx, args.threadId);
-    if (args.threadId !== undefined) {
+    if (args.threadId !== undefined && thread === null) {
+      // A new thread, under the id the page chose. The API takes only these.
+      if (!isThreadId(args.threadId)) {
+        return {
+          ok: false,
+          code: "invalid_request",
+          message: "A new thread's id must be a UUID or a ULID.",
+        };
+      }
+    } else if (thread !== null) {
       // A thread that is someone else's reads as one that does not exist.
-      if (thread === null || thread.owner !== owner || thread.agentId !== args.agentId) {
+      if (thread.owner !== owner || thread.agentId !== args.agentId) {
         return { ok: false, code: "not_found", message: "No such thread." };
       }
       if (thread.activeRunId !== null) {
@@ -123,7 +134,7 @@ export const send = mutation({
 
     if (thread === null) {
       const threadDocId = await ctx.db.insert("threads", {
-        threadId: newId(),
+        threadId: args.threadId ?? newId(),
         agentId: args.agentId,
         owner,
         activeRunId: null,
