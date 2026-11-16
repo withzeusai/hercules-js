@@ -169,16 +169,20 @@ function tokenRejection(reason: TokenFailure): Response {
  *
  * ```ts
  * // convex/agent.ts
- * export const support = new HerculesAgents(components.herculesAgents, {
+ * export const support: HerculesAgents = new HerculesAgents(components.herculesAgents, {
  *   agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
  *   onRunFinished: internal.orders.onAgentRunFinished,
  *   limits: { runsPerUserPerHour: 20 },
  * });
- * export const { send, thread, cancel, claimPageAction } = support.api();
+ * export const { send, thread, cancel, claimPageAction, deleteThread } = support.api();
  *
  * // convex/http.ts
  * support.registerRoutes(http);
  * ```
+ *
+ * Keep the `: HerculesAgents` annotation. `internal` is typed from every
+ * module's exports, this one's included, so without it TypeScript cannot
+ * infer `support` from an initializer that names `internal` (TS7022).
  */
 export class HerculesAgents {
   readonly component: ComponentApi;

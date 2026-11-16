@@ -35,7 +35,8 @@ export default app;
 import { HerculesAgents } from "@usehercules/agents/convex";
 import { components, internal } from "./_generated/api";
 
-export const support = new HerculesAgents(components.herculesAgents, {
+// Keep the `: HerculesAgents` annotation.
+export const support: HerculesAgents = new HerculesAgents(components.herculesAgents, {
   agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T", // The agent's id, a ULID.
   onRunFinished: internal.orders.onAgentRunFinished,
   limits: { runsPerUserPerHour: 20 },
@@ -44,6 +45,11 @@ export const support = new HerculesAgents(components.herculesAgents, {
 // send, thread, cancel, claimPageAction and deleteThread, for the page.
 export const { send, thread, cancel, claimPageAction, deleteThread } = support.api();
 ```
+
+The annotation on `support` is needed: `internal` is typed from every
+module's exports, `support` included, so without it TypeScript cannot infer
+`support` from an initializer that names `internal`, and the app's type-check
+fails with TS7022.
 
 ```ts
 // convex/http.ts
