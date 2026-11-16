@@ -119,7 +119,8 @@ export const billing = defineTools({ name: "billing", tools: { ... } }); // /mcp
 
 A request must carry an RS256 JWT signed by the app's Hercules Auth
 (`HERCULES_OIDC_AUTHORITY`), issued for this server's own URL
-(`CONVEX_SITE_URL` plus the path), and not expired. Keys come from the
+(`CONVEX_SITE_URL` plus the path), and not expired. It must say who is
+calling in its `hercules_principal` claim: a token without one is refused. Keys come from the
 issuer's OpenID discovery document and are cached for five minutes.
 
 Pass `issuer` or `audiences` to `defineTools` to override either.

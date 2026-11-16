@@ -146,13 +146,17 @@ function agentIdOf(value: string | null): string | null {
   return id.length > 0 ? id : null;
 }
 
-/** Reads the caller out of a verified token, or null when its claims contradict each other. */
+/**
+ * Reads the caller out of a verified token, or null when its claims do not
+ * name one. `hercules_principal` is required: a token without it is refused,
+ * never read as a user.
+ */
 export function callerFromToken(token: {
   issuer: string;
   subject: string;
   claims: Record<string, unknown>;
 }): ToolCaller | null {
-  const principal = stringClaim(token.claims, "hercules_principal") ?? "user";
+  const principal = stringClaim(token.claims, "hercules_principal");
   if (principal === "agent") {
     const agentId = agentIdOf(token.subject);
     if (agentId === null) return null;

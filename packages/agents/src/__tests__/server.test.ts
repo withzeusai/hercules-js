@@ -69,6 +69,18 @@ describe("createMcpHandler", () => {
     );
   });
 
+  it("refuses a token that does not say who is calling", async () => {
+    const { hercules_principal: _principal, ...claims } = userClaims();
+    const response = await send(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "echo" } },
+      await issuer.sign(claims),
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toBe(
+      'Bearer error="invalid_token", error_description="The token is not a valid JWT"',
+    );
+  });
+
   it("answers 503 while the signing keys cannot be loaded", async () => {
     issuer.setReachable(false);
     const response = await send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
@@ -188,33 +200,41 @@ describe("createMcpHandler", () => {
 
 describe("callerFromToken", () => {
   const base = { issuer: ISSUER, subject: "user_123" };
+  // An agent's id is a plain ULID.
+  const AGENT_ID = "01JDX5ZQ8W3J2K6M9N4P7R1S0T";
 
   it("reads an end user, with the agent acting for them when there is one", () => {
-    expect(callerFromToken({ ...base, claims: {} })).toEqual({
+    const claims = { hercules_principal: "user" };
+    expect(callerFromToken({ ...base, claims })).toEqual({
       principal: "user",
       tokenIdentifier: `${ISSUER}|user_123`,
       issuer: ISSUER,
       subject: "user_123",
       agentId: null,
     });
-    expect(callerFromToken({ ...base, claims: { hercules_actor: "agent:agt_1" } })).toMatchObject({
-      principal: "user",
-      agentId: "agt_1",
-    });
+    expect(
+      callerFromToken({ ...base, claims: { ...claims, hercules_actor: `agent:${AGENT_ID}` } }),
+    ).toMatchObject({ principal: "user", agentId: AGENT_ID });
   });
 
   it("reads an agent with no end user, and the visitor it serves", () => {
     expect(
       callerFromToken({
         issuer: ISSUER,
-        subject: "agent:agt_1",
+        subject: `agent:${AGENT_ID}`,
         claims: { hercules_principal: "agent", hercules_visitor: "anonymous:v1" },
       }),
-    ).toEqual({ principal: "agent", agentId: "agt_1", visitorId: "anonymous:v1" });
+    ).toEqual({ principal: "agent", agentId: AGENT_ID, visitorId: "anonymous:v1" });
   });
 
   it.each([
-    ["an agent subject without the agent principal", "agent:agt_1", {}],
+    ["a token with no principal", "user_123", {}],
+    ["a principal that is not text", "user_123", { hercules_principal: true }],
+    [
+      "an agent subject with the user principal",
+      `agent:${AGENT_ID}`,
+      { hercules_principal: "user" },
+    ],
     ["the agent principal on a user subject", "user_123", { hercules_principal: "agent" }],
     ["an unknown principal", "user_123", { hercules_principal: "service" }],
   ])("refuses %s", (_name, subject, claims) => {

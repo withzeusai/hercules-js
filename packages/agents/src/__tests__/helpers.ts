@@ -87,6 +87,7 @@ export function userClaims(overrides: Record<string, unknown> = {}): Record<stri
     iss: ISSUER,
     aud: AUDIENCE,
     sub: "user_123",
+    hercules_principal: "user",
     iat: NOW_SECONDS,
     exp: NOW_SECONDS + 600,
     ...overrides,
