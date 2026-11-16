@@ -1,5 +1,0 @@
----
-"@usehercules/agents": minor
----
-
-Talk to a Hercules agent from a Convex app. `@usehercules/agents/convex.config` is a Convex component that keeps an agent's threads, runs and messages in the app's own deployment, and `HerculesAgents` in `@usehercules/agents/convex` starts runs from the app's mutations (`send`, `run`), reads a user's thread (`readThread`), and routes the events Hercules delivers (`registerRoutes`). `useAgentThread` in `@usehercules/agents/react` streams the reply live and runs page actions in one tab. Callers are signed-in users (`ctx.auth`); there are no anonymous visitors. A page sees Hercules tool calls as "tool" and no tool results unless the app sets `exposeToolDetails`, and the app's backend reads the full record with `readThreadDetails`. A page action that reaches the app more than two minutes late is not run and is listed on the thread as `expired`.
