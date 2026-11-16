@@ -51,6 +51,8 @@ const KEY_SET_MIN_REFETCH_MS = 30 * 1000;
  * the keys), and a caller that waits ten seconds for its answer must get one.
  */
 const ISSUER_FETCH_TIMEOUT_MS = 4 * 1000;
+/** How many `kid`s a fetch did not bring are remembered until the next fetch. */
+const MAX_KNOWN_MISSING_KIDS = 100;
 /** Clock difference tolerated between the issuer and this server. */
 const CLOCK_SKEW_SECONDS = 30;
 
@@ -129,8 +131,12 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
 
   let keySet: { keys: Jwk[]; loadedAtMs: number } | null = null;
   let lastFetchAtMs = Number.NEGATIVE_INFINITY;
-  /** The last fetch did not bring the issuer's keys. */
-  let lastFetchFailed = false;
+  /**
+   * The `kid`s a fetch made for them did not bring: the issuer's keys were
+   * fetched after such a token came, and its key was not among them. Only
+   * these are refused within the refetch floor. Emptied by every fetch.
+   */
+  const knownMissing = new Set<string>();
   let loading: Promise<Jwk[] | null> | null = null;
 
   async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
@@ -169,7 +175,7 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
     lastFetchAtMs = now();
     const attempt = fetchKeys()
       .then((keys) => {
-        lastFetchFailed = keys === null;
+        knownMissing.clear();
         if (keys !== null) keySet = { keys, loadedAtMs: now() };
         return keys;
       })
@@ -182,9 +188,12 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
 
   /**
    * The issuer's key with this `kid`. Null only when the issuer's keys were
-   * fetched and it is not among them: that token is refused. "unavailable"
-   * whenever the keys could not be fetched, which says nothing about the
-   * token: the caller should come back, and is told so.
+   * fetched after a token with this `kid` came, and it is not among them:
+   * that token is refused. "unavailable" whenever that is not known: the
+   * keys could not be fetched, or they were last fetched before this `kid`
+   * was seen and may not be fetched again yet (a key the issuer has just
+   * rotated in looks like that). It says nothing about the token: the
+   * caller should come back, and is told so.
    */
   async function findKey(kid: string): Promise<Jwk | "unavailable" | null> {
     const fresh = keySet !== null && now() - keySet.loadedAtMs < KEY_SET_TTL_MS;
@@ -195,12 +204,15 @@ export function createTokenVerifier(options: TokenVerifierOptions) {
     if (now() - lastFetchAtMs < KEY_SET_MIN_REFETCH_MS && loading === null) {
       // Keys we already hold stay good while the issuer cannot be reached.
       if (cached) return cached;
-      // Within the floor after a failed fetch the keys are still not known.
-      return lastFetchFailed ? "unavailable" : null;
+      return knownMissing.has(kid) ? null : "unavailable";
     }
     const keys = await loadKeys();
     if (keys === null) return cached ?? "unavailable";
-    return keys.find((key) => key.kid === kid) ?? null;
+    const found = keys.find((key) => key.kid === kid);
+    if (found !== undefined) return found;
+    // A bounded note, so tokens with made-up `kid`s cannot grow it.
+    if (knownMissing.size < MAX_KNOWN_MISSING_KIDS) knownMissing.add(kid);
+    return null;
   }
 
   async function verify(token: string | null): Promise<TokenResult> {

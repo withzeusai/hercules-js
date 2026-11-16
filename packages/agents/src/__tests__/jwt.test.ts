@@ -151,6 +151,52 @@ describe("createTokenVerifier", () => {
     expect(issuer.jwksFetches()).toBe(1);
   });
 
+  it("answers that the keys are not known for a key rotated in since its last fetch", async () => {
+    let nowMs = NOW_MS;
+    const first = await createTestIssuer("key-1");
+    // The issuer rotates: the next fetch of its keys brings `key-2`.
+    const second = await createTestIssuer("key-2");
+    let rotated = false;
+    const verifier = createTokenVerifier({
+      issuer: ISSUER,
+      audiences: [AUDIENCE],
+      now: () => nowMs,
+      fetch: ((input: RequestInfo | URL) =>
+        (rotated ? second : first).fetch(input)) as typeof fetch,
+    });
+    expect((await verifier.verify(await first.sign(userClaims()))).ok).toBe(true);
+
+    rotated = true;
+    nowMs += 5_000;
+    const token = await second.sign(userClaims());
+    // Five seconds after a good fetch the keys may not be fetched again. The
+    // key set held is stale, which says nothing about this token: a 401 here
+    // would close every delivery to the deployment.
+    expect(await verifier.verify(token)).toEqual({ ok: false, reason: "keys_unavailable" });
+    expect(first.jwksFetches() + second.jwksFetches()).toBe(1);
+    nowMs += 25_000;
+    expect((await verifier.verify(token)).ok).toBe(true);
+    expect(second.jwksFetches()).toBe(1);
+  });
+
+  it("refuses an unknown kid once a fetch made after it came still lacks it", async () => {
+    let nowMs = NOW_MS;
+    const { issuer, verifier } = await setup({ now: () => nowMs });
+    expect((await verifier.verify(await issuer.sign(userClaims()))).ok).toBe(true);
+    const other = await generateKey();
+    const forged = await issuer.sign(userClaims(), { kid: "key-9", key: other.privateKey });
+    // Inside the floor: not known yet.
+    nowMs += 1_000;
+    expect(await verifier.verify(forged)).toEqual({ ok: false, reason: "keys_unavailable" });
+    // The floor has passed, the keys are fetched, and it is not among them.
+    nowMs += 30_000;
+    expect(await verifier.verify(forged)).toEqual({ ok: false, reason: "unknown_key" });
+    // Known now, so the next one inside the floor is refused without a fetch.
+    nowMs += 1_000;
+    expect(await verifier.verify(forged)).toEqual({ ok: false, reason: "unknown_key" });
+    expect(issuer.jwksFetches()).toBe(2);
+  });
+
   it("gives up on an issuer that does not answer, in time to answer its own caller", async () => {
     vi.useFakeTimers();
     const hanging = ((_input: RequestInfo | URL, init?: RequestInit) =>

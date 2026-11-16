@@ -125,9 +125,12 @@ A request must carry an RS256 JWT signed by the app's Hercules Auth
 (`HERCULES_OIDC_AUTHORITY`), issued for this server's own URL, and not
 expired. It must say who is calling in its `hercules_principal` claim: a
 token without one is refused. Keys come from the issuer's OpenID discovery
-document and are cached for five minutes. While they cannot be fetched the
-server answers 503 with `Retry-After`, never 401: that says nothing about the
-token.
+document and are cached for five minutes. While they cannot be fetched, and
+for a key the cached set lacks until the keys may be fetched again (at most
+30 seconds, as after a key rotation), the server answers 503 with
+`Retry-After`, never 401: that says nothing about the token. It answers 401
+for an unknown key only when the keys were fetched after the token came and
+its key is still not among them.
 
 Hercules calls a server at `/mcp`, or `/mcp/<name>` for a named one, on the
 deployment's own `https://<name>.convex.site`, and signs its tokens for that
