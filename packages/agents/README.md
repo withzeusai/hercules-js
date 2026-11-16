@@ -96,6 +96,10 @@ A caller never sees, and cannot call, a tool that does not accept them.
 - `returns` is enforced. Object fields it does not name are removed before the
   result leaves the app, so it is also the list of fields an assistant may
   see. Declare it on any tool that reads user data.
+- A tool whose `returns` is a `v.object` or a `v.record` is listed with that
+  shape as its MCP output schema, and its result is sent as structured
+  content. MCP takes only an object there, so any other `returns` (an array,
+  a string, a union) is enforced the same way and sent as text.
 - `v.int64()` travels as a decimal string and `v.bytes()` as base64.
 
 ## Errors

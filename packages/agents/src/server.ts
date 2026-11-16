@@ -54,6 +54,11 @@ export class ToolError extends Error {
 export interface McpTool<Ctx> {
   description: string;
   inputSchema: JsonSchema;
+  /**
+   * What the tool returns, when that is an object. MCP takes only a schema
+   * whose root `type` is `"object"`; any other is not listed, and the tool's
+   * result goes out as text alone.
+   */
   outputSchema?: JsonSchema;
   annotations?: ToolAnnotations;
   /** Who may call the tool. Defaults to signed-in users only. */
@@ -197,13 +202,26 @@ function serializeResult(value: unknown): string {
   });
 }
 
+/**
+ * The schema a tool is listed with, or undefined. MCP (2025-11-25) requires
+ * an output schema's root `type` to be `"object"`, and a client refuses the
+ * whole listing over one that is not.
+ */
+function listedOutputSchema<Ctx>(tool: McpTool<Ctx>): JsonSchema | undefined {
+  return tool.outputSchema?.["type"] === "object" ? tool.outputSchema : undefined;
+}
+
+/**
+ * A tool's result. Structured content goes with a listed output schema and
+ * only with one: a client checks it against that schema.
+ */
 function toolResult(value: unknown, structured: boolean) {
+  if (structured && isRecord(value)) {
+    const text = serializeResult(value);
+    return { content: [{ type: "text", text }], structuredContent: JSON.parse(text) as unknown };
+  }
   if (typeof value === "string") return { content: [{ type: "text", text: value }] };
-  const text = serializeResult(value);
-  return {
-    content: [{ type: "text", text }],
-    ...(structured && isRecord(value) && { structuredContent: JSON.parse(text) as unknown }),
-  };
+  return { content: [{ type: "text", text: serializeResult(value) }] };
 }
 
 function toolFailure(text: string) {
@@ -232,7 +250,10 @@ export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
       const args = tool.parseArgs(raw);
       const value: unknown = await tool.handler(ctx, args as never, caller);
       const shaped = tool.shapeResult ? tool.shapeResult(value) : value;
-      return toolResult(shaped, tool.outputSchema !== undefined);
+      const structured = listedOutputSchema(tool) !== undefined;
+      // A listed schema promises an object; anything else is the tool's bug.
+      if (structured && !isRecord(shaped)) throw new Error("The tool did not return an object");
+      return toolResult(shaped, structured);
     } catch (error) {
       // A failed tool is a result the model reads and recovers from, not a
       // protocol error. Only messages written for the model are passed on.
@@ -300,7 +321,9 @@ export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
               name,
               description: tool.description,
               inputSchema: tool.inputSchema,
-              ...(tool.outputSchema !== undefined && { outputSchema: tool.outputSchema }),
+              ...(listedOutputSchema(tool) !== undefined && {
+                outputSchema: listedOutputSchema(tool),
+              }),
               ...(tool.annotations !== undefined && { annotations: tool.annotations }),
               ...(inspecting && {
                 _meta: { [PRINCIPALS_META_KEY]: tool.principals ?? DEFAULT_PRINCIPALS },

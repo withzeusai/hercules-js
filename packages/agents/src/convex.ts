@@ -80,7 +80,9 @@ export interface ToolDefinition<
   /**
    * What the tool returns. Enforced: object fields it does not name are
    * removed before the result leaves the app, so it is also the list of
-   * fields an assistant may see.
+   * fields an assistant may see. A `v.object` or `v.record` is also listed
+   * as the tool's MCP output schema and returned as structured content; any
+   * other validator is enforced the same and returned as text.
    */
   returns?: Returns;
   annotations?: ToolAnnotations;
@@ -299,6 +301,14 @@ function fit(
   }
 }
 
+/**
+ * Whether a validator's JSON Schema has `type: "object"` at its root, the
+ * only kind MCP takes as a tool's output schema.
+ */
+function hasObjectRoot(validator: GenericValidator): boolean {
+  return validator.kind === "object" || validator.kind === "record";
+}
+
 /** Declares one tool. The handler's `args` and `caller` are typed from the definition. */
 export function tool<
   Args extends PropertyValidators,
@@ -309,7 +319,8 @@ export function tool<
   return {
     description: definition.description,
     inputSchema: fieldsToJsonSchema(definition.args),
-    ...(returns !== undefined && { outputSchema: validatorToJsonSchema(returns) }),
+    ...(returns !== undefined &&
+      hasObjectRoot(returns) && { outputSchema: validatorToJsonSchema(returns) }),
     ...(definition.annotations !== undefined && { annotations: definition.annotations }),
     ...(definition.principals !== undefined && { principals: definition.principals }),
     parseArgs(raw) {

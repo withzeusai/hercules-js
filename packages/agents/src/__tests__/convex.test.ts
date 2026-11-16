@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineTools, ToolError, tool, validatorToJsonSchema, type ToolCtx } from "../convex";
 import { createTokenVerifier } from "../jwt";
-import { createMcpHandler } from "../server";
+import { createMcpHandler, type JsonSchema, type McpTool } from "../server";
 import {
   AUDIENCE,
   createTestIssuer,
@@ -12,6 +12,9 @@ import {
   userClaims,
   type TestIssuer,
 } from "./helpers";
+
+// An agent's id is a plain ULID.
+const AGENT_ID = "01JDX5ZQ8W3J2K6M9N4P7R1S0T";
 
 const ctx: ToolCtx = {
   runQuery: vi.fn(),
@@ -75,7 +78,7 @@ interface RpcBody {
     content?: { type: string; text: string }[];
     structuredContent?: unknown;
     isError?: boolean;
-    tools?: { name: string; inputSchema: unknown; outputSchema?: unknown }[];
+    tools?: { name: string; inputSchema: JsonSchema; outputSchema?: JsonSchema }[];
     protocolVersion?: string;
   };
   error?: { code: number; message: string };
@@ -253,13 +256,13 @@ describe("tools over the handler", () => {
 
   it("shows an agent with no end user only the tools that opted in", async () => {
     const token = await issuer.sign(
-      userClaims({ sub: "agent:agt_1", hercules_principal: "agent" }),
+      userClaims({ sub: `agent:${AGENT_ID}`, hercules_principal: "agent" }),
     );
     const listed = await rpc(token, "tools/list");
     expect(listed.result?.tools?.map((entry) => entry.name)).toEqual(["whoami"]);
 
     const allowed = await rpc(token, "tools/call", { name: "whoami" });
-    expect(allowed.result?.content?.[0]?.text).toBe("agent agt_1");
+    expect(allowed.result?.content?.[0]?.text).toBe(`agent ${AGENT_ID}`);
 
     const refused = await rpc(token, "tools/call", {
       name: "create_task",
@@ -269,10 +272,172 @@ describe("tools over the handler", () => {
   });
 });
 
+/**
+ * What an MCP client's 2025-11-25 codec requires of a `tools/list` result
+ * before it shows any tool: a tool's input schema, and its output schema
+ * when it has one, must have `type: "object"` at the root. One tool that
+ * breaks the rule fails the whole listing.
+ */
+function listingProblems(listed: NonNullable<RpcBody["result"]>["tools"]): string[] {
+  const problems: string[] = [];
+  if (!Array.isArray(listed)) return ["tools is not an array"];
+  for (const entry of listed) {
+    if (typeof entry.name !== "string") problems.push("a tool has no name");
+    if (entry.inputSchema?.["type"] !== "object") {
+      problems.push(`${entry.name}: inputSchema.type is not "object"`);
+    }
+    if ("outputSchema" in entry && entry.outputSchema?.["type"] !== "object") {
+      problems.push(`${entry.name}: outputSchema.type is not "object"`);
+    }
+  }
+  return problems;
+}
+
+describe("what a tool returns, as MCP lists and sends it", () => {
+  const order = v.object({ id: v.string(), total: v.number() });
+  const shaped = {
+    one_order: tool({
+      description: "An object.",
+      args: {},
+      returns: order,
+      handler: () => ({ id: "a", total: 1, secret: "x" }),
+    }),
+    totals_by_id: tool({
+      description: "A record.",
+      args: {},
+      returns: v.record(v.string(), v.number()),
+      handler: () => ({ a: 1 }),
+    }),
+    list_orders: tool({
+      description: "An array.",
+      args: {},
+      returns: v.array(order),
+      handler: () => [{ id: "a", total: 1, secret: "x" }],
+    }),
+    order_name: tool({
+      description: "A string.",
+      args: {},
+      returns: v.string(),
+      handler: () => "Order a",
+    }),
+    maybe_order: tool({
+      description: "A union.",
+      args: {},
+      returns: v.union(order, v.null()),
+      handler: () => ({ id: "a", total: 1, secret: "x" }),
+    }),
+    no_order: tool({
+      description: "A union, answering null.",
+      args: {},
+      returns: v.union(order, v.null()),
+      handler: () => null,
+    }),
+    untyped: tool({ description: "No returns.", args: {}, handler: () => ({ id: "a" }) }),
+  };
+
+  function serve(served: Record<string, McpTool<ToolCtx>>) {
+    const handler = createMcpHandler<ToolCtx>({
+      name: "orders",
+      tools: served,
+      verifier: createTokenVerifier({
+        issuer: ISSUER,
+        audiences: [AUDIENCE],
+        fetch: issuer.fetch,
+        now: () => NOW_MS,
+      }),
+    });
+    return async (method: string, params?: unknown) => {
+      const response = await handler(
+        rpcRequest(await issuer.sign(userClaims()), { jsonrpc: "2.0", id: 1, method, params }),
+        ctx,
+      );
+      return (await response.json()) as RpcBody;
+    };
+  }
+
+  it("lists an output schema only for a tool that returns an object", async () => {
+    const listed = (await serve(shaped)("tools/list")).result?.tools;
+    expect(listingProblems(listed)).toEqual([]);
+    const withSchema = listed?.flatMap((entry) => ("outputSchema" in entry ? [entry.name] : []));
+    expect(withSchema).toEqual(["one_order", "totals_by_id"]);
+  });
+
+  it("the check fails on a listing a client would refuse", () => {
+    expect(
+      listingProblems([
+        { name: "ok", inputSchema: { type: "object" } },
+        { name: "list", inputSchema: { type: "object" }, outputSchema: { type: "array" } },
+        { name: "maybe", inputSchema: { type: "object" }, outputSchema: { anyOf: [] } },
+      ]),
+    ).toEqual([
+      'list: outputSchema.type is not "object"',
+      'maybe: outputSchema.type is not "object"',
+    ]);
+  });
+
+  it("sends structured content with a listed schema, and only then", async () => {
+    const call = serve(shaped);
+    const listed = (await call("tools/list")).result?.tools ?? [];
+    for (const entry of listed) {
+      const { result } = await call("tools/call", { name: entry.name });
+      expect(result?.isError).toBeUndefined();
+      expect(result?.content).toHaveLength(1);
+      const structured = result !== undefined && "structuredContent" in result;
+      expect([entry.name, structured]).toEqual([entry.name, "outputSchema" in entry]);
+      // The text is the same value, for a client that does not read structured content.
+      if (structured) {
+        expect(JSON.parse(result?.content?.[0]?.text ?? "")).toEqual(result?.structuredContent);
+      }
+    }
+    expect((await call("tools/call", { name: "one_order" })).result?.structuredContent).toEqual({
+      id: "a",
+      total: 1,
+    });
+    expect((await call("tools/call", { name: "totals_by_id" })).result?.structuredContent).toEqual({
+      a: 1,
+    });
+  });
+
+  it("still enforces returns on a tool it sends as text", async () => {
+    const call = serve(shaped);
+    const text = async (name: string) =>
+      (await call("tools/call", { name })).result?.content?.[0]?.text;
+    expect(await text("list_orders")).toBe('[{"id":"a","total":1}]');
+    expect(await text("maybe_order")).toBe('{"id":"a","total":1}');
+    expect(await text("no_order")).toBe("null");
+    expect(await text("order_name")).toBe("Order a");
+  });
+
+  it("never lists a schema that is not an object, whoever built the tool", async () => {
+    const base: McpTool<ToolCtx> = {
+      description: "Built without the adapter.",
+      inputSchema: { type: "object" },
+      parseArgs: (raw) => raw,
+      handler: () => [1, 2],
+    };
+    const call = serve({
+      listed_wrong: { ...base, outputSchema: { type: "array", items: { type: "number" } } },
+      promised_object: { ...base, outputSchema: { type: "object" } },
+    });
+    const listed = (await call("tools/list")).result?.tools;
+    expect(listingProblems(listed)).toEqual([]);
+    expect(listed?.find((entry) => entry.name === "listed_wrong")).not.toHaveProperty(
+      "outputSchema",
+    );
+    expect((await call("tools/call", { name: "listed_wrong" })).result).toEqual({
+      content: [{ type: "text", text: "[1,2]" }],
+    });
+    // A schema that promises an object is not answered with anything else.
+    const broken = (await call("tools/call", { name: "promised_object" })).result;
+    expect(broken?.isError).toBe(true);
+    expect(broken).not.toHaveProperty("structuredContent");
+  });
+});
+
 describe("an inspection token", () => {
   it("lists every tool with who may call it, and calls none", async () => {
     const token = await issuer.sign(
-      userClaims({ sub: "agent:agt_1", hercules_principal: "agent", hercules_inspect: true }),
+      userClaims({ sub: `agent:${AGENT_ID}`, hercules_principal: "agent", hercules_inspect: true }),
     );
     const response = await handle(
       rpcRequest(token, { jsonrpc: "2.0", id: 1, method: "tools/list" }),
