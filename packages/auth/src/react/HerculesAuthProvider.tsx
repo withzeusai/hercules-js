@@ -9,6 +9,7 @@ import {
 import { InMemoryWebStorage, WebStorageStateStore, type UserManagerSettings } from "oidc-client-ts";
 import { HerculesAuthProviderContext } from "../internal/auth-context";
 import { withRefreshLock } from "../internal/refresh-lock";
+import { renewWithRetry } from "../internal/renew";
 import { HerculesUserManager } from "../internal/user-manager";
 import {
   clearHerculesImpersonationParamsFromUrl,
@@ -116,11 +117,10 @@ function AuthRecoveryGate({
   loadingFallback: ReactNode;
   skipRecovery: boolean;
 }) {
-  const { user, isLoading, signinSilent } = useAuth();
+  const { user, isLoading } = useAuth();
+  const { userManager } = useHerculesAuthProvider();
   const userExpired = user?.expired === true;
   const hasAttempted = useRef(false);
-  const signinSilentRef = useRef(signinSilent);
-  signinSilentRef.current = signinSilent;
   const [recoveryDone, setRecoveryDone] = useState(false);
   const [recovering, setRecovering] = useState(false);
 
@@ -146,13 +146,15 @@ function AuthRecoveryGate({
     };
     setTimeout(finish, RECOVERY_TIMEOUT_MS);
 
+    // This is the only renewal an expired user gets: until it succeeds the app
+    // reads as signed out, so a dropped connection on reopen is retried.
     void withRefreshLock(async () => {
       await Promise.race([
-        signinSilentRef.current().catch(() => undefined),
+        renewWithRetry(() => userManager.signinSilent(), userManager),
         new Promise<void>((resolve) => setTimeout(resolve, RECOVERY_TIMEOUT_MS + LOCK_GRACE_MS)),
       ]);
     }).finally(finish);
-  }, [isLoading, skipRecovery, userExpired]);
+  }, [isLoading, skipRecovery, userExpired, userManager]);
 
   const shouldBlock = !skipRecovery && (recovering || (!recoveryDone && !isLoading && userExpired));
 
