@@ -12,9 +12,18 @@
  * on the thread as `expired`, for the page to tell the user.
  */
 
-/** Runs a page action. What it returns goes nowhere: page actions are one-way. */
+/**
+ * Runs a page action. What it returns goes nowhere: page actions are one-way.
+ *
+ * A model writes the arguments, and it may have been steered by text it read,
+ * so they are untrusted input. A handler navigates within the app or adjusts
+ * what the page shows. It never submits, purchases, deletes or changes a
+ * setting. It validates an id and builds the URL from a fixed route plus the
+ * encoded id, never navigates to a URL taken from an argument, and never
+ * renders an argument as HTML.
+ */
 export type PageActionHandler = (
-  // The agent writes the arguments; check them before acting on them.
+  // Untrusted: check the type and the shape of each before acting on it.
   args: any,
   info: { toolCallId: string; runId: string },
 ) => void | Promise<void>;
@@ -58,6 +67,21 @@ function parseArguments(json: string): unknown {
 }
 
 /**
+ * The page's handler for a page action, by the name the agent called it
+ * under. Only a function the page set under that name itself: a name such as
+ * `constructor` or `toString` finds nothing, as an object's inherited
+ * properties are not handlers, and neither is a value that is not a function.
+ */
+function handlerFor(
+  handlers: PageActionHandlers | undefined,
+  name: string,
+): PageActionHandler | undefined {
+  if (handlers === undefined || !Object.hasOwn(handlers, name)) return undefined;
+  const handler: unknown = handlers[name];
+  return typeof handler === "function" ? (handler as PageActionHandler) : undefined;
+}
+
+/**
  * Runs each pending page action at most once in this page: only one the page
  * has a handler for, and only after this tab won the claim. The claim is
  * refused for one that is too old, which the thread then lists as `expired`.
@@ -68,7 +92,7 @@ export function createPageActionRunner(options: PageActionRunnerOptions) {
   let warned = false;
 
   async function run(threadId: string, action: PendingPageActionCall): Promise<void> {
-    const handler = options.handlers()?.[action.name];
+    const handler = handlerFor(options.handlers(), action.name);
     const key = `${action.runId}:${action.toolCallId}`;
     if (action.status !== "pending" || handler === undefined || taken.has(key)) return;
     const claim = options.claim();

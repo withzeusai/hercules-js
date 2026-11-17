@@ -41,14 +41,19 @@ export default defineSchema({
     deletedAt: v.number(),
     /** When the thread's last row here was purged. */
     purgedAt: v.union(v.number(), v.null()),
-    /** When Hercules confirmed its copy is gone (it deleted it, or has none). */
+    /**
+     * When Hercules confirmed its copy is gone (it deleted it, or has none).
+     * Set at once, with nothing asked, for a thread Hercules never took a run
+     * on: Hercules has no thread of this caller's under the id.
+     */
     remoteDeletedAt: v.union(v.number(), v.null()),
     /** When asking Hercules was given up: after a day, or on an answer that cannot change. */
     remoteGaveUpAt: v.union(v.number(), v.null()),
     /**
-     * When Hercules first answered 404 to the delete. It answers 404 on
-     * every route while the agents API is off for the app, so a 404 counts
-     * as "gone" only once it has been the answer for an hour.
+     * When Hercules first answered 404 to the delete, or for the run it is
+     * asked for first (`unconfirmedRunId`). It answers 404 on every route
+     * while the agents API is off for the app, so a 404 counts as "gone"
+     * only once it has been the answer for an hour.
      */
     remoteMissingSince: v.union(v.number(), v.null()),
     /** How many times Hercules was asked, and the earliest time to ask again. */
@@ -56,6 +61,15 @@ export default defineSchema({
     nextAttemptAt: v.number(),
     /** When a purge batch last ran. The purge is started again only when this is stale. */
     purgeProgressAt: v.number(),
+    /**
+     * The run whose start Hercules had not answered when the thread was
+     * deleted, when it had taken none of the thread's runs before. Hercules
+     * is asked to delete the thread only once it says it has this run: that
+     * is what tells the thread there is this caller's. Left out when Hercules
+     * had taken a run of the thread, and on rows written before the field
+     * was added.
+     */
+    unconfirmedRunId: v.optional(v.string()),
   }).index("by_thread_id", ["threadId"]),
 
   /**
@@ -104,6 +118,20 @@ export default defineSchema({
     .index("by_run_id", ["runId"])
     .index("by_thread", ["threadId"])
     .index("by_owner", ["owner", "agentId"]),
+
+  /**
+   * The start of a run that was purged with its thread while it still counted
+   * toward its user's hourly limit. `send` counts these with the `runs` rows,
+   * so deleting a thread does not give its runs back. One small row per such
+   * run, dropped when the run's hour is up. The app's own runs have no limit
+   * and leave none.
+   */
+  purged_run_starts: defineTable({
+    owner: v.string(),
+    agentId: v.string(),
+    /** When the run was sent: its `runs` row's creation time. */
+    startedAt: v.number(),
+  }).index("by_owner", ["owner", "agentId", "startedAt"]),
 
   /** What a run was started with, kept so a retried start sends the same body. */
   run_requests: defineTable({

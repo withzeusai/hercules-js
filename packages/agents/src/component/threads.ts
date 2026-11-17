@@ -6,7 +6,13 @@
 import { v, type Infer } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type QueryCtx } from "./_generated/server.js";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
 import {
   DEFAULT_MESSAGE_LIMIT,
   MAX_MESSAGE_LIMIT,
@@ -45,13 +51,17 @@ const vSendResult = v.union(
 );
 type SendResult = Infer<typeof vSendResult>;
 
+/** How long a run counts toward `runsPerHour`. */
+const RUN_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
 /**
  * Starts a run: writes the user's message and the run, then schedules the
  * call to Hercules. On a new thread when `threadId` is left out, or is a new
  * UUID or ULID: the page may choose its thread's id, as TanStack AI's chat
  * does. Fails, with nothing written, when the thread is not the caller's or
  * was deleted, a run is still going on it, or the caller is over
- * `runsPerHour`.
+ * `runsPerHour`. That limit counts the runs the caller sent in the last hour,
+ * those of threads they have deleted since among them.
  */
 export const send = mutation({
   args: {
@@ -123,22 +133,30 @@ export const send = mutation({
     }
 
     if (args.endUser !== null && args.runsPerHour !== undefined) {
+      const since = now - RUN_LIMIT_WINDOW_MS;
+      const most = Math.max(0, Math.floor(args.runsPerHour)) + 1;
       const recent = await ctx.db
         .query("runs")
         .withIndex("by_owner", (q) =>
-          q
-            .eq("owner", owner)
-            .eq("agentId", args.agentId)
-            .gt("_creationTime", now - 60 * 60 * 1000),
+          q.eq("owner", owner).eq("agentId", args.agentId).gt("_creationTime", since),
         )
-        .take(Math.max(0, Math.floor(args.runsPerHour)) + 1);
-      if (recent.length >= args.runsPerHour) {
-        const oldest = recent[0]?._creationTime ?? now;
+        .take(most);
+      // The runs of threads the caller deleted in the hour count as well:
+      // deleting a thread does not give its runs back.
+      const purged = await ctx.db
+        .query("purged_run_starts")
+        .withIndex("by_owner", (q) =>
+          q.eq("owner", owner).eq("agentId", args.agentId).gt("startedAt", since),
+        )
+        .take(most);
+      if (recent.length + purged.length >= args.runsPerHour) {
+        // Both are read oldest first.
+        const oldest = Math.min(recent[0]?._creationTime ?? now, purged[0]?.startedAt ?? now);
         return {
           ok: false,
           code: "end_user_rate_limited",
           message: "Too many messages in the last hour. Try again later.",
-          retryAfterSeconds: Math.max(1, Math.ceil((oldest + 60 * 60 * 1000 - now) / 1000)),
+          retryAfterSeconds: Math.max(1, Math.ceil((oldest + RUN_LIMIT_WINDOW_MS - now) / 1000)),
         };
       }
     }
@@ -359,7 +377,8 @@ const MAX_DETAIL_RESULT_BYTES = 4 * 1024 * 1024;
  * A thread as the component stores it, for the app's own backend: tool calls
  * under their own names, and the tool calls of the listed messages' runs with
  * their results. It answers to no owner: the app decides who may ask, and
- * must not hand it to a page.
+ * must not hand it to a page. Server-only: `HerculesAgents.api()` never
+ * builds a function over it.
  */
 export const readDetails = query({
   args: { threadId: v.string(), agentId: v.string(), limit: v.optional(v.number()) },
@@ -430,12 +449,37 @@ export const cancel = mutation({
 });
 
 /**
+ * Whether Hercules took one of the thread's runs. It takes a run only for the
+ * end user the run names, on a thread that is theirs or new, so a run it took
+ * is what tells the component that the thread under this id at Hercules is
+ * this caller's. Until then the component does not know that it is.
+ *
+ * A thread that was never taken has runs that never ran, and those rows are
+ * small, so reading them costs little; any other thread answers at its first
+ * rows.
+ */
+async function herculesTookRun(ctx: QueryCtx, threadId: string): Promise<boolean> {
+  for await (const run of ctx.db
+    .query("runs")
+    .withIndex("by_thread", (q) => q.eq("threadId", threadId))) {
+    if (run.accepted) return true;
+  }
+  return false;
+}
+
+/**
  * Deletes a thread: here at once, and at Hercules, which also stops its run
  * and revokes its live tokens. Irreversible, and its id is never used again:
  * a later `send` under it is refused. True when there was one to delete.
  *
  * What is left to do is kept in `deleted_threads`: the thread's other rows
  * are purged in batches, and Hercules is asked until it confirms.
+ *
+ * The delete at Hercules names the thread and no end user, so the component
+ * sends it only for a thread it knows to be this caller's there: one Hercules
+ * took a run on (`herculesTookRun`). A thread it never took one on is deleted
+ * here only. One whose first start is still unanswered is asked about once
+ * Hercules says it has that run: see `unconfirmedRunId`.
  */
 export const remove = mutation({
   args: { threadId: v.string(), agentId: v.string(), owner: v.string(), api: vApi },
@@ -449,17 +493,24 @@ export const remove = mutation({
       await ctx.db.patch(active._id, { liveUrl: null, liveToken: null });
     }
     const now = Date.now();
+    const taken = await herculesTookRun(ctx, thread.threadId);
+    // A start Hercules has not answered may still be taken, or already was
+    // with the answer lost: Hercules is asked whether it has that run first.
+    const unconfirmedRunId =
+      !taken && active !== null && !isFinalStatus(active.status) ? active.runId : undefined;
     await ctx.db.delete(thread._id);
     await ctx.db.insert("deleted_threads", {
       threadId: thread.threadId,
       deletedAt: now,
       purgedAt: null,
-      remoteDeletedAt: null,
+      // Nothing of this thread is at Hercules, so there is nothing to ask for.
+      remoteDeletedAt: taken || unconfirmedRunId !== undefined ? null : now,
       remoteGaveUpAt: null,
       remoteMissingSince: null,
       attempts: 0,
       nextAttemptAt: now,
       purgeProgressAt: now,
+      ...(unconfirmedRunId !== undefined && { unconfirmedRunId }),
     });
     await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: thread.threadId });
     await ctx.scheduler.runAfter(0, internal.hercules.deleteTick, {
@@ -481,6 +532,33 @@ const PURGE_BATCH_BYTES = 3 * 1024 * 1024;
 const PURGE_STEP_ROWS = 2;
 
 /**
+ * Keeps the start of a run that is purged while it still counts toward its
+ * user's hourly limit, until its hour is up. Written with the delete of the
+ * run's row, so the count `send` reads never drops in between.
+ */
+async function keepRunStart(ctx: MutationCtx, run: Doc<"runs">, now: number) {
+  const countsUntil = run._creationTime + RUN_LIMIT_WINDOW_MS;
+  // The app's own runs have no limit.
+  if (run.endUser === null || countsUntil <= now) return;
+  const id = await ctx.db.insert("purged_run_starts", {
+    owner: run.owner,
+    agentId: run.agentId,
+    startedAt: run._creationTime,
+  });
+  await ctx.scheduler.runAfter(countsUntil - now, internal.threads.forgetRunStart, { id });
+}
+
+/** Drops a purged run's start once it no longer counts toward the hourly limit. */
+export const forgetRunStart = internalMutation({
+  args: { id: v.id("purged_run_starts") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    if ((await ctx.db.get(id)) !== null) await ctx.db.delete(id);
+    return null;
+  },
+});
+
+/**
  * Deletes a removed thread's rows, a batch at a time, by bytes as well as by
  * count. When none is left it says so on the thread's `deleted_threads` row.
  * `hercules.deleteTick` starts it again if a batch is lost or fails.
@@ -494,8 +572,9 @@ export const purge = internalMutation({
       .query("deleted_threads")
       .withIndex("by_thread_id", (q) => q.eq("threadId", threadId))
       .first();
+    const now = Date.now();
     // Says the purge is alive, so the tick does not start a second one.
-    if (deleted !== null) await ctx.db.patch(deleted._id, { purgeProgressAt: Date.now() });
+    if (deleted !== null) await ctx.db.patch(deleted._id, { purgeProgressAt: now });
     let rows = 0;
     let bytes = 0;
     for (const table of tables) {
@@ -514,6 +593,7 @@ export const purge = internalMutation({
         for (const row of step) {
           bytes += documentBytes(row);
           rows++;
+          if (table === "runs") await keepRunStart(ctx, row as Doc<"runs">, now);
           await ctx.db.delete(row._id);
         }
       }
@@ -546,7 +626,10 @@ export const claimPageAction = mutation({
     if (thread === null) return false;
     const call = await toolCallById(ctx, args.runId, args.toolCallId);
     if (call === null || call.threadId !== thread.threadId) return false;
-    if (call.kind !== "page" || call.claimedAt !== null || call.expired) return false;
+    // Only a delivered `page_action` holds arguments: the record of a tool
+    // call alone, or of a page action the run was not started with, has none.
+    if (call.kind !== "page" || call.argumentsJson === null) return false;
+    if (call.claimedAt !== null || call.expired) return false;
     const now = Date.now();
     if (!isPageActionFresh(call.createdAt, now)) {
       await ctx.db.patch(call._id, { expired: true });

@@ -12,7 +12,13 @@
  *   send: useMutation(api.agent.send),
  *   cancel: useMutation(api.agent.cancel),
  *   claimPageAction: useMutation(api.agent.claimPageAction),
- *   pageActions: { open_order: ({ orderId }) => navigate(`/orders/${orderId}`) },
+ *   pageActions: {
+ *     // A model writes the arguments: check the id, then build the URL from it.
+ *     open_order: ({ orderId }) => {
+ *       if (typeof orderId !== "string" || !/^[\w-]{1,64}$/.test(orderId)) return;
+ *       navigate(`/orders/${encodeURIComponent(orderId)}`);
+ *     },
+ *   },
  * });
  * const started = await chat.send(text);
  * if (started) setThreadId(started.threadId);
@@ -68,7 +74,8 @@ export interface UseAgentThreadOptions {
    * The page's actions, by name. One open tab runs each call, once Hercules
    * has delivered it to the app and while it is less than two minutes old.
    * One that came later is not run: `thread.pageActions` lists it with
-   * `status: "expired"`, for the page to say so.
+   * `status: "expired"`, for the page to say so. A handler's arguments are
+   * untrusted input: see `PageActionHandler`.
    */
   pageActions?: Readonly<Record<string, PageActionHandler>>;
   fetch?: typeof fetch;

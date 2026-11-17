@@ -31,7 +31,7 @@ type Public = {
 describe("ComponentApi", () => {
   it("matches the component's public functions", () => {
     expectTypeOf<keyof Modules["threads"]>().toEqualTypeOf<
-      keyof ComponentApi["threads"] | "purge"
+      keyof ComponentApi["threads"] | "purge" | "forgetRunStart"
     >();
     expectTypeOf<keyof Modules["events"]>().toEqualTypeOf<keyof ComponentApi["events"]>();
 
