@@ -43,14 +43,6 @@ export type ToolCaller =
   | {
       principal: "agent";
       agentId: string;
-      /**
-       * @deprecated Hercules agents no longer take anonymous visitors, so
-       * this is null on every new run. It is still set on a run in a thread
-       * a visitor opened before that: treat a caller with one as an
-       * anonymous member of the public, never as the app's own job. It will
-       * be removed once Hercules no longer sends it.
-       */
-      visitorId: string | null;
     };
 
 /** A failure the calling model should read and can act on. Its message is sent as is. */
@@ -165,7 +157,8 @@ function agentIdOf(value: string | null): string | null {
 /**
  * Reads the caller out of a verified token, or null when its claims do not
  * name one. `hercules_principal` is required: a token without it is refused,
- * never read as a user.
+ * never read as a user. Claims it does not name here are not read, so a
+ * token that carries more than these reads the same.
  */
 export function callerFromToken(token: {
   issuer: string;
@@ -176,11 +169,7 @@ export function callerFromToken(token: {
   if (principal === "agent") {
     const agentId = agentIdOf(token.subject);
     if (agentId === null) return null;
-    return {
-      principal: "agent",
-      agentId,
-      visitorId: stringClaim(token.claims, "hercules_visitor"),
-    };
+    return { principal: "agent", agentId };
   }
   if (principal !== "user") return null;
   // An agent subject without the agent principal would read as an end user

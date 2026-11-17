@@ -269,7 +269,7 @@ describe("send", () => {
     expect(errorCode(error)).toBe("sign_in_required");
     expect(h.db.all("runs")).toHaveLength(0);
 
-    // There are no visitors: a thread reads as nothing to someone not signed in.
+    // A thread reads as nothing to someone not signed in.
     const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     expect(await support.readThread(h.appCtx(null), { threadId })).toBeNull();
     expect(await support.cancel(h.appCtx(null), { threadId })).toBe(false);
@@ -2464,6 +2464,80 @@ describe("a start Hercules refuses", () => {
     expect(error?.code).toBe("agent_not_found");
     expect(error?.message).toMatch(/agent id/);
   });
+
+  it("fails with hercules_auth_required, once, in words for the developer and others for the page", async () => {
+    const support = agents();
+    // The app has no Hercules Auth 2.0 tenant: Hercules could not sign what it sends the app.
+    api.answerWith((request) =>
+      isStart(request)
+        ? problem(409, "hercules_auth_required", "The app has no Hercules Auth tenant.")
+        : undefined,
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    // Never sent again: not by the start call, and not by the stuck-run check.
+    await h.runUntil(h.now + 10 * 60_000);
+    const logged = errors.mock.calls.map((call) => String(call[0]));
+    errors.mockRestore();
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+
+    // The run's own error, the log, and `onRunFinished` are the developer's.
+    const upgrade = /Upgrade the app to Hercules Auth 2\.0/;
+    const stored = (await support.readThreadDetails(h.appCtx(), { threadId }))?.latestRun;
+    expect(stored).toMatchObject({ id: runId, status: "failed" });
+    expect(stored?.error).toEqual({
+      code: "hercules_auth_required",
+      message: expect.stringMatching(upgrade),
+    });
+    expect(logged.filter((line) => upgrade.test(line))).toEqual([
+      expect.stringContaining(`Hercules refused run ${runId}: 409 hercules_auth_required`),
+    ]);
+    expect(finished).toEqual([
+      expect.objectContaining({ runId, status: "failed", error: stored?.error }),
+    ]);
+
+    // The page's thread has the code, and words for its user.
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toEqual({
+      id: runId,
+      status: "failed",
+      error: {
+        code: "hercules_auth_required",
+        message: "The assistant is not available right now.",
+      },
+      cappedReason: null,
+      finished_at: expect.any(String),
+    });
+  });
+
+  it.each([
+    [409, "a_refusal_from_the_future", "Something this version has no name for.", undefined],
+    [429, "a_limit_from_the_future", "A limit this version has no name for.", 90],
+  ])(
+    "fails with a code it does not know as Hercules sent it: %i %s",
+    async (status, code, detail, wait) => {
+      const support = agents();
+      api.answerWith((request) =>
+        isStart(request) ? problem(status, code, detail, wait) : undefined,
+      );
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+      await h.runUntil(h.now + 60_000);
+      errors.mockRestore();
+      expect(api.requests.filter(isStart)).toHaveLength(1);
+      const error = {
+        code,
+        message: detail,
+        ...(wait !== undefined && { retryAfterSeconds: wait }),
+      };
+      // The page and the backend read the same: the message is Hercules's own.
+      expect((await read(support, threadId)).latestRun?.error).toStrictEqual(error);
+      const details = await support.readThreadDetails(h.appCtx(), { threadId });
+      expect(details?.latestRun?.error).toStrictEqual(error);
+      expect(finished).toEqual([expect.objectContaining({ runId, status: "failed", error })]);
+    },
+  );
 
   /** "Start unconfirmed": Hercules has the run, and cannot say yet that it started. */
   function unconfirmed(runId: unknown) {

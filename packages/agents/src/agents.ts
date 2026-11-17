@@ -289,7 +289,10 @@ export class HerculesAgents {
    * signed in.
    *
    * It is what a page shows, so without `exposeToolDetails` its Hercules
-   * tool calls are named "tool", and no tool call carries a result.
+   * tool calls are named "tool", and no tool call carries a result. For the
+   * same reason `latestRun.error.message` is written for the page's user
+   * when the run failed as `hercules_auth_required`: what the developer has
+   * to do is in `readThreadDetails`, `onRunFinished` and the logs.
    *
    * It holds the thread's newest messages: 100 unless `limit` says
    * otherwise, at most 200, and fewer when they come to more than about
@@ -314,8 +317,9 @@ export class HerculesAgents {
 
   /**
    * One of this agent's threads as the component stores it, for the app's
-   * own backend: every tool call under its own name, and `toolCalls` with
-   * the results of the app's tools. Null for a thread that does not exist.
+   * own backend: every tool call under its own name, `toolCalls` with the
+   * results of the app's tools, and the latest run's error as stored. Null
+   * for a thread that does not exist.
    *
    * It does not read `ctx.auth` and answers for any user's thread, so call it
    * from an internal function, or check who is asking first. Do not return

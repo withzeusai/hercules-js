@@ -12,6 +12,9 @@ import {
   type TestIssuer,
 } from "./helpers";
 
+// An agent's id is a plain ULID.
+const AGENT_ID = "01JDX5ZQ8W3J2K6M9N4P7R1S0T";
+
 const echo: McpTool<null> = {
   description: "Returns its arguments.",
   inputSchema: { type: "object" },
@@ -30,6 +33,11 @@ beforeEach(async () => {
     tools: {
       echo,
       text: { ...echo, handler: () => "plain text" },
+      caller: {
+        ...echo,
+        principals: ["user", "agent"],
+        handler: (_ctx, _args: never, caller) => caller,
+      },
       big: { ...echo, handler: () => ({ count: 12n, bytes: new Uint8Array([65, 66]).buffer }) },
       refuse: {
         ...echo,
@@ -79,6 +87,27 @@ describe("createMcpHandler", () => {
     expect(response.headers.get("www-authenticate")).toBe(
       'Bearer error="invalid_token", error_description="The token is not a valid JWT"',
     );
+  });
+
+  it("takes an agent's token that still carries hercules_visitor as an agent with no end user", async () => {
+    const claims = userClaims({ sub: `agent:${AGENT_ID}`, hercules_principal: "agent" });
+    const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "caller" } };
+    // The second is what a Hercules that has not dropped the claim yet signs
+    // for a thread a visitor of a public agent once opened.
+    for (const signed of [claims, { ...claims, hercules_visitor: "anonymous:v1" }]) {
+      const token = await issuer.sign(signed);
+      const response = await send(call, token);
+      expect(response.status).toBe(200);
+      expect(((await response.json()) as { result: unknown }).result).toEqual({
+        content: [{ type: "text", text: `{"principal":"agent","agentId":"${AGENT_ID}"}` }],
+      });
+      // It is no end user: a tool for signed-in users does not exist for it.
+      const refused = await send({ ...call, params: { name: "echo" } }, token);
+      expect(((await refused.json()) as { error: unknown }).error).toEqual({
+        code: -32602,
+        message: "Unknown tool: echo",
+      });
+    }
   });
 
   it("answers 503 while the signing keys cannot be loaded", async () => {
@@ -200,8 +229,6 @@ describe("createMcpHandler", () => {
 
 describe("callerFromToken", () => {
   const base = { issuer: ISSUER, subject: "user_123" };
-  // An agent's id is a plain ULID.
-  const AGENT_ID = "01JDX5ZQ8W3J2K6M9N4P7R1S0T";
 
   it("reads an end user, with the agent acting for them when there is one", () => {
     const claims = { hercules_principal: "user" };
@@ -217,14 +244,20 @@ describe("callerFromToken", () => {
     ).toMatchObject({ principal: "user", agentId: AGENT_ID });
   });
 
-  it("reads an agent with no end user, and the visitor it serves", () => {
+  it("reads an agent with no end user", () => {
+    const token = { issuer: ISSUER, subject: `agent:${AGENT_ID}` };
+    const agent = { principal: "agent", agentId: AGENT_ID };
+    expect(callerFromToken({ ...token, claims: { hercules_principal: "agent" } })).toStrictEqual(
+      agent,
+    );
+    // A Hercules that still signs the claim it had for the visitor of a
+    // public agent: the caller is the same, and carries nothing of it.
     expect(
       callerFromToken({
-        issuer: ISSUER,
-        subject: `agent:${AGENT_ID}`,
+        ...token,
         claims: { hercules_principal: "agent", hercules_visitor: "anonymous:v1" },
       }),
-    ).toEqual({ principal: "agent", agentId: AGENT_ID, visitorId: "anonymous:v1" });
+    ).toStrictEqual(agent);
   });
 
   it.each([

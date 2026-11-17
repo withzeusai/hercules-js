@@ -232,7 +232,20 @@ const CANCELLED: RunOutcome = {
   usage: null,
 };
 
-/** How a refused start ends the run: with Hercules's own code, and how long its limit lasts. */
+/**
+ * What the app's developer is told when Hercules refuses a run as
+ * `hercules_auth_required`: the app has no Hercules Auth 2.0 tenant, whose
+ * key signs what Hercules sends the app. It is the run's stored error and is
+ * logged. A page reads other words for it: see `pageError` in `./threads`.
+ */
+const AUTH_REQUIRED_MESSAGE =
+  "This app has no Hercules Auth 2.0 tenant, so Hercules cannot deliver a run's events to it or call its tools. Upgrade the app to Hercules Auth 2.0: no run can start until then.";
+
+/**
+ * How a refused start ends the run: with Hercules's own code, and how long
+ * its limit lasts. A code this version does not know ends it the same way,
+ * with the message Hercules sent.
+ */
 function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome {
   const { status } = response;
   if (status === null || status === 408 || status >= 500) {
@@ -244,6 +257,10 @@ function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome
       "agent_not_found",
       "Hercules has no agent with this id for this app, or the agents API is not turned on for it. Check the agent id the app was set up with.",
     );
+  }
+  // The app's setup as well. A 409, so it was sent once: sending again cannot pass.
+  if (response.code === "hercules_auth_required") {
+    return failed("hercules_auth_required", AUTH_REQUIRED_MESSAGE);
   }
   return failed(
     response.code,
@@ -663,8 +680,11 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
     return { kind: "busy", response };
   }
   if (response.retryable) return { kind: "retry", response };
+  // The log is the developer's: for a refusal that is the app's setup it says what to do.
   console.error(
-    `Hercules refused run ${run.runId}: ${response.status ?? "network"} ${response.code}`,
+    `Hercules refused run ${run.runId}: ${response.status ?? "network"} ${response.code}${
+      response.code === "hercules_auth_required" ? `. ${AUTH_REQUIRED_MESSAGE}` : ""
+    }`,
   );
   await ctx.runMutation(internal.hercules.refuseRun, {
     runId: run.runId,

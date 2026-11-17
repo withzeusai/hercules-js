@@ -41,7 +41,7 @@ import {
   keepCutOffReplies,
   notSentChunk,
   RunChunks,
-  runIdOf,
+  showsStreamOf,
   threadToUIMessages,
   transcriptKey,
 } from "./ag-ui";
@@ -520,7 +520,9 @@ export interface SyncableChat {
 /**
  * Puts the thread as Convex has it into the chat, when it reads differently
  * from what the chat shows and no reply is streaming here. Returns whether
- * it did. Messages older than the thread's window stay as they are. So does
+ * it did. A run this page streamed is left alone until Convex has its end; a
+ * run another tab started is taken with every update of the thread.
+ * Messages older than the thread's window stay as they are. So does
  * what this page streamed of a reply that was stopped while it was written,
  * when the thread holds less of it: it is kept with
  * `metadata.hercules.status` set to `"incomplete"`.
@@ -529,10 +531,10 @@ export function syncThread(chat: SyncableChat, thread: ThreadValue | undefined):
   if (thread === null || thread === undefined) return false;
   if (chat.isLoading || chat.isHydrating === true) return false;
   // This page streamed that run, and Convex has not caught up with it yet.
+  // What an earlier sync put here of a run another tab started is Convex's
+  // own copy, and each update of the thread replaces it.
   const active = thread.activeRun?.id;
-  if (active !== undefined && chat.messages.some((message) => runIdOf(message) === active)) {
-    return false;
-  }
+  if (active !== undefined && showsStreamOf(chat.messages, thread, active)) return false;
   let next = threadToUIMessages(thread);
   const first = next[0];
   if (thread.hasMore && first !== undefined) {
@@ -547,9 +549,10 @@ export function syncThread(chat: SyncableChat, thread: ThreadValue | undefined):
 
 /**
  * Keeps the chat in step with the thread in Convex: a reply another tab or
- * device got shows here too. It sets the chat's messages only while no reply
- * is streaming on this page. Returns the thread, for its `activeRun.progress`
- * and `latestRun`.
+ * device got shows here too, as far as Convex has it while it is written
+ * (its checkpoints, not the live stream) and whole once it is done. It sets
+ * the chat's messages only while no reply is streaming on this page. Returns
+ * the thread, for its `activeRun.progress` and `latestRun`.
  *
  * ```tsx
  * const chat = useChat({ connection, threadId, persistence: true });
