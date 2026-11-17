@@ -2,7 +2,7 @@
 import type { Infer } from "convex/values";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel.js";
-import { mutation, type MutationCtx } from "./_generated/server.js";
+import { mutation, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import {
   MAX_STORED_TEXT_BYTES,
   appendText,
@@ -86,15 +86,30 @@ async function upsertToolCall(
 }
 
 /**
+ * The page actions a run was started with, from its stored request: the only
+ * ones it may send the page. None when the run asked for none, or when its
+ * request is gone.
+ */
+async function requestedPageActions(ctx: QueryCtx, runId: string): Promise<ReadonlySet<string>> {
+  const request = await ctx.db
+    .query("run_requests")
+    .withIndex("by_run_id", (q) => q.eq("runId", runId))
+    .unique();
+  return new Set(request?.pageActions ?? []);
+}
+
+/**
  * Applies one event's own rows. What it changes of the run goes into
  * `progress`, and how it ended the run is returned: the caller writes the run
- * document once for the whole batch.
+ * document once for the whole batch. `pageActions` reads the names the run
+ * may send the page, when an event needs them.
  */
 async function applyOne(
   ctx: MutationCtx,
   run: Doc<"runs">,
   event: WireEvent,
   progress: RunProgress,
+  pageActions: () => Promise<ReadonlySet<string>>,
 ): Promise<RunOutcome | null> {
   const data = event.data;
   switch (data.kind) {
@@ -120,6 +135,14 @@ async function applyOne(
       }
       return null;
     case "page_action":
+      // The app's backend lists the page actions a run may use. One the run
+      // was not started with is not stored, so no page lists or claims it.
+      if (!(await pageActions()).has(data.name)) {
+        console.warn(
+          `Dropped page action ${JSON.stringify(data.name)} (call ${data.toolCallId}) of run ${run.runId}: the run was not started with it.`,
+        );
+        return null;
+      }
       await upsertToolCall(ctx, run, data.toolCallId, eventTime(event), {
         name: data.name,
         kind: "page",
@@ -171,12 +194,15 @@ export async function applyEvents(ctx: MutationCtx, events: readonly WireEvent[]
     let started = false;
     let ending: RunOutcome | null = null;
     const progress: RunProgress = {};
+    // Read once for the batch, and only when it holds a page action.
+    let requested: Promise<ReadonlySet<string>> | null = null;
+    const pageActions = () => (requested ??= requestedPageActions(ctx, runId));
     for (const event of list) {
       if (event.seq <= lastSeq) {
         skipped++;
         continue;
       }
-      const ended = await applyOne(ctx, run, event, progress);
+      const ended = await applyOne(ctx, run, event, progress, pageActions);
       // The first ending counts; a run ends once.
       ending ??= ended;
       // Any event after `run.queued` means the run started.

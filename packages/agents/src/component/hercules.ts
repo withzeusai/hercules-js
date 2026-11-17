@@ -358,6 +358,14 @@ export const endRun = internalMutation({
  * Ends a run Hercules would not take. Only a run it has not taken: a run
  * that a delivered event has since shown to be going is left alone, whatever
  * a later start call was answered.
+ *
+ * The run stays `accepted: false`, and that is the mark its thread carries:
+ * a thread none of whose runs Hercules took is never named to Hercules again
+ * except in a new run, which says who it is for (see `remove` in `./threads`).
+ * Hercules answers 404 both for an agent it does not have and for a thread
+ * it will not open for this caller, and the two cannot be told apart here.
+ * So the thread is kept, for its owner to read the failure on and to send in
+ * again once the app is set up right.
  */
 export const refuseRun = internalMutation({
   args: { runId: v.string(), outcome: vOutcome },
@@ -519,6 +527,14 @@ async function recordStopped(
 }
 
 /**
+ * Notes that Hercules has a run whose start it never answered: it answered
+ * for the run by its id, which only a run it took has there.
+ */
+async function noteTaken(ctx: ActionCtx, runId: string): Promise<void> {
+  await ctx.runMutation(internal.hercules.recordAccepted, { runId, status: null, live: null });
+}
+
+/**
  * Stops a run at Hercules that a cancel is waiting for. A run Hercules never
  * got is ended here. True when the run is over.
  */
@@ -533,6 +549,9 @@ async function cancelAtHercules(
     `/v1/agents/runs/${encodeURIComponent(run.runId)}/cancel`,
   );
   if (response.ok) {
+    // Hercules knows the run, so it took it: a start call reached it and the
+    // answer was lost. Noted, so the thread counts as one Hercules has.
+    if (!run.accepted) await noteTaken(ctx, run.runId);
     const current = readRun(response.body);
     const outcome = current === null ? null : outcomeFromRun(current);
     if (outcome === null) return false;
@@ -728,7 +747,13 @@ export const startRun = internalAction({
 });
 
 export const cancelRun = internalAction({
-  args: { runId: v.string(), api: vApi, attempt: v.number() },
+  args: {
+    runId: v.string(),
+    api: vApi,
+    attempt: v.number(),
+    /** The run's start was never answered, so whether Hercules has it is not known. */
+    unconfirmed: v.optional(v.boolean()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const response = await callHercules(
@@ -737,6 +762,7 @@ export const cancelRun = internalAction({
       `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
     );
     if (response.ok) {
+      if (args.unconfirmed === true) await noteTaken(ctx, args.runId);
       const current = readRun(response.body);
       const outcome = current === null ? null : outcomeFromRun(current);
       if (outcome !== null) {
@@ -780,13 +806,79 @@ async function deletedThread(ctx: QueryCtx, threadId: string) {
 }
 
 /**
+ * Records an answer about a deleted thread that was not a yes. A 404 is "it
+ * is not there". But Hercules also answers 404 on every route while the
+ * agents API is off for the app, so one 404 is not taken for it: it must
+ * still be the answer an hour later.
+ */
+async function noteNotDeleted(
+  ctx: ActionCtx,
+  threadId: string,
+  response: Extract<HerculesResponse, { ok: false }>,
+): Promise<void> {
+  if (response.status === 404) {
+    await ctx.runMutation(internal.hercules.noteDelete, { threadId, outcome: "missing" });
+    return;
+  }
+  // An answer that asking again cannot change: the request or the key is wrong.
+  if (response.status === 400 || response.status === 401 || response.status === 403) {
+    console.error(
+      `Hercules refused to delete thread ${threadId}: ${response.status} ${response.code}`,
+    );
+    await ctx.runMutation(internal.hercules.noteDelete, { threadId, outcome: "refused" });
+    return;
+  }
+  // Anything else may pass: Hercules answers 409 `thread_busy` while the
+  // thread's run is still stopping, and says when to ask again.
+  await ctx.runMutation(internal.hercules.noteDelete, {
+    threadId,
+    outcome: "later",
+    waitMs: Math.min(response.retryAfterMs ?? 0, MAX_RETRY_MS),
+  });
+}
+
+/**
  * Asks Hercules once to delete a thread, and records what it said. It does
  * not try again itself: `deleteTick` does, and that cannot be lost.
+ *
+ * The delete names the thread and no end user. So it is sent only for a
+ * thread Hercules took a run on, which it does for the thread's own end user
+ * and no other. With `ifRun`, the thread was deleted before Hercules had
+ * answered for any of its runs: Hercules is asked for that run first, by the
+ * id this component gave it, and for the delete only if it has the run, on
+ * this thread. A run it does not have (yet) reads as a thread that is not
+ * there.
  */
 export const deleteThread = internalAction({
-  args: { threadId: v.string(), api: vApi },
+  args: { threadId: v.string(), api: vApi, ifRun: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
+    if (args.ifRun !== undefined) {
+      const asked = await callHercules(
+        args.api,
+        "GET",
+        `/v1/agents/runs/${encodeURIComponent(args.ifRun)}`,
+      );
+      if (!asked.ok) {
+        await noteNotDeleted(ctx, args.threadId, asked);
+        return null;
+      }
+      const run = readRun(asked.body);
+      if (run === null || run.id !== args.ifRun || run.thread_id !== args.threadId) {
+        console.error(
+          `Hercules did not place run ${args.ifRun} on thread ${args.threadId}, so the thread is not deleted there.`,
+        );
+        await ctx.runMutation(internal.hercules.noteDelete, {
+          threadId: args.threadId,
+          outcome: "refused",
+        });
+        return null;
+      }
+      await ctx.runMutation(internal.hercules.noteDelete, {
+        threadId: args.threadId,
+        outcome: "confirmed",
+      });
+    }
     const response = await callHercules(
       args.api,
       "DELETE",
@@ -799,34 +891,7 @@ export const deleteThread = internalAction({
       });
       return null;
     }
-    // A thread Hercules never saw is gone there. But it also answers 404 on
-    // every route while the agents API is off for the app, so one 404 is not
-    // taken for it: it must still be the answer an hour later.
-    if (response.status === 404) {
-      await ctx.runMutation(internal.hercules.noteDelete, {
-        threadId: args.threadId,
-        outcome: "missing",
-      });
-      return null;
-    }
-    // An answer that asking again cannot change: the request or the key is wrong.
-    if (response.status === 400 || response.status === 401 || response.status === 403) {
-      console.error(
-        `Hercules refused to delete thread ${args.threadId}: ${response.status} ${response.code}`,
-      );
-      await ctx.runMutation(internal.hercules.noteDelete, {
-        threadId: args.threadId,
-        outcome: "refused",
-      });
-      return null;
-    }
-    // Anything else may pass: Hercules answers 409 `thread_busy` while the
-    // thread's run is still stopping, and says when to ask again.
-    await ctx.runMutation(internal.hercules.noteDelete, {
-      threadId: args.threadId,
-      outcome: "later",
-      waitMs: Math.min(response.retryAfterMs ?? 0, MAX_RETRY_MS),
-    });
+    await noteNotDeleted(ctx, args.threadId, response);
     return null;
   },
 });
@@ -840,6 +905,8 @@ export const noteDelete = internalMutation({
       v.literal("missing"),
       v.literal("refused"),
       v.literal("later"),
+      /** Hercules has the run the thread was waiting on: the thread is there, and this caller's. */
+      v.literal("confirmed"),
     ),
     waitMs: v.optional(v.number()),
   },
@@ -849,7 +916,10 @@ export const noteDelete = internalMutation({
     if (row === null) return null;
     const now = Date.now();
     if (args.outcome === "deleted") await ctx.db.patch(row._id, { remoteDeletedAt: now });
-    else if (args.outcome === "refused") await ctx.db.patch(row._id, { remoteGaveUpAt: now });
+    else if (args.outcome === "confirmed") {
+      // From here on the delete is sent without asking for the run again.
+      await ctx.db.patch(row._id, { unconfirmedRunId: undefined, remoteMissingSince: null });
+    } else if (args.outcome === "refused") await ctx.db.patch(row._id, { remoteGaveUpAt: now });
     else if (args.outcome === "missing") {
       const since = row.remoteMissingSince ?? now;
       await ctx.db.patch(
@@ -874,6 +944,8 @@ export const noteDelete = internalMutation({
 /**
  * Sees a deleted thread through: asks Hercules to delete its copy until it
  * confirms, and starts the purge of the thread's rows again if it stopped.
+ * A thread Hercules never took a run on has no copy there: its row says so
+ * from the start, and only the purge is seen through.
  *
  * It is a mutation that schedules itself, so it cannot be lost the way an
  * action can: Convex runs a scheduled mutation exactly once. Each time it
@@ -913,7 +985,10 @@ export const deleteTick = internalMutation({
           Math.min(DELETE_FIRST_RETRY_MS * 2 ** Math.min(row.attempts, 10), MAX_RETRY_MS),
         );
         await ctx.db.patch(row._id, { attempts: row.attempts + 1, nextAttemptAt: now + wait });
-        await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, args);
+        await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, {
+          ...args,
+          ...(row.unconfirmedRunId !== undefined && { ifRun: row.unconfirmedRunId }),
+        });
         next = wait;
       } else {
         next = row.nextAttemptAt - now;
@@ -950,7 +1025,11 @@ export const tickRun = internalMutation({
       await finishRun(ctx, run, failed("run_failed", gaveUp));
       // The thread is free here. Hercules may still have the run going and
       // hold the thread there, so it is asked to stop it, as well as can be.
-      await ctx.scheduler.runAfter(0, internal.hercules.cancelRun, { ...args, attempt: 0 });
+      await ctx.scheduler.runAfter(0, internal.hercules.cancelRun, {
+        ...args,
+        attempt: 0,
+        ...(!run.accepted && { unconfirmed: true }),
+      });
       return null;
     }
 

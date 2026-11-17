@@ -154,6 +154,14 @@ code of its own, such as `out_of_credits`, stays a failure.
 | `claimPageAction(ctx, { threadId, runId, toolCallId })` | mutation           | Takes a page action for one tab to run                                   |
 | `registerRoutes(http)`                                  | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents         |
 
+`run` and `readThreadDetails` are server-only. Neither reads `ctx.auth`: `run`
+starts a run for no end user and against no limit, and `readThreadDetails`
+returns any user's thread with its tool results. Call them from an internal
+function (`internalMutation`, `internalQuery`, a cron), or from a public one
+only after it has checked who is asking. `support.api()` exports neither, and
+the package cannot tell a public function from an internal one, so the check
+is the app's.
+
 `send` opens a new thread when `threadId` is left out, or when it is a UUID or
 ULID no thread has yet: the page may choose its thread's id, as a TanStack AI
 chat does. The id must be in the form Hercules keeps it in: a UUID in
@@ -226,6 +234,11 @@ action can be claimed once Hercules has delivered it to the app, and only
 while it is less than two minutes old by the time the agent called it. The
 claim decides that on the server's clock, so a browser's clock plays no part.
 
+A run sends the page only the page actions it was started with. One under any
+other name is dropped when Hercules delivers it, with a warning in the Convex
+logs that names it, so no page lists or claims it. In the page, a handler runs
+only when the page set a function under that exact name.
+
 One that came too late is not run, and the page is told: `thread.pageActions`
 lists the page actions no tab has run (the twenty that have waited longest),
 each with `status: "pending"` or `"expired"`, for ten minutes from when it
@@ -248,6 +261,16 @@ component asks again as told, for up to a day. A 404 counts as "gone" only
 once it has been the answer for an hour, since Hercules also answers 404
 while the agents API is off for the app. Both are driven by a mutation
 that reschedules itself, so neither stops halfway.
+
+Hercules is asked to delete only a thread it took a run on. It takes a run
+only for the user the run was sent for, so a run it took is what tells the
+component that the thread under that id at Hercules is the caller's. A thread
+whose runs Hercules all refused, or never got, is deleted in the app alone.
+One deleted while its first run is still being started is deleted at Hercules
+once Hercules says it has that run.
+
+Deleting a thread does not give its runs back: they count toward
+`limits.runsPerUserPerHour` until an hour after they were sent.
 
 ### Several agents
 
@@ -457,19 +480,30 @@ when Hercules has delivered the call to the app, a moment after it shows in
 the chat, and not at all once it is two minutes old by the server's clock.
 
 ```tsx
+// What an order's id looks like in this app. At module scope.
+const ORDER_ID = /^[\w-]{1,64}$/;
+
 // In SignedInChat, after useChat. useNavigate is TanStack Router's.
 const navigate = useNavigate();
 useEffect(() => {
   connection.setPageActions({
-    // The agent writes the arguments: check them before acting on them.
+    // Untrusted input: check the id, then go to a fixed route with it.
     open_order: ({ orderId }) => {
-      if (typeof orderId !== "string") return;
+      if (typeof orderId !== "string" || !ORDER_ID.test(orderId)) return;
+      // The router encodes the id into the path.
       void navigate({ to: "/orders/$orderId", params: { orderId } });
     },
   });
   return () => connection.setPageActions(undefined);
 }, [connection, navigate]);
 ```
+
+A model writes the arguments, and it may have been steered by text it read,
+so treat them as untrusted input. A handler navigates within the app or
+adjusts what the page shows: it never submits, purchases, deletes or changes a
+setting. Validate an id and build the URL from a fixed route plus the encoded
+id, never navigate to a URL taken from an argument, and never render an
+argument as HTML.
 
 Handlers that need nothing from React can go in `herculesConnection`'s
 `pageActions` option instead, when the connection is made. A page action is
@@ -582,7 +616,11 @@ function Chat() {
     cancel: useMutation(api.agent.cancel),
     claimPageAction: useMutation(api.agent.claimPageAction),
     pageActions: {
-      open_order: ({ orderId }) => navigate(`/orders/${orderId}`),
+      // Untrusted input: check the id, then build the URL from it.
+      open_order: ({ orderId }) => {
+        if (typeof orderId !== "string" || !/^[\w-]{1,64}$/.test(orderId)) return;
+        navigate(`/orders/${encodeURIComponent(orderId)}`);
+      },
     },
   });
 
@@ -599,7 +637,8 @@ The reply streams from the run's live URL, resuming with `Last-Event-ID`
 after a dropped connection, until Convex has the completed message. Page
 actions are one-way: one open tab claims each and runs it, and nothing goes
 back to the run. The hook takes them from `thread.pageActions`, so one runs
-when Hercules has delivered it.
+when Hercules has delivered it. A handler's arguments are untrusted input:
+the rules under "Page actions" above hold here too.
 
 `thread` returns the thread's newest messages: 100 unless `limit` is a whole
 number of at least one, at most 200, and fewer when they come to more than about 4 MiB.

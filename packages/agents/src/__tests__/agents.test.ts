@@ -310,6 +310,59 @@ describe("send", () => {
     await support.send(h.appCtx(ALICE), { text: "Three" });
   });
 
+  it("keeps counting the runs of a deleted thread toward the hourly limit", async () => {
+    const support = agents({ limits: { runsPerUserPerHour: 2 } });
+    const sentAt = h.now;
+    const one = await support.send(h.appCtx(ALICE), { text: "One" });
+    const two = await support.send(h.appCtx(ALICE), { text: "Two" });
+    await h.runDue();
+    // Deleting both threads purges their runs. It does not give them back.
+    for (const { threadId } of [one, two]) {
+      expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    }
+    await h.runDue();
+    expect(h.db.all("runs")).toEqual([]);
+    expect(h.db.all("purged_run_starts")).toEqual([
+      expect.objectContaining({ owner: `user:${ALICE}`, agentId: AGENT_ID }),
+      expect.objectContaining({ owner: `user:${ALICE}`, agentId: AGENT_ID }),
+    ]);
+    h.advance(10 * 60 * 1000);
+    const error = await support.send(h.appCtx(ALICE), { text: "Three" }).catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("end_user_rate_limited");
+    // Counted from when the oldest run was sent, as if its thread were still there.
+    const { retryAfterSeconds } = (error as ConvexError<{ retryAfterSeconds: number }>).data;
+    expect(retryAfterSeconds).toBeGreaterThanOrEqual(50 * 60);
+    expect(retryAfterSeconds).toBeLessThanOrEqual(50 * 60 + 1);
+    // Someone else is not held back.
+    await support.send(h.appCtx(BOB), { text: "One" });
+
+    // The hour passes, and with it what was kept of the purged runs.
+    await h.runUntil(sentAt + 60 * 60 * 1000 + 1_000, 2000);
+    expect(h.db.all("purged_run_starts")).toEqual([]);
+    await support.send(h.appCtx(ALICE), { text: "Three" });
+  });
+
+  it("keeps nothing of a purged run that no longer counts, or that is the app's own", async () => {
+    const support = agents({ limits: { runsPerUserPerHour: 2 } });
+    const old = await support.send(h.appCtx(ALICE), { text: "An hour ago" });
+    const job = await support.run(h.appCtx(), { text: "Summarize today's orders" });
+    await h.runDue();
+    h.advance(60 * 60 * 1000 + 1);
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId: old.threadId })).toBe(true);
+    // The app's own thread is deleted through the component, as the app's backend would.
+    expect(
+      await h.call(h.component.threads.remove, {
+        threadId: job.threadId,
+        agentId: AGENT_ID,
+        owner: "app",
+        api: { key: "hercules-app-key", url: API_URL },
+      }),
+    ).toBe(true);
+    await h.runDue();
+    expect(h.db.all("runs")).toEqual([]);
+    expect(h.db.all("purged_run_starts")).toEqual([]);
+  });
+
   it("refuses input over the size limit before writing anything", async () => {
     const error = await agents()
       .send(h.appCtx(ALICE), { text: "x".repeat(262_145) })
@@ -614,6 +667,9 @@ describe("segments", () => {
 });
 
 describe("page actions", () => {
+  /** An agent whose runs may open an order on the page. */
+  const pageAgent = () => agents({ pageActions: ["open_order"] });
+
   async function withPageAction(support: HerculesAgents) {
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Show my order" });
     await deliver(
@@ -628,7 +684,7 @@ describe("page actions", () => {
   }
 
   it("lists a delivered page action until one tab claims it", async () => {
-    const support = agents();
+    const support = pageAgent();
     const { threadId, runId } = await withPageAction(support);
     expect((await read(support, threadId)).pageActions).toEqual([
       expect.objectContaining({
@@ -646,7 +702,7 @@ describe("page actions", () => {
   });
 
   it("claims only a page action the run made and Hercules delivered", async () => {
-    const support = agents();
+    const support = pageAgent();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Show my order" });
     const claim = { threadId, runId, toolCallId: "call_page" };
     // Not delivered: an id the caller made up, or one read off the live stream too early.
@@ -685,7 +741,7 @@ describe("page actions", () => {
   });
 
   it("keeps the oldest waiting page actions listed when more than twenty arrive", async () => {
-    const support = agents();
+    const support = pageAgent();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Show my orders" });
     const calls = Array.from({ length: 25 }, (_, n) => `call_${String(n).padStart(2, "0")}`);
     await deliver(
@@ -713,7 +769,7 @@ describe("page actions", () => {
   });
 
   it("keeps each run's tool calls apart when two runs use the same id", async () => {
-    const support = agents();
+    const support = pageAgent();
     const first = await withPageAction(support);
     const second = await withPageAction(support);
     expect(h.db.all("tool_calls").map((row) => row["runId"])).toEqual([first.runId, second.runId]);
@@ -730,7 +786,7 @@ describe("page actions", () => {
   });
 
   it("lists a page action no tab took in two minutes as expired, and refuses its claim", async () => {
-    const support = agents();
+    const support = pageAgent();
     const { threadId, runId } = await withPageAction(support);
     // Each call here runs the query anew. A page that is subscribed to the
     // thread is not told as time passes: it sees `expired` at the thread's
@@ -754,7 +810,7 @@ describe("page actions", () => {
   });
 
   it("decides a claim on the server's clock, whatever the thread said when it was read", async () => {
-    const support = agents();
+    const support = pageAgent();
     const { threadId, runId } = await withPageAction(support);
     // The page read the thread while the action was pending, and asks later.
     const stale = await read(support, threadId);
@@ -767,7 +823,7 @@ describe("page actions", () => {
   });
 
   it("lists a page action that was delivered late as expired, and never runs it", async () => {
-    const support = agents();
+    const support = pageAgent();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Show my order" });
     await h.runDue();
     const written = new Date(h.now).toISOString();
@@ -810,6 +866,101 @@ describe("page actions", () => {
         false,
       );
     }
+  });
+
+  it("drops a page action the run was not started with, and says so in the log", async () => {
+    const support = pageAgent();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Show my order" });
+    await h.runDue();
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const delivered = await deliver(
+      support,
+      event(runId, threadId, 5, "page_action", {
+        tool_call_id: "call_delete",
+        name: "delete_account",
+        arguments: { confirm: "secret-argument" },
+      }),
+      // A name every object answers to is no more listed than any other.
+      event(runId, threadId, 6, "page_action", {
+        tool_call_id: "call_constructor",
+        name: "constructor",
+        arguments: {},
+      }),
+      event(runId, threadId, 7, "page_action", {
+        tool_call_id: "call_open",
+        name: "open_order",
+        arguments: { orderId: "123" },
+      }),
+      // The record of the dropped call is kept. It is still not one a page can take.
+      event(runId, threadId, 8, "tool_call.completed", {
+        tool_call_id: "call_delete",
+        name: "delete_account",
+        kind: "page",
+        status: "sent",
+        summary: null,
+      }),
+    );
+    const logged = warnings.mock.calls.map((call) => String(call[0]));
+    warnings.mockRestore();
+    // Each event is taken once, so a dropped one does not hold up the run's delivery.
+    expect(delivered).toEqual({ applied: 4, skipped: 0 });
+    expect(h.db.all("runs")[0]).toMatchObject({ lastSeq: 8 });
+
+    expect((await read(support, threadId)).pageActions.map((action) => action.name)).toEqual([
+      "open_order",
+    ]);
+    for (const toolCallId of ["call_delete", "call_constructor"]) {
+      expect(await support.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId })).toBe(
+        false,
+      );
+    }
+    expect(
+      await support.claimPageAction(h.appCtx(ALICE), { threadId, runId, toolCallId: "call_open" }),
+    ).toBe(true);
+
+    // The ids and the name, and nothing of the arguments.
+    expect(logged).toEqual([
+      expect.stringMatching(new RegExp(`"delete_account" \\(call call_delete\\) of run ${runId}`)),
+      expect.stringMatching(
+        new RegExp(`"constructor" \\(call call_constructor\\) of run ${runId}`),
+      ),
+    ]);
+    expect(logged.join()).not.toContain("secret-argument");
+  });
+
+  it("checks a page action against its own run's list, not the agent's", async () => {
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // This run was started with a list of its own.
+    const support = pageAgent();
+    const own = await support.send(h.appCtx(ALICE), {
+      text: "Show my invoice",
+      pageActions: ["show_invoice"],
+    });
+    // And an agent with no page actions starts runs that may send none.
+    const plain = agents();
+    const none = await plain.send(h.appCtx(ALICE), { text: "Show my order" });
+    await h.runDue();
+    for (const { threadId, runId } of [own, none]) {
+      await deliver(
+        support,
+        event(runId, threadId, 5, "page_action", {
+          tool_call_id: "call_open",
+          name: "open_order",
+          arguments: { orderId: "123" },
+        }),
+        event(runId, threadId, 6, "page_action", {
+          tool_call_id: "call_invoice",
+          name: "show_invoice",
+          arguments: { invoiceId: "456" },
+        }),
+      );
+    }
+    warnings.mockRestore();
+    expect((await read(support, own.threadId)).pageActions.map((action) => action.name)).toEqual([
+      "show_invoice",
+    ]);
+    expect((await read(plain, none.threadId)).pageActions).toEqual([]);
+    expect(h.db.all("tool_calls").map((row) => row["name"])).toEqual(["show_invoice"]);
   });
 });
 
@@ -2631,6 +2782,221 @@ describe("deleting a thread at Hercules", () => {
   });
 });
 
+describe("a thread Hercules never took a run on", () => {
+  const CHOSEN = "33333333-3333-4333-8333-333333333333";
+  const isDelete = (request: Recorded) => request.method === "DELETE";
+  const isRunRead = (request: Recorded) =>
+    request.method === "GET" && /^\/v1\/agents\/runs\/[^/]+$/.test(request.path);
+  const deletedRow = () => h.db.all("deleted_threads")[0];
+  const deleteJobs = () =>
+    h.scheduled.map((job) => job.name).filter((name) => /delete|purge/i.test(name));
+  const called = (from: number) =>
+    api.requests.slice(from).map((request) => `${request.method} ${request.path}`);
+  let errors: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errors.mockRestore();
+  });
+
+  /**
+   * Hercules as it answers for a thread it will not open for this caller:
+   * it refuses the run, and has no run under the run's id.
+   */
+  function anotherCallersThread(request: Recorded) {
+    if (isStart(request)) return problem(404, "not_found", "Thread not found");
+    if (isRunRead(request)) return problem(404, "not_found", "Run not found");
+    return undefined;
+  }
+
+  it("is deleted here only: Hercules is not asked about a thread it refused to open", async () => {
+    const support = agents();
+    api.answerWith(anotherCallersThread);
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), {
+      threadId: CHOSEN,
+      text: "Hi",
+    });
+    await h.runUntil(h.now + 60_000);
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    // The run failed as a run Hercules does not take always has, for the page to show.
+    expect((await read(support, threadId)).latestRun).toMatchObject({
+      id: runId,
+      status: "failed",
+      error: { code: "agent_not_found" },
+    });
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: false });
+
+    const before = api.requests.length;
+    // Nothing is going, so there is nothing to stop, here or at Hercules.
+    expect(await support.cancel(h.appCtx(ALICE), { threadId })).toBe(false);
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    // Settled at once, with nothing asked.
+    expect(deletedRow()).toMatchObject({ threadId, remoteDeletedAt: h.now, attempts: 0 });
+    expect(deletedRow()).not.toHaveProperty("unconfirmedRunId");
+    await h.runUntil(h.now + 2 * 60 * 60 * 1000);
+    expect(called(before)).toEqual([]);
+
+    // Here it is a deleted thread like any other: purged, and its id retired.
+    expect(await support.readThread(h.appCtx(ALICE), { threadId })).toBeNull();
+    for (const table of ["threads", "runs", "run_requests", "messages"]) {
+      expect(h.db.all(table)).toHaveLength(0);
+    }
+    expect(deletedRow()).toMatchObject({ purgedAt: expect.any(Number), remoteGaveUpAt: null });
+    expect(deleteJobs()).toEqual([]);
+    const again = await support
+      .send(h.appCtx(ALICE), { threadId, text: "Again" })
+      .catch((e: unknown) => e);
+    expect(errorCode(again)).toBe("thread_deleted");
+  });
+
+  it("is not asked about however soon the delete comes, before or after the refusal", async () => {
+    const support = agents();
+    api.answerWith(anotherCallersThread);
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), {
+      threadId: CHOSEN,
+      text: "Hi",
+    });
+    // Deleted before the start call ran: whether Hercules takes the run is not known yet.
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    expect(deletedRow()).toMatchObject({ remoteDeletedAt: null, unconfirmedRunId: runId });
+    await h.runUntil(h.now + 2 * 60 * 60 * 1000);
+
+    // Hercules was asked for the run, by the id the component gave it, and
+    // never for the thread.
+    expect(api.requests.filter(isDelete)).toEqual([]);
+    expect(new Set(called(0))).toEqual(
+      new Set([`POST /v1/agents/${AGENT_ID}/runs`, `GET /v1/agents/runs/${runId}`]),
+    );
+    expect(api.requests.filter(isRunRead).length).toBeGreaterThan(1);
+    // After an hour of "no such run", there is nothing of this thread at Hercules.
+    expect(deletedRow()).toMatchObject({
+      remoteDeletedAt: expect.any(Number),
+      remoteGaveUpAt: null,
+      purgedAt: expect.any(Number),
+    });
+    expect(deleteJobs()).toEqual([]);
+  });
+
+  it("is asked about once Hercules says it has the run whose start it never answered", async () => {
+    const support = agents();
+    // Hercules took the run, and its answer was lost on the way back.
+    api.answerWith((request) =>
+      isStart(request) ? new Response("Bad Gateway", { status: 502 }) : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: false, status: "queued" });
+    api.answerWith((request) =>
+      isRunRead(request)
+        ? Response.json({ id: runId, thread_id: threadId, status: "running" })
+        : undefined,
+    );
+
+    const before = api.requests.length;
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    expect(deletedRow()).toMatchObject({ remoteDeletedAt: null, unconfirmedRunId: runId });
+    await h.runUntil(h.now + 60_000);
+    // The run first, and the thread only because Hercules has it.
+    expect(called(before)).toEqual([
+      `GET /v1/agents/runs/${runId}`,
+      `DELETE /v1/agents/threads/${threadId}`,
+    ]);
+    expect(deletedRow()).toMatchObject({ remoteDeletedAt: expect.any(Number) });
+    expect(deletedRow()).not.toHaveProperty("unconfirmedRunId");
+    expect(deleteJobs()).toEqual([]);
+  });
+
+  it("is left alone when the run Hercules has is on another thread", async () => {
+    const support = agents();
+    api.answerWith((request) =>
+      isStart(request) ? new Response("Bad Gateway", { status: 502 }) : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      isRunRead(request)
+        ? Response.json({ id: runId, thread_id: CHOSEN, status: "running" })
+        : undefined,
+    );
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 60 * 60 * 1000);
+    expect(api.requests.filter(isDelete)).toEqual([]);
+    expect(api.requests.filter(isRunRead)).toHaveLength(1);
+    expect(deletedRow()).toMatchObject({ remoteGaveUpAt: expect.any(Number) });
+    expect(deleteJobs()).toEqual([]);
+  });
+
+  it("is deleted at Hercules as before once Hercules has taken a later run on it", async () => {
+    const support = agents();
+    // The agents API was off for the app: Hercules answers 404 on every route.
+    let off = true;
+    api.answerWith(() => (off ? problem(404, "not_found", "Not found.") : undefined));
+    const { threadId } = await support.send(h.appCtx(ALICE), { threadId: CHOSEN, text: "Hi" });
+    await h.runUntil(h.now + 60_000);
+    expect((await read(support, threadId)).latestRun?.error?.code).toBe("agent_not_found");
+
+    // The thread is still the caller's here, and the next run is taken.
+    off = false;
+    const next = await support.send(h.appCtx(ALICE), { threadId, text: "Hi again" });
+    await h.runDue();
+    expect(h.db.all("runs").map((row) => row["accepted"])).toEqual([false, true]);
+    const before = api.requests.length;
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 60_000);
+    expect(called(before)).toEqual([`DELETE /v1/agents/threads/${threadId}`]);
+    expect(next.threadId).toBe(threadId);
+  });
+
+  it("is not one whose first run is queued and taken: that is deleted at Hercules at once", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Hercules answered the start, and nothing was delivered yet.
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: true, status: "queued", lastSeq: 0 });
+    const before = api.requests.length;
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    expect(deletedRow()).toMatchObject({ remoteDeletedAt: null });
+    expect(deletedRow()).not.toHaveProperty("unconfirmedRunId");
+    await h.runDue();
+    expect(called(before)).toEqual([`DELETE /v1/agents/threads/${threadId}`]);
+  });
+
+  it("is not one whose run Hercules stopped, though it never answered the start", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    // The start call was lost. Hercules had the run all the same: it stops it.
+    await runOnly((name) => name !== "hercules:startRun", h.now + 3 * 60 * 1000);
+    expect(api.requests[0]?.path).toBe(`/v1/agents/runs/${runId}/cancel`);
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: true, status: "cancelled" });
+    const before = api.requests.length;
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 10_000);
+    expect(called(before)).toEqual([`DELETE /v1/agents/threads/${threadId}`]);
+  });
+
+  it("is not one whose run Hercules stops after a day of starts it could not answer", async () => {
+    const support = agents();
+    api.answerWith((request) =>
+      isStart(request) ? new Response("down", { status: 503 }) : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runUntil(h.now + 24 * 60 * 60 * 1000 + 4 * 60 * 1000, 5000);
+    expect((await read(support, threadId)).latestRun?.error?.message).toBe(
+      "The run could not be started within a day.",
+    );
+    // Asked to stop the run, Hercules answered for it: it had it.
+    expect(called(0)).toContain(`POST /v1/agents/runs/${runId}/cancel`);
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: true, status: "failed" });
+    const before = api.requests.length;
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 10_000);
+    expect(called(before)).toEqual([`DELETE /v1/agents/threads/${threadId}`]);
+  });
+});
+
 describe("large threads", () => {
   /** Rows as the component writes them for a streamed reply, each close to a document's limit. */
   async function addChunks(threadId: string, runId: string, count: number, chars: number) {
@@ -2836,7 +3202,7 @@ describe("two agents in one app", () => {
   const OTHER_AGENT = "01JDX5ZQ8W3J2K6M9N4P7R1S0V";
 
   it("reach only their own threads, so one agent's settings never apply to another's", async () => {
-    const support = agents();
+    const support = agents({ pageActions: ["open_order"] });
     // The app's other agent shows tool details. This one does not.
     const sales = agents({ agentId: OTHER_AGENT, exposeToolDetails: true });
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
@@ -3060,5 +3426,23 @@ describe("api()", () => {
     expect(argsOf(fns.cancel)).toEqual(["threadId"]);
     expect(argsOf(fns.claimPageAction)).toEqual(["runId", "threadId", "toolCallId"]);
     expect(argsOf(fns.deleteThread)).toEqual(["threadId"]);
+  });
+
+  it("leaves out the server-only methods, which answer to no caller", async () => {
+    const support = agents();
+    const fns = support.api();
+    expect(fns).not.toHaveProperty("run");
+    expect(fns).not.toHaveProperty("readThreadDetails");
+    // Why: neither reads who is asking. One user's thread, tool results
+    // included, is read with no one signed in at all.
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    expect(await support.readThread(h.appCtx(null), { threadId })).toBeNull();
+    expect(await support.readThreadDetails(h.appCtx(null), { threadId })).toMatchObject({
+      id: threadId,
+      toolCalls: [],
+    });
+    expect((await support.run(h.appCtx(null), { text: "A job" })).threadId).toEqual(
+      expect.any(String),
+    );
   });
 });

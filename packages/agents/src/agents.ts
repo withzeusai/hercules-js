@@ -80,7 +80,11 @@ export interface HerculesAgentsOptions {
    */
   onRunFinished?: RunFinishedHandler;
   limits?: {
-    /** Runs one signed-in user may start in an hour. No limit when left out. */
+    /**
+     * Runs one signed-in user may start in an hour. No limit when left out.
+     * Deleting a thread does not give its runs back: they count until their
+     * hour is up.
+     */
     runsPerUserPerHour?: number;
   };
   /**
@@ -93,7 +97,11 @@ export interface HerculesAgentsOptions {
    * `readThreadDetails`.
    */
   exposeToolDetails?: boolean;
-  /** The page actions every run may call, by name. They must be declared on the agent. */
+  /**
+   * The page actions every run may call, by name. They must be declared on
+   * the agent. A page action a run was not started with is dropped when
+   * Hercules delivers it, so no page runs it.
+   */
   pageActions?: readonly string[];
   /** Defaults to the `HERCULES_API_KEY` environment variable. Never send it to a browser. */
   apiKey?: string;
@@ -264,6 +272,11 @@ export class HerculesAgents {
   /**
    * Starts a run as the app's own job, for no end user: from a scheduled
    * function, say. Its thread is the app's and no user can read it.
+   *
+   * Server-only. It does not read `ctx.auth`, checks no limit, and sends in
+   * any of the app's own threads, so call it from an internal function
+   * (`internalMutation`, `internalAction`, a cron). Never export it from a
+   * public function as it is: `api()` leaves it out for that reason.
    */
   async run(ctx: RunMutationCtx, args: SendArgs) {
     return await this.start(ctx, null, args);
@@ -307,6 +320,12 @@ export class HerculesAgents {
    * It does not read `ctx.auth` and answers for any user's thread, so call it
    * from an internal function, or check who is asking first. Do not return
    * it to a page: that is what `exposeToolDetails` is for.
+   *
+   * Server-only, like `run`. Exported from a public query as it is, it would
+   * hand any caller who has a thread's id that thread, tool results included.
+   * `api()` leaves it out for that reason. A helper cannot tell a public
+   * function from an internal one, so nothing here stops that: the check is
+   * the app's to make.
    */
   async readThreadDetails(
     ctx: RunQueryCtx,
@@ -338,6 +357,11 @@ export class HerculesAgents {
   /**
    * Deletes the caller's thread, here and at Hercules. Irreversible, and the
    * thread's id is retired: `send` under it throws `thread_deleted`.
+   *
+   * Hercules is asked to delete only a thread it took a run on. One whose
+   * runs it all refused, or never got, is deleted here alone: nothing under
+   * that id at Hercules is this caller's. The runs the caller sent in it
+   * still count toward `limits.runsPerUserPerHour` until their hour is up.
    */
   async deleteThread(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
     const owner = await this.ownerFor(ctx);
@@ -376,6 +400,8 @@ export class HerculesAgents {
    * The app functions a page needs, ready to export from `convex/agent.ts`:
    * `send`, `thread`, `cancel`, `claimPageAction` and `deleteThread`.
    * `@usehercules/agents/react` and `/tanstack` call them by these names.
+   * Each answers only to the signed-in caller, for their own threads. `run`
+   * and `readThreadDetails` do not, and are not here: they are server-only.
    */
   api() {
     return {
