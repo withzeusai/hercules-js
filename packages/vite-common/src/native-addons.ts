@@ -1,5 +1,10 @@
 import path from "node:path";
-import type { Rolldown } from "vite";
+import * as vite from "vite";
+import type { DepOptimizationOptions, Rolldown } from "vite";
+
+type EsbuildPlugin = NonNullable<
+  NonNullable<DepOptimizationOptions["esbuildOptions"]>["plugins"]
+>[number];
 
 /** A relative import that names a compiled addon, such as `../build/Release/cpufeatures.node`. */
 const ADDON_FILE = /^\.\.?\/.*\.node$/;
@@ -27,4 +32,41 @@ export function nativeAddonsExternal(): Rolldown.Plugin {
       },
     },
   };
+}
+
+/** Marks the lookup `nativeAddonsExternalEsbuild` makes, so it skips its own hook. */
+const RESOLVING_ADDON = Symbol("hercules:native-addons-external");
+
+/** `nativeAddonsExternal` for esbuild, which runs the optimizer on Vite 7. */
+export function nativeAddonsExternalEsbuild(): EsbuildPlugin {
+  return {
+    name: "hercules:native-addons-external",
+    setup(build) {
+      build.onResolve({ filter: ADDON_FILE }, async (args) => {
+        if (args.pluginData === RESOLVING_ADDON) return undefined;
+        const { path: resolved, errors } = await build.resolve(args.path, {
+          kind: args.kind,
+          importer: args.importer,
+          resolveDir: args.resolveDir,
+          pluginData: RESOLVING_ADDON,
+        });
+        if (errors.length === 0 && !resolved.endsWith(".node")) return undefined;
+        const file = errors.length === 0 ? resolved : path.resolve(args.resolveDir, args.path);
+        return { path: file, external: true };
+      });
+    },
+  };
+}
+
+/**
+ * Optimizer options that keep native addon files external. Vite 8 bundles
+ * dependencies with Rolldown and Vite 7 with esbuild, and each ignores the
+ * other's options. Only Vite builds on Rolldown export `rolldownVersion`.
+ */
+export function nativeAddonsOptimizerOptions(
+  usesRolldown = "rolldownVersion" in vite,
+): Pick<DepOptimizationOptions, "rolldownOptions" | "esbuildOptions"> {
+  return usesRolldown
+    ? { rolldownOptions: { plugins: [nativeAddonsExternal()] } }
+    : { esbuildOptions: { plugins: [nativeAddonsExternalEsbuild()] } };
 }

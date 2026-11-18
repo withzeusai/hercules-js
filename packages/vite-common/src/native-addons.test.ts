@@ -1,8 +1,13 @@
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import * as esbuild from "esbuild";
 import { build, type Rolldown } from "vite";
 import { describe, expect, it } from "vitest";
-import { nativeAddonsExternal } from "./native-addons";
+import {
+  nativeAddonsExternal,
+  nativeAddonsExternalEsbuild,
+  nativeAddonsOptimizerOptions,
+} from "./native-addons";
 import { appRoot, install } from "./testing";
 
 function writeFile(file: string, contents: string): void {
@@ -99,5 +104,79 @@ describe("nativeAddonsExternal", () => {
     const root = appRoot({});
     writeFile(path.join(root, "entry.js"), 'export * from "./missing.js";');
     await expect(bundle(root, [nativeAddonsExternal()])).rejects.toThrow("missing.js");
+  });
+});
+
+/** Bundles `entry.js` with esbuild, as the Vite 7 optimizer does, plugins first. */
+async function bundleWithEsbuild(root: string, plugins: esbuild.Plugin[]): Promise<string> {
+  const result = await esbuild.build({
+    absWorkingDir: root,
+    entryPoints: [path.join(root, "entry.js")],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    write: false,
+    logLevel: "silent",
+    plugins,
+  });
+  return result.outputFiles[0]?.text ?? "";
+}
+
+describe("nativeAddonsExternalEsbuild", () => {
+  it("bundles a package whose dependency requires an addon that was never built", async () => {
+    const root = appRoot({ "sftp-client": "*" });
+    installSftpClient(path.join(root, "node_modules"));
+    writeFile(path.join(root, "entry.js"), 'export { default } from "sftp-client";');
+
+    await expect(bundleWithEsbuild(root, [])).rejects.toThrow("cpufeatures.node");
+    expect(await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()])).toContain(
+      path.join(root, "node_modules/cpu-features/build/Release/cpufeatures.node"),
+    );
+  });
+
+  it("keeps an addon that was built external", async () => {
+    const root = appRoot({ "sftp-client": "*" });
+    installSftpClient(path.join(root, "node_modules"));
+    writeFile(path.join(root, "node_modules/cpu-features/build/Release/cpufeatures.node"), "\0");
+    writeFile(path.join(root, "entry.js"), 'export { default } from "sftp-client";');
+
+    await expect(bundleWithEsbuild(root, [])).rejects.toThrow("cpufeatures.node");
+    expect(await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()])).toContain(
+      "cpufeatures.node",
+    );
+  });
+
+  it("bundles a script whose name ends in .node, as react-dom/server loads it", async () => {
+    const root = appRoot({});
+    writeFile(path.join(root, "server.node.js"), "module.exports = { renderToString() {} };");
+    writeFile(path.join(root, "entry.js"), 'export { default } from "./server.js";');
+    writeFile(path.join(root, "server.js"), 'module.exports = require("./server.node");');
+
+    const code = await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()]);
+    expect(code).toContain("renderToString");
+    expect(code).not.toContain('"./server.node"');
+  });
+
+  it("still fails on a missing file that is not an addon", async () => {
+    const root = appRoot({});
+    writeFile(path.join(root, "entry.js"), 'export * from "./missing.js";');
+    await expect(bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()])).rejects.toThrow(
+      "missing.js",
+    );
+  });
+});
+
+describe("nativeAddonsOptimizerOptions", () => {
+  it("sets only the options of the bundler the optimizer runs on", () => {
+    expect(nativeAddonsOptimizerOptions(true)).toEqual({
+      rolldownOptions: { plugins: [expect.objectContaining({ resolveId: expect.any(Object) })] },
+    });
+    expect(nativeAddonsOptimizerOptions(false)).toEqual({
+      esbuildOptions: { plugins: [expect.objectContaining({ setup: expect.any(Function) })] },
+    });
+  });
+
+  it("picks Rolldown on Vite 8", () => {
+    expect(nativeAddonsOptimizerOptions()).toHaveProperty("rolldownOptions");
   });
 });

@@ -2,7 +2,7 @@ import {
   BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle as appDependenciesToPrebundle,
   exportedSubpaths,
-  nativeAddonsExternal,
+  nativeAddonsOptimizerOptions,
   onlyDeclared,
   readDeclaredDependencies,
   sourceEntries,
@@ -146,7 +146,7 @@ export function prebundleDependencies(options: PrebundleOptions): Plugin {
         optimizeDeps: {
           include: withoutExcluded(entries, exclude),
           exclude: [...BUILD_TOOL_PACKAGES],
-          rolldownOptions: { plugins: [nativeAddonsExternal()] },
+          ...nativeAddonsOptimizerOptions(),
           ...(name === "ssr" ? { entries: sourceEntries(options.srcDir) } : {}),
         },
       };
