@@ -202,28 +202,25 @@ export function requireEnv(names: readonly [string, ...string[]]): string {
 }
 
 // Discovery is a network round-trip and the resolved metadata is static for the
-// lifetime of the process, so resolve the Configuration once and reuse it.
-let configPromise: Promise<client.Configuration> | undefined;
-export function getConfig(): Promise<client.Configuration> {
-  if (!configPromise) {
-    const issuerUrl = new URL(requireEnv(ISSUER_URL_ENV_VARS));
-    const clientId = requireEnv(CLIENT_ID_ENV_VARS);
-    const clientSecret = readEnv(CLIENT_SECRET_ENV_VARS);
+// lifetime of the process, so reuse the Configuration once one request resolves
+// it. Only the result is shared, never the pending discovery: on Cloudflare
+// Workers a promise whose I/O belongs to one request cannot be awaited by
+// another, so a first request cancelled mid-discovery would otherwise leave
+// every later sign-in on the isolate waiting on a promise that never settles.
+// Concurrent first requests each run their own discovery until one succeeds.
+let cachedConfig: client.Configuration | undefined;
+export async function getConfig(discover = client.discovery): Promise<client.Configuration> {
+  if (cachedConfig) return cachedConfig;
+  const issuerUrl = new URL(requireEnv(ISSUER_URL_ENV_VARS));
+  const clientId = requireEnv(CLIENT_ID_ENV_VARS);
+  const clientSecret = readEnv(CLIENT_SECRET_ENV_VARS);
 
-    // A public client authenticates with PKCE alone (no secret); a confidential
-    // client authenticates the token request with its secret.
-    const discovered = clientSecret
-      ? client.discovery(issuerUrl, clientId, clientSecret)
-      : client.discovery(issuerUrl, clientId, undefined, client.None());
-
-    configPromise = discovered.catch((error) => {
-      // Don't cache a failed discovery — let the next request retry instead of
-      // permanently poisoning every sign-in and callback.
-      configPromise = undefined;
-      throw error;
-    });
-  }
-  return configPromise;
+  // A public client authenticates with PKCE alone (no secret); a confidential
+  // client authenticates the token request with its secret.
+  cachedConfig = clientSecret
+    ? await discover(issuerUrl, clientId, clientSecret)
+    : await discover(issuerUrl, clientId, undefined, client.None());
+  return cachedConfig;
 }
 
 /**

@@ -1,4 +1,5 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import type { Configuration, discovery } from "openid-client";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { setAuthOptions } from "./auth-options";
 import {
   DEFAULT_SESSION_COOKIE_MAX_AGE,
@@ -195,5 +196,60 @@ describe("clientAuthHint", () => {
     const invalidGrant = Object.assign(new Error("x"), { error: "invalid_grant" });
     expect(clientAuthHint(invalidGrant)).toBeUndefined();
     expect(clientAuthHint(new Error("network"))).toBeUndefined();
+  });
+});
+
+describe("getConfig", () => {
+  const resolved = {} as Configuration;
+
+  // A fresh module per test, so each one starts with nothing cached.
+  async function loadGetConfig() {
+    vi.resetModules();
+    return (await import("./config")).getConfig;
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("HERCULES_AUTH_ISSUER_URL", "https://auth.example.com");
+    vi.stubEnv("HERCULES_AUTH_CLIENT_ID", "client");
+    vi.stubEnv("HERCULES_AUTH_CLIENT_SECRET", "");
+    vi.stubEnv("AUTH_CLIENT_SECRET", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("does not make later requests wait on a discovery that never settles", async () => {
+    const getConfig = await loadGetConfig();
+    const discover = vi
+      .fn<typeof discovery>()
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValueOnce(resolved);
+
+    void getConfig(discover);
+
+    await expect(getConfig(discover)).resolves.toBe(resolved);
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries discovery after a failure", async () => {
+    const getConfig = await loadGetConfig();
+    const discover = vi
+      .fn<typeof discovery>()
+      .mockRejectedValueOnce(new Error("provider down"))
+      .mockResolvedValueOnce(resolved);
+
+    await expect(getConfig(discover)).rejects.toThrow("provider down");
+    await expect(getConfig(discover)).resolves.toBe(resolved);
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the resolved Configuration without discovering again", async () => {
+    const getConfig = await loadGetConfig();
+    const discover = vi.fn<typeof discovery>().mockResolvedValue(resolved);
+
+    await expect(getConfig(discover)).resolves.toBe(resolved);
+    await expect(getConfig(discover)).resolves.toBe(resolved);
+    expect(discover).toHaveBeenCalledOnce();
   });
 });
