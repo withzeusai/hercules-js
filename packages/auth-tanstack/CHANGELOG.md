@@ -1,5 +1,11 @@
 # @usehercules/auth-tanstack
 
+## 1.1.1
+
+### Patch Changes
+
+- [#252](https://github.com/withzeusai/hercules-js/pull/252) [`1916fb2`](https://github.com/withzeusai/hercules-js/commit/1916fb2ee1cad8877d10f57fb0361cf7b9b27b61) Thanks [@delbyte](https://github.com/delbyte)! - Fix sign-in failing on Cloudflare Workers after a cancelled first request. The OIDC discovery result is now shared across requests only once it has resolved, so each request runs its own discovery until one succeeds. Before, a pending discovery was shared, and when the first request on an isolate was cancelled mid-discovery, every later sign-in, callback, and refresh on that isolate failed until the isolate restarted.
+
 ## 1.1.0
 
 ### Minor Changes

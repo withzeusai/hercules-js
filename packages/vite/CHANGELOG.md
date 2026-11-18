@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 2.0.4
+
+### Patch Changes
+
+- [#253](https://github.com/withzeusai/hercules-js/pull/253) [`f5e5ec9`](https://github.com/withzeusai/hercules-js/commit/f5e5ec919c4d263426673e01995cd49ecd2e4ca7) Thanks [@delbyte](https://github.com/delbyte)! - Fix the dev server exiting on Vite 7 when a dependency loads a native addon, such as `ssh2-sftp-client` through `cpu-features`. The plugin that keeps `.node` files out of the dependency optimizer was only given to Rolldown, which Vite 8 uses. Vite 7 runs the optimizer on esbuild, so it now gets an esbuild version of the same plugin.
+
 ## 2.0.3
 
 ### Patch Changes
