@@ -3,7 +3,7 @@ import {
   BUILD_TOOL_PACKAGES,
   dependenciesToPrebundle,
   isHerculesDevMachine,
-  nativeAddonsExternal,
+  nativeAddonsOptimizerOptions,
   sourceEntries,
   watchDependencies,
   withoutExcluded,
@@ -56,7 +56,7 @@ export function optimizerEntriesPlugin(): Plugin {
         optimizeDeps: {
           entries: [...inputEntries, "**/*.html", ...sourceEntries("src", { serverFiles: false })],
           exclude: [...BUILD_TOOL_PACKAGES],
-          rolldownOptions: { plugins: [nativeAddonsExternal()] },
+          ...nativeAddonsOptimizerOptions(),
         },
       };
     },

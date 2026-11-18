@@ -21,6 +21,6 @@ export {
   isHerculesDevMachine,
   isHerculesDevServer,
 } from "./environment";
-export { nativeAddonsExternal } from "./native-addons";
+export { nativeAddonsOptimizerOptions } from "./native-addons";
 export { importOptional, isModuleNotFound, type ImportOptionalOptions } from "./optional-import";
 export { watchDependencies, type WatchDependenciesOptions } from "./restart-on-install";
