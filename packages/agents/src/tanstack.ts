@@ -24,8 +24,9 @@
  * }
  * ```
  *
- * `threadId` is the page's: a UUID it makes for a new chat
- * (`crypto.randomUUID()`), and keeps, in the URL say. The first message
+ * `threadId` is the page's: a random UUID it makes for a new chat
+ * (`crypto.randomUUID()`, never an id derived from the app's own data), and
+ * keeps, in the URL say. The first message
  * opens the thread under it.
  *
  * The chat is for signed-in users. Render it once `useConvexAuth()` says

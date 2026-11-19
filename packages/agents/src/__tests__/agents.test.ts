@@ -13,7 +13,9 @@ import {
 } from "../component/protocol";
 import {
   SEGMENT_MAX_BYTES,
+  isThreadId,
   joinSegments,
+  newId,
   segmentParts,
   splitText,
   utf8Length,
@@ -303,7 +305,56 @@ describe("send", () => {
   });
 
   it.each([
+    ["a UUID of version 4, as crypto.randomUUID() makes", "1f0c9a3e-8d2b-4c7a-9e1f-2b3c4d5e6f70"],
+    ["a UUID of version 4 with each other variant digit", "1f0c9a3e-8d2b-4c7a-8e1f-2b3c4d5e6f70"],
+    ["the same, variant a", "1f0c9a3e-8d2b-4c7a-ae1f-2b3c4d5e6f70"],
+    ["the same, variant b", "1f0c9a3e-8d2b-4c7a-be1f-2b3c4d5e6f70"],
+    ["a UUID of version 7", "0192f3a1-7c1e-7b3a-8f21-5d6c7e8f9a0b"],
+    ["a ULID", "01JDX8Z6V7Q0W5K1M3N2P4R6S8"],
+  ])("opens a new thread under %s", async (_name, threadId) => {
+    expect(isThreadId(threadId)).toBe(true);
+    const started = await agents().send(h.appCtx(ALICE), { threadId, text: "Hi" });
+    expect(started.threadId).toBe(threadId);
+  });
+
+  it("makes its own ids in the form it takes, and crypto.randomUUID()'s", () => {
+    for (let n = 0; n < 200; n++) {
+      expect(isThreadId(newId())).toBe(true);
+      expect(isThreadId(crypto.randomUUID())).toBe(true);
+    }
+    expect(newId()).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("keeps sending in a thread that exists under an id it would not open a new one under", async () => {
+    // A thread from before the rule, under an id made from a name.
+    const old = "886313e1-3b8a-5372-9b90-0c9aee199e5d";
+    expect(isThreadId(old)).toBe(false);
+    await h.db.insert("threads", {
+      threadId: old,
+      agentId: AGENT_ID,
+      owner: `user:${ALICE}`,
+      activeRunId: null,
+      updatedAt: h.now,
+    });
+    const support = agents();
+    expect((await support.send(h.appCtx(ALICE), { threadId: old, text: "Hi" })).threadId).toBe(old);
+    expect((await read(support, old)).messages).toHaveLength(1);
+  });
+
+  it.each([
     ["a name", "support-chat"],
+    // Ids are unique across all of Hercules, so a new one has to be made at
+    // random: a UUID made from a name, or from a clock and a node, is not.
+    ["a UUID of version 5, made from a name", "886313e1-3b8a-5372-9b90-0c9aee199e5d"],
+    ["a UUID of version 3, made from a name", "6fa459ea-ee8a-3ca4-894e-db77e160355e"],
+    ["a UUID of version 1, made from a clock and a node", "c232ab00-9414-11ec-b3c8-9f6bdeced846"],
+    ["a UUID of version 6", "1ec9414c-232a-6b00-b3c8-9f6bdeced846"],
+    ["a UUID of version 8", "320c3d4d-cc00-875b-8ec9-32d5f69181c0"],
+    ["the nil UUID", "00000000-0000-0000-0000-000000000000"],
+    ["a UUID of version 4 without the RFC's variant bits", "1f0c9a3e-8d2b-4c7a-ce1f-2b3c4d5e6f70"],
+    ["the same, variant 7", "1f0c9a3e-8d2b-4c7a-7e1f-2b3c4d5e6f70"],
     // Hercules stores a UUID in lowercase and takes a ULID in uppercase only:
     // in any other form the id would name a different thread there than here.
     ["a UUID in uppercase", "9C2D7A10-55E1-4F0B-8D3C-2A1B0C9D8E7F"],

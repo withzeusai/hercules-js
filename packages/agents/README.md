@@ -230,12 +230,16 @@ only after it has checked who is asking. `support.api()` exports neither, and
 the package cannot tell a public function from an internal one, so the check
 is the app's.
 
-`send` opens a new thread when `threadId` is left out, or when it is a UUID or
-ULID no thread has yet: the page may choose its thread's id, as a TanStack AI
-chat does. The id must be in the form Hercules keeps it in: a UUID in
-lowercase, as `crypto.randomUUID()` makes, or a ULID in uppercase. Any other
-`threadId` that names no thread is refused with `invalid_request` before
-anything is written. A deleted thread's id is retired: `send` under it throws
+`send` opens a new thread when `threadId` is left out, or when it is an id no
+thread has yet: the page may choose its thread's id, as a TanStack AI chat
+does. A new thread's id is a random UUID, as `crypto.randomUUID()` makes, or
+a ULID; never an id derived from your own data. Ids are unique across all of
+Hercules, so Hercules opens a thread only under one that was made at random:
+a UUID of version 4 or 7, in lowercase, or a ULID in uppercase. A UUID of
+another version, such as one made from an order number (version 3 or 5), and
+any other `threadId` that names no thread, is refused with `invalid_request`
+before anything is written. A thread that exists keeps its id, whatever form
+it has. A deleted thread's id is retired: `send` under it throws
 `thread_deleted`, so the page starts the next chat under a new id.
 
 The caller is the signed-in user, from `ctx.auth`. Without a signed-in user
@@ -539,7 +543,7 @@ function errorText(error: unknown): string {
   as `ChatLayout`, not in an arrow function written inside the `components`
   object, which breaks `react-hooks/rules-of-hooks`.
 
-The thread's id is the page's to choose: a UUID for a new chat
+The thread's id is the page's to choose: a random UUID for a new chat
 (`crypto.randomUUID()`), kept in the URL so a reload opens the same thread.
 The first message opens the thread under it. With `persistence: true` the
 chat reads the thread from Convex when it mounts, and joins a reply still
@@ -1271,7 +1275,7 @@ package writes itself are these:
 | `thread_busy`                                                            | `send` throws it                                     | A run is going on the thread. Hercules has a code of the same name and meaning, which a run fails with when Hercules kept refusing its start                                                                   |
 | `end_user_rate_limited`                                                  | `send` throws it                                     | The user reached `limits.runsPerUserPerHour`. Hercules has a code of the same name for its own limit on a user, which a run fails with                                                                         |
 | `message_too_long`                                                       | `send` throws it                                     | The text and its context are over the limit                                                                                                                                                                    |
-| `invalid_request`                                                        | `send` throws it; `chat.error` in the TanStack path  | The thread's id is in no form Hercules keeps, or, in the TanStack path, there was no message to send. Hercules has a code of the same name for a start it refuses                                              |
+| `invalid_request`                                                        | `send` throws it; `chat.error` in the TanStack path  | A new thread's id is not one Hercules opens a thread under, or, in the TanStack path, there was no message to send. Hercules has a code of the same name for a start it refuses                                |
 | `run_failed`                                                             | `latestRun.error`, `onRunFinished`, the hooks' error | The package ended the run: Hercules could not be reached to start it, nothing was heard of it for a long time, or it ended in a way this version does not know. Hercules ends a run it lost with the same code |
 | `agent_not_found`                                                        | the same                                             | Hercules answered 404 to the run's start: see "How it works"                                                                                                                                                   |
 | `agent_unavailable`, `hercules_auth_required`, `client_upgrade_required` | the same                                             | Hercules's own codes, with a message the package writes for the developer and another for the page: see "How it works"                                                                                         |

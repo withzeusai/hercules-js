@@ -104,7 +104,7 @@ export const send = mutation({
           ok: false,
           code: "invalid_request",
           message:
-            "A new thread's id must be a UUID in lowercase, as crypto.randomUUID() makes, or a ULID in uppercase.",
+            "A new thread's id must be made at random: a UUID in lowercase, as crypto.randomUUID() makes (version 4, or 7), or a ULID in uppercase. Never an id derived from your own data.",
         };
       }
       // A deleted thread's id stays taken: its rows may still be going, here and at Hercules.
