@@ -504,8 +504,12 @@ export class RunChunks {
     const chunks: StreamChunk[] = [];
     for (const message of thread.messages) {
       if (message.runId !== this.runId || message.role !== "assistant") continue;
-      if (message.status === "streaming") {
-        // Convex holds only the text of a message still being written.
+      if (message.status !== "completed") {
+        // Convex holds only the text of a message still being written, and of
+        // one whose run ended before the app got it whole (`incomplete`).
+        // That is as far as the app got, not the reply: what it has past
+        // what this page streamed is added, and what the page streamed past
+        // it stays.
         chunks.push(...this.write(this.message(message.id), textOf(knownParts(message.parts))));
       } else {
         chunks.push(

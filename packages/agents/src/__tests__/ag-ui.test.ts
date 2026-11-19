@@ -436,6 +436,55 @@ describe("RunChunks", () => {
     });
   });
 
+  it("keeps what it streamed of a reply the thread holds in part once the run is over", () => {
+    const partial = (text: string): AgentThread => ({
+      ...settledThread(),
+      messages: [
+        {
+          id: "msg_1",
+          threadId: THREAD,
+          runId: RUN,
+          role: "assistant",
+          parts: [{ type: "text", text }],
+          createdAt: AT,
+          // The run ended before the app got the reply whole.
+          status: "incomplete",
+        },
+      ],
+      latestRun: {
+        id: RUN,
+        status: "failed",
+        error: { code: "run_failed", message: "The run failed." },
+        cappedReason: null,
+        finishedAt: null,
+      },
+    });
+    function shown(streamed: string, held: string) {
+      seq = 0;
+      const thread = partial(held);
+      const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+      const chunks = [
+        run.started(),
+        ...run.apply(ev("run.started")),
+        ...run.apply(ev("message.delta", { message_id: "msg_1", text: streamed })),
+        ...run.reconcile(thread),
+        ...run.finish(),
+      ];
+      const processor = new StreamProcessor({});
+      for (const chunk of chunks) processor.processChunk(chunk);
+      // The chat's messages are not replaced with the thread's.
+      expect(chunks.some((chunk) => chunk.type === "MESSAGES_SNAPSHOT")).toBe(false);
+      expect(chunks.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "run_failed" });
+      return processor.getMessages().map((message) => message.parts);
+    }
+    // The page streamed further than the app got: its text stays.
+    expect(shown("Your order is on its way", "Your order")).toEqual([
+      [{ type: "text", content: "Your order is on its way" }],
+    ]);
+    // The app got further than the page streamed: the rest is added.
+    expect(shown("Your", "Your order")).toEqual([[{ type: "text", content: "Your order" }]]);
+  });
+
   it("takes a failed run's error from Convex", () => {
     const run = new RunChunks(THREAD, RUN);
     run.reconcile({
