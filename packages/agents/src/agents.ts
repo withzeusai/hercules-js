@@ -127,10 +127,11 @@ type RunMutationCtx = { runMutation: GenericActionCtx<GenericDataModel>["runMuta
 
 export interface SendArgs {
   /**
-   * The thread to send in. Leave out to start a new thread, or pass a new
-   * UUID (in lowercase, as `crypto.randomUUID()` makes) or ULID (in
-   * uppercase) to start one under that id, as a page using TanStack AI does.
-   * A deleted thread's id cannot be used again.
+   * The thread to send in. Leave out to start a new thread, or pass a new id
+   * to start one under it, as a page using TanStack AI does: a random UUID,
+   * as `crypto.randomUUID()` makes, or a ULID. Never an id derived from your
+   * own data. A UUID is of version 4 or 7, in lowercase; a ULID is in
+   * uppercase. A deleted thread's id cannot be used again.
    */
   threadId?: string;
   text: string;
