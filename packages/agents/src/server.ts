@@ -7,6 +7,7 @@
  * Stateless Streamable HTTP: every request is one JSON-RPC message answered
  * with one JSON body. There are no sessions and no server-sent events.
  */
+import type { UnknownName } from "./api";
 import { bearerTokenOf, type TokenFailure, type TokenVerifier } from "./jwt";
 
 export type JsonSchema = Record<string, unknown>;
@@ -20,7 +21,15 @@ export interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
-export type ToolPrincipal = "user" | "agent";
+/** The kinds of caller this version knows: what a tool's `principals` may list. */
+export type KnownPrincipal = "user" | "agent";
+
+/**
+ * The kind of caller, as `caller.principal` reads. An open set: Hercules may
+ * add a kind of caller. A call from one this version does not know is
+ * refused before any handler runs.
+ */
+export type ToolPrincipal = KnownPrincipal | (string & {});
 
 /**
  * Where a run with no end user was started, as Hercules signs it into the
@@ -64,7 +73,7 @@ export type AgentOrigin =
  *   from the origins it accepts: the app's own job, unless `agentOrigins`
  *   says otherwise.
  */
-export type ToolCaller =
+export type KnownCaller =
   | {
       principal: "user";
       tokenIdentifier: string;
@@ -77,6 +86,15 @@ export type ToolCaller =
       agentId: string;
       origin: AgentOrigin | null;
     };
+
+/**
+ * Who is calling a tool: `KnownCaller`, and one more member for a kind of
+ * caller added later, so a `switch` over `caller.principal` is never complete
+ * without a `default`. A handler is typed with the callers its tool lists in
+ * `principals`, which are always ones this version knows, and no call from
+ * any other kind of caller reaches it.
+ */
+export type ToolCaller = KnownCaller | { principal: UnknownName };
 
 /** A failure the calling model should read and can act on. Its message is sent as is. */
 export class ToolError extends Error {
@@ -98,7 +116,7 @@ export interface McpTool<Ctx> {
   outputSchema?: JsonSchema;
   annotations?: ToolAnnotations;
   /** Who may call the tool. Defaults to signed-in users only. */
-  principals?: readonly ToolPrincipal[];
+  principals?: readonly KnownPrincipal[];
   /**
    * For a tool that lists `"agent"`: the origins it takes a call with no end
    * user from. Defaults to `["app"]`, the app's own job. `"any"` takes every
@@ -109,7 +127,7 @@ export interface McpTool<Ctx> {
   parseArgs(raw: unknown): unknown;
   /** Checks the handler's result against what the tool declared it returns. */
   shapeResult?(value: unknown): unknown;
-  handler(ctx: Ctx, args: never, caller: ToolCaller): unknown;
+  handler(ctx: Ctx, args: never, caller: KnownCaller): unknown;
 }
 
 export interface McpHandlerOptions<Ctx> {
@@ -130,7 +148,7 @@ export interface McpHandlerOptions<Ctx> {
 /** Newest first. The first entry answers a client that asks for a version we do not speak. */
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
 
-const DEFAULT_PRINCIPALS: readonly ToolPrincipal[] = ["user"];
+const DEFAULT_PRINCIPALS: readonly KnownPrincipal[] = ["user"];
 /**
  * The origins a tool that lists `"agent"` takes a call from when it does not
  * say: the app's own job, and no other.
@@ -210,7 +228,7 @@ export function callerFromToken(token: {
   issuer: string;
   subject: string;
   claims: Record<string, unknown>;
-}): ToolCaller | null {
+}): KnownCaller | null {
   const principal = stringClaim(token.claims, "hercules_principal");
   if (principal === "agent") {
     const agentId = agentIdOf(token.subject);
@@ -281,7 +299,7 @@ function toolFailure(text: string) {
  * A call whose token names no origin is from none of the origins a tool can
  * list: only a tool that accepts `"any"` takes it.
  */
-function allows<Ctx>(tool: McpTool<Ctx>, caller: ToolCaller): boolean {
+function allows<Ctx>(tool: McpTool<Ctx>, caller: KnownCaller): boolean {
   if (!(tool.principals ?? DEFAULT_PRINCIPALS).includes(caller.principal)) return false;
   if (caller.principal !== "agent") return true;
   const origins = tool.agentOrigins ?? DEFAULT_AGENT_ORIGINS;
@@ -328,7 +346,7 @@ export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
   const tools = new Map(Object.entries(options.tools));
   for (const [name, tool] of tools) checkToolAccess(name, tool);
 
-  async function callTool(ctx: Ctx, caller: ToolCaller, params: unknown) {
+  async function callTool(ctx: Ctx, caller: KnownCaller, params: unknown) {
     const name = isRecord(params) ? params["name"] : undefined;
     const tool = typeof name === "string" ? tools.get(name) : undefined;
     // A tool this caller may not use is reported like one that does not

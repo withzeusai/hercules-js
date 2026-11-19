@@ -14,8 +14,9 @@ import {
   type GenericActionCtx,
   type GenericDataModel,
   type HttpRouter,
+  type RegisteredQuery,
 } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import type { ComponentApi } from "./component/_generated/component";
 import {
   DEFAULT_API_URL,
@@ -26,6 +27,7 @@ import {
 } from "./component/protocol";
 import { ownerOf } from "./component/store";
 import { vThread, type EndUser, type RunFinished } from "./component/validators";
+import type { AgentThread, AgentThreadDetails } from "./thread";
 import {
   bearerTokenOf,
   createTokenVerifier,
@@ -39,22 +41,21 @@ declare const process: { env: Record<string, string | undefined> } | undefined;
 export type { RunFinished } from "./component/validators";
 export { vRunFinished as runFinishedValidator } from "./component/validators";
 
-/** The thread `readThread` returns: what the component's `threads.read` answers. */
-export type AgentThread = NonNullable<ComponentApi["threads"]["read"]["_returnType"]>;
-/**
- * A message of a thread, as the package builds it: `runId`, `createdAt`, and
- * a `status`. The API's own message, as an event carries it, is `Message`.
- */
-export type ThreadMessage = AgentThread["messages"][number];
-export type ActiveRun = NonNullable<AgentThread["activeRun"]>;
-export type PendingPageAction = AgentThread["pageActions"][number];
-/** What `readThreadDetails` returns: the thread as stored, with its tool calls and their results. */
-export type AgentThreadDetails = NonNullable<ComponentApi["threads"]["readDetails"]["_returnType"]>;
-export type StoredToolCall = AgentThreadDetails["toolCalls"][number];
+export type {
+  ActiveRun,
+  AgentThread,
+  AgentThreadDetails,
+  LatestRun,
+  PendingPageAction,
+  StoredToolCall,
+  ThreadMessage,
+} from "./thread";
 
 /**
  * The `code` of a `ConvexError` from `send` and the other methods, for the
  * page to show or act on. `data` is `{ code, message, retryAfterSeconds? }`.
+ * An open set: a later version may refuse a message for a reason it adds, so
+ * match on the codes you handle and keep a default.
  */
 export type AgentErrorCode =
   | "sign_in_required"
@@ -63,7 +64,8 @@ export type AgentErrorCode =
   | "thread_busy"
   | "end_user_rate_limited"
   | "message_too_long"
-  | "invalid_request";
+  | "invalid_request"
+  | (string & {});
 
 export interface AgentErrorData {
   code: AgentErrorCode;
@@ -501,11 +503,18 @@ export class HerculesAgents {
         returns: v.object({ threadId: v.string(), runId: v.string() }),
         handler: (ctx, args) => this.send(ctx, args),
       }),
+      // Typed by hand: the validator says what the component returns today,
+      // and the app reads it as `AgentThread`, whose value sets are open.
       thread: queryGeneric({
         args: { threadId: v.string(), limit: v.optional(v.number()) },
         returns: v.union(vThread, v.null()),
-        handler: (ctx, args) => this.readThread(ctx, args),
-      }),
+        handler: async (ctx, args): Promise<Infer<typeof vThread> | null> =>
+          (await this.readThread(ctx, args)) as Infer<typeof vThread> | null,
+      }) as unknown as RegisteredQuery<
+        "public",
+        { threadId: string; limit?: number },
+        Promise<AgentThread | null>
+      >,
       cancel: mutationGeneric({
         args: { threadId: v.string() },
         returns: v.boolean(),

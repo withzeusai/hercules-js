@@ -1115,10 +1115,14 @@ Two kinds of object reach an app's code, and each keeps one style.
   snake_case: the events `followRun` yields (`AgentEvent`, and the `Message`
   inside a `message.completed`), and the `Run` type. They read as the
   [API reference](https://hercules.app/docs/agents/api-reference) and
-  [Run events](https://hercules.app/docs/agents/run-events) document them.
-  So what those pages say holds here, and a field the API adds to an event's
-  `data` reaches your code under the name the API gave it, whichever version
-  of the package you run.
+  [Run events](https://hercules.app/docs/agents/run-events) document them,
+  and `followRun` hands each event on as Hercules sent it: nothing is
+  renamed, left out or rewritten, on the event or anywhere inside it. So
+  what those pages say holds here, `final` included, and a field, a part
+  type or a value the API adds reaches your code as the API sent it,
+  whichever version of the package you run. An event of a type this version
+  does not know is yielded like any other, and a final one ends the loop
+  after it is yielded.
 
 A message is the one thing with both forms, under two names. `Message` is the
 API's, with `run_id` and `created_at`. A thread's message is `ThreadMessage`,
@@ -1147,6 +1151,53 @@ passed on as they are.
   it retries a delivery, how many streams of one run it allows, which codes
   it sends. That is the Hercules API's to define.
 
+### Open sets
+
+The Hercules API adds to a version without changing it, and what it adds most
+often is a value: a status, a kind, a reason, a code, a type of event or of
+message part. Every set of values that can grow that way is an open set in
+this package's types, so code that reads one has to have a default. A
+`switch` over one that ends in an exhaustiveness check does not compile, and
+comparing with a value this version does not know does.
+
+| Set                            | Where an app reads it                                                        | Known in this version                                                               | A value you do not know means                                             | What the thread holds for one                                           |
+| ------------------------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Run status                     | `latestRun.status`, `activeRun.status`, `Run.status`                         | `queued`, `running`, and the four final ones                                        | The run is still going                                                    | `running`, on `activeRun` and `latestRun`                               |
+| Capped reason                  | `latestRun.cappedReason`, `onRunFinished`, `run.capped`, `Run.capped_reason` | `steps`, `time`, `credits`, `output`                                                | A limit was reached                                                       | `null`                                                                  |
+| Run error code                 | `latestRun.error.code`, `onRunFinished`, `run.failed`, `Run.error.code`      | Any string: see "Error codes"                                                       | The run failed                                                            | The code as Hercules sent it                                            |
+| Tool kind                      | a tool call's `kind`, in a message part and in `toolCalls`                   | `hercules`, `app`, `page`                                                           | A tool that is neither the app's nor a page action: read it as `hercules` | `hercules`                                                              |
+| Tool-call status               | a tool call's `status`                                                       | `succeeded`, `failed`, `sent`                                                       | Not known to have worked                                                  | `failed`                                                                |
+| Message role                   | a message's `role`                                                           | `user`, `assistant`                                                                 | Skip the message                                                          | The message is not kept                                                 |
+| Message part type              | a part's `type`                                                              | `text`, `tool_call`                                                                 | Skip the part, and show the parts beside it                               | The part is left out                                                    |
+| Event type                     | an event's `type`, from `followRun`                                          | The thirteen in `EventDataByType`                                                   | Skip the event, unless its `final` is true: then the run is over          | Nothing, or the run's ending as `failed` with `run_failed`              |
+| Code of an error `send` throws | the `ConvexError`'s `data.code`                                              | The seven in `AgentErrorCode`                                                       | The message was not sent                                                  |                                                                         |
+| Code on the page               | `chat.error`, `AgentError.code`, `agentErrorCode()`, `RunStreamError.code`   | Any string: see "Error codes"                                                       | It did not work: show a general message                                   |                                                                         |
+| Origin                         | `caller.origin`, `agentOrigins`                                              | `app`, `organization`, `console`, `trigger`, `channel`, `schedule`, `test`, `other` | Not this app's own job, and not `other`                                   | The call is refused unless the tool names that origin, or takes `"any"` |
+| Kind of caller                 | `caller.principal`                                                           | `user`, `agent`                                                                     | A caller this version cannot read                                         | The call is refused before any handler runs                             |
+
+Two things stay closed, and code may rely on that:
+
+- **The four statuses a run ends with**: `completed`, `failed`, `cancelled`,
+  `capped`. A run is over exactly when its status is one of them, and
+  `onRunFinished` is called with one of them and no other.
+- **The sets the package defines for itself**: a thread message's `status`
+  (`streaming`, `completed`, `incomplete`), a page action's `status`
+  (`pending`, `expired`), and `useAgentThread`'s `status`.
+
+The last column is about the thread: what the component stores, and so what
+`thread`, `readThreadDetails`, the two hooks and `onRunFinished` hand an app.
+The component stores only what this version knows, so there an unknown value
+is read as the table says before it is stored. An event from `followRun` is
+not read that way: it is handed on as Hercules sent it, with the value this
+version does not know still in it.
+
+A union that is told apart by a name has one more member, for the names this
+version does not know: an event by its `type`, a message part by its `type`,
+a tool's caller by its `principal`. Narrowing works as usual
+(`if (event.type === "message.delta")`), and what is left in a `default`
+branch is that member. Its name is typed `UnknownName`, which TypeScript does
+not compare with a string. Read it with `String(event.type)`.
+
 ### Compatibility with the Hercules API
 
 The Hercules API adds to a version without changing it: new event types,
@@ -1159,10 +1210,13 @@ the app's backend and in the page alike:
   events the package does not know is applied and answered 2xx: the events
   it knows are applied, the others keep their place in the run's sequence
   and change nothing.
-- **A field it does not know is not read.** On a run, an event, a message, an
-  error or the answer to a start, the fields it knows are read as before.
-- **A message part of a type it does not know is left out.** The parts beside
-  it are kept, in order.
+- **A field it does not know is not read**, by the component. On a run, an
+  event, a message, an error or the answer to a start, the fields it knows
+  are read as before, and the thread holds those. `followRun` hands an event
+  on with every field Hercules sent, known or not.
+- **A value it does not know is read as "Open sets" says.** In the thread, a
+  message part of a type it does not know is left out, and the parts beside
+  it are kept, in order. Neither hook reads such a part as a tool call.
 - **A run status it does not know is a run that is still going.** A run ends
   only as `completed`, `failed`, `cancelled` or `capped`. Until then the
   thread has its `activeRun`, the page shows the run as going and can stop

@@ -44,10 +44,11 @@ import {
   threadToUIMessages,
   type SyncableChat,
 } from "./ag-ui";
-import type { AgentThread } from "./agents";
+import { readAgentEvent } from "./component/protocol";
 import { AgentError, toAgentError } from "./errors";
 import { createPageActionRunner, type PageActionHandlers } from "./page-actions";
 import { followRun, RunStreamError, type RunStreamOptions } from "./stream";
+import type { AgentThread } from "./thread";
 
 export {
   agentErrorCode,
@@ -58,7 +59,8 @@ export {
   type SyncableChat,
 } from "./ag-ui";
 export type { PageActionHandler, PageActionHandlers } from "./page-actions";
-export type { AgentThread } from "./agents";
+export type { AgentThread } from "./thread";
+export type { UnknownName } from "./api";
 
 // Not exported: `/convex` has the `SendArgs` an app's backend uses, and these
 // two only spell out `HerculesAgentApi`.
@@ -404,7 +406,10 @@ export function herculesConnection(
             ...(options.fetch !== undefined && { fetch: options.fetch }),
             ...(options.retry !== undefined && { retry: options.retry }),
           })) {
-            yield* chunks.apply(event);
+            // Read as the component reads it: an event of a type this
+            // version does not know, or one it cannot read, adds nothing.
+            const read = readAgentEvent(event);
+            if (read !== null) yield* chunks.apply(read);
           }
         } catch (error) {
           // The live view failed (Hercules refused the stream, or kept

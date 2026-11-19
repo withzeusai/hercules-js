@@ -220,7 +220,9 @@ export const vRunFinished = v.object({
   status: vFinalRunStatus,
   output: v.union(v.string(), v.null()),
   error: v.union(vRunError, v.null()),
-  cappedReason: v.union(vCappedReason, v.null()),
+  // Any string: an app takes these fields as its function's arguments, and a
+  // reason Hercules adds later must not be one its validator refuses.
+  cappedReason: v.union(v.string(), v.null()),
   usage: v.union(vUsage, v.null()),
   endUser: v.union(vEndUser, v.null()),
 });

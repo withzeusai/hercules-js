@@ -3,22 +3,20 @@
  * reply being written laid over them from the run's live stream until its
  * `message.completed` lands in Convex. No React here, so it is tested alone.
  */
-import type { AgentThread, ThreadMessage } from "./agents";
-import {
-  isFinalEvent,
-  type AgentEvent,
-  type Message,
-  type ToolCallPart,
-  type ToolCallStatus,
-  type ToolKind,
-} from "./component/protocol";
+import type { ToolCallPart, ToolCallStatus, UnknownPart } from "./api";
+import { isFinalEvent, type AgentEvent, type Message, type ToolKind } from "./component/protocol";
+import type { AgentThread, ThreadMessage } from "./thread";
 
 /** A tool call as the page shows it: `running` until the live stream says how it went. */
 export interface ViewToolCallPart extends Omit<ToolCallPart, "status"> {
   status: ToolCallStatus | "running";
 }
 
-export type ViewPart = { type: "text"; text: string } | ViewToolCallPart;
+/**
+ * A part of a message the hook shows. An open set, as a thread's parts are:
+ * render the parts whose `type` you know and skip the rest.
+ */
+export type ViewPart = { type: "text"; text: string } | ViewToolCallPart | UnknownPart;
 
 export interface ViewMessage extends Omit<ThreadMessage, "parts" | "status"> {
   parts: ViewPart[];

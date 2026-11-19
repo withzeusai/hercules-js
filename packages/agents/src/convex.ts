@@ -45,8 +45,8 @@ import { fieldsToJsonSchema, INT64_PATTERN, validatorToJsonSchema } from "./json
 import {
   ToolError,
   type AgentOrigin,
+  type KnownPrincipal,
   type ToolCaller,
-  type ToolPrincipal,
   type McpTool,
   type ToolAnnotations,
 } from "./server";
@@ -75,7 +75,7 @@ type Awaitable<T> = T | Promise<T>;
 export interface ToolDefinition<
   Args extends PropertyValidators,
   Returns extends GenericValidator | undefined,
-  Principal extends ToolPrincipal,
+  Principal extends KnownPrincipal,
 > {
   /** What the tool does and when to use it, written for the calling model. */
   description: string;
@@ -279,7 +279,7 @@ function hasObjectRoot(validator: GenericValidator): boolean {
 export function tool<
   Args extends PropertyValidators,
   Returns extends GenericValidator | undefined = undefined,
-  Principal extends ToolPrincipal = "user",
+  Principal extends KnownPrincipal = "user",
 >(definition: ToolDefinition<Args, Returns, Principal>): ConvexTool {
   const returns = definition.returns;
   return {
@@ -363,4 +363,4 @@ export {
   type ThreadArgs,
   type ThreadMessage,
 } from "./agents";
-export type { ComponentApi } from "./component/_generated/component";
+export type { UnknownName } from "./api";

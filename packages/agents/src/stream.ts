@@ -3,14 +3,14 @@
  * as server-sent events, with the read-only run token. `fetch`, not
  * `EventSource`, because the token goes in the `Authorization` header.
  */
+import type { AgentEvent } from "./api";
 import {
   CLIENT_HEADER,
   CLIENT_ID,
   HERCULES_API_VERSION,
   isFinalEvent,
-  readAgentEvent,
   readWireEvent,
-  type AgentEvent,
+  type WireEvent,
 } from "./component/protocol";
 
 export interface RunStreamOptions {
@@ -154,21 +154,50 @@ async function problemCode(response: Response): Promise<string | null> {
 }
 
 /**
+ * An event as `followRun` hands it on: what Hercules sent, field for field,
+ * under the API's names. Nothing is renamed, dropped or rewritten, at any
+ * depth, so a field, a part type, a kind or a status the API adds later
+ * reaches the app as it was sent. Three things are made sure of, since the
+ * type promises them: the envelope's own fields are there (`id`,
+ * `thread_id` and `created_at` read as Hercules sends them, or as `readWireEvent`
+ * fills them in), `data` is an object, and `final` is a boolean. An event
+ * from before Hercules sent `final` is final exactly when its type is one of
+ * the four endings.
+ */
+function apiEvent(raw: Record<string, unknown>, wire: WireEvent, final: boolean): AgentEvent {
+  const data: unknown = raw["data"];
+  return {
+    ...raw,
+    id: typeof raw["id"] === "string" ? raw["id"] : `${wire.runId}:${wire.seq}`,
+    seq: wire.seq,
+    run_id: wire.runId,
+    thread_id: wire.threadId,
+    type: wire.type,
+    created_at: wire.createdAt,
+    final,
+    data: typeof data === "object" && data !== null && !Array.isArray(data) ? data : {},
+  } as unknown as AgentEvent;
+}
+
+/**
  * Follows a run's events live, reconnecting with `Last-Event-ID` until the
  * run's final event arrives or `signal` aborts. Each event comes once, in
- * order. Throws `RunStreamError` when Hercules refuses the stream, and after
+ * order, as Hercules sent it: the API's own JSON, under the API's names.
+ * Throws `RunStreamError` when Hercules refuses the stream, and after
  * `maxAttempts` failed connections in a row.
+ *
+ * The generator returns after the run's final event, the one whose `final`
+ * is true, which it yields like any other. So an ending of a type this
+ * version does not know is yielded too, and ends the loop.
  *
  * A run's final event and a `message.completed` are passed on whatever their
  * sequence number: Hercules can number the ending of a run it had to end
  * itself at or below an event already streamed, and it must not be dropped.
  *
- * An event of a type this version does not know is not passed on. It keeps
- * its place: the stream is resumed after it. A run that is quiet for a long
- * time, waiting for a person say, is followed for as long as it takes, with
- * one connection per stream Hercules closes. An ending of a type this
- * version does not know ends the stream when Hercules marks it final, and
- * otherwise after `maxAttempts` connections that brought nothing new.
+ * An event of a type this version does not know is passed on as it came:
+ * `String(event.type)` is its name. A run that is quiet for a long time,
+ * waiting for a person say, is followed for as long as it takes, with one
+ * connection per stream Hercules closes.
  */
 export async function* followRun(options: RunStreamOptions): AsyncGenerator<AgentEvent> {
   const fetchFn = options.fetch ?? fetch;
@@ -220,31 +249,21 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
         } catch {
           continue;
         }
+        // Without a run, a sequence number and a type it cannot be placed.
         const wire = readWireEvent(parsed);
         if (wire === null) continue;
-        const event = readAgentEvent(parsed);
-        if (event === null) {
-          // A type this version does not know, or data it cannot read. Not
-          // passed on, but it was sent: the stream is resumed after it.
-          if (wire.seq > lastSeq) {
-            lastSeq = wire.seq;
-            failures = 0;
-            received = true;
-          }
-          // An ending of a type added later, which Hercules marked: nothing follows it.
-          if (wire.data.kind === "final") return;
-          continue;
-        }
-        const final = isFinalEvent(event);
-        if (event.seq <= lastSeq && !final) {
+        const raw = parsed as Record<string, unknown>;
+        // One of the four endings, or any type Hercules marks as the run's ending.
+        const final = isFinalEvent({ type: wire.type, final: raw["final"] });
+        if (wire.seq <= lastSeq && !final) {
           // A repeat, unless it is a reply this reader has not passed on yet.
-          if (event.type !== "message.completed" || repliesPassed.has(event.seq)) continue;
+          if (wire.type !== "message.completed" || repliesPassed.has(wire.seq)) continue;
         }
-        if (event.type === "message.completed") repliesPassed.add(event.seq);
-        lastSeq = Math.max(lastSeq, event.seq);
+        if (wire.type === "message.completed") repliesPassed.add(wire.seq);
+        lastSeq = Math.max(lastSeq, wire.seq);
         failures = 0;
         received = true;
-        yield event;
+        yield apiEvent(raw, wire, final);
         if (final) return;
       }
       // The stream closed before the run's final event: pick up where it

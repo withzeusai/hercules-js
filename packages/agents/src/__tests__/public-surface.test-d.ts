@@ -68,6 +68,7 @@ describe("the types each entry point exports", () => {
           Root.ToolCaller,
           Root.ToolKind,
           Root.ToolPrincipal,
+          Root.UnknownName,
           Root.Usage,
         ]
       >
@@ -84,7 +85,6 @@ describe("the types each entry point exports", () => {
           Convex.AgentOrigin,
           Convex.AgentThread,
           Convex.AgentThreadDetails,
-          Convex.ComponentApi,
           Convex.ConvexTool,
           Convex.DefinedTools,
           Convex.HerculesAgentsOptions,
@@ -150,7 +150,10 @@ describe("the types each entry point exports", () => {
 
   it("is the component's API from /_generated/component", () => {
     expectTypeOf<IsAny<Generated.ComponentApi>>().toEqualTypeOf<false>();
-    expectTypeOf<Generated.ComponentApi>().toEqualTypeOf<Convex.ComponentApi>();
+    // What `new HerculesAgents(...)` takes: an app passes `components.herculesAgents`.
+    expectTypeOf<Generated.ComponentApi>().toEqualTypeOf<
+      ConstructorParameters<typeof Convex.HerculesAgents>[0]
+    >();
   });
 });
 

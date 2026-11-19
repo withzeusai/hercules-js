@@ -9,10 +9,12 @@
  * never get: its page actions are one-way.
  */
 import { EventType, type StreamChunk, type UIMessage } from "@tanstack/ai/client";
-import type { AgentThread, ThreadMessage } from "./agents";
+import type { MessagePart as ThreadPart } from "./api";
 import {
   isFinalEvent,
   isFinalStatus,
+  readCappedReason,
+  readPart,
   type AgentEvent,
   type CappedReason,
   type MessagePart,
@@ -20,6 +22,7 @@ import {
   type ToolCallStatus,
   type ToolKind,
 } from "./component/protocol";
+import type { AgentThread, ThreadMessage } from "./thread";
 
 /** What a page action reports as its result: it went to the page, and the run carried on. */
 export const PAGE_ACTION_OUTPUT = "sent to the page";
@@ -491,9 +494,11 @@ export class RunChunks {
       if (message.runId !== this.runId || message.role !== "assistant") continue;
       if (message.status === "streaming") {
         // Convex holds only the text of a message still being written.
-        chunks.push(...this.write(this.message(message.id), textOf(message.parts)));
+        chunks.push(...this.write(this.message(message.id), textOf(knownParts(message.parts))));
       } else {
-        chunks.push(...this.complete(message.id, message.parts, message.createdAt, thread));
+        chunks.push(
+          ...this.complete(message.id, knownParts(message.parts), message.createdAt, thread),
+        );
       }
     }
     const latest = thread.latestRun;
@@ -505,7 +510,7 @@ export class RunChunks {
               error: latest.error ?? { code: "run_failed", message: "The run failed." },
             }
           : latest.status === "capped"
-            ? { status: "capped", cappedReason: latest.cappedReason }
+            ? { status: "capped", cappedReason: readCappedReason(latest.cappedReason) }
             : { status: latest.status };
     }
     // The thread has moved on to a newer run (the app started a follow-up, or
@@ -607,11 +612,23 @@ function textOf(parts: readonly MessagePart[]): string {
   return parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 }
 
+/**
+ * A thread message's parts as this version reads them. The thread may come
+ * from a backend running a later version of the package (a tab that was open
+ * before the app was upgraded), so its sets of values are open: a part of a
+ * type this version does not know is left out, never read as a tool call; a
+ * tool call of a kind it does not know reads as `hercules`, and one with a
+ * status it does not know as `failed`.
+ */
+function knownParts(parts: readonly ThreadPart[]): MessagePart[] {
+  return parts.map(readPart).filter((part): part is MessagePart => part !== null);
+}
+
 type UIPart = UIMessage["parts"][number];
 
 function uiParts(message: ThreadMessage): UIPart[] {
   const parts: UIPart[] = [];
-  for (const part of message.parts) {
+  for (const part of knownParts(message.parts)) {
     if (part.type === "text") {
       if (part.text.length > 0) parts.push({ type: "text", content: part.text });
       continue;
@@ -647,13 +664,17 @@ export function threadToUIMessages(thread: AgentThread | null | undefined): UIMe
   if (thread === null || thread === undefined) return [];
   const messages: UIMessage[] = [];
   for (const message of thread.messages) {
+    // A message of a role this version does not know is not shown.
+    const role =
+      message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : null;
+    if (role === null) continue;
     const parts = uiParts(message);
     // A reply that has not written anything yet is not shown.
-    if (parts.length === 0 && message.role === "assistant") continue;
+    if (parts.length === 0 && role === "assistant") continue;
     const createdAt = new Date(message.createdAt);
     messages.push({
       id: message.id,
-      role: message.role,
+      role,
       parts,
       ...(!Number.isNaN(createdAt.getTime()) && { createdAt }),
       metadata: { hercules: { runId: message.runId, status: message.status } },
@@ -775,14 +796,14 @@ export function keepCutOffReplies(
     if (text.length === 0) continue;
     const cutOff = last.role === "assistant" && last.status === "incomplete" ? last : null;
     if (cutOff !== null) {
-      const held = textOf(cutOff.parts);
+      const held = textOf(knownParts(cutOff.parts));
       if (text.length <= held.length || !text.startsWith(held)) continue;
     } else if (
       // The thread has this reply, under its id or by its text.
       stored.some(
         (entry) =>
           entry.id === message.id ||
-          (entry.role === "assistant" && textOf(entry.parts).startsWith(text)),
+          (entry.role === "assistant" && textOf(knownParts(entry.parts)).startsWith(text)),
       )
     ) {
       continue;
