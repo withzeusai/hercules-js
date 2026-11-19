@@ -9,9 +9,40 @@ import { httpActionGeneric, type HttpRouter } from "convex/server";
 import { ConvexError } from "convex/values";
 import type { ToolCtx, ToolsDefinition } from "./convex";
 import { createTokenVerifier, deploymentOrigins } from "./jwt";
-import { checkToolAccess, createMcpHandler } from "./server";
+import { checkToolAccess, createMcpHandler, type McpTool } from "./server";
 
 declare const process: { env: Record<string, string | undefined> } | undefined;
+
+declare const toolBrand: unique symbol;
+
+/**
+ * A tool, as `tool()` returns it and `defineTools({ tools })` takes it. It
+ * is opaque: there is nothing on it to read or to change, and the only way
+ * to get one is to call `tool()`. A tool written by hand, or a copy of one
+ * (`{ ...made }`), is not a tool, and `defineTools` refuses it when the
+ * module loads.
+ */
+export interface ConvexTool {
+  readonly [toolBrand]: true;
+}
+
+/** The tools `tool()` made, by the value it handed out for each. */
+const made = new WeakMap<object, McpTool<ToolCtx>>();
+
+/** The opaque value for a tool `tool()` built: frozen, and empty. */
+export function sealTool(record: McpTool<ToolCtx>): ConvexTool {
+  const handle = Object.freeze({}) as ConvexTool;
+  made.set(handle, record);
+  return handle;
+}
+
+/**
+ * The tool behind a value `tool()` returned, or undefined for anything else.
+ * For the package and its tests: not exported from the package.
+ */
+export function toolRecordOf(value: unknown): McpTool<ToolCtx> | undefined {
+  return typeof value === "object" && value !== null ? made.get(value) : undefined;
+}
 
 export interface ToolServer {
   name: string;
@@ -50,8 +81,16 @@ export function createToolServer(definition: ToolsDefinition): ToolServer {
     }
   }
   // When the module loads, so a mistake fails the deploy, not the first call.
+  const tools: Record<string, McpTool<ToolCtx>> = {};
   for (const [toolName, declared] of Object.entries(definition.tools)) {
-    checkToolAccess(toolName, declared);
+    const record = toolRecordOf(declared);
+    if (record === undefined) {
+      throw new Error(
+        `MCP tool "${toolName}" was not made by tool(). Pass defineTools the value tool() returns, as it is: a tool written by hand, or a copy of one, is not served.`,
+      );
+    }
+    checkToolAccess(toolName, record);
+    tools[toolName] = record;
   }
   const path = definition.name === undefined ? "/mcp" : `/mcp/${name}`;
 
@@ -70,7 +109,7 @@ export function createToolServer(definition: ToolsDefinition): ToolServer {
     if (issuer === undefined || audiences.length === 0) return null;
     handler = createMcpHandler<ToolCtx>({
       name,
-      tools: definition.tools,
+      tools,
       verifier: createTokenVerifier({ issuer, audiences }),
       describeError: describeConvexError,
       ...(definition.instructions !== undefined && { instructions: definition.instructions }),

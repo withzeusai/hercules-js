@@ -1,8 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineTools, ToolError, tool, type ToolCtx } from "../convex";
+import { defineTools, ToolError, tool, type ConvexTool, type ToolCtx } from "../convex";
 import { validatorToJsonSchema } from "../json-schema";
-import { createToolServer } from "../tool-server";
+import { createToolServer, toolRecordOf } from "../tool-server";
 import { createTokenVerifier } from "../jwt";
 import { createMcpHandler, type JsonSchema, type McpTool } from "../server";
 import {
@@ -95,11 +95,22 @@ async function rpc(token: string, method: string, params?: unknown): Promise<Rpc
   return (await response.json()) as RpcBody;
 }
 
+/** The tools behind what `tool()` returned, as the server runs them. */
+function served(made: Record<string, ConvexTool>): Record<string, McpTool<ToolCtx>> {
+  return Object.fromEntries(
+    Object.entries(made).map(([name, value]) => {
+      const record = toolRecordOf(value);
+      if (record === undefined) throw new Error(`${name} was not made by tool()`);
+      return [name, record];
+    }),
+  );
+}
+
 beforeEach(async () => {
   issuer = await createTestIssuer();
   const handler = createMcpHandler<ToolCtx>({
     name: "tasks",
-    tools,
+    tools: served(tools),
     verifier: createTokenVerifier({
       issuer: ISSUER,
       audiences: [AUDIENCE],
@@ -192,7 +203,7 @@ describe("tools over the handler", () => {
     const seen: unknown[] = [];
     const handler = createMcpHandler<ToolCtx>({
       name: "tasks",
-      tools: {
+      tools: served({
         echo: tool({
           description: "Records its argument.",
           args: { priority: v.int64(), blob: v.bytes() },
@@ -201,7 +212,7 @@ describe("tools over the handler", () => {
             return "ok";
           },
         }),
-      },
+      }),
       verifier: createTokenVerifier({
         issuer: ISSUER,
         audiences: [AUDIENCE],
@@ -337,10 +348,10 @@ describe("what a tool returns, as MCP lists and sends it", () => {
     untyped: tool({ description: "No returns.", args: {}, handler: () => ({ id: "a" }) }),
   };
 
-  function serve(served: Record<string, McpTool<ToolCtx>>) {
+  function serve(tools: Record<string, McpTool<ToolCtx>>) {
     const handler = createMcpHandler<ToolCtx>({
       name: "orders",
-      tools: served,
+      tools,
       verifier: createTokenVerifier({
         issuer: ISSUER,
         audiences: [AUDIENCE],
@@ -358,7 +369,7 @@ describe("what a tool returns, as MCP lists and sends it", () => {
   }
 
   it("lists an output schema only for a tool that returns an object", async () => {
-    const listed = (await serve(shaped)("tools/list")).result?.tools;
+    const listed = (await serve(served(shaped))("tools/list")).result?.tools;
     expect(listingProblems(listed)).toEqual([]);
     const withSchema = listed?.flatMap((entry) => ("outputSchema" in entry ? [entry.name] : []));
     expect(withSchema).toEqual(["one_order", "totals_by_id"]);
@@ -378,7 +389,7 @@ describe("what a tool returns, as MCP lists and sends it", () => {
   });
 
   it("sends structured content with a listed schema, and only then", async () => {
-    const call = serve(shaped);
+    const call = serve(served(shaped));
     const listed = (await call("tools/list")).result?.tools ?? [];
     for (const entry of listed) {
       const { result } = await call("tools/call", { name: entry.name });
@@ -401,7 +412,7 @@ describe("what a tool returns, as MCP lists and sends it", () => {
   });
 
   it("still enforces returns on a tool it sends as text", async () => {
-    const call = serve(shaped);
+    const call = serve(served(shaped));
     const text = async (name: string) =>
       (await call("tools/call", { name })).result?.content?.[0]?.text;
     expect(await text("list_orders")).toBe('[{"id":"a","total":1}]');
@@ -495,12 +506,13 @@ describe("defineTools", () => {
       handler: (_ctx, _args, caller) =>
         caller.principal === "agent" ? `from ${caller.origin ?? "nowhere it says"}` : "a user",
     });
-    expect(scheduled.agentOrigins).toEqual(["app", "schedule"]);
+    expect(toolRecordOf(scheduled)?.agentOrigins).toEqual(["app", "schedule"]);
     expect(
-      tool({ ...base, principals: ["agent"], agentOrigins: "any", handler: () => 1 }).agentOrigins,
+      toolRecordOf(tool({ ...base, principals: ["agent"], agentOrigins: "any", handler: () => 1 }))
+        ?.agentOrigins,
     ).toBe("any");
     // Left out, it is left to the default: the app's own job.
-    expect(tools.whoami).not.toHaveProperty("agentOrigins");
+    expect(toolRecordOf(tools.whoami)).not.toHaveProperty("agentOrigins");
     expect(createToolServer({ tools: { scheduled } })).toMatchObject({ path: "/mcp" });
 
     // A tool for users only has no origins to set. The types refuse it, and so does declaring it.
@@ -538,6 +550,34 @@ describe("defineTools", () => {
       ["/mcp/support", "POST"],
       ["/mcp/support", "GET"],
     ]);
+  });
+
+  it("takes only what tool() returned: nothing written by hand, and no copy", () => {
+    const made = tool({
+      description: "Says who is calling.",
+      args: {},
+      handler: (_ctx, _args, caller) => caller.subject,
+    });
+    // There is nothing on it to read or to change.
+    expect(Object.keys(made)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(made)).toEqual([]);
+    expect(Object.isFrozen(made)).toBe(true);
+    expect(() => {
+      "use strict";
+      (made as unknown as { principals: string[] }).principals = ["user", "agent"];
+    }).toThrow(TypeError);
+    expect(() => defineTools({ tools: { made } })).not.toThrow();
+
+    // The tool itself, as the server runs it: what an app must not be able to pass.
+    const byHand = toolRecordOf(made) as unknown as ConvexTool;
+    expect(byHand).toHaveProperty("handler");
+    const refused = /was not made by tool\(\)/;
+    expect(() => defineTools({ tools: { by_hand: byHand } })).toThrow(refused);
+    expect(() => defineTools({ tools: { copy: { ...made } } })).toThrow(refused);
+    expect(() => defineTools({ tools: { empty: {} as ConvexTool } })).toThrow(refused);
+    expect(() => defineTools({ tools: { nothing: null as unknown as ConvexTool } })).toThrow(
+      /MCP tool "nothing" was not made by tool\(\)/,
+    );
   });
 
   it("reads its issuer and audience from the deployment's environment", async () => {

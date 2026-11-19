@@ -50,7 +50,7 @@ import {
   type McpTool,
   type ToolAnnotations,
 } from "./server";
-import { createToolServer } from "./tool-server";
+import { createToolServer, sealTool, type ConvexTool } from "./tool-server";
 
 export {
   ToolError,
@@ -118,8 +118,7 @@ export interface ToolDefinition<
   ) => Awaitable<Returns extends GenericValidator ? Infer<Returns> : unknown>;
 }
 
-/** A tool ready to be listed in `defineTools({ tools })`. */
-export type ConvexTool = McpTool<ToolCtx>;
+export type { ConvexTool } from "./tool-server";
 
 type Direction = "input" | "output";
 
@@ -282,7 +281,7 @@ export function tool<
   Principal extends KnownPrincipal = "user",
 >(definition: ToolDefinition<Args, Returns, Principal>): ConvexTool {
   const returns = definition.returns;
-  return {
+  return sealTool({
     description: definition.description,
     inputSchema: fieldsToJsonSchema(definition.args),
     ...(returns !== undefined &&
@@ -305,8 +304,8 @@ export function tool<
       // generic failure and the detail goes to the app's logs.
       shapeResult: (value: unknown) => fit(returns, value, "result", "output"),
     }),
-    handler: definition.handler as ConvexTool["handler"],
-  };
+    handler: definition.handler as McpTool<ToolCtx>["handler"],
+  });
 }
 
 export interface ToolsDefinition {
