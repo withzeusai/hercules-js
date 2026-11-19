@@ -322,7 +322,7 @@ this route; 503 with `Retry-After` while the issuer's keys cannot be fetched;
 500 while the app's environment is not set, or when one event cannot be
 applied (tried again for a day); 413 when a batch of several events cannot be
 applied (Hercules sends half). Event types and fields the package does not
-know are accepted and skipped.
+know are accepted and skipped: see "Compatibility".
 
 ### Configuration
 
@@ -340,6 +340,51 @@ component's scheduled functions as an argument. It never reaches a browser,
 and is sent only to an `https` API URL (or `http://localhost`). A run's
 stuck-run check keeps the key it was scheduled with, so a run that is going
 while the key is rotated is settled by delivery, not by the check.
+
+### Compatibility
+
+The Hercules API adds to a version without changing it: new event types,
+fields, statuses, part types and error codes can arrive at any time. An app
+keeps running the version of this package it was built with, so the package
+is written to meet what it has never seen. It promises this, in the app's
+backend and in the page alike:
+
+- **Nothing new is refused, and nothing new throws.** A delivery that holds
+  events the package does not know is applied and answered 2xx: the events
+  it knows are applied, the others keep their place in the run's sequence
+  and change nothing.
+- **A field it does not know is not read.** On a run, an event, a message, an
+  error or the answer to a start, the fields it knows are read as before.
+- **A message part of a type it does not know is left out.** The parts beside
+  it are kept, in order.
+- **A run status it does not know is a run that is still going.** A run ends
+  only as `completed`, `failed`, `cancelled` or `capped`. Until then the
+  thread has its `activeRun`, the page shows the run as going and can stop
+  it, `send` throws `thread_busy`, and `onRunFinished` is not called.
+- **A run can stay unfinished for a long time.** A run that waits, for a
+  person say, is kept open for as long as Hercules says it is going, and is
+  asked about every half hour at most. It is failed only once nothing was
+  heard of it for a day. The live stream of a quiet run is followed for as
+  long as it takes.
+- **An ending it does not know still ends the run.** A run Hercules reports
+  as finished, in a status or with a final event added later, is recorded as
+  `failed` with the code `run_failed`, and keeps the reply it wrote.
+- **A tool call of a kind it does not know is kept**, as a `hercules` tool
+  call: the kind whose name and summary a page is not shown unless the app
+  set `exposeToolDetails`. One that ended with a status it does not know is
+  kept as `failed`: it is not known to have worked.
+- **An error code is any string.** A run that fails with a code the package
+  does not know, or that Hercules refuses with one, fails with that code and
+  the message Hercules sent. A `capped` run whose reason the package does
+  not know has `cappedReason: null`.
+
+So match on the codes and statuses you handle, and keep a default for the
+rest.
+
+Every request the app's backend makes to Hercules names the package and its
+version in a `Hercules-Client` header. Hercules can answer
+`client_upgrade_required` to a version it no longer takes: see "How it
+works" for what the package does then.
 
 ## In the page, with TanStack AI
 
