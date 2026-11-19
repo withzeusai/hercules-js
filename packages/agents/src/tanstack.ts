@@ -506,9 +506,10 @@ export function herculesConnection(
 /**
  * Keeps the chat in step with the thread in Convex: a reply another tab or
  * device got shows here too, as far as Convex has it while it is written
- * (its checkpoints, not the live stream) and whole once it is done. It sets
- * the chat's messages only while no reply is streaming on this page. Returns
- * the thread, for its `activeRun.progress` and `latestRun`.
+ * (what Hercules has delivered of it, not the live stream) and whole once it
+ * is done. It sets the chat's messages only while no reply is streaming on
+ * this page. Returns the thread, for its `activeRun.progress` and
+ * `latestRun`.
  *
  * ```tsx
  * const chat = useChat({ connection, threadId, persistence: true });

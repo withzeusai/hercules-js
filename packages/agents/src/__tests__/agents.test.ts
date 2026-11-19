@@ -1488,6 +1488,48 @@ describe("cancel", () => {
     expect(finished).toHaveLength(1);
   });
 
+  it("keeps a stopped reply as far as it was written, as a completed message", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Hercules ends a stopped run with its reply up to the stop, as the run's reply.
+    const stopped = [
+      event(runId, threadId, 2, "run.started"),
+      event(runId, threadId, 5, "message.completed", {
+        message: {
+          id: "msg_1",
+          thread_id: threadId,
+          run_id: runId,
+          role: "assistant",
+          parts: [{ type: "text", text: "Here is the first part" }],
+          created_at: "2026-11-15T12:00:01.000Z",
+        },
+      }),
+      event(runId, threadId, 6, "run.cancelled", { usage: { credits: 0.5 } }),
+    ];
+    api.answerWith((request) =>
+      request.path.startsWith(`/v1/agents/runs/${runId}/events`)
+        ? Response.json({ data: stopped, has_more: false })
+        : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    const reply = {
+      id: "msg_1",
+      status: "completed",
+      parts: [{ type: "text", text: "Here is the first part" }],
+    };
+    let thread = await read(support, threadId);
+    expect(thread.latestRun?.status).toBe("cancelled");
+    expect(thread.messages[1]).toMatchObject(reply);
+    // Delivery brings the same events later, and changes nothing.
+    await deliver(support, ...stopped);
+    thread = await read(support, threadId);
+    expect(thread.messages).toHaveLength(2);
+    expect(thread.messages[1]).toMatchObject(reply);
+    expect(finished).toHaveLength(1);
+  });
+
   it("records the stop even when what the run wrote cannot be read", async () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });

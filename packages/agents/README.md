@@ -193,26 +193,32 @@ about less and less often. `followRun` connects again after a 408, a 429 or a
 `cancel` asks Hercules to stop the run. Until Hercules has, the run is still
 the thread's: `activeRun.stopping` is true, and `send` throws `thread_busy`.
 That is a second or so as a rule. The component then reads what the run wrote
-before it stopped and records the run as `cancelled`. Hercules stores a
-reply's text in checkpoints (at the end of each block of text, before each
-tool call, and every 2,000 characters), so a reply that was stopped while it
-was written is kept up to its last checkpoint, as a message with the status
-`incomplete`. A run that was asked to stop and that Hercules ends as `failed`
+before it stopped and records the run as `cancelled`. A reply that was
+stopped while it was written is kept as far as it was written: Hercules
+delivers that text as the run's reply, and the thread holds it as a message
+with the status `completed`. A run stopped before it wrote any text leaves no
+reply. A message has the status `incomplete` only when its run ended and the
+app got part of the reply, not the whole: a run that failed while it was
+writing, say. A run that was asked to stop and that Hercules ends as `failed`
 with the code `run_failed` is recorded as `cancelled` too; a failure with a
 code of its own, such as `out_of_credits`, stays a failure.
 
 ### Methods
 
-| Method                                                  | Where              | Does                                                                     |
-| ------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------ |
-| `send(ctx, { threadId?, text, context? })`              | mutation           | Sends the caller's message and starts a run                              |
-| `run(ctx, { threadId?, text, context? })`               | mutation or action | Starts a run as the app's own job, for no end user                       |
-| `readThread(ctx, { threadId, limit? })`                 | query              | The caller's thread: its newest messages, the run going, its live stream |
-| `readThreadDetails(ctx, { threadId, limit? })`          | query, internal    | A thread as stored, with tool results. For the app's backend             |
-| `cancel(ctx, { threadId })`                             | mutation           | Stops the run going on the caller's thread                               |
-| `deleteThread(ctx, { threadId })`                       | mutation           | Deletes the thread here and at Hercules. Irreversible                    |
-| `claimPageAction(ctx, { threadId, runId, toolCallId })` | mutation           | Takes a page action for one tab to run                                   |
-| `registerRoutes(http)`                                  | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents         |
+| Method                                                   | Where              | Does                                                                     |
+| -------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| `send(ctx, { threadId?, text, context?, pageActions? })` | mutation           | Sends the caller's message and starts a run                              |
+| `run(ctx, { threadId?, text, context?, pageActions? })`  | mutation or action | Starts a run as the app's own job, for no end user                       |
+| `readThread(ctx, { threadId, limit? })`                  | query              | The caller's thread: its newest messages, the run going, its live stream |
+| `readThreadDetails(ctx, { threadId, limit? })`           | query, internal    | A thread as stored, with tool results. For the app's backend             |
+| `cancel(ctx, { threadId })`                              | mutation           | Stops the run going on the caller's thread                               |
+| `deleteThread(ctx, { threadId })`                        | mutation           | Deletes the thread here and at Hercules. Irreversible                    |
+| `claimPageAction(ctx, { threadId, runId, toolCallId })`  | mutation           | Takes a page action for one tab to run                                   |
+| `registerRoutes(http)`                                   | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents         |
+
+`pageActions` on `send` and `run` replaces the option's list for that one
+run. The `send` that `support.api()` exports does not take it: a page does
+not choose a run's page actions.
 
 `run` and `readThreadDetails` are server-only. Neither reads `ctx.auth`: `run`
 starts a run for no end user and against no limit, and `readThreadDetails`
@@ -435,8 +441,8 @@ talks to the agent through the app's Convex functions, the ones
 npm install @tanstack/ai @tanstack/ai-client @tanstack/ai-react
 ```
 
-TanStack AI 1.x, from `@tanstack/ai` 1.2, `@tanstack/ai-client` 1.1 and
-`@tanstack/ai-react` 1.0.2. The package's own peers are `@tanstack/ai` and
+The package is tested with `@tanstack/ai` 1.2.0, `@tanstack/ai-client` 1.1.0
+and `@tanstack/ai-react` 1.0.2. Its own peers are `@tanstack/ai` and
 `@tanstack/ai-client`, whose connection contract it implements. It never
 imports `@tanstack/ai-react`: that one is the app's, for `useChat`.
 
@@ -675,10 +681,16 @@ call itself, so TanStack never runs one or starts a second run.
   that moment waits for the run to end (for `settleTimeoutMs` at most) and is
   then sent. `thread.activeRun?.stopping` says a stop is on its way, for a
   page that would rather hold its Send button.
-- A reply that was stopped while it was written stays in the chat as far as
-  this page streamed it, with `metadata.hercules.status` set to
-  `"incomplete"`. The thread keeps it up to its last checkpoint only, so a
-  reload, or another tab, can show less of it, or none of it.
+- A reply that was stopped while it was written is kept as far as it was
+  written. When the run ends, Hercules delivers that text as the run's reply
+  and the thread holds it as a `completed` message, so the chat shows the
+  same text here, in another tab and after a reload. `thread.latestRun.status`
+  is then `"cancelled"`, for the page to say the reply was stopped. A run
+  stopped before it wrote any text leaves no reply.
+- When a run ends and the thread holds less of its reply than this page
+  streamed (a run that failed while it was writing, say), the page's text
+  stays in the chat, with `metadata.hercules.status` set to `"incomplete"`. A
+  reload, or another tab, shows what the thread holds.
 - `chat.error` is not kept across a reload. To say why the last message got
   no reply after one, read the thread: when `thread.latestRun.status` is
   `"failed"`, `thread.latestRun.error.code` is the run's code.
@@ -688,8 +700,9 @@ call itself, so TanStack never runs one or starts a second run.
   delivered to the app yet. A message sent then fails with `thread_busy`, so
   hold Send, or say that the reply is still finishing.
 - A run another tab started shows here through `useThreadSync` as Convex
-  gets it: the message that started it, then the reply up to each checkpoint,
-  then the reply whole. It is not streamed live in this tab.
+  gets it: the message that started it, then the reply as far as Hercules
+  has delivered it to the app (in steps, while it is written), then the reply
+  whole. It is not streamed live in this tab.
 - The chat is for signed-in users: gate it with `useConvexAuth()`, as
   `AgentChat` does above. Without a signed-in user every message fails with
   `sign_in_required`.
@@ -779,11 +792,12 @@ number of at least one, at most 200, and fewer when they come to more than about
 - An `AgentError` with a `code`. The message was not sent (one of `send`'s
   codes), or the latest run failed (the run's code, such as `out_of_credits`
   or `agent_daily_limit_reached`). For a limit it also has
-  `retryAfterSeconds`. `agent_not_found`, `hercules_auth_required` and
-  `client_upgrade_required` are the app's setup, not the chat. For the last
-  two the message is "The assistant is not available right now.": the app
-  has to be upgraded to Hercules Auth 2.0, or this package to a version
-  Hercules still takes.
+  `retryAfterSeconds`. `agent_not_found`, `agent_unavailable`,
+  `hercules_auth_required` and `client_upgrade_required` are the app's setup,
+  not the chat. For the last three the message is "The assistant is not
+  available right now.": the agent's setup has to be checked in Hercules, the
+  app upgraded to Hercules Auth 2.0, or this package to a version Hercules
+  still takes.
 - A `RunStreamError`, only while a run is going. The live view of the reply
   could not be read: Hercules refused the stream, or kept answering 429
   because more than ten streams of the run are open (an eleventh tab). The
@@ -799,7 +813,12 @@ if (chat.error instanceof RunStreamError) {
   // Nothing to tell the user: the reply is on its way through Convex.
 } else if (
   chat.error instanceof AgentError &&
-  ["agent_not_found", "agent_unavailable", "hercules_auth_required"].includes(chat.error.code)
+  [
+    "agent_not_found",
+    "agent_unavailable",
+    "hercules_auth_required",
+    "client_upgrade_required",
+  ].includes(chat.error.code)
 ) {
   // The app is set up wrong. Starting a new chat will not help.
 }
@@ -936,7 +955,8 @@ send_daily_digest: tool({
   it is a type error, and `defineTools` throws when the module loads. So does
   an empty list.
 - Signed-in users are not affected: a `"user"` caller has no origin, and a
-  tool takes them as before, with an agent acting for them or not.
+  tool that lists `"user"` takes them whatever `agentOrigins` says, with an
+  agent acting for them or not.
 
 A caller never sees, and cannot call, a tool that does not accept them:
 `tools/list` and `tools/call` apply the same rule.

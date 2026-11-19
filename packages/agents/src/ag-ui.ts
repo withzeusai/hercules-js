@@ -738,11 +738,14 @@ function isUnansweredToolCall(part: unknown): boolean {
  * `next`, the thread as Convex has it, with what this page streamed of a
  * reply its run's end cut off put back in.
  *
- * Hercules stores a reply's text in checkpoints. When a run is stopped while
- * it writes, the thread holds the reply up to its last checkpoint
- * (`incomplete`), or nothing of it, and the page has streamed further. The
- * page's copy is kept, marked `incomplete`, for as long as the page lives; a
- * reload shows what the thread has.
+ * A run that is stopped while it writes keeps its reply as far as it was
+ * written: Hercules delivers that as the run's `message.completed`, the
+ * thread holds it as a `completed` message, and that is what the chat shows.
+ * This is for the other case: a run that ended without its reply reaching
+ * the app whole (it failed while it was writing, say). The thread then holds
+ * the text delivered up to then (`incomplete`), or nothing of it, and the
+ * page has streamed further. The page's copy is kept, marked `incomplete`,
+ * for as long as the page lives; a reload shows what the thread has.
  *
  * Kept narrowly, because a completed reply in Convex is the truth: only the
  * last message the page shows of a run, only when that run did not finish
@@ -847,9 +850,10 @@ export interface SyncableChat {
  * it did. A run this page streamed is left alone until Convex has its end; a
  * run another tab started is taken with every update of the thread.
  * Messages older than the thread's window stay as they are. So does
- * what this page streamed of a reply that was stopped while it was written,
- * when the thread holds less of it: it is kept with
- * `metadata.hercules.status` set to `"incomplete"`.
+ * what this page streamed of a reply whose run ended before the app got it
+ * whole, when the thread holds less of it: it is kept with
+ * `metadata.hercules.status` set to `"incomplete"`. The reply of a run that
+ * was stopped is not such a one: the thread holds it as `completed`.
  */
 export function syncThread(chat: SyncableChat, thread: AgentThread | null | undefined): boolean {
   if (thread === null || thread === undefined) return false;
