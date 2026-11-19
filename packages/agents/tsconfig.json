@@ -11,7 +11,9 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "removeComments": true,
+    // Kept: the declarations carry the doc comments, which is where an editor
+    // shows that `run` is server-only or that an argument is untrusted input.
+    "removeComments": false,
     "importHelpers": true,
 
     // Interop constraints
