@@ -81,8 +81,12 @@ export interface UseAgentThreadOptions {
  * - `submitted`: a message is on its way, or the run has not started writing.
  * - `streaming`: the reply is being written.
  * - `ready`: nothing is going; a new message can be sent.
+ *
+ * An open set: a later version of the package may add a status, for a run
+ * that waits on a person, say. Only `ready` means a new message can be
+ * sent. A status you do not know means something is going.
  */
-export type AgentThreadStatus = "loading" | "ready" | "submitted" | "streaming";
+export type AgentThreadStatus = "loading" | "ready" | "submitted" | "streaming" | (string & {});
 
 export interface UseAgentThreadResult {
   messages: ViewMessage[];

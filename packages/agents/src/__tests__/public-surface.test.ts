@@ -32,6 +32,10 @@ const DECLARATIONS = import.meta.glob(["../../dist/**/*.d.mts", "../../dist/**/*
 });
 /** The built modules, each loaded when asked for. */
 const MODULES = import.meta.glob(["../../dist/*.mjs", "../../dist/component/convex.config.js"]);
+/** The README, as text: it is where the public API is described. */
+const README = Object.values(
+  import.meta.glob(["../../README.md"], { query: "?raw", import: "default", eager: true }),
+)[0] as string;
 const IS_BUILT = Object.keys(DECLARATIONS).length > 0;
 
 interface Surface {
@@ -210,6 +214,21 @@ describe("the package's public surface", () => {
     for (const [alias, entry] of Object.entries(ALIASES)) {
       expect(exports[alias]).toEqual(exports[entry]);
     }
+  });
+
+  it("counts 83 names, and the README names every one", () => {
+    const names = Object.entries(SURFACE).flatMap(([entry, surface]) =>
+      [...surface.values, ...surface.types].map((name) => ({ entry, name })),
+    );
+    // A name is frozen once it is published. This number moves on purpose only.
+    expect(names).toHaveLength(83);
+    const undocumented = names
+      // The component is the default export of its entry point, and the README names it there.
+      .filter(({ name }) => name !== "default")
+      .filter(({ name }) => !README.includes(`\`${name}\``) && !README.includes(`\`${name}<`))
+      .map(({ entry, name }) => `${name} (${entry})`);
+    expect(undocumented).toEqual([]);
+    expect(README).toContain("`@usehercules/agents/_generated/component`");
   });
 
   it("keeps each list sorted, so a change to one reads as one line", () => {

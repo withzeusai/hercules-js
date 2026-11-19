@@ -409,10 +409,13 @@ talks to the agent through the app's Convex functions, the ones
 npm install @tanstack/ai @tanstack/ai-client @tanstack/ai-react
 ```
 
-The package is tested with `@tanstack/ai` 1.2.0, `@tanstack/ai-client` 1.1.0
-and `@tanstack/ai-react` 1.0.2. Its own peers are `@tanstack/ai` and
-`@tanstack/ai-client`, whose connection contract it implements. It never
-imports `@tanstack/ai-react`: that one is the app's, for `useChat`.
+The package's own peers are `@tanstack/ai` (`^1.2.0`) and
+`@tanstack/ai-client` (`^1.1.0`), whose connection contract it implements. It
+never imports `@tanstack/ai-react`: that one is the app's, for `useChat`. Its
+tests run against the lowest versions those ranges take, with
+`@tanstack/ai-react` 1.0.2, and at this release they pass against the newest
+as well: `@tanstack/ai` 1.7.0, `@tanstack/ai-client` 1.2.0 and
+`@tanstack/ai-react` 1.1.0.
 
 ```tsx
 // src/components/agent-chat.tsx
@@ -660,7 +663,8 @@ can be left out:
   `status: "expired"` for a while, for the page to tell the user.
 - `useThreadSync` returns the thread: `thread.activeRun?.progress` is the
   run's latest progress label. Each also comes to `useChat`'s
-  `onCustomEvent` as `hercules.progress` with `{ label }`.
+  `onCustomEvent` as `hercules.progress` with `{ label }`. The package
+  exports that name as `PROGRESS_EVENT`.
 - `chat.stop()` stops the run with the app's `cancel` mutation. The chat is
   free at once, and the run takes a moment longer to end. A message sent in
   that moment waits for the run to end (for `settleTimeoutMs` at most) and is
@@ -788,10 +792,25 @@ function Chat() {
     const started = await chat.send(text);
     if (started !== null) setThreadId(started.threadId);
   }
-  // chat.messages, chat.status ("loading" | "ready" | "submitted" | "streaming"),
-  // chat.cancel(), chat.error
+  // chat.messages, chat.status, chat.cancel(), chat.error
 }
 ```
+
+`chat.status` says what is going:
+
+| `chat.status` | Means                                                       |
+| ------------- | ----------------------------------------------------------- |
+| `loading`     | The thread is being read                                    |
+| `submitted`   | A message is on its way, or the run has not started writing |
+| `streaming`   | The reply is being written                                  |
+| `ready`       | Nothing is going: a new message can be sent                 |
+
+Enable Send on `ready` and on nothing else. The set is open: a later version
+of the package may add a status, for a run that waits on a person, say, and
+any status but `ready` means something is going. Each message in
+`chat.messages` has the `status` the thread gives it (`streaming`,
+`completed`, `incomplete`), or `pending` for the user's message on its way
+to Convex.
 
 The reply streams from the run's live URL, resuming with `Last-Event-ID`
 after a dropped connection, until Convex has the completed message. Page
@@ -1051,9 +1070,10 @@ overrides both variables must pass `audiences` to `defineTools` with its
 
 Pass `issuer` or `audiences` to `defineTools` to override either.
 
-### Not supported yet
+### Not supported
 
-Server-sent events, resources, prompts, sampling and elicitation.
+A tool server serves tools, and answers each call in one response. It does
+not serve server-sent events, resources, prompts, sampling or elicitation.
 
 ## Defaults and limits
 
@@ -1097,34 +1117,43 @@ without its timing. That timing is the package's own to tune.
 
 ## Versioning
 
-`@usehercules/agents` is at 0.x. A 0.x minor version may still contain
-breaking changes, and the changelog names each one. So pin an exact version,
-as the apps Hercules builds do, and read the changelog before you upgrade:
+`@usehercules/agents` follows [semantic versioning](https://semver.org).
+Within a major version, an upgrade does not break an app that uses the
+public API as this README describes it. A change that would break one takes
+a new major version, and the changelog names every change.
 
 ```sh
-npm install --save-exact @usehercules/agents
+npm install @usehercules/agents
 ```
 
-This section says what the package's public API is. It is what 1.0.0 is
-meant to freeze. From 1.0.0 the package will follow
-[semantic versioning](https://semver.org): within a major version, an
-upgrade will not break an app that uses the public API as this README
-describes it, and a change to any of it will take a new major version.
+This section says what the public API is, what a minor version may change,
+and what is not part of it.
 
 ### What the public API is
 
 - The exports of these entry points that this README documents, with their
   options, their return values and the error codes they name:
 
-  | Entry point                         | Exports                                                                       |
-  | ----------------------------------- | ----------------------------------------------------------------------------- |
-  | `@usehercules/agents/convex.config` | The `herculesAgents` component, as the default export                         |
-  | `@usehercules/agents/convex`        | `HerculesAgents`, `runFinishedValidator`, `defineTools`, `tool`, `ToolError`  |
-  | `@usehercules/agents/tanstack`      | `herculesConnection`, `useThreadSync`, `agentErrorCode`, `PAGE_ACTION_OUTPUT` |
-  | `@usehercules/agents/react`         | `useAgentThread`, `AgentError`, `RunStreamError`                              |
-  | `@usehercules/agents`               | `followRun`, `RunStreamError`, `ToolError`                                    |
+  | Entry point                         | Exports                                                                                         |
+  | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+  | `@usehercules/agents/convex.config` | The `herculesAgents` component, as the default export                                           |
+  | `@usehercules/agents/convex`        | `HerculesAgents`, `runFinishedValidator`, `defineTools`, `tool`, `ToolError`                    |
+  | `@usehercules/agents/tanstack`      | `herculesConnection`, `useThreadSync`, `agentErrorCode`, `PAGE_ACTION_OUTPUT`, `PROGRESS_EVENT` |
+  | `@usehercules/agents/react`         | `useAgentThread`, `AgentError`, `RunStreamError`                                                |
+  | `@usehercules/agents`               | `followRun`, `RunStreamError`, `ToolError`                                                      |
 
-  Each entry point also exports the types of what it takes and returns.
+- The types each entry point exports, which are the types of what the
+  exports above take and return:
+
+  | Entry point                    | Types                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+  | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `@usehercules/agents/convex`   | `HerculesAgentsOptions`; `SendArgs` and `ThreadArgs`, the arguments of its methods; `RunFinished`; `AgentErrorCode` and `AgentErrorData`, what `send` throws; the thread: `AgentThread`, `AgentThreadDetails`, `ThreadMessage`, `ActiveRun`, `PendingPageAction`, `StoredToolCall`; the tools: `ToolsDefinition`, `DefinedTools`, `ToolDefinition`, `ConvexTool` (what `tool()` returns), `ToolCtx` (a handler's `ctx`), `ToolCaller`, `ToolPrincipal`, `AgentOrigin`, `ToolAnnotations`         |
+  | `@usehercules/agents/tanstack` | `HerculesConnection` and `HerculesConnectionOptions`; `HerculesAgentApi`, the functions `support.api()` builds, as the connection takes them; `HerculesConvexClient`, what the connection needs of a Convex client (a `ConvexReactClient` is one); `SyncableChat`, what `useThreadSync` needs of `useChat`'s result; `HerculesMessageMetadata`, a message's `metadata.hercules`; `HerculesToolOutput`, a tool call part's `output`; `PageActionHandler` and `PageActionHandlers`; `AgentThread`  |
+  | `@usehercules/agents/react`    | `UseAgentThreadOptions`, `UseAgentThreadResult` and `AgentThreadStatus`; `SendMutationArgs`, what the hook calls `send` with; `ViewMessage`, `ViewPart` and `ViewToolCallPart`, the messages it returns; `PageActionHandler`; `AgentThread`                                                                                                                                                                                                                                                      |
+  | `@usehercules/agents`          | `RunStreamOptions`, `followRun`'s options; the API's own JSON: `AgentEvent`, `AgentEventType`, `EventDataByType` (each event type's `data`), `AgentEventOf` (the event of one type, as in `AgentEventOf<"message.delta">`), `Message`, `MessagePart`, `TextPart`, `ToolCallPart`, `Run`, `RunError`, `Usage`, `RunStatus`, `FinalRunStatus`, `CappedReason`, `ToolKind`, `ToolCallStatus`; and `ToolCaller`, `ToolPrincipal`, `AgentOrigin`, `ToolAnnotations`, the same types `/convex` exports |
+
+  Each entry point whose types have an open set also exports `UnknownName`:
+  see "Open sets".
 
 - The functions `support.api()` builds: their names, their arguments and what
   they return, the thread among them.
@@ -1152,8 +1181,10 @@ describes it, and a change to any of it will take a new major version.
   the default `limit` are tuning. The changelog names any that changes. How
   the package recovers when something goes wrong is not stated at all, and
   may change in any version.
-- **Peer ranges.** Taking a newer version of a peer, or raising the lowest
-  version of one within the same major, is a minor change of this package.
+- **Peer ranges.** Taking a newer version of a peer, a new major of one
+  among them, or raising the lowest version of one within the same major, is
+  a minor change of this package. Dropping a major version of a peer takes a
+  new major version of this package.
 
 So:
 
@@ -1173,10 +1204,11 @@ So:
   run in a browser that has `fetch`, streams and `AbortController`. Under
   Node, as in tests and builds, the package needs Node 22 or later, and is
   tested on Node 24.
-- **Peers.** `convex`, `react`, `@tanstack/ai` and `@tanstack/ai-client` are
-  optional peers: install the ones the entry points you import need.
-  `/tanstack` needs all four, `/convex` needs `convex`, `/react` needs
-  `react`, and `@usehercules/agents` needs none.
+- **Peers.** `convex` (`^1.49.0`), `react` (`^18.0.0 || ^19.0.0`),
+  `@tanstack/ai` (`^1.2.0`) and `@tanstack/ai-client` (`^1.1.0`) are optional
+  peers: install the ones the entry points you import need. `/tanstack`
+  needs all four, `/convex` needs `convex`, `/react` needs `react`, and
+  `@usehercules/agents` needs none. `/tanstack` is built on TanStack AI 1.x.
 
 ### Naming
 
@@ -1213,16 +1245,16 @@ passed on as they are.
 
 - Anything these entry points do not export, such as a file imported by its
   path inside the package.
-- `@usehercules/agents/_generated/component`. It is there for Convex's code
-  generation, which reads the component's types from that path. An app does
-  not import it.
+- `@usehercules/agents/_generated/component` and its one type,
+  `ComponentApi`. It is there for Convex's code generation, which reads the
+  component's types from that path. An app does not import it.
 - The component's own functions and tables. An app reaches them only through
   `HerculesAgents`: do not call `components.herculesAgents` functions or read
-  its tables directly. From 1.0.0, a version will read what earlier versions
-  of the same major stored, so that an upgrade keeps an app's threads. An
-  upgrade is one-way for what is stored: once a newer version has run in a
-  deployment, going back to an older version of the package there is not
-  supported, in 0.x or after.
+  its tables directly. A version reads what earlier versions of the same
+  major stored, and what 0.3.0 stored, so an upgrade keeps an app's threads.
+  An upgrade is one-way for what is stored: once a newer version has run in
+  a deployment, going back to an older version of the package there is not
+  supported.
 - What the package logs: the wording, the level, and when.
 - The exact requests the package makes to Hercules: their paths, headers and
   bodies, how many it makes, and when it makes one again.
@@ -1254,14 +1286,24 @@ comparing with a value this version does not know does.
 | Origin                         | `caller.origin`, `agentOrigins`                                              | `app`, `organization`, `console`, `trigger`, `channel`, `schedule`, `test`, `other` | Not this app's own job, and not `other`                                   | The call is refused unless the tool names that origin, or takes `"any"` |
 | Kind of caller                 | `caller.principal`                                                           | `user`, `agent`                                                                     | A caller this version cannot read                                         | The call is refused before any handler runs                             |
 
-Two things stay closed, and code may rely on that:
+Three more sets are the package's own. Hercules does not add to them, so a
+value you do not know never reaches an app that has not upgraded the
+package: only a new minor version adds one, and the changelog names it. They
+are open so that one can, for a message held for a person, a page action
+that waits for approval, or a run that is paused:
 
-- **The four statuses a run ends with**: `completed`, `failed`, `cancelled`,
-  `capped`. A run is over exactly when its status is one of them, and
-  `onRunFinished` is called with one of them and no other.
-- **The sets the package defines for itself**: a thread message's `status`
-  (`streaming`, `completed`, `incomplete`), a page action's `status`
-  (`pending`, `expired`), and `useAgentThread`'s `status`.
+| Set                       | Where an app reads it                                                                        | Known in this version                                                     | A value you do not know means                                             |
+| ------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Message status            | a thread message's `status`, `metadata.hercules.messageStatus`, a `useAgentThread` message's | `streaming`, `completed`, `incomplete`, and `pending` in `useAgentThread` | Show the message as it is, marked neither as being written nor as cut off |
+| Page-action status        | `thread.pageActions[].status`                                                                | `pending`, `expired`                                                      | Not the page's to run, and not expired: say nothing of it                 |
+| `useAgentThread`'s status | `chat.status`                                                                                | `loading`, `ready`, `submitted`, `streaming`                              | Something is going: only `ready` takes a new message                      |
+
+One set stays closed, and code may rely on that: **the four statuses a run
+ends with**, `completed`, `failed`, `cancelled` and `capped`. A run is over
+exactly when its status is one of them, `onRunFinished` is called with one
+of them and no other, and `metadata.hercules.runStatus` is one of them. A
+run Hercules ends in a way added later is recorded as `failed`: see
+"Compatibility with the Hercules API".
 
 The last column is about the thread: what the component stores, and so what
 `thread`, `readThreadDetails`, the two hooks and `onRunFinished` hand an app.

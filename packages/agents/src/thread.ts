@@ -5,7 +5,8 @@
  * types, so the browser entry points do not need Convex to read them.
  *
  * Where a field holds a value Hercules may add to (a status, a kind, a
- * reason, a part's type), its type is an open set: see `./api`.
+ * reason, a part's type), its type is an open set: see `./api`. So is a
+ * status the package defines itself: a later version may add a value.
  */
 import type { CappedReason, MessagePart, RunStatus, ToolCallStatus, ToolKind } from "./api";
 
@@ -22,8 +23,13 @@ export interface ThreadMessage {
   /** Render the parts whose `type` you know and skip the rest. */
   parts: MessagePart[];
   createdAt: string;
-  /** `streaming` while the reply is being written, `incomplete` when its run ended first. */
-  status: "streaming" | "completed" | "incomplete";
+  /**
+   * `streaming` while the reply is being written, `completed` when it is
+   * whole, `incomplete` when its run ended first. An open set: a later
+   * version of the package may add a status. Show a message whose status you
+   * do not know as it is, marked neither as being written nor as cut off.
+   */
+  status: "streaming" | "completed" | "incomplete" | (string & {});
 }
 
 /** The run that is going on a thread. */
@@ -62,8 +68,13 @@ export interface PendingPageAction {
   argumentsJson: string;
   /** When the agent called it. */
   createdAt: string;
-  /** `expired`: it came too late to be run, and will not be. */
-  status: "pending" | "expired";
+  /**
+   * `pending`: no tab has run it yet. `expired`: it came too late to be run,
+   * and will not be. An open set: a later version of the package may add a
+   * status. One you do not know is not the page's to run, and has not
+   * expired.
+   */
+  status: "pending" | "expired" | (string & {});
 }
 
 /** The thread `thread` and `readThread` return. */

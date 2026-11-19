@@ -20,7 +20,10 @@ export type ViewPart = { type: "text"; text: string } | ViewToolCallPart | Unkno
 
 export interface ViewMessage extends Omit<ThreadMessage, "parts" | "status"> {
   parts: ViewPart[];
-  /** `pending` is the user's message on its way to Convex. */
+  /**
+   * The message's status in the thread, or `pending`: the user's message on
+   * its way to Convex. An open set, as a thread message's status is.
+   */
   status: ThreadMessage["status"] | "pending";
 }
 

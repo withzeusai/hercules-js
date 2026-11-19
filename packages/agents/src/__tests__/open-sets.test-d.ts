@@ -16,7 +16,8 @@
  * know. TypeScript cannot compare that name with a string directly without
  * losing the narrowing, so it is read with `String(...)`.
  *
- * The sets that are closed on purpose are held at the end.
+ * The statuses the package defines itself are open too, for its own later
+ * versions. The one set that is closed on purpose is held at the end.
  */
 import { describe, expectTypeOf, it } from "vitest";
 import type { ComponentApi } from "../component/_generated/component";
@@ -252,6 +253,98 @@ describe("sets of plain strings", () => {
   });
 });
 
+// The statuses the package defines itself. Hercules does not add to these: a
+// later version of the package may, for a message held for a person, a page
+// action that waits for approval, or a run that is paused. They are open so
+// that it can do so in a minor version, and an app's code has its default
+// from the start.
+describe("the sets the package defines for itself", () => {
+  it("a thread message's status, in the thread and in both hooks", () => {
+    const known = (status: Convex.ThreadMessage["status"]) => {
+      switch (status) {
+        case "streaming":
+        case "completed":
+        case "incomplete":
+          return status;
+        default:
+          // @ts-expect-error A status added later lands here.
+          return assertNever(status);
+      }
+    };
+    const shown = (status: ReactEntry.ViewMessage["status"]) => {
+      switch (status) {
+        case "streaming":
+        case "completed":
+        case "incomplete":
+        case "pending":
+          return status;
+        default:
+          // @ts-expect-error A status added later lands here.
+          return assertNever(status);
+      }
+    };
+    const later = (
+      stored: Convex.ThreadMessage,
+      view: ReactEntry.ViewMessage,
+      metadata: Tanstack.HerculesMessageMetadata,
+    ) =>
+      stored.status === "queued" || view.status === "queued" || metadata.messageStatus === "queued";
+    expectTypeOf(known).toBeFunction();
+    expectTypeOf(shown).toBeFunction();
+    expectTypeOf(later).returns.toBeBoolean();
+    expectTypeOf<TakesAnyString<Convex.ThreadMessage["status"]>>().toEqualTypeOf<true>();
+    expectTypeOf<TakesAnyString<ReactEntry.ViewMessage["status"]>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      TakesAnyString<NonNullable<Tanstack.HerculesMessageMetadata["messageStatus"]>>
+    >().toEqualTypeOf<true>();
+    // The names this version knows still complete in an editor and narrow.
+    const cutOff = (message: Convex.ThreadMessage) => message.status === "incomplete";
+    expectTypeOf(cutOff).returns.toBeBoolean();
+  });
+
+  it("a page action's status", () => {
+    const known = (status: Convex.PendingPageAction["status"]) => {
+      switch (status) {
+        case "pending":
+        case "expired":
+          return status;
+        default:
+          // @ts-expect-error A status added later lands here.
+          return assertNever(status);
+      }
+    };
+    const later = (action: Convex.PendingPageAction) => action.status === "awaiting_approval";
+    expectTypeOf(known).toBeFunction();
+    expectTypeOf(later).returns.toBeBoolean();
+    expectTypeOf<TakesAnyString<Convex.PendingPageAction["status"]>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      TakesAnyString<ReactEntry.AgentThread["pageActions"][number]["status"]>
+    >().toEqualTypeOf<true>();
+  });
+
+  it("useAgentThread's status", () => {
+    const known = (status: ReactEntry.AgentThreadStatus) => {
+      switch (status) {
+        case "loading":
+        case "ready":
+        case "submitted":
+        case "streaming":
+          return status;
+        default:
+          // @ts-expect-error A status added later lands here.
+          return assertNever(status);
+      }
+    };
+    const later = (result: ReactEntry.UseAgentThreadResult) => result.status === "waiting";
+    // What the README tells a page to do: only `ready` takes a new message.
+    const canSend = (result: ReactEntry.UseAgentThreadResult) => result.status === "ready";
+    expectTypeOf(known).toBeFunction();
+    expectTypeOf(later).returns.toBeBoolean();
+    expectTypeOf(canSend).returns.toBeBoolean();
+    expectTypeOf<TakesAnyString<ReactEntry.AgentThreadStatus>>().toEqualTypeOf<true>();
+  });
+});
+
 describe("unions told apart by a name", () => {
   it("an event: narrows on the types this version knows, and is never exhausted", () => {
     const read = (event: Root.AgentEvent) => {
@@ -359,14 +452,9 @@ describe("sets that are closed, on purpose", () => {
     expectTypeOf(ended).toBeFunction();
   });
 
-  it("the sets the package defines for itself", () => {
-    expectTypeOf<Convex.ThreadMessage["status"]>().toEqualTypeOf<
-      "streaming" | "completed" | "incomplete"
-    >();
-    expectTypeOf<Convex.PendingPageAction["status"]>().toEqualTypeOf<"pending" | "expired">();
-    expectTypeOf<ReactEntry.AgentThreadStatus>().toEqualTypeOf<
-      "loading" | "ready" | "submitted" | "streaming"
-    >();
+  it("how a message's run ended, in the TanStack path: the same four", () => {
+    type RunStatus = NonNullable<Tanstack.HerculesMessageMetadata["runStatus"]>;
+    expectTypeOf<RunStatus>().toEqualTypeOf<Root.FinalRunStatus>();
   });
 });
 
