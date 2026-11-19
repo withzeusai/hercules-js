@@ -820,7 +820,7 @@ caller is the handler's third argument:
 | `caller.principal` | Who                               | Fields                                                                                                                                                           |
 | ------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `"user"`           | A signed-in end user of the app   | `tokenIdentifier` (the same `<issuer>\|<subject>` the app stores for their web session), `issuer`, `subject`, and `agentId` when a Hercules agent calls for them |
-| `"agent"`          | A Hercules agent with no end user | `agentId`                                                                                                                                                        |
+| `"agent"`          | A Hercules agent with no end user | `agentId`, and `origin`: where the agent's run was started                                                                                                       |
 
 Pass the caller to an internal function explicitly. Never take a user id from
 the tool's arguments: the model writes those.
@@ -842,7 +842,7 @@ export const createFor = internalMutation({
 ```
 
 Tools accept signed-in users only. A tool an agent may run with no end user
-says so, and its handler then has to handle both:
+says so with `"agent"`, and its handler then has to handle both:
 
 ```ts
 list_open_hours: tool({
@@ -853,7 +853,57 @@ list_open_hours: tool({
 }),
 ```
 
-A caller never sees, and cannot call, a tool that does not accept them.
+#### Where a run with no end user was started
+
+A run has no end user when nobody signed in to the app asked for it. Hercules
+signs where such a run was started into the token of every call it makes, and
+the handler reads it as `caller.origin`:
+
+| `caller.origin`  | The run was started                                                 |
+| ---------------- | ------------------------------------------------------------------- |
+| `"app"`          | By this app's own backend, with its app key and no end user (`run`) |
+| `"organization"` | With an Organization API key                                        |
+| `"console"`      | From the Hercules console                                           |
+| `"trigger"`      | By one of the agent's triggers                                      |
+| `"channel"`      | From one of the agent's channels                                    |
+| `"schedule"`     | By one of the agent's schedules                                     |
+| `"test"`         | As a test, while the agent is being built                           |
+| `null`           | The token does not say                                              |
+
+Hercules may add origins. One this version of the package does not know
+reaches the handler as the string Hercules signed.
+
+**A tool that lists `"agent"` takes the app's own job, and nothing else,
+unless it says so.** That is the origin `"app"`. To take a call from other
+origins, name them in `agentOrigins`, beside `principals`:
+
+```ts
+send_daily_digest: tool({
+  description: "Sends the daily digest to every subscriber.",
+  args: {},
+  principals: ["agent"],
+  // The app's own job, and a run one of the agent's schedules started.
+  agentOrigins: ["app", "schedule"],
+  handler: (ctx, _args, caller) =>
+    ctx.runMutation(internal.digest.send, { startedBy: caller.origin }),
+}),
+```
+
+- Left out, `agentOrigins` is `["app"]`.
+- A call whose token names an origin the tool does not list is refused. So is
+  one whose token names no origin, or one the package does not know: neither
+  is taken for the app's own job.
+- `agentOrigins: "any"` takes every call with no end user, wherever its run
+  was started, one whose token does not say among them. The handler can
+  still tell them apart by `caller.origin`.
+- `agentOrigins` is only for a tool that lists `"agent"`. On any other tool
+  it is a type error, and `defineTools` throws when the module loads. So does
+  an empty list.
+- Signed-in users are not affected: a `"user"` caller has no origin, and a
+  tool takes them as before, with an agent acting for them or not.
+
+A caller never sees, and cannot call, a tool that does not accept them:
+`tools/list` and `tools/call` apply the same rule.
 
 ### Arguments and results
 

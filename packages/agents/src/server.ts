@@ -23,14 +23,42 @@ export interface ToolAnnotations {
 export type ToolPrincipal = "user" | "agent";
 
 /**
+ * Where a run with no end user was started, as Hercules signs it into the
+ * token of each call the run makes:
+ *
+ * - `app`: this app's own job. Its backend started the run with the app's
+ *   key and no end user (`HerculesAgents.run`).
+ * - `organization`: a run started with an Organization API key.
+ * - `console`: a run started from the Hercules console.
+ * - `trigger`, `channel`, `schedule`: a run one of the agent's own triggers,
+ *   channels or schedules started.
+ * - `test`: a test run made while the agent is being built.
+ *
+ * Hercules may add origins. One this version does not know is a string like
+ * any other: it is never taken for `app`.
+ */
+export type AgentOrigin =
+  | "app"
+  | "organization"
+  | "console"
+  | "trigger"
+  | "channel"
+  | "schedule"
+  | "test"
+  // Any other string, with the names above still offered by an editor.
+  | (string & {});
+
+/**
  * Who is calling a tool, taken from the verified token.
  *
  * - `user`: a signed-in end user of the app. `tokenIdentifier` is the same
  *   `<issuer>|<subject>` string the app stores for that user's web session.
  *   `agentId` is set when a Hercules agent makes the call on their behalf.
- * - `agent`: a Hercules agent acting for nobody the app knows (a run the
- *   organization, a schedule, or the app's own job started). There is no end
- *   user, so a tool only receives it after opting in with `principals`.
+ * - `agent`: a Hercules agent acting for no end user. `origin` says where its
+ *   run was started, and is null when the token does not say. A tool only
+ *   receives this caller after opting in with `principals`, and then only
+ *   from the origins it accepts: the app's own job, unless `agentOrigins`
+ *   says otherwise.
  */
 export type ToolCaller =
   | {
@@ -43,6 +71,7 @@ export type ToolCaller =
   | {
       principal: "agent";
       agentId: string;
+      origin: AgentOrigin | null;
     };
 
 /** A failure the calling model should read and can act on. Its message is sent as is. */
@@ -66,6 +95,12 @@ export interface McpTool<Ctx> {
   annotations?: ToolAnnotations;
   /** Who may call the tool. Defaults to signed-in users only. */
   principals?: readonly ToolPrincipal[];
+  /**
+   * For a tool that lists `"agent"`: the origins it takes a call with no end
+   * user from. Defaults to `["app"]`, the app's own job. `"any"` takes every
+   * such call, one whose token names no origin among them.
+   */
+  agentOrigins?: readonly AgentOrigin[] | "any";
   /** Checks and converts the raw arguments. Throws `ToolError` when they do not fit. */
   parseArgs(raw: unknown): unknown;
   /** Checks the handler's result against what the tool declared it returns. */
@@ -92,8 +127,15 @@ export interface McpHandlerOptions<Ctx> {
 export const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
 
 const DEFAULT_PRINCIPALS: readonly ToolPrincipal[] = ["user"];
+/**
+ * The origins a tool that lists `"agent"` takes a call from when it does not
+ * say: the app's own job, and no other.
+ */
+const DEFAULT_AGENT_ORIGINS: readonly AgentOrigin[] = ["app"];
 /** On each tool of an inspection listing: who may call it. */
 export const PRINCIPALS_META_KEY = "hercules.app/principals";
+/** Beside it, on a tool that lists `"agent"`: the origins it accepts, or `"any"`. */
+export const AGENT_ORIGINS_META_KEY = "hercules.app/agent-origins";
 const MAX_BODY_BYTES = 1_000_000;
 const AGENT_SUBJECT_PREFIX = "agent:";
 const GENERIC_TOOL_FAILURE = "The tool failed. Try again, or tell the user it is unavailable.";
@@ -169,7 +211,8 @@ export function callerFromToken(token: {
   if (principal === "agent") {
     const agentId = agentIdOf(token.subject);
     if (agentId === null) return null;
-    return { principal: "agent", agentId };
+    // As the token says it, or null when it does not: never a guess.
+    return { principal: "agent", agentId, origin: stringClaim(token.claims, "hercules_origin") };
   }
   if (principal !== "user") return null;
   // An agent subject without the agent principal would read as an end user
@@ -228,8 +271,49 @@ function toolFailure(text: string) {
   return { content: [{ type: "text", text }], isError: true };
 }
 
+/**
+ * Whether a tool takes this caller: its principal, and for a call with no
+ * end user, where its run was started. The one rule for listing and calling.
+ * A call whose token names no origin is from none of the origins a tool can
+ * list: only a tool that accepts `"any"` takes it.
+ */
 function allows<Ctx>(tool: McpTool<Ctx>, caller: ToolCaller): boolean {
-  return (tool.principals ?? DEFAULT_PRINCIPALS).includes(caller.principal);
+  if (!(tool.principals ?? DEFAULT_PRINCIPALS).includes(caller.principal)) return false;
+  if (caller.principal !== "agent") return true;
+  const origins = tool.agentOrigins ?? DEFAULT_AGENT_ORIGINS;
+  if (origins === "any") return true;
+  return caller.origin !== null && origins.includes(caller.origin);
+}
+
+/**
+ * Checks what a tool says about who may call it, when it is declared: a
+ * mistake here is the app's to fix before it serves anything. `agentOrigins`
+ * widens who may call a tool with no end user, so it must be said on purpose:
+ * only on a tool that lists `"agent"`, and as a list of names or `"any"`.
+ */
+export function checkToolAccess<Ctx>(name: string, tool: McpTool<Ctx>): void {
+  const origins = tool.agentOrigins;
+  if (origins === undefined) return;
+  const fail = (problem: string): never => {
+    throw new Error(`MCP tool "${name}": agentOrigins ${problem}`);
+  };
+  if (!(tool.principals ?? DEFAULT_PRINCIPALS).includes("agent")) {
+    fail(
+      'is set, but the tool does not list "agent" in principals. Add it, or remove agentOrigins.',
+    );
+  }
+  if (origins === "any") return;
+  if (!Array.isArray(origins)) fail('must be a list of origins, or "any".');
+  if (origins.length === 0) {
+    fail(
+      'is empty, so no agent could call the tool. List an origin, or remove "agent" from principals.',
+    );
+  }
+  for (const origin of origins as readonly unknown[]) {
+    if (typeof origin !== "string" || origin.length === 0) fail("must list origins by name.");
+    if (origin === "any")
+      fail('lists "any" as an origin. To take every origin, set agentOrigins: "any".');
+  }
 }
 
 /**
@@ -238,6 +322,7 @@ function allows<Ctx>(tool: McpTool<Ctx>, caller: ToolCaller): boolean {
  */
 export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
   const tools = new Map(Object.entries(options.tools));
+  for (const [name, tool] of tools) checkToolAccess(name, tool);
 
   async function callTool(ctx: Ctx, caller: ToolCaller, params: unknown) {
     const name = isRecord(params) ? params["name"] : undefined;
@@ -326,7 +411,12 @@ export function createMcpHandler<Ctx>(options: McpHandlerOptions<Ctx>) {
               }),
               ...(tool.annotations !== undefined && { annotations: tool.annotations }),
               ...(inspecting && {
-                _meta: { [PRINCIPALS_META_KEY]: tool.principals ?? DEFAULT_PRINCIPALS },
+                _meta: {
+                  [PRINCIPALS_META_KEY]: tool.principals ?? DEFAULT_PRINCIPALS,
+                  ...((tool.principals ?? DEFAULT_PRINCIPALS).includes("agent") && {
+                    [AGENT_ORIGINS_META_KEY]: tool.agentOrigins ?? DEFAULT_AGENT_ORIGINS,
+                  }),
+                },
               }),
             })),
         });
