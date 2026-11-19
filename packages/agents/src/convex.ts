@@ -49,8 +49,10 @@ import {
 } from "convex/values";
 import { createTokenVerifier, deploymentOrigins } from "./jwt";
 import {
+  checkToolAccess,
   createMcpHandler,
   ToolError,
+  type AgentOrigin,
   type JsonSchema,
   type ToolCaller,
   type ToolPrincipal,
@@ -58,7 +60,13 @@ import {
   type ToolAnnotations,
 } from "./server";
 
-export { ToolError, type ToolCaller, type ToolPrincipal, type ToolAnnotations } from "./server";
+export {
+  ToolError,
+  type AgentOrigin,
+  type ToolCaller,
+  type ToolPrincipal,
+  type ToolAnnotations,
+} from "./server";
 
 declare const process: { env: Record<string, string | undefined> } | undefined;
 
@@ -93,9 +101,26 @@ export interface ToolDefinition<
   annotations?: ToolAnnotations;
   /**
    * Who may call the tool. Defaults to `["user"]`, signed-in end users only.
-   * Add `"agent"` for a tool a Hercules agent may run with no end user.
+   * Add `"agent"` for a tool a Hercules agent may run with no end user: from
+   * the app's own job only, unless `agentOrigins` says otherwise.
    */
   principals?: readonly Principal[];
+  /**
+   * For a tool that lists `"agent"`: where a run with no end user may have
+   * been started for the tool to take its call. Defaults to `["app"]`: only
+   * the app's own job, a run its backend started with the app's key and no
+   * end user (`HerculesAgents.run`).
+   *
+   * List more origins to take them too, such as
+   * `["app", "schedule", "trigger"]`: see `AgentOrigin`. `"any"` takes every
+   * call with no end user, wherever its run was started, one whose token
+   * does not say among them. The handler reads which it was as
+   * `caller.origin`.
+   *
+   * Setting it on a tool that does not list `"agent"` is an error, at
+   * compile time and when the tools are declared.
+   */
+  agentOrigins?: "agent" extends Principal ? readonly AgentOrigin[] | "any" : never;
   handler: (
     ctx: ToolCtx,
     args: ObjectType<Args>,
@@ -328,6 +353,7 @@ export function tool<
       hasObjectRoot(returns) && { outputSchema: validatorToJsonSchema(returns) }),
     ...(definition.annotations !== undefined && { annotations: definition.annotations }),
     ...(definition.principals !== undefined && { principals: definition.principals }),
+    ...(definition.agentOrigins !== undefined && { agentOrigins: definition.agentOrigins }),
     parseArgs(raw) {
       try {
         return fitFields(definition.args, raw, "args", "input");
@@ -409,6 +435,10 @@ export function defineTools(definition: ToolsDefinition): DefinedTools {
     if (!TOOL_NAME_PATTERN.test(toolName)) {
       throw new Error(`MCP tool name "${toolName}" must be letters, digits, "_" and "-"`);
     }
+  }
+  // When the module loads, so a mistake fails the deploy, not the first call.
+  for (const [toolName, declared] of Object.entries(definition.tools)) {
+    checkToolAccess(toolName, declared);
   }
   const path = definition.name === undefined ? "/mcp" : `/mcp/${name}`;
 

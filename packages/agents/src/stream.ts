@@ -4,9 +4,12 @@
  * `EventSource`, because the token goes in the `Authorization` header.
  */
 import {
+  CLIENT_HEADER,
+  CLIENT_ID,
   HERCULES_API_VERSION,
   isFinalEvent,
   readAgentEvent,
+  readWireEvent,
   type AgentEvent,
 } from "./component/protocol";
 
@@ -40,6 +43,30 @@ export class RunStreamError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+/**
+ * Whether the browser names this package on the run's stream request, as the
+ * app's backend does on every request it makes. Off: a header the events
+ * route does not list among those a page may send makes the browser's
+ * preflight fail, and with it the whole live view. It is to be turned on in
+ * a release made after Hercules allows the header there.
+ */
+const STREAM_SENDS_CLIENT_HEADER: boolean = false;
+
+/** The headers of a request for a run's live stream, resumed after `lastSeq` when that is past 0. */
+export function runStreamHeaders(
+  token: string,
+  lastSeq: number,
+  sendClient = STREAM_SENDS_CLIENT_HEADER,
+): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
+    accept: "text/event-stream",
+    "hercules-version": HERCULES_API_VERSION,
+    ...(sendClient && { [CLIENT_HEADER]: CLIENT_ID }),
+    ...(lastSeq > 0 && { "last-event-id": String(lastSeq) }),
+  };
 }
 
 export interface ServerSentEvent {
@@ -113,6 +140,12 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 }
 
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+/**
+ * A stream that stayed open this long and then closed with nothing new is a
+ * run that is quiet, not a connection that failed: Hercules closes a stream
+ * after ten minutes, and a run can wait far longer than that.
+ */
+const QUIET_STREAM_MS = 60_000;
 
 async function problemCode(response: Response): Promise<string | null> {
   try {
@@ -136,6 +169,13 @@ async function problemCode(response: Response): Promise<string | null> {
  * A run's final event and a `message.completed` are passed on whatever their
  * sequence number: Hercules can number the ending of a run it had to end
  * itself at or below an event already streamed, and it must not be dropped.
+ *
+ * An event of a type this version does not know is not passed on. It keeps
+ * its place: the stream is resumed after it. A run that is quiet for a long
+ * time, waiting for a person say, is followed for as long as it takes, with
+ * one connection per stream Hercules closes. An ending of a type this
+ * version does not know ends the stream when Hercules marks it final, and
+ * otherwise after `maxAttempts` connections that brought nothing new.
  */
 export async function* followRun(options: RunStreamOptions): AsyncGenerator<AgentEvent> {
   const fetchFn = options.fetch ?? fetch;
@@ -144,6 +184,11 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
   const maxAttempts = options.retry?.maxAttempts ?? 10;
   let lastSeq = Math.max(0, options.after ?? 0);
   let failures = 0;
+  /**
+   * The `message.completed` events passed on, by sequence number. Hercules
+   * sends a finished run's reply again to a reader at or past the run's end.
+   */
+  const repliesPassed = new Set<number>();
   /** The last answer that was not a stream, for the error if it never becomes one. */
   let lastRefusal: { status: number; code: string | null } | null = null;
 
@@ -154,16 +199,13 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
       const url = new URL(options.url);
       if (lastSeq > 0) url.searchParams.set("after", String(lastSeq));
       const response = await fetchFn(url, {
-        headers: {
-          authorization: `Bearer ${options.token}`,
-          accept: "text/event-stream",
-          "hercules-version": HERCULES_API_VERSION,
-          ...(lastSeq > 0 && { "last-event-id": String(lastSeq) }),
-        },
+        headers: runStreamHeaders(options.token, lastSeq),
         ...(options.signal !== undefined && { signal: options.signal }),
       });
       if (!response.ok || response.body === null) {
-        if (!RETRYABLE_STATUSES.has(response.status)) {
+        // By its status, whatever its code: Hercules could not answer (these
+        // and every 5xx), or the request is refused (any other 4xx).
+        if (!RETRYABLE_STATUSES.has(response.status) && response.status < 500) {
           const code = await problemCode(response);
           throw new RunStreamError(
             `The run's live stream was refused (${response.status}${code === null ? "" : ` ${code}`})`,
@@ -176,6 +218,7 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
         lastRefusal = { status: response.status, code: await problemCode(response) };
         throw new Error(`The run's live stream answered ${response.status}`);
       }
+      const openedAt = Date.now();
       let received = false;
       for await (const message of parseEventStream(response.body)) {
         let parsed: unknown;
@@ -184,18 +227,40 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
         } catch {
           continue;
         }
+        const wire = readWireEvent(parsed);
+        if (wire === null) continue;
         const event = readAgentEvent(parsed);
-        if (event === null) continue;
+        if (event === null) {
+          // A type this version does not know, or data it cannot read. Not
+          // passed on, but it was sent: the stream is resumed after it.
+          if (wire.seq > lastSeq) {
+            lastSeq = wire.seq;
+            failures = 0;
+            received = true;
+          }
+          // An ending of a type added later, which Hercules marked: nothing follows it.
+          if (wire.data.kind === "final") return;
+          continue;
+        }
         const final = isFinalEvent(event);
-        if (event.seq <= lastSeq && !final && event.type !== "message.completed") continue;
+        if (event.seq <= lastSeq && !final) {
+          // A repeat, unless it is a reply this reader has not passed on yet.
+          if (event.type !== "message.completed" || repliesPassed.has(event.seq)) continue;
+        }
+        if (event.type === "message.completed") repliesPassed.add(event.seq);
         lastSeq = Math.max(lastSeq, event.seq);
         failures = 0;
         received = true;
         yield event;
         if (final) return;
       }
-      // The stream closed before the run's final event: pick up where it stopped.
-      if (!received) throw new Error("The run's live stream closed with nothing new");
+      // The stream closed before the run's final event: pick up where it
+      // stopped. One that closed at once with nothing new counts as a failed
+      // connection, so a run whose ending cannot be read here is not asked
+      // for without end.
+      if (!received && Date.now() - openedAt < QUIET_STREAM_MS) {
+        throw new Error("The run's live stream closed with nothing new");
+      }
     } catch (error) {
       if (error instanceof RunStreamError) throw error;
       if (options.signal?.aborted) return;

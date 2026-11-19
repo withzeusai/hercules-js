@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentThread } from "../agents";
-import type { AgentEvent } from "../component/protocol";
+import { readAgentEvent, type AgentEvent } from "../component/protocol";
 import { LiveRun, mergeThread } from "../live-thread";
 
 const RUN = "run_1";
@@ -162,6 +162,55 @@ describe("mergeThread", () => {
     expect(live.apply(event(6, "message.delta", { message_id: "msg_1", text: "again" }))).toBe(
       false,
     );
+  });
+
+  it("shows what it knows of a live reply that holds parts and tool calls added later", () => {
+    const live = new LiveRun(RUN, THREAD);
+    const wire = (seq: number, type: string, data: unknown) =>
+      readAgentEvent({ ...event(seq, type, data) }) as AgentEvent;
+    live.apply(wire(1, "tool_call.started", { tool_call_id: "c1", name: "search", kind: "mcp" }));
+    expect(mergeThread(thread(), live, [])[1]?.parts).toEqual([
+      {
+        type: "tool_call",
+        id: "c1",
+        name: "search",
+        kind: "hercules",
+        status: "running",
+        summary: null,
+      },
+    ]);
+    live.apply(
+      wire(2, "tool_call.completed", {
+        tool_call_id: "c1",
+        name: "search",
+        kind: "mcp",
+        status: "skipped",
+        summary: "Skipped search",
+      }),
+    );
+    live.apply(
+      wire(3, "message.completed", {
+        message: {
+          ...completed,
+          parts: [
+            { type: "citation", url: "https://example.test" },
+            { type: "text", text: "Hello there" },
+            { type: "tool_call", id: "c1", name: "search", kind: "mcp", status: "skipped" },
+          ],
+        },
+      }),
+    );
+    expect(mergeThread(thread(), live, [])[1]?.parts).toEqual([
+      { type: "text", text: "Hello there" },
+      {
+        type: "tool_call",
+        id: "c1",
+        name: "search",
+        kind: "hercules",
+        status: "failed",
+        summary: null,
+      },
+    ]);
   });
 
   it("ignores events of other runs and repeats", () => {

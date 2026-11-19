@@ -4,7 +4,9 @@
  * read the app's environment variables).
  */
 import { v, type Infer } from "convex/values";
+import { CLIENT_HEADER, CLIENT_ID } from "./protocol.js";
 import { api, internal } from "./_generated/api.js";
+import { END_USER_HEADER, endUserHeaderValue } from "./protocol.js";
 import {
   internalAction,
   internalMutation,
@@ -14,13 +16,22 @@ import {
 } from "./_generated/server.js";
 import {
   HERCULES_API_VERSION,
+  goingStatus,
+  hasRunEnded,
   isFinalStatus,
   readRun,
   readWireEvent,
-  type Run,
   type WireEvent,
+  type WireRun,
 } from "./protocol.js";
-import { STUCK_AFTER_MS, finishRun, jittered, runById, type RunOutcome } from "./store.js";
+import {
+  STUCK_AFTER_MS,
+  endUserIdOf,
+  finishRun,
+  jittered,
+  runById,
+  type RunOutcome,
+} from "./store.js";
 import {
   vApi,
   vCappedReason,
@@ -42,7 +53,11 @@ const START_RETRY_CAP_MS = 2 * 60 * 1000;
 /** The longest wait between two checks of a run Hercules says is still going. */
 const MAX_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const MAX_CANCEL_ATTEMPTS = 6;
-/** A run that could not be settled for this long is given up on. */
+/**
+ * A run is given up on once nothing was heard of it for this long: no event
+ * applied, and no answer from Hercules that it is still going. A run Hercules
+ * keeps saying is going is never given up on for its age alone.
+ */
 const GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000;
 /**
  * How long past that the check itself is given to end the run, with what it
@@ -75,6 +90,14 @@ const MISSING_FINAL_AFTER_MS = 60 * 60 * 1000;
 /** How soon the check comes back when a run has more events than one check reads. */
 const MORE_EVENTS_DELAY_MS = 1_000;
 
+/**
+ * The code Hercules answers with once it no longer takes requests from this
+ * version of the package. Reserved: nothing sends it today. It is final for
+ * the request, on whatever status it comes (426 or 400), and is never sent
+ * again: only upgrading the package can change the answer.
+ */
+export const UPGRADE_REQUIRED_CODE = "client_upgrade_required";
+
 type HerculesResponse =
   | { ok: true; status: number; body: unknown }
   | {
@@ -101,18 +124,40 @@ function retryAfterMs(header: string | null): number | null {
 }
 
 /**
- * Whether a refusal may pass if the same request is sent again. Of the 429s
- * only `rate_limited` (too many requests just now) and one with no code (a
- * proxy's) may: `end_user_rate_limited` and `agent_daily_limit_reached` are
- * quotas, which stand for hours.
+ * The 429s that are quotas, which stand for hours: sending again soon cannot
+ * pass. Every other 429 is too many requests just now.
+ */
+const QUOTA_CODES: ReadonlySet<string> = new Set([
+  "end_user_rate_limited",
+  "agent_daily_limit_reached",
+]);
+
+/**
+ * Whether a refusal may pass if the same request is sent again. The HTTP
+ * status decides, as the API documents for a code a client does not know:
+ * its list of codes may grow.
+ *
+ * - 408 and every 5xx may pass: Hercules could not answer.
+ * - A 429 may pass once `Retry-After` is over, whatever its code, one with
+ *   no code (a proxy's) and one added later among them. Only the two quotas
+ *   above may not.
+ * - Any other 4xx may not: the request itself is what is refused.
  */
 function isRetryable(status: number, code: string | null): boolean {
-  if (status === 429) return code === null || code === "rate_limited";
+  if (status === 429) return code === null || !QUOTA_CODES.has(code);
   return status === 408 || status >= 500;
 }
 
+/**
+ * One request to Hercules. `endUser` is the `tokenIdentifier` of the user
+ * whose thread or run the request is about, or null for the app's own: every
+ * caller says which, from what the component stored when the thread was
+ * opened, never from what a page sent. It goes out as `Hercules-End-User`,
+ * so Hercules answers for a user's thread only when asked for that user.
+ */
 export async function callHercules(
   config: ApiConfig,
+  endUser: string | null,
   method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
@@ -126,7 +171,9 @@ export async function callHercules(
       headers: {
         authorization: `Bearer ${config.key}`,
         "hercules-version": HERCULES_API_VERSION,
+        [CLIENT_HEADER]: CLIENT_ID,
         accept: "application/json",
+        ...(endUser !== null && { [END_USER_HEADER]: endUserHeaderValue(endUser) }),
         ...(body !== undefined && { "content-type": "application/json" }),
       },
       ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -165,7 +212,8 @@ export async function callHercules(
     status: response.status,
     code: code ?? `http_${response.status}`,
     message,
-    retryable: isRetryable(response.status, code),
+    // `client_upgrade_required` is final whatever status carries it: only a newer package can pass.
+    retryable: code !== UPGRADE_REQUIRED_CODE && isRetryable(response.status, code),
     retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
     detailsRunId:
       isRecord(problem["details"]) && typeof problem["details"]["run_id"] === "string"
@@ -192,18 +240,42 @@ export function retryDelayMs(
   return Math.floor(least + Math.random() * Math.max(backoff / 2, asked / 10));
 }
 
-function outcomeFromRun(run: Run): RunOutcome | null {
-  if (!isFinalStatus(run.status)) return null;
+/**
+ * How a run read from Hercules ended, or null while it is going. A run in a
+ * status this version does not know is going, unless Hercules says when it
+ * finished: that one ended in a way added after this version was built, and
+ * is recorded as failed, with its own error when it has one.
+ */
+function outcomeFromRun(run: WireRun): RunOutcome | null {
+  if (isFinalStatus(run.status)) {
+    return {
+      status: run.status,
+      output: run.output,
+      error:
+        run.status === "failed"
+          ? (run.error ?? { code: "run_failed", message: "The run failed." })
+          : null,
+      cappedReason: run.capped_reason,
+      usage: run.usage,
+    };
+  }
+  if (!hasRunEnded(run)) return null;
   return {
-    status: run.status,
+    status: "failed",
     output: run.output,
-    error:
-      run.status === "failed"
-        ? (run.error ?? { code: "run_failed", message: "The run failed." })
-        : null,
-    cappedReason: run.capped_reason,
+    error: run.error ?? {
+      code: "run_failed",
+      message: `The run ended with the status ${JSON.stringify(run.status.slice(0, 64))}, which this version of @usehercules/agents does not know. Upgrade the package to read it.`,
+    },
+    cappedReason: null,
     usage: run.usage,
   };
+}
+
+/** A run's status as `recordAccepted` takes it: one this version does not know is a run that is going. */
+function knownStatus(run: WireRun | null) {
+  if (run === null) return null;
+  return isFinalStatus(run.status) ? run.status : goingStatus(run.status);
 }
 
 const vOutcome = v.object({
@@ -233,6 +305,34 @@ const CANCELLED: RunOutcome = {
 };
 
 /**
+ * Hercules will not run the agent for this app: the agent is turned off, is
+ * not open to apps, has no owner, or its organization is suspended. One code,
+ * `agent_unavailable`, on a 403. A Hercules that names the four cases apart
+ * (two of them on a 409) is read the same: all are stored as the one code,
+ * so an app has one to handle.
+ */
+const AGENT_UNAVAILABLE_CODE = "agent_unavailable";
+const AGENT_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  AGENT_UNAVAILABLE_CODE,
+  "agent_not_exposed",
+  "organization_suspended",
+  "agent_disabled",
+  "agent_has_no_owner",
+]);
+
+/**
+ * What the app's developer is told of it, with what Hercules said. It is the
+ * run's stored error. A page reads other words for it: see `pageError` in
+ * `./threads`.
+ */
+function agentUnavailableMessage(response: Extract<HerculesResponse, { ok: false }>): string {
+  const said = response.message === `Hercules answered ${response.status}.` ? "" : response.message;
+  return `Hercules will not run this agent for the app: the agent is turned off, is not open to apps, has no owner, or its organization is suspended. Check the agent in Hercules: no run can start until then.${
+    said.length > 0 ? ` Hercules said: ${said}` : ""
+  }`;
+}
+
+/**
  * What the app's developer is told when Hercules refuses a run as
  * `hercules_auth_required`: the app has no Hercules Auth 2.0 tenant, whose
  * key signs what Hercules sends the app. It is the run's stored error and is
@@ -242,12 +342,33 @@ const AUTH_REQUIRED_MESSAGE =
   "This app has no Hercules Auth 2.0 tenant, so Hercules cannot deliver a run's events to it or call its tools. Upgrade the app to Hercules Auth 2.0: no run can start until then.";
 
 /**
+ * What the app's developer is told when Hercules answers
+ * `client_upgrade_required`, with what Hercules said when it said more. It is
+ * the run's stored error and is logged. A page reads other words for it: see
+ * `pageError` in `./threads`.
+ */
+function upgradeRequiredMessage(response: Extract<HerculesResponse, { ok: false }>): string {
+  const said = response.message === `Hercules answered ${response.status}.` ? "" : response.message;
+  return `Hercules no longer takes requests from this version of @usehercules/agents. Upgrade the package to its latest version: no run can start until then.${
+    said.length > 0 ? ` Hercules said: ${said}` : ""
+  }`;
+}
+
+function isUpgradeRequired(response: HerculesResponse): boolean {
+  return !response.ok && response.code === UPGRADE_REQUIRED_CODE;
+}
+
+/**
  * How a refused start ends the run: with Hercules's own code, and how long
  * its limit lasts. A code this version does not know ends it the same way,
  * with the message Hercules sent.
  */
 function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome {
   const { status } = response;
+  // The app's setup, like the two below: checked first, as its status is not fixed.
+  if (isUpgradeRequired(response)) {
+    return failed(UPGRADE_REQUIRED_CODE, upgradeRequiredMessage(response));
+  }
   if (status === null || status === 408 || status >= 500) {
     return failed("run_failed", "Hercules could not be reached to start the run.");
   }
@@ -261,6 +382,10 @@ function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome
   // The app's setup as well. A 409, so it was sent once: sending again cannot pass.
   if (response.code === "hercules_auth_required") {
     return failed("hercules_auth_required", AUTH_REQUIRED_MESSAGE);
+  }
+  // And so is an agent Hercules will not run for the app, under whichever name it came.
+  if (AGENT_UNAVAILABLE_CODES.has(response.code)) {
+    return failed(AGENT_UNAVAILABLE_CODE, agentUnavailableMessage(response));
   }
   return failed(
     response.code,
@@ -296,9 +421,16 @@ const vLoadedRun = v.object({
   quietChecks: v.number(),
   lastSeq: v.number(),
   lastEventAt: v.number(),
+  /** When Hercules last answered that the run is still going. Null until it has. */
+  goingAt: v.union(v.number(), v.null()),
   createdAt: v.number(),
 });
 type LoadedRun = Infer<typeof vLoadedRun>;
+
+/** The user a run is for, as the run's row has it: who every request about the run names. */
+function endUserOf(run: LoadedRun): string | null {
+  return run.endUser?.tokenIdentifier ?? null;
+}
 
 export const loadRun = internalQuery({
   args: { runId: v.string() },
@@ -333,6 +465,7 @@ export const loadRun = internalQuery({
       quietChecks: run.quietChecks,
       lastSeq: run.lastSeq,
       lastEventAt: run.lastEventAt,
+      goingAt: run.goingAt ?? null,
       createdAt: run._creationTime,
     };
   },
@@ -425,20 +558,44 @@ export const noteMissing = internalMutation({
 });
 
 /**
- * Notes that a check found the run still going at Hercules, with nothing new
- * to apply: the next check waits twice as long. A delivered event resets it.
+ * Notes what a check found of a run that is not over at Hercules.
+ *
+ * - `confirmed`: Hercules answered that the run is still going, in whatever
+ *   status. That is a sign of life: the day a run is given to settle counts
+ *   from it (`goingAt`).
+ * - `quiet`, the default: there was nothing new to apply, so the next check
+ *   waits twice as long. A delivered event resets that.
+ * - `started`: Hercules has the run past `queued`, so it reads as `running`
+ *   here too, as it does once an event of it is applied.
  */
 export const noteStillGoing = internalMutation({
-  args: { runId: v.string() },
+  args: {
+    runId: v.string(),
+    confirmed: v.optional(v.boolean()),
+    quiet: v.optional(v.boolean()),
+    started: v.optional(v.boolean()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const run = await runById(ctx, args.runId);
     if (run !== null && !isFinalStatus(run.status)) {
-      await ctx.db.patch(run._id, { quietChecks: run.quietChecks + 1 });
+      await ctx.db.patch(run._id, {
+        ...(args.confirmed === true && { goingAt: Date.now() }),
+        ...(args.quiet !== false && { quietChecks: run.quietChecks + 1 }),
+        ...(args.started === true && run.status === "queued" && { status: "running" as const }),
+      });
     }
     return null;
   },
 });
+
+/**
+ * When a run was last heard of: an event of it was applied, or Hercules
+ * answered that it is still going. Never before the run was created.
+ */
+function lastHeardAt(run: { createdAt: number; lastEventAt: number; goingAt: number | null }) {
+  return Math.max(run.createdAt, run.lastEventAt, run.goingAt ?? 0);
+}
 
 /** How long a run must have been quiet before it is checked: 3 minutes, doubling to 30. */
 function checkIntervalMs(quietChecks: number): number {
@@ -501,14 +658,17 @@ async function pullEvents(
   run: LoadedRun,
   /** Set to true when an event was applied. */
   seen: { applied: boolean } = { applied: false },
-): Promise<"done" | "more" | "failed"> {
+): Promise<"done" | "more" | "failed" | "upgrade"> {
   let after = run.lastSeq;
   for (let page = 0; page < MAX_EVENT_PAGES; page++) {
     const response = await callHercules(
       config,
+      endUserOf(run),
       "GET",
       `/v1/agents/runs/${encodeURIComponent(run.runId)}/events?after=${after}&limit=${EVENT_PAGE_SIZE}`,
     );
+    // Not to be read by this version at all: the caller ends the run on it.
+    if (isUpgradeRequired(response)) return "upgrade";
     if (!response.ok || !isRecord(response.body)) return "failed";
     const data = Array.isArray(response.body["data"]) ? response.body["data"] : [];
     const events = data
@@ -562,6 +722,7 @@ async function cancelAtHercules(
 ): Promise<boolean> {
   const response = await callHercules(
     config,
+    endUserOf(run),
     "POST",
     `/v1/agents/runs/${encodeURIComponent(run.runId)}/cancel`,
   );
@@ -604,6 +765,7 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
   }
   const response = await callHercules(
     config,
+    endUserOf(run),
     "POST",
     `/v1/agents/${encodeURIComponent(run.agentId)}/runs`,
     {
@@ -625,7 +787,7 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
     const started = readRun(body["run"]);
     const cancelWaiting = await ctx.runMutation(internal.hercules.recordAccepted, {
       runId: run.runId,
-      status: started?.status ?? null,
+      status: knownStatus(started),
       live:
         live !== null && typeof live["url"] === "string" && typeof live["token"] === "string"
           ? { url: live["url"], token: live["token"] }
@@ -683,7 +845,11 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
   // The log is the developer's: for a refusal that is the app's setup it says what to do.
   console.error(
     `Hercules refused run ${run.runId}: ${response.status ?? "network"} ${response.code}${
-      response.code === "hercules_auth_required" ? `. ${AUTH_REQUIRED_MESSAGE}` : ""
+      response.code === "hercules_auth_required"
+        ? `. ${AUTH_REQUIRED_MESSAGE}`
+        : isUpgradeRequired(response)
+          ? `. ${upgradeRequiredMessage(response)}`
+          : ""
     }`,
   );
   await ctx.runMutation(internal.hercules.refuseRun, {
@@ -775,9 +941,14 @@ export const cancelRun = internalAction({
     unconfirmed: v.optional(v.boolean()),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
+    // Read first: the request says whose run it is. A run that is gone was
+    // purged with its thread, and deleting the thread at Hercules stops it.
+    const stored = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
+    if (stored === null) return null;
     const response = await callHercules(
       args.api,
+      endUserOf(stored),
       "POST",
       `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
     );
@@ -826,6 +997,18 @@ async function deletedThread(ctx: QueryCtx, threadId: string) {
 }
 
 /**
+ * Whether a delete Hercules did not do may be done if asked again: when
+ * Hercules could not answer (no answer, 408, 429, a 5xx), and when it said
+ * the thread's run is still stopping (409 `thread_busy`). Any other 4xx, with
+ * a code this version knows or not, is an answer that stands.
+ */
+function mayDeleteLater(response: Extract<HerculesResponse, { ok: false }>): boolean {
+  const { status } = response;
+  if (status === null || status === 408 || status === 429 || status >= 500) return true;
+  return status === 409 && response.code === "thread_busy";
+}
+
+/**
  * Records an answer about a deleted thread that was not a yes. A 404 is "it
  * is not there". But Hercules also answers 404 on every route while the
  * agents API is off for the app, so one 404 is not taken for it: it must
@@ -840,8 +1023,16 @@ async function noteNotDeleted(
     await ctx.runMutation(internal.hercules.noteDelete, { threadId, outcome: "missing" });
     return;
   }
+  // Hercules no longer takes this version of the package, on whatever status it says so.
+  if (isUpgradeRequired(response)) {
+    console.error(
+      `Hercules refused to delete thread ${threadId}: ${response.status} ${response.code}`,
+    );
+    await ctx.runMutation(internal.hercules.noteDelete, { threadId, outcome: "refused" });
+    return;
+  }
   // An answer that asking again cannot change: the request or the key is wrong.
-  if (response.status === 400 || response.status === 401 || response.status === 403) {
+  if (!mayDeleteLater(response)) {
     console.error(
       `Hercules refused to delete thread ${threadId}: ${response.status} ${response.code}`,
     );
@@ -870,12 +1061,24 @@ async function noteNotDeleted(
  * there.
  */
 export const deleteThread = internalAction({
-  args: { threadId: v.string(), api: vApi, ifRun: v.optional(v.string()) },
+  args: {
+    threadId: v.string(),
+    api: vApi,
+    ifRun: v.optional(v.string()),
+    /**
+     * The `tokenIdentifier` of the user the thread was, from its
+     * `deleted_threads` row. Left out for the app's own threads, and for a
+     * thread deleted before its owner was kept there.
+     */
+    endUser: v.optional(v.string()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const endUser = args.endUser ?? null;
     if (args.ifRun !== undefined) {
       const asked = await callHercules(
         args.api,
+        endUser,
         "GET",
         `/v1/agents/runs/${encodeURIComponent(args.ifRun)}`,
       );
@@ -901,6 +1104,7 @@ export const deleteThread = internalAction({
     }
     const response = await callHercules(
       args.api,
+      endUser,
       "DELETE",
       `/v1/agents/threads/${encodeURIComponent(args.threadId)}`,
     );
@@ -1005,9 +1209,11 @@ export const deleteTick = internalMutation({
           Math.min(DELETE_FIRST_RETRY_MS * 2 ** Math.min(row.attempts, 10), MAX_RETRY_MS),
         );
         await ctx.db.patch(row._id, { attempts: row.attempts + 1, nextAttemptAt: now + wait });
+        const endUser = endUserIdOf(row.owner);
         await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, {
           ...args,
           ...(row.unconfirmedRunId !== undefined && { ifRun: row.unconfirmedRunId }),
+          ...(endUser !== null && { endUser }),
         });
         next = wait;
       } else {
@@ -1025,10 +1231,11 @@ export const deleteTick = internalMutation({
  *
  * It is a mutation that schedules itself: Convex runs a scheduled mutation
  * exactly once, where a scheduled action runs at most once and can be lost.
- * So a lost check costs one tick, never the run: no run is left open for
- * good, and no thread stays busy behind one. It ends with the run. A run
- * nothing could settle in a day (and half an hour for the check to say why)
- * is failed here.
+ * So a lost check costs one tick, never the run: no run is left open behind
+ * a check that was lost, and no thread stays busy behind one. It ends with
+ * the run. A run nothing was heard of for a day (and half an hour for the
+ * check to say why) is failed here. One Hercules keeps answering for as
+ * still going stays open, and is looked at every half hour at most.
  */
 export const tickRun = internalMutation({
   args: { runId: v.string(), api: vApi },
@@ -1038,9 +1245,23 @@ export const tickRun = internalMutation({
     if (run === null || isFinalStatus(run.status)) return null;
     const now = Date.now();
     const age = now - run._creationTime;
+    // A run Hercules took is given up on once nothing was heard of it for a
+    // day: it can stay unfinished for much longer than that, waiting for a
+    // person say, for as long as Hercules keeps saying it is going. A run
+    // that was asked to stop is held to its age alone, so a stop always
+    // frees the thread.
+    const silentFor = run.cancelRequested
+      ? age
+      : now -
+        lastHeardAt({
+          createdAt: run._creationTime,
+          lastEventAt: run.lastEventAt,
+          goingAt: run.goingAt ?? null,
+        });
     const gaveUp = !run.accepted
       ? age > GIVE_UP_AFTER_MS && "The run could not be started within a day."
-      : age > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS && "The run could not be settled within a day.";
+      : silentFor > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS &&
+        "The run could not be settled within a day.";
     if (gaveUp !== false) {
       await finishRun(ctx, run, failed("run_failed", gaveUp));
       // The thread is free here. Hercules may still have the run going and
@@ -1093,11 +1314,15 @@ export const tickRun = internalMutation({
 export const checkRun = internalAction({
   args: { runId: v.string(), api: vApi },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const run = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
     if (run === null || isFinalStatus(run.status)) return null;
+    const endUser = endUserOf(run);
     const now = Date.now();
-    const tooOld = now - run.createdAt > GIVE_UP_AFTER_MS;
+    // Counted from when the run was last heard of, not from when it was sent:
+    // see `tickRun`. A run that was asked to stop is held to its age.
+    const tooOld =
+      now - (run.cancelRequested ? run.createdAt : lastHeardAt(run)) > GIVE_UP_AFTER_MS;
     async function giveUp(message: string, stillGoing = false) {
       await ctx.runMutation(internal.hercules.endRun, {
         runId: args.runId,
@@ -1108,10 +1333,36 @@ export const checkRun = internalAction({
       if (stillGoing) {
         await callHercules(
           args.api,
+          endUser,
           "POST",
           `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
         );
       }
+      return null;
+    }
+
+    /**
+     * Hercules no longer takes this version of the package, so nothing this
+     * check asks can settle the run. It is ended here, once, with what the
+     * developer has to do: asking again cannot change the answer.
+     */
+    async function upgradeRequired(refusal?: Extract<HerculesResponse, { ok: false }>) {
+      const message = upgradeRequiredMessage(
+        refusal ?? {
+          ok: false,
+          status: null,
+          code: UPGRADE_REQUIRED_CODE,
+          message: "Hercules answered null.",
+          retryable: false,
+          retryAfterMs: null,
+          detailsRunId: null,
+        },
+      );
+      console.error(`Hercules refused to answer for run ${args.runId}: ${message}`);
+      await ctx.runMutation(internal.hercules.endRun, {
+        runId: args.runId,
+        outcome: failed(UPGRADE_REQUIRED_CODE, message),
+      });
       return null;
     }
 
@@ -1132,6 +1383,7 @@ export const checkRun = internalAction({
     // way round, a reply written between the two reads would be missed.
     const response = await callHercules(
       args.api,
+      endUserOf(run),
       "GET",
       `/v1/agents/runs/${encodeURIComponent(run.runId)}`,
     );
@@ -1143,6 +1395,7 @@ export const checkRun = internalAction({
       const outcome = current === null ? null : outcomeFromRun(current);
       const seen = { applied: false };
       const pulled = await pullEvents(ctx, args.api, run, seen);
+      if (pulled === "upgrade") return upgradeRequired();
       if (pulled === "more") {
         // More events than one pass reads. Soon, if this is not lost; at the next tick if it is.
         await ctx.scheduler.runAfter(MORE_EVENTS_DELAY_MS, internal.hercules.checkRun, args);
@@ -1152,18 +1405,39 @@ export const checkRun = internalAction({
         await ctx.runMutation(internal.hercules.recordRun, { runId: run.runId, outcome });
         return null;
       }
-      if (tooOld) {
-        return outcome === null
-          ? giveUp("The run was still going at Hercules after a day.", true)
-          : giveUp("The run ended at Hercules, but its events could not be read for a day.");
+      if (outcome !== null) {
+        return tooOld
+          ? giveUp("The run ended at Hercules, but its events could not be read for a day.")
+          : null;
       }
-      // Still going with nothing new: the next check waits longer. (Events it
-      // just applied reset the wait, as delivered ones do.)
-      if (outcome === null && pulled === "done" && !seen.applied) {
-        await ctx.runMutation(internal.hercules.noteStillGoing, { runId: run.runId });
+      // Hercules answered for the run, and it is not over: `queued`,
+      // `running`, or a status this version does not know, such as a run
+      // waiting for a person. It is kept open for as long as Hercules says
+      // so. Only a run that was asked to stop, or whose answer could not be
+      // read, is still given up on after a day.
+      const confirmed = current !== null && !run.cancelRequested;
+      if (!confirmed && tooOld) {
+        return giveUp(
+          current === null
+            ? "What Hercules answered about this run could not be read for a day."
+            : "The run was still going at Hercules a day after it was sent, and after it was asked to stop.",
+          true,
+        );
+      }
+      // With nothing new, the next check waits longer. (Events it just
+      // applied reset the wait, as delivered ones do.)
+      const quiet = pulled === "done" && !seen.applied;
+      if (confirmed || quiet || current !== null) {
+        await ctx.runMutation(internal.hercules.noteStillGoing, {
+          runId: run.runId,
+          confirmed,
+          quiet,
+          started: current !== null && goingStatus(current.status) === "running",
+        });
       }
       return null;
     }
+    if (isUpgradeRequired(response)) return upgradeRequired(response);
     if (response.status === 404) {
       const since = run.missingSince ?? now;
       if (now - since >= MISSING_FINAL_AFTER_MS) {
@@ -1175,6 +1449,12 @@ export const checkRun = internalAction({
       return null;
     }
     if (tooOld) return giveUp("Nothing was heard from Hercules about this run for a day.");
+    // An answer that asking again cannot change (the app key was rotated,
+    // say) does not end the run: delivery may still settle it. But it is not
+    // asked for every three minutes either: the next check waits longer.
+    if (!response.retryable) {
+      await ctx.runMutation(internal.hercules.noteStillGoing, { runId: run.runId });
+    }
     return null;
   },
 });

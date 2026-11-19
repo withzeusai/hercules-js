@@ -70,6 +70,14 @@ export default defineSchema({
      * was added.
      */
     unconfirmedRunId: v.optional(v.string()),
+    /**
+     * Whose the thread was, as its `threads` row had it: `user:<tokenIdentifier>`
+     * or `app`. Hercules is told the end user with every request about a
+     * user's thread, and the thread's own row is gone by the time it is asked
+     * to delete it. Left out on rows written before the field was added:
+     * Hercules is then asked without one.
+     */
+    owner: v.optional(v.string()),
   }).index("by_thread_id", ["threadId"]),
 
   /**
@@ -111,6 +119,14 @@ export default defineSchema({
     lastSeq: v.number(),
     /** When an event was last applied, or the run was created. The stuck-run check reads it. */
     lastEventAt: v.number(),
+    /**
+     * When Hercules last answered that the run is still going, in a status
+     * this version knows or not. A run is given up on only once nothing was
+     * heard of it for a day, counted from here and from `lastEventAt`. Left
+     * out until Hercules has said so, and on rows written before the field
+     * was added.
+     */
+    goingAt: v.optional(v.number()),
     finishedAt: v.union(v.number(), v.null()),
     /** A function handle into the app, called once the run's last write is done. */
     onRunFinished: v.union(v.string(), v.null()),

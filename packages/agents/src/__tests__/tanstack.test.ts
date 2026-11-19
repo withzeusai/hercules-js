@@ -453,6 +453,32 @@ describe("herculesConnection", () => {
     await vi.waitFor(() => expect(app.watching()).toBe(0));
   });
 
+  it("keeps the chat running while a run waits in a state it does not know, and can stop it", async () => {
+    const app = createApp();
+    const { chat, chunks } = chatFor(app);
+    app.push(
+      frame(1, "run.started"),
+      frame(2, "message.delta", { message_id: "msg_1", text: "Let me check." }),
+      // The run now waits for a person: an event and a status added later.
+      frame(3, "run.requires_action", { action: { type: "approval" } }),
+    );
+    const sending = chat.sendMessage("Refund my order");
+    await vi.waitFor(() =>
+      expect(chunks.some((c) => c.type === "TEXT_MESSAGE_CONTENT")).toBe(true),
+    );
+    // Convex still has the run going, so the chat does: no end, and no error.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chat.getIsLoading()).toBe(true);
+    expect(chat.getError()).toBeUndefined();
+    expect(chunks.some((c) => c.type === "RUN_FINISHED" || c.type === "RUN_ERROR")).toBe(false);
+
+    chat.stop();
+    await vi.waitFor(() => expect(app.callsTo("agent:cancel")).toHaveLength(1));
+    expect(app.callsTo("agent:cancel")[0]?.args).toEqual({ threadId: THREAD });
+    await sending;
+    await vi.waitFor(() => expect(app.watching()).toBe(0));
+  });
+
   it("sends a message that follows a stop once the stopped run has ended", async () => {
     const stopped = runningThread([userMessage("Write a report", STOPPED_RUN)], STOPPED_RUN);
     const app = createApp({ ...stopped, activeRun: { ...stopped.activeRun!, stopping: true } });

@@ -256,7 +256,7 @@ describe("tools over the handler", () => {
 
   it("shows an agent with no end user only the tools that opted in", async () => {
     const token = await issuer.sign(
-      userClaims({ sub: `agent:${AGENT_ID}`, hercules_principal: "agent" }),
+      userClaims({ sub: `agent:${AGENT_ID}`, hercules_principal: "agent", hercules_origin: "app" }),
     );
     const listed = await rpc(token, "tools/list");
     expect(listed.result?.tools?.map((entry) => entry.name)).toEqual(["whoami"]);
@@ -448,7 +448,10 @@ describe("an inspection token", () => {
     expect(body.result.tools).toHaveLength(Object.keys(tools).length);
     const byName = new Map(body.result.tools.map((entry) => [entry.name, entry._meta]));
     expect(byName.get("create_task")).toEqual({ "hercules.app/principals": ["user"] });
-    expect(byName.get("whoami")).toEqual({ "hercules.app/principals": ["user", "agent"] });
+    expect(byName.get("whoami")).toEqual({
+      "hercules.app/principals": ["user", "agent"],
+      "hercules.app/agent-origins": ["app"],
+    });
 
     const called = await rpc(token, "tools/call", { name: "whoami" });
     expect(called.error).toEqual({
@@ -479,6 +482,43 @@ describe("defineTools", () => {
     expect(defineTools({ name: "support", path: "/agents", tools: {} } as never).path).toBe(
       "/mcp/support",
     );
+  });
+
+  it("takes a tool's agentOrigins, and refuses one set on a tool that does not list the agent", () => {
+    const base = { description: "Names the caller.", args: {} };
+    const scheduled = tool({
+      ...base,
+      principals: ["user", "agent"],
+      agentOrigins: ["app", "schedule"],
+      handler: (_ctx, _args, caller) =>
+        caller.principal === "agent" ? `from ${caller.origin ?? "nowhere it says"}` : "a user",
+    });
+    expect(scheduled.agentOrigins).toEqual(["app", "schedule"]);
+    expect(
+      tool({ ...base, principals: ["agent"], agentOrigins: "any", handler: () => 1 }).agentOrigins,
+    ).toBe("any");
+    // Left out, it is left to the default: the app's own job.
+    expect(tools.whoami).not.toHaveProperty("agentOrigins");
+    expect(defineTools({ tools: { scheduled } })).toMatchObject({ path: "/mcp" });
+
+    // A tool for users only has no origins to set. The types refuse it, and so does declaring it.
+    const usersOnly = tool({
+      ...base,
+      // @ts-expect-error agentOrigins is only for a tool that lists "agent"
+      agentOrigins: "any",
+      handler: () => 1,
+    });
+    expect(() => defineTools({ tools: { users_only: usersOnly } })).toThrow(
+      /MCP tool "users_only": agentOrigins is set, but the tool does not list "agent"/,
+    );
+    const explicit = tool({
+      ...base,
+      principals: ["user"],
+      // @ts-expect-error agentOrigins is only for a tool that lists "agent"
+      agentOrigins: ["schedule"],
+      handler: () => 1,
+    });
+    expect(() => defineTools({ tools: { explicit } })).toThrow(/does not list "agent"/);
   });
 
   it("refuses names that would not route or list", () => {

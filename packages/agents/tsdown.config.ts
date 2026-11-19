@@ -3,6 +3,11 @@ import { join } from "node:path";
 import { defineConfig } from "tsdown";
 
 const COMPONENT_OUT = "dist/component";
+
+// The one place the package's version comes from. The build writes it into
+// the code that names the package to Hercules, so the two cannot differ.
+const { version } = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+const define = { __HERCULES_AGENTS_VERSION__: JSON.stringify(version) };
 const ROLLDOWN_RUNTIME = join(COMPONENT_OUT, "_virtual");
 
 /**
@@ -24,6 +29,7 @@ export default defineConfig((options) => [
   {
     ...options,
     entry: ["src/index.ts", "src/convex.ts", "src/react.ts", "src/tanstack.ts"],
+    define,
     dts: true,
     sourcemap: true,
     ignoreWatch: [".turbo"],
@@ -39,6 +45,7 @@ export default defineConfig((options) => [
     outDir: COMPONENT_OUT,
     fixedExtension: false,
     clean: false,
+    define,
     dts: true,
     sourcemap: true,
     ignoreWatch: [".turbo"],

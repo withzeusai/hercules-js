@@ -292,6 +292,71 @@ describe("RunChunks", () => {
     expect(chunks[1]).toMatchObject({ content: JSON.stringify(PAGE_ACTION_OUTPUT) });
   });
 
+  it("shows only what it knows of a reply that holds parts and tool calls added later", () => {
+    seq = 0;
+    const chunks = translate([
+      ev("run.started"),
+      ev("tool_call.started", { tool_call_id: "call_new", name: "search", kind: "connector" }),
+      ev("tool_call.completed", {
+        tool_call_id: "call_new",
+        name: "search",
+        kind: "connector",
+        status: "partially_succeeded",
+        summary: "Searched",
+      }),
+      ev("message.completed", {
+        message: {
+          id: "msg_1",
+          thread_id: THREAD,
+          run_id: RUN,
+          role: "assistant",
+          parts: [
+            { type: "reasoning", text: "Thinking." },
+            { type: "text", text: "Done." },
+            {
+              type: "tool_call",
+              id: "call_new",
+              name: "search",
+              kind: "connector",
+              status: "partially_succeeded",
+              summary: "Searched",
+            },
+          ],
+          created_at: AT,
+        },
+      }),
+      ev("run.completed", { output: "Done." }),
+    ]);
+    // One tool call, by its own id: a part of a type added later is not one.
+    expect(
+      chunks.flatMap((chunk) =>
+        chunk.type === EventType.TOOL_CALL_START ? [chunk.toolCallId] : [],
+      ),
+    ).toEqual(["call_new"]);
+    const result = chunks.find((chunk) => chunk.type === EventType.TOOL_CALL_RESULT);
+    expect(JSON.parse((result as { content: string }).content)).toEqual({
+      kind: "hercules",
+      status: "failed",
+      summary: "Searched",
+    });
+    expect(
+      chunks.flatMap((chunk) =>
+        chunk.type === EventType.TEXT_MESSAGE_CONTENT ? [chunk.delta] : [],
+      ),
+    ).toEqual(["Done."]);
+    expect(chunks.at(-1)).toMatchObject({ type: EventType.RUN_FINISHED });
+  });
+
+  it("ends a failed run with RUN_ERROR though its event carried no error it can read", () => {
+    seq = 0;
+    const chunks = translate([ev("run.started"), ev("run.failed", { reason: "new shape" })]);
+    expect(chunks.at(-1)).toMatchObject({
+      type: EventType.RUN_ERROR,
+      code: "run_failed",
+      message: "The run failed.",
+    });
+  });
+
   it("ends a cancelled run with a cancelled outcome", () => {
     seq = 0;
     const run = new RunChunks(THREAD, RUN);

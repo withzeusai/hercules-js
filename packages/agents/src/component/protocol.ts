@@ -3,16 +3,51 @@
  * `https://api.hercules.app/v1/agents`, version `2025-12-09`. Names are the
  * wire's, snake_case. No Convex imports, so the browser code can share it.
  *
- * The API only ever adds: unknown event types, part types and fields are
- * ignored, never refused.
+ * The API only ever adds: new event types, fields, statuses, part types and
+ * error codes arrive without a new version. So everything read here ignores
+ * what it does not know and never throws over it:
+ *
+ * - An event of an unknown type keeps its place in the sequence and changes
+ *   nothing. One Hercules marks as a run's ending (`final: true`) ends the run.
+ * - A field it does not know is not read. A message part of an unknown type
+ *   is left out, and the parts beside it are kept.
+ * - A tool call of an unknown kind reads as a `hercules` tool call, the kind
+ *   whose details a page is not shown. One that ended with an unknown status
+ *   reads as `failed`: it is not known to have worked.
+ * - A `capped_reason` it does not know reads as null, and an error code is
+ *   any string.
  */
 
 /** The API version every request sends as `Hercules-Version`. */
 export const HERCULES_API_VERSION = "2025-12-09";
+
+// The build writes the package's version here, from `package.json`: see
+// `tsdown.config.ts`. It is never written by hand.
+declare const __HERCULES_AGENTS_VERSION__: string | undefined;
+
+/** This package's version, as `package.json` has it. */
+export const PACKAGE_VERSION: string =
+  typeof __HERCULES_AGENTS_VERSION__ === "string" ? __HERCULES_AGENTS_VERSION__ : "unknown";
+
+/**
+ * The header that says which client, and which version of it, makes a
+ * request: `Hercules-Client: agents/<version>`. Hercules reads it to know
+ * which versions of the package are in use. It is a header of its own, not
+ * `User-Agent`, because a runtime may set or drop that one itself, and a
+ * browser does not let a page set it at all.
+ */
+export const CLIENT_HEADER = "hercules-client";
+export const CLIENT_ID = `agents/${PACKAGE_VERSION}`;
+
 export const DEFAULT_API_URL = "https://api.hercules.app";
 /** Where Hercules delivers a run's durable events in an app. Part of the contract. */
 export const EVENTS_PATH = "/hercules/agents/events";
 
+/**
+ * The statuses this version knows. A run ends with one of the four in
+ * `FinalRunStatus`. Every other status, `queued`, `running` or one added
+ * later, is a run that is still going.
+ */
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "capped";
 export type FinalRunStatus = Exclude<RunStatus, "queued" | "running">;
 export type CappedReason = "steps" | "time" | "credits" | "output";
@@ -98,7 +133,12 @@ export interface EventDataByType {
   "run.completed": { output: string | null; usage: Usage | null };
   "run.failed": { error: RunError; usage: Usage | null };
   "run.cancelled": { usage: Usage | null };
-  "run.capped": { capped_reason: CappedReason; output: string | null; usage: Usage | null };
+  /** `capped_reason` is null for a reason this version does not know. */
+  "run.capped": {
+    capped_reason: CappedReason | null;
+    output: string | null;
+    usage: Usage | null;
+  };
 }
 
 export type AgentEventType = keyof EventDataByType;
@@ -181,6 +221,35 @@ export function isSafeApiUrl(url: string): boolean {
   return parsed.protocol === "http:" && local;
 }
 
+/**
+ * The header that names the end user a request is made for, on every
+ * request about a user's thread or run: `Hercules-End-User: <tokenIdentifier>`,
+ * the same `<issuer>|<subject>` a run is started with as
+ * `end_user.token_identifier`. Left out for the app's own threads.
+ */
+export const END_USER_HEADER = "hercules-end-user";
+
+/** What a header can carry as it is: visible ASCII, with spaces only inside. */
+const HEADER_SAFE = /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/;
+const ENCODED_PREFIX = "UTF-8''";
+/** Half of a surrogate pair with no other half: it has no UTF-8 of its own. */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/**
+ * A user's `tokenIdentifier` as the `Hercules-End-User` header carries it.
+ * As it is when it is visible ASCII, which an identifier made of an issuer's
+ * URL and a subject is as a rule. One that a header cannot carry (a subject
+ * with other characters) is sent as `UTF-8''` followed by its percent-encoded
+ * UTF-8, the form RFC 8187 gives such values: a request must never fail to
+ * be sent over who it is for.
+ */
+export function endUserHeaderValue(tokenIdentifier: string): string {
+  if (HEADER_SAFE.test(tokenIdentifier) && !tokenIdentifier.startsWith(ENCODED_PREFIX)) {
+    return tokenIdentifier;
+  }
+  // A lone surrogate is sent as the replacement character, as UTF-8 encoders do.
+  return `${ENCODED_PREFIX}${encodeURIComponent(tokenIdentifier.replace(LONE_SURROGATE, "\ufffd"))}`;
+}
 /** Every run ends with exactly one of these. */
 export const FINAL_EVENT_TYPES = [
   "run.completed",
@@ -189,12 +258,57 @@ export const FINAL_EVENT_TYPES = [
   "run.capped",
 ] as const;
 
-export function isFinalStatus(status: RunStatus): status is FinalRunStatus {
-  return status !== "queued" && status !== "running";
+/** The statuses a run ends with. The list is closed: a status not on it is not an ending. */
+export const FINAL_RUN_STATUSES = ["completed", "failed", "cancelled", "capped"] as const;
+
+/**
+ * Whether `status` is one a run ends with. A status this version does not
+ * know is not: the API may add statuses for a run that is still going, such
+ * as one waiting for a person, and such a run must not read as over.
+ */
+export function isFinalStatus(status: string): status is FinalRunStatus {
+  return (FINAL_RUN_STATUSES as readonly string[]).includes(status);
 }
 
-export function isFinalEvent(event: { type: string }): boolean {
-  return (FINAL_EVENT_TYPES as readonly string[]).includes(event.type);
+/**
+ * A run as read off the wire. `status` is whatever Hercules sent, known to
+ * this version or not: see `isFinalStatus` and `hasRunEnded`.
+ */
+export interface WireRun extends Omit<Run, "status"> {
+  status: string;
+}
+
+/**
+ * Whether a run read from Hercules is over. It is when its status is a final
+ * one. A run in a status this version does not know is over when it carries
+ * `finished_at`, which Hercules sets only on a run that ended: that is how an
+ * ending added after this version was built is told from a run that is still
+ * going. `queued` and `running` are a run that is going, whatever else it
+ * carries.
+ */
+export function hasRunEnded(run: WireRun): boolean {
+  if (isFinalStatus(run.status)) return true;
+  if (run.status === "queued" || run.status === "running") return false;
+  return run.finished_at !== null;
+}
+
+/**
+ * The status this package keeps for a run that is going at Hercules. A
+ * status it does not know reads as `running`: Hercules has the run, and it
+ * is not over.
+ */
+export function goingStatus(status: string): "queued" | "running" {
+  return status === "queued" ? "queued" : "running";
+}
+
+/**
+ * Whether an event ends its run: one of the four final types, or an event of
+ * any other type that Hercules marks with `final: true`. No type added so far
+ * carries the mark. It is read so that an ending added later is still an
+ * ending to this version.
+ */
+export function isFinalEvent(event: { type: string; final?: unknown }): boolean {
+  return (FINAL_EVENT_TYPES as readonly string[]).includes(event.type) || event.final === true;
 }
 
 // Reading the wire. Everything below takes JSON that came over the network
@@ -211,6 +325,8 @@ function stringOr<T>(value: unknown, fallback: T): string | T {
 
 /** A summary is a line for a person to read; a longer one is cut. */
 const MAX_SUMMARY_CHARS = 4000;
+/** An error code is a short name; a longer one is cut. */
+const MAX_CODE_CHARS = 256;
 
 function summaryOf(value: unknown): string | null {
   return typeof value === "string" ? value.slice(0, MAX_SUMMARY_CHARS) : null;
@@ -218,18 +334,25 @@ function summaryOf(value: unknown): string | null {
 
 const TOOL_KINDS: readonly string[] = ["hercules", "app", "page"];
 const TOOL_CALL_STATUSES: readonly string[] = ["succeeded", "failed", "sent"];
-const RUN_STATUSES: readonly string[] = [
-  "queued",
-  "running",
-  "completed",
-  "failed",
-  "cancelled",
-  "capped",
-];
 const CAPPED_REASONS: readonly string[] = ["steps", "time", "credits", "output"];
 
+/**
+ * A tool call's kind. One this version does not know reads as `hercules`:
+ * not the app's tool and not a page action, and the kind whose name and
+ * summary a page is not shown unless the app set `exposeToolDetails`.
+ */
 function readToolKind(value: unknown): ToolKind | null {
-  return typeof value === "string" && TOOL_KINDS.includes(value) ? (value as ToolKind) : null;
+  if (typeof value !== "string") return null;
+  return TOOL_KINDS.includes(value) ? (value as ToolKind) : "hercules";
+}
+
+/**
+ * How a tool call ended. A status this version does not know reads as
+ * `failed`: the call is over and is not known to have worked.
+ */
+function readEndedStatus(value: unknown): ToolCallStatus | null {
+  if (typeof value !== "string") return null;
+  return TOOL_CALL_STATUSES.includes(value) ? (value as ToolCallStatus) : "failed";
 }
 
 export function readUsage(value: unknown): Usage | null {
@@ -241,7 +364,11 @@ export function readRunError(value: unknown): RunError | null {
   if (!isRecord(value)) return null;
   const code = stringOr(value["code"], null);
   if (code === null) return null;
-  return { code, message: stringOr(value["message"], code) };
+  // Any code is taken, one this version does not know among them.
+  return {
+    code: code.slice(0, MAX_CODE_CHARS),
+    message: stringOr(value["message"], code).slice(0, MAX_SUMMARY_CHARS),
+  };
 }
 
 export function readCappedReason(value: unknown): CappedReason | null {
@@ -260,18 +387,11 @@ export function readPart(value: unknown): MessagePart | null {
     const id = stringOr(value["id"], null);
     const name = stringOr(value["name"], null);
     const kind = readToolKind(value["kind"]);
-    const status = value["status"];
-    if (id === null || name === null || kind === null) return null;
-    if (typeof status !== "string" || !TOOL_CALL_STATUSES.includes(status)) return null;
-    return {
-      type: "tool_call",
-      id,
-      name,
-      kind,
-      status: status as ToolCallStatus,
-      summary: summaryOf(value["summary"]),
-    };
+    const status = readEndedStatus(value["status"]);
+    if (id === null || name === null || kind === null || status === null) return null;
+    return { type: "tool_call", id, name, kind, status, summary: summaryOf(value["summary"]) };
   }
+  // A part type added later: left out, and the parts beside it are kept.
   return null;
 }
 
@@ -294,16 +414,21 @@ export function readMessage(value: unknown): Message | null {
   };
 }
 
-export function readRun(value: unknown): Run | null {
+/**
+ * Reads a run. Null only for a body without an id and a status. A status
+ * this version does not know is kept as it came, so the run can be told
+ * apart from one that could not be read.
+ */
+export function readRun(value: unknown): WireRun | null {
   if (!isRecord(value)) return null;
   const id = stringOr(value["id"], null);
-  const status = value["status"];
-  if (id === null || typeof status !== "string" || !RUN_STATUSES.includes(status)) return null;
+  const status = stringOr(value["status"], null);
+  if (id === null || status === null) return null;
   return {
     id,
     thread_id: stringOr(value["thread_id"], ""),
     agent_id: stringOr(value["agent_id"], ""),
-    status: status as RunStatus,
+    status,
     output: stringOr(value["output"], null),
     error: readRunError(value["error"]),
     capped_reason: readCappedReason(value["capped_reason"]),
@@ -368,7 +493,12 @@ const FINAL_STATUS_BY_TYPE: Record<string, FinalRunStatus> = {
   "run.capped": "capped",
 };
 
-function readEventData(type: string, data: Record<string, unknown>): WireEventData | null {
+function readEventData(
+  type: string,
+  data: Record<string, unknown>,
+  /** Hercules marked the event as its run's ending. */
+  markedFinal: boolean,
+): WireEventData | null {
   switch (type) {
     case "message.delta":
     case "message.appended": {
@@ -386,16 +516,13 @@ function readEventData(type: string, data: Record<string, unknown>): WireEventDa
       const name = stringOr(data["name"], null);
       const toolKind = readToolKind(data["kind"]);
       if (toolCallId === null || name === null || toolKind === null) return null;
-      const status = data["status"];
       return {
         kind: "tool_call",
         toolCallId,
         name,
         toolKind,
-        status:
-          typeof status === "string" && TOOL_CALL_STATUSES.includes(status)
-            ? (status as ToolCallStatus)
-            : null,
+        // Only a call that completed says how it ended.
+        status: type === "tool_call.completed" ? readEndedStatus(data["status"]) : null,
         summary: summaryOf(data["summary"]),
         resultJson: toolKind === "app" ? toJsonText(data["result"]) : null,
       };
@@ -413,7 +540,7 @@ function readEventData(type: string, data: Record<string, unknown>): WireEventDa
     }
     case "run.progress": {
       const label = stringOr(data["label"], null);
-      return label === null ? null : { kind: "progress", label };
+      return label === null ? null : { kind: "progress", label: label.slice(0, MAX_SUMMARY_CHARS) };
     }
     case "run.completed":
     case "run.failed":
@@ -433,7 +560,21 @@ function readEventData(type: string, data: Record<string, unknown>): WireEventDa
       };
     }
     default:
-      return { kind: "none" };
+      if (!markedFinal) return { kind: "none" };
+      // An ending of a type added after this version was built. The run is
+      // over, and this version cannot say how: it is recorded as failed, with
+      // the event's own error when it carries one, and keeps what it wrote.
+      return {
+        kind: "final",
+        status: "failed",
+        output: stringOr(data["output"], null),
+        error: readRunError(data["error"]) ?? {
+          code: "run_failed",
+          message: `The run ended with the event ${JSON.stringify(type.slice(0, 64))}, which this version of @usehercules/agents does not know. Upgrade the package to read it.`,
+        },
+        cappedReason: null,
+        usage: readUsage(data["usage"]),
+      };
   }
 }
 
@@ -457,21 +598,83 @@ export function readWireEvent(value: unknown): WireEvent | null {
     type,
     createdAt: stringOr(value["created_at"], ""),
     // Known type, unreadable data: keep the place in the sequence, drop the event.
-    data: readEventData(type, data) ?? { kind: "none" },
+    data: readEventData(type, data, value["final"] === true) ?? { kind: "none" },
   };
+}
+
+/**
+ * A known event's data for the browser: the fields this version knows, read
+ * as `readWireEvent` reads them, over whatever else the event carried. Null
+ * for an event that is not one of the known types.
+ */
+function agentEventData(
+  type: string,
+  wire: WireEventData,
+  raw: Record<string, unknown>,
+): Record<string, unknown> | null {
+  switch (wire.kind) {
+    case "none":
+      return type === "run.queued" || type === "run.started" ? raw : null;
+    case "text":
+      return { ...raw, message_id: wire.messageId, text: wire.text };
+    case "message":
+      return { ...raw, message: wire.message };
+    case "tool_call":
+      if (type === "tool_call.started") {
+        return { ...raw, tool_call_id: wire.toolCallId, name: wire.name, kind: wire.toolKind };
+      }
+      return {
+        ...raw,
+        tool_call_id: wire.toolCallId,
+        name: wire.name,
+        kind: wire.toolKind,
+        // The call is over. With no status this version knows, it is not known to have worked.
+        status: wire.status ?? "failed",
+        summary: wire.summary,
+      };
+    case "page_action":
+      return { ...raw, tool_call_id: wire.toolCallId, name: wire.name };
+    case "progress":
+      return { ...raw, label: wire.label };
+    case "final":
+      switch (type) {
+        case "run.completed":
+          return { ...raw, output: wire.output, usage: wire.usage };
+        case "run.failed":
+          return { ...raw, error: wire.error, usage: wire.usage };
+        case "run.cancelled":
+          return { ...raw, usage: wire.usage };
+        case "run.capped":
+          return {
+            ...raw,
+            capped_reason: wire.cappedReason,
+            output: wire.output,
+            usage: wire.usage,
+          };
+        default:
+          // An ending of a type added later: `followRun` ends on it without passing it on.
+          return null;
+      }
+  }
 }
 
 /**
  * Reads an event for the browser. Returns null for an envelope that cannot be
  * read, an event type this package does not know, or a known event whose
  * data is not the shape the contract gives it.
+ *
+ * What it returns can be relied on: the fields this version knows are of the
+ * types it declares, an unknown tool kind, tool status or capped reason is
+ * read as the header of this file says, and a completed message holds only
+ * parts of the types this version knows. Fields it does not know are passed
+ * on as they came.
  */
 export function readAgentEvent(value: unknown): AgentEvent | null {
   if (!isRecord(value)) return null;
   const wire = readWireEvent(value);
   if (wire === null) return null;
-  const known = wire.type === "run.queued" || wire.type === "run.started";
-  if (wire.data.kind === "none" && !known) return null;
+  const data = agentEventData(wire.type, wire.data, isRecord(value["data"]) ? value["data"] : {});
+  if (data === null) return null;
   return {
     id: stringOr(value["id"], `${wire.runId}:${wire.seq}`),
     seq: wire.seq,
@@ -479,6 +682,6 @@ export function readAgentEvent(value: unknown): AgentEvent | null {
     thread_id: wire.threadId,
     type: wire.type,
     created_at: wire.createdAt,
-    data: isRecord(value["data"]) ? value["data"] : {},
+    data,
   } as AgentEvent;
 }

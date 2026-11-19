@@ -102,6 +102,13 @@ export const thread = query({
    reply from Hercules with the run's read-only token.
 4. When a run ends, `onRunFinished` is called after the last write.
 
+Every request the component makes to Hercules about a user's thread or run
+names that user: starting the run, reading it and its events, stopping it,
+and deleting the thread. The name is the user's `tokenIdentifier`, as the
+component stored it when the thread was opened from `ctx.auth`, never
+anything a page sent, and it travels in a `Hercules-End-User` header.
+Requests about the app's own threads, those `run` opens, name no one.
+
 If nothing has been delivered for a run in three minutes, the component asks
 Hercules for the run and then its events itself, so a delivery that never
 arrives only delays a reply. While Hercules says the run is still going it
@@ -110,8 +117,15 @@ delivered event starts that over. The same check sends a run again if the call
 that starts it was lost, asks again for a cancel that did not get through,
 and records a run's ending only once every event before it is applied. The
 check is started by a mutation that reschedules itself, which Convex never
-loses, so a run is not left open and its thread busy. A run that cannot be
-settled within a day is failed, so its thread is free again.
+loses, so a run is not left open and its thread busy behind a check that was
+lost.
+
+A run stays open for as long as Hercules says it is going, however long that
+is: a status the package does not know reads as a run that is going, not as
+one that ended. A run is failed, so its thread is free again, only once
+nothing was heard of it for a day: no event delivered, and no answer from
+Hercules that it is still going. A run that was asked to stop is failed a day
+after it was sent, whatever Hercules answers.
 
 A start Hercules cannot answer is not a refusal. On a 503, any other 5xx, a
 timeout or a network error the run stays open and is sent again under the
@@ -121,22 +135,60 @@ says so in the 503 it answers while it cannot confirm the run started. A run
 it never takes is failed after a day.
 
 A run Hercules does not take fails with Hercules's own code, and with the
-message Hercules sent unless the package has its own for the code. Two codes
+message Hercules sent unless the package has its own for the code. A code the
+package does not know fails the run the same way, with that code. Some codes
 are the app's setup, not the conversation, so a new chat will not help:
 
 - `agent_not_found`: Hercules has no agent with the id in `convex/agent.ts`
   for this app, or the agents API is not turned on for it. Fix the id.
+- `agent_unavailable`: Hercules will not run the agent for the app. The
+  agent is turned off, is not open to apps, has no owner, or its
+  organization is suspended. Check the agent in Hercules. The run fails at
+  once and is not sent again. Its error tells the developer what to check,
+  with what Hercules said, and the thread a page reads has the same code
+  with "The assistant is not available right now."
 - `hercules_auth_required`: the app has no Hercules Auth 2.0 tenant, so
   Hercules cannot deliver a run's events to it or call its tools. Upgrade the
   app to Hercules Auth 2.0. The run fails at once and is not sent again. Its
   error tells the developer to upgrade: in the Convex logs, in `onRunFinished`
   and in `readThreadDetails`. The thread a page reads has the same code with
   a message for its user: "The assistant is not available right now."
+- `client_upgrade_required`: Hercules no longer takes requests from the
+  version of `@usehercules/agents` the app runs. Upgrade the package. The run
+  fails at once and is not sent again, and a run that was going is failed the
+  first time Hercules answers for it with this code. The developer and the
+  page read it as they read `hercules_auth_required`: the error tells the
+  developer to upgrade, and the page's message is "The assistant is not
+  available right now." Hercules does not send this code today. It is
+  reserved, so that a version in use can be retired one day.
 
 A run Hercules refuses over a limit (`end_user_rate_limited`,
 `agent_daily_limit_reached`) fails at once with that code. The thread's
 `latestRun.error` then carries `retryAfterSeconds`, counted from
 `latestRun.finished_at`.
+
+What the package does with an answer is decided by its code when the package
+has a rule for it, and by its HTTP status otherwise. Hercules may add codes,
+so a code the package does not know is handled by the status it came with:
+
+| Hercules answers a start with                                 | The package                                                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 202, or 200                                                   | Takes the run. One that is already over is settled at once, with what it wrote                           |
+| 404                                                           | Fails the run as `agent_not_found`. Not sent again                                                       |
+| 403 `agent_unavailable`                                       | Fails the run with that code. Not sent again. The page reads "The assistant is not available right now." |
+| 409 `hercules_auth_required`, 426 `client_upgrade_required`   | The same, with what the developer has to upgrade                                                         |
+| 409 `thread_busy`                                             | Sends it again for up to a minute, then fails the run as `thread_busy`                                   |
+| 429 `end_user_rate_limited`, `agent_daily_limit_reached`      | Fails the run with that code and `retryAfterSeconds`. Not sent again                                     |
+| 429 with any other code, or none                              | Sends it again once `Retry-After` is over, eight times at most, then fails the run with that code        |
+| 408, any 5xx, or no answer                                    | Sends it again under the same run id, as `Retry-After` says and then further apart, for up to a day      |
+| Any other 4xx, with any code: 400, 401, 402, 403, 409, 413... | Fails the run with Hercules's code and message. Not sent again                                           |
+
+The other requests follow the same rule. A delete Hercules refuses with a 4xx
+is not asked for again, except a 404 (which has to stay the answer for an
+hour) and a 409 `thread_busy` (the thread's run is still stopping). A run
+whose read is refused with a 4xx is left for delivery to settle, and is asked
+about less and less often. `followRun` connects again after a 408, a 429 or a
+5xx, and throws a `RunStreamError` on any other answer.
 
 `cancel` asks Hercules to stop the run. Until Hercules has, the run is still
 the thread's: `activeRun.stopping` is true, and `send` throws `thread_busy`.
@@ -306,7 +358,7 @@ this route; 503 with `Retry-After` while the issuer's keys cannot be fetched;
 500 while the app's environment is not set, or when one event cannot be
 applied (tried again for a day); 413 when a batch of several events cannot be
 applied (Hercules sends half). Event types and fields the package does not
-know are accepted and skipped.
+know are accepted and skipped: see "Compatibility".
 
 ### Configuration
 
@@ -324,6 +376,51 @@ component's scheduled functions as an argument. It never reaches a browser,
 and is sent only to an `https` API URL (or `http://localhost`). A run's
 stuck-run check keeps the key it was scheduled with, so a run that is going
 while the key is rotated is settled by delivery, not by the check.
+
+### Compatibility
+
+The Hercules API adds to a version without changing it: new event types,
+fields, statuses, part types and error codes can arrive at any time. An app
+keeps running the version of this package it was built with, so the package
+is written to meet what it has never seen. It promises this, in the app's
+backend and in the page alike:
+
+- **Nothing new is refused, and nothing new throws.** A delivery that holds
+  events the package does not know is applied and answered 2xx: the events
+  it knows are applied, the others keep their place in the run's sequence
+  and change nothing.
+- **A field it does not know is not read.** On a run, an event, a message, an
+  error or the answer to a start, the fields it knows are read as before.
+- **A message part of a type it does not know is left out.** The parts beside
+  it are kept, in order.
+- **A run status it does not know is a run that is still going.** A run ends
+  only as `completed`, `failed`, `cancelled` or `capped`. Until then the
+  thread has its `activeRun`, the page shows the run as going and can stop
+  it, `send` throws `thread_busy`, and `onRunFinished` is not called.
+- **A run can stay unfinished for a long time.** A run that waits, for a
+  person say, is kept open for as long as Hercules says it is going, and is
+  asked about every half hour at most. It is failed only once nothing was
+  heard of it for a day. The live stream of a quiet run is followed for as
+  long as it takes.
+- **An ending it does not know still ends the run.** A run Hercules reports
+  as finished, in a status or with a final event added later, is recorded as
+  `failed` with the code `run_failed`, and keeps the reply it wrote.
+- **A tool call of a kind it does not know is kept**, as a `hercules` tool
+  call: the kind whose name and summary a page is not shown unless the app
+  set `exposeToolDetails`. One that ended with a status it does not know is
+  kept as `failed`: it is not known to have worked.
+- **An error code is any string.** A run that fails with a code the package
+  does not know, or that Hercules refuses with one, fails with that code and
+  the message Hercules sent. A `capped` run whose reason the package does
+  not know has `cappedReason: null`.
+
+So match on the codes and statuses you handle, and keep a default for the
+rest.
+
+Every request the app's backend makes to Hercules names the package and its
+version in a `Hercules-Client` header. Hercules can answer
+`client_upgrade_required` to a version it no longer takes: see "How it
+works" for what the package does then.
 
 ## In the page, with TanStack AI
 
@@ -443,9 +540,15 @@ function errorText(error: unknown): string {
   const code = agentErrorCode(error);
   if (code === "sign_in_required") return "Sign in to chat.";
   // The app's setup: sending again will not help.
-  if (code === "hercules_auth_required" || code === "agent_not_found") {
+  if (
+    code === "hercules_auth_required" ||
+    code === "agent_not_found" ||
+    code === "client_upgrade_required"
+  ) {
     return "The assistant is not available right now.";
   }
+  // The agent is turned off, or not open to this app.
+  if (code === "agent_unavailable") return "The assistant is not available right now.";
   return "Not sent. Try again.";
 }
 ```
@@ -536,14 +639,21 @@ call itself, so TanStack never runs one or starts a second run.
   `agent_daily_limit_reached`. For a run that failed over a limit,
   `thread.latestRun.error.retryAfterSeconds` says how long it lasts, counted
   from `thread.latestRun.finished_at`.
-- Three codes are not the user's to fix by starting over. `agent_not_found`
+- Some codes are not the user's to fix by starting over. `agent_not_found`
   is the app's setup: Hercules has no agent with the id in `convex/agent.ts`
   for this app, or the agents API is not turned on for it.
   `hercules_auth_required` is the app's setup too: it has to be upgraded to
-  Hercules Auth 2.0 before any run can start. Its message on `chat.error` is
-  for the user, "The assistant is not available right now."; the Convex logs
+  Hercules Auth 2.0 before any run can start. So is
+  `client_upgrade_required`: the app runs a version of this package that
+  Hercules no longer takes, and the package has to be upgraded. For both, the
+  message on `chat.error` is for the user, "The assistant is not available
+  right now."; the Convex logs
   say what to do. `not_found` from `send` is a thread that is not this
   user's or not this agent's.
+- `agent_unavailable` is the app's setup as well: Hercules will not run the
+  agent for the app, because the agent is turned off, is not open to apps,
+  has no owner, or its organization is suspended. Its message on
+  `chat.error` is "The assistant is not available right now."
 - A run's ending is found by the run, not only by the thread's latest run.
   When the thread already has a newer run (the app's `onRunFinished` started
   a follow-up, or another tab sent a message) and this run's reply is stored,
@@ -668,10 +778,11 @@ number of at least one, at most 200, and fewer when they come to more than about
 - An `AgentError` with a `code`. The message was not sent (one of `send`'s
   codes), or the latest run failed (the run's code, such as `out_of_credits`
   or `agent_daily_limit_reached`). For a limit it also has
-  `retryAfterSeconds`. `agent_not_found` and `hercules_auth_required` are
-  the app's setup, not the chat: for the second, the message is "The
-  assistant is not available right now." and the app has to be upgraded to
-  Hercules Auth 2.0.
+  `retryAfterSeconds`. `agent_not_found`, `hercules_auth_required` and
+  `client_upgrade_required` are the app's setup, not the chat. For the last
+  two the message is "The assistant is not available right now.": the app
+  has to be upgraded to Hercules Auth 2.0, or this package to a version
+  Hercules still takes.
 - A `RunStreamError`, only while a run is going. The live view of the reply
   could not be read: Hercules refused the stream, or kept answering 429
   because more than ten streams of the run are open (an eleventh tab). The
@@ -687,7 +798,7 @@ if (chat.error instanceof RunStreamError) {
   // Nothing to tell the user: the reply is on its way through Convex.
 } else if (
   chat.error instanceof AgentError &&
-  (chat.error.code === "agent_not_found" || chat.error.code === "hercules_auth_required")
+  ["agent_not_found", "agent_unavailable", "hercules_auth_required"].includes(chat.error.code)
 ) {
   // The app is set up wrong. Starting a new chat will not help.
 }
@@ -744,7 +855,7 @@ caller is the handler's third argument:
 | `caller.principal` | Who                               | Fields                                                                                                                                                           |
 | ------------------ | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `"user"`           | A signed-in end user of the app   | `tokenIdentifier` (the same `<issuer>\|<subject>` the app stores for their web session), `issuer`, `subject`, and `agentId` when a Hercules agent calls for them |
-| `"agent"`          | A Hercules agent with no end user | `agentId`                                                                                                                                                        |
+| `"agent"`          | A Hercules agent with no end user | `agentId`, and `origin`: where the agent's run was started                                                                                                       |
 
 Pass the caller to an internal function explicitly. Never take a user id from
 the tool's arguments: the model writes those.
@@ -766,7 +877,7 @@ export const createFor = internalMutation({
 ```
 
 Tools accept signed-in users only. A tool an agent may run with no end user
-says so, and its handler then has to handle both:
+says so with `"agent"`, and its handler then has to handle both:
 
 ```ts
 list_open_hours: tool({
@@ -777,7 +888,57 @@ list_open_hours: tool({
 }),
 ```
 
-A caller never sees, and cannot call, a tool that does not accept them.
+#### Where a run with no end user was started
+
+A run has no end user when nobody signed in to the app asked for it. Hercules
+signs where such a run was started into the token of every call it makes, and
+the handler reads it as `caller.origin`:
+
+| `caller.origin`  | The run was started                                                 |
+| ---------------- | ------------------------------------------------------------------- |
+| `"app"`          | By this app's own backend, with its app key and no end user (`run`) |
+| `"organization"` | With an Organization API key                                        |
+| `"console"`      | From the Hercules console                                           |
+| `"trigger"`      | By one of the agent's triggers                                      |
+| `"channel"`      | From one of the agent's channels                                    |
+| `"schedule"`     | By one of the agent's schedules                                     |
+| `"test"`         | As a test, while the agent is being built                           |
+| `null`           | The token does not say                                              |
+
+Hercules may add origins. One this version of the package does not know
+reaches the handler as the string Hercules signed.
+
+**A tool that lists `"agent"` takes the app's own job, and nothing else,
+unless it says so.** That is the origin `"app"`. To take a call from other
+origins, name them in `agentOrigins`, beside `principals`:
+
+```ts
+send_daily_digest: tool({
+  description: "Sends the daily digest to every subscriber.",
+  args: {},
+  principals: ["agent"],
+  // The app's own job, and a run one of the agent's schedules started.
+  agentOrigins: ["app", "schedule"],
+  handler: (ctx, _args, caller) =>
+    ctx.runMutation(internal.digest.send, { startedBy: caller.origin }),
+}),
+```
+
+- Left out, `agentOrigins` is `["app"]`.
+- A call whose token names an origin the tool does not list is refused. So is
+  one whose token names no origin, or one the package does not know: neither
+  is taken for the app's own job.
+- `agentOrigins: "any"` takes every call with no end user, wherever its run
+  was started, one whose token does not say among them. The handler can
+  still tell them apart by `caller.origin`.
+- `agentOrigins` is only for a tool that lists `"agent"`. On any other tool
+  it is a type error, and `defineTools` throws when the module loads. So does
+  an empty list.
+- Signed-in users are not affected: a `"user"` caller has no origin, and a
+  tool takes them as before, with an agent acting for them or not.
+
+A caller never sees, and cannot call, a tool that does not accept them:
+`tools/list` and `tools/call` apply the same rule.
 
 ### Arguments and results
 

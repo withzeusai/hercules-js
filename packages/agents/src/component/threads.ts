@@ -246,7 +246,9 @@ const MAX_LISTED_PAGE_ACTIONS = 20;
  * `onRunFinished` give the app's backend that one.
  */
 const PAGE_ERROR_MESSAGES: ReadonlyMap<string, string> = new Map([
+  ["agent_unavailable", "The assistant is not available right now."],
   ["hercules_auth_required", "The assistant is not available right now."],
+  ["client_upgrade_required", "The assistant is not available right now."],
 ]);
 
 /** A run's error as a page reads it. Any code not named above reads as it is stored. */
@@ -529,6 +531,7 @@ export const remove = mutation({
       nextAttemptAt: now,
       purgeProgressAt: now,
       ...(unconfirmedRunId !== undefined && { unconfirmedRunId }),
+      owner: thread.owner,
     });
     await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: thread.threadId });
     await ctx.scheduler.runAfter(0, internal.hercules.deleteTick, {
