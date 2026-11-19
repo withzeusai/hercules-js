@@ -366,21 +366,21 @@ this route; 503 with `Retry-After` while the issuer's keys cannot be fetched;
 500 while the app's environment is not set, or when one event cannot be
 applied (tried again for a day); 413 when a batch of several events cannot be
 applied (Hercules sends half). Event types and fields the package does not
-know are accepted and skipped: see "Compatibility".
+know are accepted and skipped: see "Versioning".
 
 ### Configuration
 
 `HerculesAgents` takes the agent's id, and these options:
 
-| Option                      | What it sets                                                           |
-| --------------------------- | ---------------------------------------------------------------------- |
-| `onRunFinished`             | The app's function to call when a run ends                             |
-| `limits.runsPerUserPerHour` | How many runs one signed-in user may start in an hour                  |
-| `pageActions`               | The page actions every run may call, by name                           |
-| `exposeToolDetails`         | Whether a page sees tool calls as they are: see the section above      |
-| `apiKey`                    | The app's Hercules key. Never send it to a browser                     |
-| `apiUrl`                    | The Hercules API's URL                                                 |
-| `issuer`                    | The app's Hercules Auth URL, which signs the deliveries Hercules sends |
+| Option                      | What it sets                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `onRunFinished`             | The app's function to call when a run ends                                    |
+| `limits.runsPerUserPerHour` | How many runs one signed-in user may start in an hour                         |
+| `pageActions`               | The page actions every run may call, by name                                  |
+| `exposeToolDetails`         | Whether a page sees tool calls as they are: see "What the page sees of tools" |
+| `apiKey`                    | The app's Hercules key. Never send it to a browser                            |
+| `apiUrl`                    | The Hercules API's URL                                                        |
+| `issuer`                    | The app's Hercules Auth URL, which signs the deliveries Hercules sends        |
 
 What each is when left out is under "Defaults and limits".
 
@@ -389,52 +389,6 @@ component's scheduled functions as an argument. It never reaches a browser,
 and is sent only to an `https` API URL (or `http://localhost`). A run's
 stuck-run check keeps the key it was scheduled with, so a run that is going
 while the key is rotated is settled by delivery, not by the check.
-
-### Compatibility
-
-The Hercules API adds to a version without changing it: new event types,
-fields, statuses, part types and error codes can arrive at any time. An app
-keeps running the version of this package it was built with, so the package
-is written to meet what it has never seen. It promises this, in the app's
-backend and in the page alike:
-
-- **Nothing new is refused, and nothing new throws.** A delivery that holds
-  events the package does not know is applied and answered 2xx: the events
-  it knows are applied, the others keep their place in the run's sequence
-  and change nothing.
-- **A field it does not know is not read.** On a run, an event, a message, an
-  error or the answer to a start, the fields it knows are read as before.
-- **A message part of a type it does not know is left out.** The parts beside
-  it are kept, in order.
-- **A run status it does not know is a run that is still going.** A run ends
-  only as `completed`, `failed`, `cancelled` or `capped`. Until then the
-  thread has its `activeRun`, the page shows the run as going and can stop
-  it, `send` throws `thread_busy`, and `onRunFinished` is not called.
-- **A run can stay unfinished for a long time.** A run that waits, for a
-  person say, is kept open for as long as Hercules says it is going, and is
-  asked about less and less often. It is failed only once nothing was heard
-  of it for the give-up time. The live stream of a quiet run is followed for
-  as long as it takes.
-- **An ending it does not know still ends the run.** A run Hercules reports
-  as finished, in a status or with a final event added later, is recorded as
-  `failed` with the code `run_failed`, and keeps the reply it wrote.
-- **A tool call of a kind it does not know is kept**, as a `hercules` tool
-  call: the kind whose name and summary a page is not shown unless the app
-  set `exposeToolDetails`. One that ended with a status it does not know is
-  kept as `failed`: it is not known to have worked.
-- **An error code is any string.** A run that fails with a code the package
-  does not know, or that Hercules refuses with one, fails with that code and
-  the message Hercules sent. A `capped` run whose reason the package does
-  not know has `cappedReason: null`.
-
-So match on the codes and statuses you handle, and keep a default for the
-rest.
-
-Every request the package makes to Hercules names the package and its
-version in a `Hercules-Client` header: the app's backend's requests, and the
-page's request for a run's live stream. Hercules can answer
-`client_upgrade_required` to a version it no longer takes: see "How it
-works" for what the package does then.
 
 ## In the page, with TanStack AI
 
@@ -637,7 +591,8 @@ argument as HTML.
 Handlers that need nothing from React can go in `herculesConnection`'s
 `pageActions` option instead, when the connection is made. A page action is
 one-way: it shows in the chat as a tool call with the result "sent to the
-page", and nothing goes back to the run.
+page", which the package exports as `PAGE_ACTION_OUTPUT`, and nothing goes
+back to the run.
 Do not register it as a TanStack client tool: the adapter answers every tool
 call itself, so TanStack never runs one or starts a second run.
 
@@ -736,8 +691,10 @@ can be left out:
   call, then one `RUN_FINISHED` or `RUN_ERROR`. It ends once Convex has the
   run's end, so the next message never finds the thread busy.
 - `hydrate` reads the thread once as TanStack `UIMessage`s. A message's
-  `metadata.hercules` holds its `runId`. Page action arguments are not kept
-  with the messages, so a reloaded page action has none.
+  `metadata.hercules` is a `HerculesMessageMetadata`: its `runId`, and a
+  `status` once the thread or the run's ending has said one. Page action
+  arguments are not kept with the messages, so a reloaded page action has
+  none.
 - `joinRun` replays a run that is still going from its start.
 - If Hercules refuses the live stream, the reply is read from Convex.
 - A completed message is the truth. When Hercules retries a step, the step's
@@ -1097,3 +1054,114 @@ them. They are part of what "Versioning" promises.
 | A 404 from Hercules for a run, or for a deleted thread, is taken as final                                                                                                                     | Once it has been the answer for one hour                                       |
 | The issuer's signing keys are kept                                                                                                                                                            | 5 minutes                                                                      |
 | The keys are fetched again for a key the kept ones lack                                                                                                                                       | 30 seconds after the last fetch, at the soonest                                |
+
+## Versioning
+
+`@usehercules/agents` follows [semantic versioning](https://semver.org) from
+1.0.0. Within a major version, an upgrade does not break an app that uses the
+public API as this README describes it: what is listed below keeps its name,
+its arguments, what it returns and what it does. A change to any of it is a
+new major version.
+
+An app Hercules builds pins an exact version of the package, and keeps
+running that version until someone upgrades it. Pin it in your own app too:
+
+```sh
+npm install --save-exact @usehercules/agents
+```
+
+### What the public API is
+
+- The exports of these entry points that this README documents, with their
+  options, their return values and the error codes they name:
+
+  | Entry point                         | Exports                                                                               |
+  | ----------------------------------- | ------------------------------------------------------------------------------------- |
+  | `@usehercules/agents/convex.config` | The `herculesAgents` component, as the default export                                 |
+  | `@usehercules/agents/convex`        | `HerculesAgents`, `runFinishedValidator`, `defineTools`, `tool`, `ToolError`          |
+  | `@usehercules/agents/tanstack`      | `herculesConnection`, `useThreadSync`, `agentErrorCode`, `PAGE_ACTION_OUTPUT`         |
+  | `@usehercules/agents/react`         | `useAgentThread`, `AgentError`, `RunStreamError`                                      |
+  | `@usehercules/agents`               | `followRun`, `RunStreamError`, `createMcpHandler`, `createTokenVerifier`, `ToolError` |
+
+  Each entry point also exports the types of what it takes and returns.
+
+- The functions `support.api()` builds: their names, their arguments and what
+  they return, the thread among them.
+- What `onRunFinished` is called with, and what a tool's handler is called
+  with.
+- The routes the package serves in the app: `POST /hercules/agents/events`,
+  and `/mcp` or `/mcp/<name>`.
+- Every value under "Defaults and limits".
+
+A minor version may add to these: an export, an option, a field on something
+the package returns or passes to the app's functions, or a member of a union
+that mirrors the Hercules API (event types, run statuses, tool kinds,
+origins, error codes). So:
+
+- Match on the codes and statuses you handle, and keep a default for the
+  rest.
+- Take `onRunFinished`'s arguments as `runFinishedValidator.fields`, which
+  holds whatever fields the installed version sends.
+- When you wrap a method in a function of your own, do not copy the shape of
+  what it returns into a `returns` validator.
+
+### What it is not
+
+- Anything these entry points do not export, such as a file imported by its
+  path inside the package.
+- `@usehercules/agents/_generated/component`. It is there for Convex's code
+  generation, which reads the component's types from that path. An app does
+  not import it.
+- The component's own functions and tables. An app reaches them only through
+  `HerculesAgents`: do not call `components.herculesAgents` functions or read
+  its tables directly. A version reads what earlier versions of the same
+  major stored, so an upgrade keeps an app's threads.
+- What the package logs: the wording, the level, and when.
+- The exact requests the package makes to Hercules: their paths, headers and
+  bodies, and how many it makes.
+- What Hercules itself does, where this README describes it for context: how
+  it retries a delivery, how many streams of one run it allows, which codes
+  it sends. That is the Hercules API's to define.
+
+### Compatibility with the Hercules API
+
+The Hercules API adds to a version without changing it: new event types,
+fields, statuses, part types and error codes can arrive at any time. An app
+keeps running the version of this package it was built with, so the package
+is written to meet what it has never seen. Every version promises this, in
+the app's backend and in the page alike:
+
+- **Nothing new is refused, and nothing new throws.** A delivery that holds
+  events the package does not know is applied and answered 2xx: the events
+  it knows are applied, the others keep their place in the run's sequence
+  and change nothing.
+- **A field it does not know is not read.** On a run, an event, a message, an
+  error or the answer to a start, the fields it knows are read as before.
+- **A message part of a type it does not know is left out.** The parts beside
+  it are kept, in order.
+- **A run status it does not know is a run that is still going.** A run ends
+  only as `completed`, `failed`, `cancelled` or `capped`. Until then the
+  thread has its `activeRun`, the page shows the run as going and can stop
+  it, `send` throws `thread_busy`, and `onRunFinished` is not called.
+- **A run can stay unfinished for a long time.** A run that waits, for a
+  person say, is kept open for as long as Hercules says it is going, and is
+  asked about less and less often. It is failed only once nothing was heard
+  of it for the give-up time. The live stream of a quiet run is followed for
+  as long as it takes.
+- **An ending it does not know still ends the run.** A run Hercules reports
+  as finished, in a status or with a final event added later, is recorded as
+  `failed` with the code `run_failed`, and keeps the reply it wrote.
+- **A tool call of a kind it does not know is kept**, as a `hercules` tool
+  call: the kind whose name and summary a page is not shown unless the app
+  set `exposeToolDetails`. One that ended with a status it does not know is
+  kept as `failed`: it is not known to have worked.
+- **An error code is any string.** A run that fails with a code the package
+  does not know, or that Hercules refuses with one, fails with that code and
+  the message Hercules sent. A `capped` run whose reason the package does
+  not know has `cappedReason: null`.
+
+Every request the package makes to Hercules names the package and its
+version in a `Hercules-Client` header: the app's backend's requests, and the
+page's request for a run's live stream. Hercules can answer
+`client_upgrade_required` to a version it no longer takes: see "How it
+works" for what the package does then.
