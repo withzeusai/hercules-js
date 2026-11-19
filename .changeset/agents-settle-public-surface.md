@@ -24,6 +24,11 @@ This release makes the public API small and writes it down, so that a later 1.0.
 
 **One addition on the wire.** The page's request for a run's live stream now carries `Hercules-Client: agents/<version>`, as every request the app's backend makes has since 0.3.0. Hercules accepts the header from a page, so there is nothing to do in an app. A `fetch` you pass to `herculesConnection`, `useAgentThread` or `followRun` sees one more request header.
 
+**Two facts about Hercules, now stated.**
+
+- Hercules sends a `final` field on every event: `true` on the event that ends its run, `false` on every other. The package has read it since 0.3.0, so a final event of a type added later ends its run. Nothing changes in an app.
+- Hercules signs one more origin for a run with no end user: `other`, for a run it does not put under another name. The `AgentOrigin` type names it and the README lists it. As before, a tool that lists `"agent"` takes the origin `app` only: `other` is refused unless the tool lists it in `agentOrigins`, which is wise only for a tool that is safe for anyone who can reach the agent. An origin the package does not know is not read as `other`.
+
 **The README says what is promised.**
 
 - "Versioning" says what the public API is and what it is not, that 0.x minors may break, and what will hold from 1.0.0.

@@ -51,6 +51,13 @@ beforeEach(async () => {
         agentOrigins: ["app", "schedule", "trigger"],
         handler: (_ctx, _args: never, caller) => caller,
       },
+      // Names the origin Hercules signs for a run it cannot classify.
+      caller_other: {
+        ...echo,
+        principals: ["agent"],
+        agentOrigins: ["app", "other"],
+        handler: (_ctx, _args: never, caller) => caller,
+      },
       // As every tool that listed "agent" was before origins: any call with no end user.
       caller_any: {
         ...echo,
@@ -257,7 +264,7 @@ describe("createMcpHandler", () => {
 });
 
 describe("where a call with no end user came from", () => {
-  const AGENT_TOOLS = ["caller", "caller_listed", "caller_any"];
+  const AGENT_TOOLS = ["caller", "caller_listed", "caller_other", "caller_any"];
 
   async function agentToken(origin?: unknown) {
     return issuer.sign(
@@ -294,7 +301,7 @@ describe("where a call with no end user came from", () => {
 
   it.each([
     // The app's own job: every tool that lists "agent" takes it.
-    ["app", ["caller", "caller_listed", "caller_any"]],
+    ["app", ["caller", "caller_listed", "caller_other", "caller_any"]],
     // Any other origin: only a tool that names it, or takes any.
     ["schedule", ["caller_listed", "caller_any"]],
     ["trigger", ["caller_listed", "caller_any"]],
@@ -302,7 +309,11 @@ describe("where a call with no end user came from", () => {
     ["console", ["caller_any"]],
     ["channel", ["caller_any"]],
     ["test", ["caller_any"]],
-    // An origin added after this version was built.
+    // What Hercules signs for a run it cannot classify. Never taken by
+    // default: only by a tool that names it, or takes any.
+    ["other", ["caller_other", "caller_any"]],
+    // An origin added after this version was built. It is not read as
+    // "other": the tool that names "other" does not take it.
     ["webhook", ["caller_any"]],
     // Near misses are not `app`.
     ["App", ["caller_any"]],

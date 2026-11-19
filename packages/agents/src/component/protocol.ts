@@ -303,8 +303,10 @@ export function goingStatus(status: string): "queued" | "running" {
 
 /**
  * Whether an event ends its run: one of the four final types, or an event of
- * any other type that Hercules marks with `final: true`. No type added so far
- * carries the mark. It is read so that an ending added later is still an
+ * any other type that Hercules marks with `final: true`. Hercules sends
+ * `final` on every event, `true` on the one that ends the run. The four types
+ * are still read by name, for an event stored before the field existed, and
+ * the mark is read so that an ending of a type added later is still an
  * ending to this version.
  */
 export function isFinalEvent(event: { type: string; final?: unknown }): boolean {

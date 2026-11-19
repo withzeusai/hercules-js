@@ -33,9 +33,12 @@ export type ToolPrincipal = "user" | "agent";
  * - `trigger`, `channel`, `schedule`: a run one of the agent's own triggers,
  *   channels or schedules started.
  * - `test`: a test run made while the agent is being built.
+ * - `other`: a run Hercules does not put under a name above, such as a
+ *   teammate's message on a thread one of the app's jobs opened. It says
+ *   only that the run is not this app's own job.
  *
  * Hercules may add origins. One this version does not know is a string like
- * any other: it is never taken for `app`.
+ * any other: it is never taken for `app`, and it is not read as `other`.
  */
 export type AgentOrigin =
   | "app"
@@ -45,6 +48,7 @@ export type AgentOrigin =
   | "channel"
   | "schedule"
   | "test"
+  | "other"
   // Any other string, with the names above still offered by an editor.
   | (string & {});
 

@@ -904,10 +904,17 @@ the handler reads it as `caller.origin`:
 | `"channel"`      | From one of the agent's channels                                    |
 | `"schedule"`     | By one of the agent's schedules                                     |
 | `"test"`         | As a test, while the agent is being built                           |
+| `"other"`        | Some other way, which Hercules does not put under a name above      |
 | `null`           | The token does not say                                              |
 
+`"other"` is what Hercules signs for a run it cannot put under one of the
+other names: a teammate's message, sent from the console, on a thread one of
+the app's jobs opened, or a job another app started on the same agent. It
+says only that the run is not this app's own job.
+
 Hercules may add origins. One this version of the package does not know
-reaches the handler as the string Hercules signed.
+reaches the handler as the string Hercules signed. It is not read as
+`"other"`: a tool takes it only by its own name, or with `"any"`.
 
 **A tool that lists `"agent"` takes the app's own job, and nothing else,
 unless it says so.** That is the origin `"app"`. To take a call from other
@@ -932,6 +939,10 @@ send_daily_digest: tool({
 - `agentOrigins: "any"` takes every call with no end user, wherever its run
   was started, one whose token does not say among them. The handler can
   still tell them apart by `caller.origin`.
+- `"other"` is an origin like the rest: never taken unless the tool lists it,
+  and taken when it does, as in `agentOrigins: ["app", "other"]`. List it
+  only on a tool that is safe for anyone who can reach the agent. It names
+  no kind of caller, so listing it is close to `"any"`.
 - `agentOrigins` is only for a tool that lists `"agent"`. On any other tool
   it is a type error, and `defineTools` throws when the module loads. So does
   an empty list.
@@ -1134,9 +1145,13 @@ the app's backend and in the page alike:
   asked about less and less often. It is failed only once nothing was heard
   of it for a long time. The live stream of a quiet run is followed for
   as long as it takes.
-- **An ending it does not know still ends the run.** A run Hercules reports
-  as finished, in a status or with a final event added later, is recorded as
-  `failed` with the code `run_failed`, and keeps the reply it wrote.
+- **An ending it does not know still ends the run.** Every event Hercules
+  sends says whether it ends its run, in a `final` field: `true` on the
+  run's final event and `false` on every other. The package reads it, so a
+  final event of a type added later ends the run all the same. A run
+  Hercules reports as finished that way, or in a status added later, is
+  recorded as `failed` with the code `run_failed`, and keeps the reply it
+  wrote.
 - **A tool call of a kind it does not know is kept**, as a `hercules` tool
   call: the kind whose name and summary a page is not shown unless the app
   set `exposeToolDetails`. One that ended with a status it does not know is
