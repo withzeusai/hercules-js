@@ -1,5 +1,163 @@
 # @usehercules/agents
 
+## 1.0.0
+
+### Major Changes
+
+- [#260](https://github.com/withzeusai/hercules-js/pull/260) [`bd85487`](https://github.com/withzeusai/hercules-js/commit/bd85487b51e5432dfbdb740f20674f66ca5f84fe) Thanks [@grant0417](https://github.com/grant0417)! - 1.0.0. The public API is stable, and from this release the package follows [semantic versioning](https://semver.org).
+
+  **What 1.0.0 means**
+
+  Within 1.x, an upgrade does not break an app that uses the public API as the README describes it. A change that would break one takes a new major version.
+
+  - **Covered:** the documented exports of `@usehercules/agents`, `/convex`, `/convex.config`, `/tanstack` and `/react`, with their options, their return values, their types and the error codes they name; the functions `support.api()` builds; what `onRunFinished` and a tool's handler are called with; the routes the package serves in the app; and the option defaults that decide who can call a tool or what a page sees. The README's "Versioning" lists each.
+  - **A minor version may:** add an export, an option, a field, or a value to an open set; change a limit or a timing the README marks as tuning; take a newer version of a peer, or raise the lowest version of one within the same major.
+  - **Not covered:** anything the entry points do not export, `@usehercules/agents/_generated/component`, the component's own functions and tables, what the package logs, and the exact requests it makes to Hercules.
+  - **What is stored:** a 1.x version reads what earlier 1.x versions stored, and what 0.3.0 stored. An upgrade is one-way: going back to an older version in a deployment a newer one has run in is not supported.
+  - **Peers:** `convex` `^1.49.0`, `react` `^18.0.0 || ^19.0.0`, `@tanstack/ai` `^1.2.0` and `@tanstack/ai-client` `^1.1.0`, each optional and needed only by the entry points that use it. `/tanstack` is built on TanStack AI 1.x.
+
+  **Upgrading from 0.3.0**
+
+  Nothing stored changes, and no default changes: a deployment that ran 0.3.0 upgrades in place, with no migration, and reads every thread it had. An app that uses the package as the README and the Hercules docs describe changes two things, the field names in (1) and `metadata.hercules.status` in (2). The rest of this list is complete: everything else that can need a code change is in it, and TypeScript flags each place.
+
+  **1. The thread's fields are camelCase**
+
+  What the package builds for an app uses one style of name. What is the Hercules API's own JSON keeps the API's names: the events `followRun` yields, the `Message` in a `message.completed`, and `Run` are unchanged.
+
+  | Where                                                                                                       | 0.3.0                               | 1.0.0                            |
+  | ----------------------------------------------------------------------------------------------------------- | ----------------------------------- | -------------------------------- |
+  | `thread.messages[]`, from `thread`, `readThread`, `readThreadDetails`, `useThreadSync` and `useAgentThread` | `thread_id`, `run_id`, `created_at` | `threadId`, `runId`, `createdAt` |
+  | `thread.activeRun`                                                                                          | `created_at`                        | `createdAt`                      |
+  | `thread.latestRun`                                                                                          | `finished_at`                       | `finishedAt`                     |
+  | `thread.pageActions[]`                                                                                      | `created_at`                        | `createdAt`                      |
+  | `readThreadDetails(...).toolCalls[]`                                                                        | `created_at`                        | `createdAt`                      |
+
+  **2. `metadata.hercules.status` is two fields**
+
+  In the TanStack path a message said one thing under `status`: where the thread had it, or how its run ended, depending on where the message came from. Now each has its own field, and a reply has both when its run is over.
+
+  | What you read                           | 0.3.0                                                  | 1.0.0                                                      |
+  | --------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------- |
+  | A reply that stopped before it finished | `metadata.hercules.status === "incomplete"`            | `metadata.hercules.messageStatus === "incomplete"`         |
+  | Where the thread has a message          | `status`: `streaming`, `completed`, `incomplete`       | `messageStatus`, with the same values                      |
+  | How a message's run ended               | `status`: `completed`, `failed`, `cancelled`, `capped` | `runStatus`, with the same values, on the run's last reply |
+
+  **3. Every set of values that can grow is open**
+
+  A `switch` over one of these needs a `default`. One that ended in an exhaustiveness check stops compiling, which is the point: it would have stopped the day a value was added. Comparing with a value you know, and narrowing on it, work as before.
+
+  | Set                                                                                                                                                   | 0.3.0                    | 1.0.0                                                                                                                      |
+  | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+  | A run's status, the capped reason, a tool's kind, how a tool call ended, a message's role, an event's type name, `AgentErrorCode`, the kind of caller | A closed list of names   | The same names, or any string                                                                                              |
+  | An event, a message part, a tool's caller: unions told apart by a name                                                                                | One member for each name | One more member, for a name this version does not know. Its name is typed `UnknownName`: read it with `String(event.type)` |
+  | A thread message's `status` (and `messageStatus`), a page action's `status`, `useAgentThread`'s `status`                                              | A closed list of names   | The same names, or any string. These are the package's own: only a later version of the package adds one                   |
+
+  The four statuses a run ends with (`completed`, `failed`, `cancelled`, `capped`) stay a closed list. The README's "Open sets" says what a value you do not know means for each set.
+
+  **4. `followRun` hands each event on as Hercules sent it**
+
+  | What                                                       | 0.3.0                                                     | 1.0.0                                                             |
+  | ---------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
+  | An event of a type this version does not know              | Skipped                                                   | Yielded. A final one ends the loop after it is yielded            |
+  | A tool kind, tool status or capped reason it does not know | Rewritten to `hercules`, `failed`, `null`                 | Handed on as sent                                                 |
+  | An event's fields                                          | Rebuilt from the fields the package knew                  | Every field Hercules sent, `final` among them                     |
+  | A stream that closes at once with nothing new              | Counted as a failed connection, and thrown for in the end | A run that waits: `followRun` connects again, less and less often |
+
+  The thread, the hooks and `onRunFinished` read a value the package does not know as they did before.
+
+  **5. A tool is opaque**
+
+  | What                               | 0.3.0                                            | 1.0.0                                                                                            |
+  | ---------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+  | What `tool()` returns              | An object whose fields could be read and changed | A value with nothing on it to read or change                                                     |
+  | What `defineTools` takes as a tool | Any object of that shape                         | Only a value `tool()` returned. One written by hand, or a copy, is refused when the module loads |
+  | What `defineTools` returns         | `registerRoutes`, `name`, `path`, `handle`       | `registerRoutes`                                                                                 |
+
+  `tool({...})` inside `defineTools({ tools: {...} })` is unchanged.
+
+  **6. A page action's arguments are `Record<string, unknown>`**
+
+  | What                                        | 0.3.0 | 1.0.0                                                             |
+  | ------------------------------------------- | ----- | ----------------------------------------------------------------- |
+  | A handler's first argument                  | `any` | `Record<string, unknown>`: check a value's type before you use it |
+  | A page action whose arguments are no object | Run   | Not run                                                           |
+
+  **7. A new thread's id is made at random**
+
+  | A `threadId` that names no thread yet                         | 0.3.0                                                 | 1.0.0                                                                |
+  | ------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+  | A UUID of version 4 or 7 in lowercase, or a ULID in uppercase | Opens the thread                                      | Opens the thread                                                     |
+  | Any other, such as a UUID derived from an order number        | Stored, then refused by Hercules when the run started | Refused by `send` with `invalid_request`, before anything is written |
+
+  Use `crypto.randomUUID()`. A thread that already exists keeps working under its id, whatever its form.
+
+  **8. Removed exports**
+
+  None of these was named in the README, the Hercules docs or the builder's skills.
+
+  | Entry point                    | Removed                                                                                                                                                                                                                                                                                                                                                                                                                                       | Use instead                                                                 |
+  | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+  | `@usehercules/agents`          | The type `Event`                                                                                                                                                                                                                                                                                                                                                                                                                              | `AgentEvent`, the same type                                                 |
+  | `@usehercules/agents`          | `createMcpHandler`, `createTokenVerifier` and their types `McpTool`, `McpHandlerOptions`, `JsonSchema`, `TokenVerifier`, `TokenVerifierOptions`, `TokenResult`, `TokenFailure`, `VerifiedToken`                                                                                                                                                                                                                                               | `defineTools` and `tool` from `/convex`                                     |
+  | `@usehercules/agents`          | `bearerTokenOf`, `callerFromToken`, `deploymentOrigins`, `parseEventStream` and its `ServerSentEvent` type, `readAgentEvent`, `isFinalEvent`, `isFinalStatus`, and the constants `AGENT_ORIGINS_META_KEY`, `PRINCIPALS_META_KEY`, `SUPPORTED_PROTOCOL_VERSIONS`, `DEFAULT_API_URL`, `EVENTS_PATH`, `FINAL_EVENT_TYPES`, `HERCULES_API_VERSION`, `HIDDEN_TOOL_NAME`, `HIDDEN_TOOL_SUMMARY`, `HIDDEN_TOOL_FAILED_SUMMARY`, `PAGE_ACTION_TTL_MS` | `followRun` reads a stream; an event's `final` says whether it ends its run |
+  | `@usehercules/agents/convex`   | `validatorToJsonSchema`, and the type `ComponentApi`                                                                                                                                                                                                                                                                                                                                                                                          | Pass `components.herculesAgents` to `new HerculesAgents(...)`, as before    |
+  | `@usehercules/agents/react`    | `LiveRun`, `mergeThread`, and the type `PendingInput`                                                                                                                                                                                                                                                                                                                                                                                         | `useAgentThread`                                                            |
+  | `@usehercules/agents/tanstack` | `syncThread`, `threadToUIMessages`, and the types `SendArgs` and `ThreadQueryArgs`                                                                                                                                                                                                                                                                                                                                                            | `useThreadSync`, and `SendArgs` from `/convex`                              |
+
+  **9. Members of `HerculesAgents` that are no longer public**
+
+  | What                              | 0.3.0                       | 1.0.0                 |
+  | --------------------------------- | --------------------------- | --------------------- |
+  | `component`, `options`, `agentId` | Readable on an instance     | Gone, at run time too |
+  | `handleEvents`                    | `(ctx, request, verifier?)` | `(ctx, request)`      |
+
+  **10. What it runs on**
+
+  | What              | 0.3.0      | 1.0.0                                                       |
+  | ----------------- | ---------- | ----------------------------------------------------------- |
+  | The `convex` peer | `^1.29.0`  | `^1.49.0`, the version Hercules's app templates ship        |
+  | Node              | Not stated | 22 or later (`engines`), the lowest its Convex peer runs on |
+
+  The `react`, `@tanstack/ai` and `@tanstack/ai-client` peers are unchanged.
+
+### Minor Changes
+
+- [#256](https://github.com/withzeusai/hercules-js/pull/256) [`f38f4e4`](https://github.com/withzeusai/hercules-js/commit/f38f4e4bb3905c47fea8d173d2ba796faf20e7d9) Thanks [@grant0417](https://github.com/grant0417)! - What is new since 0.3.0 and needs no change in an app.
+
+  **The page names the package to Hercules.** The page's request for a run's live stream carries `Hercules-Client: agents/<version>`, as every request the app's backend makes has since 0.3.0. Hercules accepts the header from a page, so there is nothing to do in an app. A `fetch` you pass to `herculesConnection`, `useAgentThread` or `followRun` sees one more request header.
+
+  **Two facts about Hercules, now stated and typed.**
+
+  - Hercules sends a `final` field on every event: `true` on the event that ends its run, `false` on every other. The package has read it since 0.3.0, so a final event of a type added later ends its run. `AgentEvent` now types it, and `followRun` hands it on with each event.
+  - Hercules signs one more origin for a run with no end user: `other`, for a run it does not put under another name. The `AgentOrigin` type names it and the README lists it. As before, a tool that lists `"agent"` takes the origin `app` only: `other` is refused unless the tool lists it in `agentOrigins`, which is wise only for a tool that is safe for anyone who can reach the agent. An origin the package does not know is not read as `other`.
+
+  **Types.**
+
+  - `UnknownName` is exported from each entry point whose types use it.
+  - The declarations carry their doc comments, so an editor shows that `run` is server-only, that `apiKey` must not reach a browser and that a page action's arguments are untrusted.
+  - The `/react` types no longer need `convex` installed to resolve, and `herculesConnection(convex, api.agent)` compiles under `exactOptionalPropertyTypes`.
+  - `runFinishedValidator` takes any string as `cappedReason`.
+
+  **The README says what is promised.**
+
+  - "Versioning" says what the public API is and what it is not, what a minor version may change, and what the package runs on. It names every export and every type, lists the open sets with what a value you do not know means, and lists every error code the package writes itself, `http_<status>` and `send_failed` among them.
+  - "Defaults and limits" states, once, what every option is when left out and the limits an app is designed around: a message's length, the size of a thread read, and the page-action expiry. How the package recovers (when it asks again, how long before it gives up) is described by what it achieves, without its timing, which is the package's own to tune.
+  - `chat.reload()` in the TanStack path sends the last user message again as a new, charged run. There is no regenerate: do not wire a button to it.
+  - A reply that was stopped while it was written is kept as far as it was written, as a `completed` message, in the thread, in another tab and after a reload. The README said it was kept "up to its last checkpoint", as `incomplete`. `incomplete` is the status of a reply whose run ended before the app got it whole.
+
+### Patch Changes
+
+- [#259](https://github.com/withzeusai/hercules-js/pull/259) [`12eb0ac`](https://github.com/withzeusai/hercules-js/commit/12eb0ac60d61ae567bdc2f2099ec7060b4a5ed87) Thanks [@grant0417](https://github.com/grant0417)! - With `@usehercules/agents/tanstack`, a reply says the same of itself when its run ends as it does after a reload.
+
+  A page marks a reply from its `metadata.hercules`: `messageStatus` is `"incomplete"` on a reply that stopped before it finished, and `runStatus` says how its run ended. In 0.3.0 a reply the page streamed said how its run ended and a reloaded reply said where the thread had it, so a mark made from either showed live or after a reload, not both.
+
+  - When a run ends, its last reply has both `messageStatus` and `runStatus`, whether the run completed, failed, was stopped or was capped. A run that ended in a way this version does not know reads as `failed`.
+  - After a reload the reply reads the same: the last reply of the thread's latest run has `runStatus` too. The thread keeps how its latest run ended and no earlier one, so an older reply has `messageStatus` alone.
+  - When a run ends and the thread holds less of its reply than the page streamed, the page's text stays in the chat with `messageStatus` set to `"incomplete"`, as the README says. Before, the text could go back to what the thread held.
+  - `useThreadSync` also puts the thread into the chat when the page's stream ends, not only when the thread changes. When only a reply's `metadata.hercules` differs, it sets that and keeps the chat's own messages.
+
+  `useAgentThread` (`@usehercules/agents/react`) already read the thread at the run's end, so its messages and `thread.latestRun` were the same live and after a reload. Tests now hold it to that.
+
 ## 0.3.0
 
 ### Minor Changes
