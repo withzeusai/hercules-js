@@ -585,7 +585,10 @@ useEffect(() => {
 ```
 
 A model writes the arguments, and it may have been steered by text it read,
-so treat them as untrusted input. A handler navigates within the app or
+so treat them as untrusted input. A handler is always given an object, each
+of whose values is typed `unknown`, so it has to check a value's type before
+it uses it. A page action whose arguments are not an object is not run. A
+handler navigates within the app or
 adjusts what the page shows: it never submits, purchases, deletes or changes a
 setting. Validate an id and build the URL from a fixed route plus the encoded
 id, never navigate to a URL taken from an argument, and never render an

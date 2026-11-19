@@ -13,7 +13,12 @@
  *   const chat = useChat({ connection, threadId, persistence: true });
  *   useThreadSync(chat, api.agent.thread, { threadId });
  *   useEffect(() => {
- *     connection.setPageActions({ open_order: ({ orderId }) => openOrder(orderId) });
+ *     connection.setPageActions({
+ *       // A model writes the arguments: check the id before acting on it.
+ *       open_order: ({ orderId }) => {
+ *         if (typeof orderId === "string" && ORDER_ID.test(orderId)) openOrder(orderId);
+ *       },
+ *     });
  *     return () => connection.setPageActions(undefined);
  *   }, [connection]);
  * }

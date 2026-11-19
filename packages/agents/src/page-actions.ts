@@ -21,10 +21,14 @@
  * setting. It validates an id and builds the URL from a fixed route plus the
  * encoded id, never navigates to a URL taken from an argument, and never
  * renders an argument as HTML.
+ *
+ * `args` is always an object, with whatever the model put in it: each value
+ * is `unknown`, so the handler has to check its type before it uses it. A
+ * page action whose arguments are not an object is not run.
  */
 export type PageActionHandler = (
-  // Untrusted: check the type and the shape of each before acting on it.
-  args: any,
+  // Untrusted: check the type and the shape of each value before acting on it.
+  args: Record<string, unknown>,
   info: { toolCallId: string; runId: string },
 ) => void | Promise<void>;
 
@@ -58,12 +62,22 @@ export interface PageActionRunnerOptions {
   name: string;
 }
 
-function parseArguments(json: string): unknown {
+/**
+ * A page action's arguments: the object the model wrote, or null when what
+ * it wrote is not one (text that is not JSON, a list, a string, a number,
+ * null). A handler takes an object apart by name, so nothing else is handed
+ * to one.
+ */
+function parseArguments(json: string): Record<string, unknown> | null {
+  let parsed: unknown;
   try {
-    return JSON.parse(json) as unknown;
+    parsed = JSON.parse(json);
   } catch {
-    return {};
+    return null;
   }
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
 }
 
 /**
@@ -95,6 +109,13 @@ export function createPageActionRunner(options: PageActionRunnerOptions) {
     const handler = handlerFor(options.handlers(), action.name);
     const key = `${action.runId}:${action.toolCallId}`;
     if (action.status !== "pending" || handler === undefined || taken.has(key)) return;
+    const args = parseArguments(action.argumentsJson);
+    if (args === null) {
+      // Not an action any tab can run. It is left unclaimed, and expires.
+      taken.add(key);
+      console.warn(`Page action ${action.name} was not run: its arguments are not an object`);
+      return;
+    }
     const claim = options.claim();
     if (claim === undefined) {
       if (!warned) {
@@ -121,7 +142,7 @@ export function createPageActionRunner(options: PageActionRunnerOptions) {
     }
     if (!claimed) return;
     try {
-      await handler(parseArguments(action.argumentsJson), {
+      await handler(args, {
         toolCallId: action.toolCallId,
         runId: action.runId,
       });
