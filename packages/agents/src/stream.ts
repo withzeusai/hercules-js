@@ -4,6 +4,8 @@
  * `EventSource`, because the token goes in the `Authorization` header.
  */
 import {
+  CLIENT_HEADER,
+  CLIENT_ID,
   HERCULES_API_VERSION,
   isFinalEvent,
   readAgentEvent,
@@ -41,6 +43,30 @@ export class RunStreamError extends Error {
     this.status = status;
     this.code = code;
   }
+}
+
+/**
+ * Whether the browser names this package on the run's stream request, as the
+ * app's backend does on every request it makes. Off: a header the events
+ * route does not list among those a page may send makes the browser's
+ * preflight fail, and with it the whole live view. It is to be turned on in
+ * a release made after Hercules allows the header there.
+ */
+const STREAM_SENDS_CLIENT_HEADER: boolean = false;
+
+/** The headers of a request for a run's live stream, resumed after `lastSeq` when that is past 0. */
+export function runStreamHeaders(
+  token: string,
+  lastSeq: number,
+  sendClient = STREAM_SENDS_CLIENT_HEADER,
+): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
+    accept: "text/event-stream",
+    "hercules-version": HERCULES_API_VERSION,
+    ...(sendClient && { [CLIENT_HEADER]: CLIENT_ID }),
+    ...(lastSeq > 0 && { "last-event-id": String(lastSeq) }),
+  };
 }
 
 export interface ServerSentEvent {
@@ -173,12 +199,7 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
       const url = new URL(options.url);
       if (lastSeq > 0) url.searchParams.set("after", String(lastSeq));
       const response = await fetchFn(url, {
-        headers: {
-          authorization: `Bearer ${options.token}`,
-          accept: "text/event-stream",
-          "hercules-version": HERCULES_API_VERSION,
-          ...(lastSeq > 0 && { "last-event-id": String(lastSeq) }),
-        },
+        headers: runStreamHeaders(options.token, lastSeq),
         ...(options.signal !== undefined && { signal: options.signal }),
       });
       if (!response.ok || response.body === null) {

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { followRun, parseEventStream, RunStreamError } from "../stream";
 import { readAgentEvent, readWireEvent } from "../component/protocol";
+import { CLIENT_ID } from "../component/protocol";
+import { runStreamHeaders } from "../stream";
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -215,6 +217,32 @@ describe("followRun", () => {
     expect(requests[0]?.headers.get("last-event-id")).toBeNull();
     expect(requests[2]?.headers.get("last-event-id")).toBe("2");
     expect(requests[2]?.url).toContain("after=2");
+  });
+
+  it("sends only headers the events route lets a page send", async () => {
+    const { requests, fetch: fetchFn } = scripted([
+      () => new Response(streamOf(sse(event(1, "run.started")))),
+      () => new Response(streamOf(sse(event(2, "run.completed", { output: "" })))),
+    ]);
+    await collect(
+      followRun({ url: URL_, token: "t", fetch: fetchFn, retry: { initialMs: 1, maxMs: 2 } }),
+    );
+    // A header outside this list fails the browser's preflight, and the live
+    // view with it. `Hercules-Client` is not on the list yet, so the page
+    // does not send it: the app's backend names the package.
+    const allowed = ["authorization", "accept", "last-event-id", "hercules-version"];
+    for (const request of requests) {
+      expect([...request.headers.keys()].filter((name) => !allowed.includes(name))).toEqual([]);
+    }
+    expect(runStreamHeaders("t", 0)).not.toHaveProperty("hercules-client");
+    // What turning it on sends, once the route allows it.
+    expect(runStreamHeaders("t", 4, true)).toEqual({
+      authorization: "Bearer t",
+      accept: "text/event-stream",
+      "hercules-version": "2025-12-09",
+      "hercules-client": CLIENT_ID,
+      "last-event-id": "4",
+    });
   });
 
   /** A fetch that answers from a list, and records what was asked. */

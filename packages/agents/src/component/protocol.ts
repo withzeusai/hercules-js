@@ -20,6 +20,25 @@
 
 /** The API version every request sends as `Hercules-Version`. */
 export const HERCULES_API_VERSION = "2025-12-09";
+
+// The build writes the package's version here, from `package.json`: see
+// `tsdown.config.ts`. It is never written by hand.
+declare const __HERCULES_AGENTS_VERSION__: string | undefined;
+
+/** This package's version, as `package.json` has it. */
+export const PACKAGE_VERSION: string =
+  typeof __HERCULES_AGENTS_VERSION__ === "string" ? __HERCULES_AGENTS_VERSION__ : "unknown";
+
+/**
+ * The header that says which client, and which version of it, makes a
+ * request: `Hercules-Client: agents/<version>`. Hercules reads it to know
+ * which versions of the package are in use. It is a header of its own, not
+ * `User-Agent`, because a runtime may set or drop that one itself, and a
+ * browser does not let a page set it at all.
+ */
+export const CLIENT_HEADER = "hercules-client";
+export const CLIENT_ID = `agents/${PACKAGE_VERSION}`;
+
 export const DEFAULT_API_URL = "https://api.hercules.app";
 /** Where Hercules delivers a run's durable events in an app. Part of the contract. */
 export const EVENTS_PATH = "/hercules/agents/events";

@@ -20,6 +20,18 @@ import {
 import { createTokenVerifier } from "../jwt";
 import { createHarness, type Harness } from "./convex-harness";
 import { createTestIssuer, ISSUER, NOW_MS, NOW_SECONDS } from "./helpers";
+import packageJson from "../../package.json";
+import { CLIENT_ID, PACKAGE_VERSION } from "../component/protocol";
+
+declare global {
+  interface ImportMeta {
+    /** Vite's: the files a pattern matches, read when the tests are built. */
+    glob(
+      pattern: string[],
+      options: { query: "?raw"; import: "default"; eager: true },
+    ): Record<string, string>;
+  }
+}
 
 const API_URL = "https://api.hercules.test";
 // An agent's id is a plain ULID.
@@ -4156,5 +4168,62 @@ describe("api()", () => {
     expect((await support.run(h.appCtx(null), { text: "A job" })).threadId).toEqual(
       expect.any(String),
     );
+  });
+});
+
+describe("naming the package to Hercules", () => {
+  it("has the version package.json has", () => {
+    expect(packageJson.name).toBe("@usehercules/agents");
+    expect(PACKAGE_VERSION).toBe(packageJson.version);
+    expect(CLIENT_ID).toBe(`agents/${packageJson.version}`);
+  });
+
+  // The build writes the version into what is published. `turbo test` builds
+  // first; a package that was never built has nothing to check.
+  const built = Object.values(
+    import.meta.glob(["../../dist/**/*.js", "../../dist/**/*.mjs"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }),
+  );
+  it.skipIf(built.length === 0)("is built with the version package.json has", () => {
+    const versions = built.flatMap((text) =>
+      [...text.matchAll(/PACKAGE_VERSION = "([^"]*)"/g)].map((match) => match[1]),
+    );
+    // In the component's own module and in the bundle the other entry points share.
+    expect(versions.length).toBeGreaterThanOrEqual(2);
+    expect([...new Set(versions)]).toEqual([packageJson.version]);
+    // Nothing was left for the runtime to fill in.
+    expect(built.some((text) => text.includes("__HERCULES_AGENTS_VERSION__"))).toBe(false);
+  });
+
+  it("sends Hercules-Client on every request the app's backend makes", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // The stuck-run check reads the run and its events.
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+
+    const asked = api.requests.map(
+      (request) => `${request.method} ${request.path.replace(/\?.*$/, "")}`,
+    );
+    expect([...new Set(asked)].sort()).toEqual(
+      [
+        `POST /v1/agents/${AGENT_ID}/runs`,
+        `GET /v1/agents/runs/${runId}`,
+        `GET /v1/agents/runs/${runId}/events`,
+        `POST /v1/agents/runs/${runId}/cancel`,
+        `DELETE /v1/agents/threads/${threadId}`,
+      ].sort(),
+    );
+    for (const request of api.requests) {
+      expect(request.headers.get("hercules-client")).toBe(`agents/${packageJson.version}`);
+      expect(request.headers.get("hercules-version")).toBe("2025-12-09");
+    }
   });
 });

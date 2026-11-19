@@ -4,6 +4,7 @@
  * read the app's environment variables).
  */
 import { v, type Infer } from "convex/values";
+import { CLIENT_HEADER, CLIENT_ID } from "./protocol.js";
 import { api, internal } from "./_generated/api.js";
 import {
   internalAction,
@@ -132,6 +133,7 @@ export async function callHercules(
       headers: {
         authorization: `Bearer ${config.key}`,
         "hercules-version": HERCULES_API_VERSION,
+        [CLIENT_HEADER]: CLIENT_ID,
         accept: "application/json",
         ...(body !== undefined && { "content-type": "application/json" }),
       },
