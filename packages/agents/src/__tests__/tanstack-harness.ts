@@ -43,12 +43,28 @@ export function frame(seq: number, type: string, data: unknown = {}, runId = RUN
 export function userMessage(text: string, runId = RUN): AgentThread["messages"][number] {
   return {
     id: `${runId}:input`,
-    thread_id: THREAD,
-    run_id: runId,
+    threadId: THREAD,
+    runId: runId,
     role: "user",
     parts: [{ type: "text", text }],
-    created_at: AT,
+    createdAt: AT,
     status: "completed",
+  };
+}
+
+/**
+ * A message as the Hercules API sends it in a `message.completed` event:
+ * the API's own JSON, with its names. The thread holds the same message
+ * under the package's names.
+ */
+export function apiMessage(message: AgentThread["messages"][number]) {
+  return {
+    id: message.id,
+    thread_id: message.threadId,
+    run_id: message.runId,
+    role: message.role,
+    parts: message.parts,
+    created_at: message.createdAt,
   };
 }
 
@@ -58,7 +74,7 @@ export function assistantMessage(
   status: "streaming" | "completed" | "incomplete" = "completed",
   runId = RUN,
 ): AgentThread["messages"][number] {
-  return { id, thread_id: THREAD, run_id: runId, role: "assistant", parts, created_at: AT, status };
+  return { id, threadId: THREAD, runId: runId, role: "assistant", parts, createdAt: AT, status };
 }
 
 export function runningThread(messages: AgentThread["messages"], runId = RUN): AgentThread {
@@ -73,10 +89,10 @@ export function runningThread(messages: AgentThread["messages"], runId = RUN): A
       progress: null,
       live: { url: LIVE_URL, token: "run-token" },
       lastSeq: 0,
-      created_at: AT,
+      createdAt: AT,
       stopping: false,
     },
-    latestRun: { id: runId, status: "running", error: null, cappedReason: null, finished_at: null },
+    latestRun: { id: runId, status: "running", error: null, cappedReason: null, finishedAt: null },
     pageActions: [],
   };
 }
@@ -88,7 +104,7 @@ export function settledThread(
     status: "completed",
     error: null,
     cappedReason: null,
-    finished_at: null,
+    finishedAt: null,
   },
 ): AgentThread {
   return {
@@ -113,7 +129,7 @@ export function pendingPageAction(
     runId,
     name: "open_order",
     argumentsJson: JSON.stringify(args),
-    created_at: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
     status: "pending",
   };
 }

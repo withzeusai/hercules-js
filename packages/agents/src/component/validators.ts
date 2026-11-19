@@ -115,14 +115,18 @@ export const vMessageStatus = v.union(
   v.literal("incomplete"),
 );
 
-/** A message as `threads.read` returns it: the API's Message, plus where it stands. */
+/**
+ * A message as `threads.read` returns it: the package's own shape, under
+ * camelCase names, with where the message stands. The API's `Message`, which
+ * `vMessage` above mirrors, keeps the API's names.
+ */
 export const vThreadMessage = v.object({
   id: v.string(),
-  thread_id: v.string(),
-  run_id: v.string(),
+  threadId: v.string(),
+  runId: v.string(),
   role: v.union(v.literal("user"), v.literal("assistant")),
   parts: v.array(vMessagePart),
-  created_at: v.string(),
+  createdAt: v.string(),
   /** `streaming` while the reply is being written, `incomplete` when its run ended first. */
   status: vMessageStatus,
 });
@@ -136,7 +140,7 @@ export const vActiveRun = v.object({
   live: v.union(v.object({ url: v.string(), token: v.string() }), v.null()),
   /** The last event sequence number this app has applied. */
   lastSeq: v.number(),
-  created_at: v.string(),
+  createdAt: v.string(),
   /**
    * A stop was asked for (`cancel`) and the run has not ended yet. It ends
    * within a few seconds as a rule; until then a new message is refused as
@@ -152,7 +156,7 @@ export const vLatestRun = v.object({
   error: v.union(vRunError, v.null()),
   cappedReason: v.union(vCappedReason, v.null()),
   /** When the run ended. `error.retryAfterSeconds` counts from here. */
-  finished_at: v.union(v.string(), v.null()),
+  finishedAt: v.union(v.string(), v.null()),
 });
 
 export const vPendingPageAction = v.object({
@@ -162,7 +166,7 @@ export const vPendingPageAction = v.object({
   /** The arguments as JSON text. */
   argumentsJson: v.string(),
   /** When the agent called it. A page action older than two minutes is not run. */
-  created_at: v.string(),
+  createdAt: v.string(),
   /**
    * `pending`: waiting for a tab to claim and run it. `expired`: it reached
    * the app, or a tab, more than two minutes after the agent called it, so
@@ -197,7 +201,7 @@ export const vStoredToolCall = v.object({
   resultJson: v.union(v.string(), v.null()),
   /** A page action's arguments as JSON text. */
   argumentsJson: v.union(v.string(), v.null()),
-  created_at: v.string(),
+  createdAt: v.string(),
 });
 
 /** What `threads.readDetails` returns: the thread as stored, with its tool calls. */

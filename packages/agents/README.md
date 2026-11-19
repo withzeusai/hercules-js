@@ -166,7 +166,7 @@ are the app's setup, not the conversation, so a new chat will not help:
 A run Hercules refuses over a limit (`end_user_rate_limited`,
 `agent_daily_limit_reached`) fails at once with that code. The thread's
 `latestRun.error` then carries `retryAfterSeconds`, counted from
-`latestRun.finished_at`.
+`latestRun.finishedAt`.
 
 What the package does with an answer is decided by its code when the package
 has a rule for it, and by its HTTP status otherwise. Hercules may add codes,
@@ -623,7 +623,7 @@ can be left out:
   as `out_of_credits`, `end_user_rate_limited` or
   `agent_daily_limit_reached`. For a run that failed over a limit,
   `thread.latestRun.error.retryAfterSeconds` says how long it lasts, counted
-  from `thread.latestRun.finished_at`.
+  from `thread.latestRun.finishedAt`.
 - Some codes are not the user's to fix by starting over. `agent_not_found`
   is the app's setup: Hercules has no agent with the id in `convex/agent.ts`
   for this app, or the agents API is not turned on for it.
@@ -1101,6 +1101,33 @@ types, run statuses, tool kinds, origins, error codes). So:
   holds whatever fields the installed version sends.
 - When you wrap a method in a function of your own, do not copy the shape of
   what it returns into a `returns` validator.
+
+### Naming
+
+Two kinds of object reach an app's code, and each keeps one style.
+
+- **What the package builds is camelCase.** The thread and everything in it
+  (`messages`, `activeRun`, `latestRun`, `pageActions`, and the `toolCalls`
+  of `readThreadDetails`), what `useAgentThread` and `useThreadSync` return,
+  what `onRunFinished` and a tool's handler are called with, and every
+  option.
+- **What is the Hercules API's own JSON keeps the API's names**, which are
+  snake_case: the events `followRun` yields (`AgentEvent`, and the `Message`
+  inside a `message.completed`), and the `Run` type. They read as the
+  [API reference](https://hercules.app/docs/agents/api-reference) and
+  [Run events](https://hercules.app/docs/agents/run-events) document them.
+  So what those pages say holds here, and a field the API adds to an event's
+  `data` reaches your code under the name the API gave it, whichever version
+  of the package you run.
+
+A message is the one thing with both forms, under two names. `Message` is the
+API's, with `run_id` and `created_at`. A thread's message is `ThreadMessage`,
+the package's, with `runId`, `createdAt` and a `status`.
+
+Neither rule touches values, or data that is yours: event types such as
+`tool_call.completed`, statuses and error codes are strings the API defines,
+and tool arguments, tool results, page-action arguments and `context` are
+passed on as they are.
 
 ### What it is not
 

@@ -41,6 +41,10 @@ export { vRunFinished as runFinishedValidator } from "./component/validators";
 
 /** The thread `readThread` returns: what the component's `threads.read` answers. */
 export type AgentThread = NonNullable<ComponentApi["threads"]["read"]["_returnType"]>;
+/**
+ * A message of a thread, as the package builds it: `runId`, `createdAt`, and
+ * a `status`. The API's own message, as an event carries it, is `Message`.
+ */
 export type ThreadMessage = AgentThread["messages"][number];
 export type ActiveRun = NonNullable<AgentThread["activeRun"]>;
 export type PendingPageAction = AgentThread["pageActions"][number];

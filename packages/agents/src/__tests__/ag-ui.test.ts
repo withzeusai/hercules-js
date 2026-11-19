@@ -111,17 +111,26 @@ function settledThread(): AgentThread {
     messages: [
       {
         id: `${RUN}:input`,
-        thread_id: THREAD,
-        run_id: RUN,
+        threadId: THREAD,
+        runId: RUN,
         role: "user",
         parts: [{ type: "text", text: "Where is my order?" }],
-        created_at: AT,
+        createdAt: AT,
         status: "completed",
       },
-      { ...completed.data.message, status: "completed" },
+      // The API's message, as the thread holds it: under the package's names.
+      {
+        id: completed.data.message.id,
+        threadId: completed.data.message.thread_id,
+        runId: completed.data.message.run_id,
+        role: completed.data.message.role,
+        parts: completed.data.message.parts,
+        createdAt: completed.data.message.created_at,
+        status: "completed",
+      },
     ],
     activeRun: null,
-    latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finished_at: null },
+    latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: null },
     pageActions: [],
   };
 }
@@ -386,7 +395,7 @@ describe("RunChunks", () => {
         status: "running",
         error: null,
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       },
       activeRun: {
         id: "newer",
@@ -394,7 +403,7 @@ describe("RunChunks", () => {
         progress: null,
         live: null,
         lastSeq: 0,
-        created_at: AT,
+        createdAt: AT,
         stopping: false,
       },
     };
@@ -418,7 +427,7 @@ describe("RunChunks", () => {
         status: "failed" as const,
         error: { code: "out_of_credits", message: "Out." },
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       },
     };
     expect([...failed.reconcile(ended), ...failed.finish()].at(-1)).toMatchObject({
@@ -437,7 +446,7 @@ describe("RunChunks", () => {
         status: "failed",
         error: { code: "agent_disabled", message: "The agent is off." },
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       },
     });
     expect(run.finish().at(-1)).toMatchObject({ type: "RUN_ERROR", code: "agent_disabled" });
@@ -447,22 +456,22 @@ describe("RunChunks", () => {
 describe("RunChunks, when a step was retried", () => {
   const user: AgentThread["messages"][number] = {
     id: `${RUN}:input`,
-    thread_id: THREAD,
-    run_id: RUN,
+    threadId: THREAD,
+    runId: RUN,
     role: "user",
     parts: [{ type: "text", text: "Where is my order?" }],
-    created_at: AT,
+    createdAt: AT,
     status: "completed",
   };
   const earlier: AgentThread["messages"] = [
-    { ...user, id: "earlier:input", run_id: "earlier", parts: [{ type: "text", text: "Hello" }] },
+    { ...user, id: "earlier:input", runId: "earlier", parts: [{ type: "text", text: "Hello" }] },
     {
       id: "msg_0",
-      thread_id: THREAD,
-      run_id: "earlier",
+      threadId: THREAD,
+      runId: "earlier",
       role: "assistant",
       parts: [{ type: "text", text: "Hi! How can I help?" }],
-      created_at: AT,
+      createdAt: AT,
       status: "completed",
     },
   ];
@@ -480,10 +489,10 @@ describe("RunChunks, when a step was retried", () => {
         progress: null,
         live: { url: "https://api.hercules.test/x", token: "t" },
         lastSeq: 0,
-        created_at: AT,
+        createdAt: AT,
         stopping: false,
       },
-      latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
+      latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finishedAt: null },
       pageActions: [],
       ...overrides,
     };
@@ -558,11 +567,11 @@ describe("RunChunks, when a step was retried", () => {
         ...thread.messages,
         {
           id: "msg_1",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [{ type: "text", text: "Your order shipped today." }],
-          created_at: AT,
+          createdAt: AT,
           status: "completed",
         },
       ],
@@ -669,15 +678,15 @@ describe("RunChunks, when a step was retried", () => {
         user,
         {
           id: "msg_1",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [{ type: "text", text: "Your order shipped." }],
-          created_at: AT,
+          createdAt: AT,
           status: "completed",
         },
       ],
-      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finished_at: AT },
+      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: AT },
     });
     chunks.push(...run.reconcile(settled), ...run.finish());
     expect(chunks.map((chunk) => chunk.type)).toContain("MESSAGES_SNAPSHOT");
@@ -758,8 +767,8 @@ describe("threadToUIMessages", () => {
         ...thread.messages,
         {
           id: "msg_2",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [
             {
@@ -771,16 +780,16 @@ describe("threadToUIMessages", () => {
               summary: "No results",
             },
           ],
-          created_at: AT,
+          createdAt: AT,
           status: "completed",
         },
         {
           id: "msg_3",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [],
-          created_at: AT,
+          createdAt: AT,
           status: "streaming",
         },
       ],

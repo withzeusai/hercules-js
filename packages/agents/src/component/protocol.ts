@@ -61,6 +61,7 @@ export interface Usage {
   credits: number;
 }
 
+/** A run as the Hercules API returns it: the API's own JSON, under the API's names. */
 export interface Run {
   id: string;
   thread_id: string;
@@ -100,6 +101,11 @@ export interface ToolCallPart {
 /** More part types may be added. This package keeps the ones it knows. */
 export type MessagePart = TextPart | ToolCallPart;
 
+/**
+ * A message as the Hercules API sends it, in a `message.completed` event:
+ * the API's own JSON, under the API's names. A thread's message, which the
+ * package builds from it, is `ThreadMessage`.
+ */
 export interface Message {
   id: string;
   thread_id: string;

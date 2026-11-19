@@ -13,6 +13,7 @@ import {
 } from "../tanstack";
 import {
   api,
+  apiMessage,
   assistantMessage,
   createApp,
   frame,
@@ -20,8 +21,8 @@ import {
   runningThread,
   settledThread,
   THREAD,
-  userMessage,
   type App,
+  userMessage,
 } from "./tanstack-harness";
 
 const OTHER_RUN = "0f4e3d2c-1b0a-4987-8654-3210fedcba98";
@@ -82,7 +83,7 @@ describe("useThreadSync", () => {
             status: "completed",
             error: null,
             cappedReason: null,
-            finished_at: null,
+            finishedAt: null,
           },
         ),
       );
@@ -169,8 +170,8 @@ describe("useThreadSync", () => {
 
     const second = assistantMessage("msg_2", [{ type: "text", text: "It is open." }]);
     app.push(
-      frame(3, "message.completed", { message: first }),
-      frame(4, "message.completed", { message: second }),
+      frame(3, "message.completed", { message: apiMessage(first) }),
+      frame(4, "message.completed", { message: apiMessage(second) }),
       frame(5, "run.completed", { output: "It is open.", usage: null }),
     );
     act(() => app.setThread(settledThread([input, first, second])));
@@ -226,7 +227,7 @@ describe("useThreadSync", () => {
     const reply = assistantMessage("msg_1", [{ type: "text", text: "Opening order 123." }]);
     lagging.push(
       frame(1, "run.started"),
-      frame(2, "message.completed", { message: reply }),
+      frame(2, "message.completed", { message: apiMessage(reply) }),
       frame(3, "run.completed", { output: "Opening order 123.", usage: null }),
     );
     await act(async () => {
@@ -275,7 +276,7 @@ describe("useThreadSync", () => {
 
     const reply = assistantMessage("msg_1", [{ type: "text", text: "Opening order 123." }]);
     app.push(
-      frame(3, "message.completed", { message: reply }),
+      frame(3, "message.completed", { message: apiMessage(reply) }),
       frame(4, "run.completed", { output: "Opening order 123.", usage: null }),
     );
     act(() => app.setThread(settledThread([userMessage("Open my order"), reply])));
@@ -315,7 +316,7 @@ describe("useThreadSync", () => {
     const stopped = { id: RUN, status: "cancelled", error: null, cappedReason: null } as const;
     act(() => {
       app.setThread(
-        settledThread([userMessage("Write a report")], { ...stopped, finished_at: null }),
+        settledThread([userMessage("Write a report")], { ...stopped, finishedAt: null }),
       );
     });
     await waitFor(() =>
@@ -340,7 +341,7 @@ describe("useThreadSync", () => {
             userMessage("Write a report"),
             assistantMessage("msg_1", [{ type: "text", text: "Here is" }], "incomplete"),
           ],
-          { ...stopped, finished_at: null },
+          { ...stopped, finishedAt: null },
         ),
       );
     });
@@ -370,7 +371,7 @@ describe("useThreadSync", () => {
             status: "completed",
             error: null,
             cappedReason: null,
-            finished_at: null,
+            finishedAt: null,
           },
         ),
       );
@@ -434,7 +435,7 @@ describe("syncThread", () => {
         type: "text",
         content: part.type === "text" ? part.text : "",
       })),
-      metadata: { hercules: { runId: message.run_id, status: message.status } },
+      metadata: { hercules: { runId: message.runId, status: message.status } },
     });
     // The message that started the run carries the run's id, and is Convex's copy.
     const checkpoint = assistantMessage("msg_1", [{ type: "text", text: "Hel" }], "streaming");
@@ -497,7 +498,7 @@ describe("syncThread", () => {
         userMessage("Hi"),
         assistantMessage("msg_1", [{ type: "text", text: "Hello" }], "incomplete"),
       ],
-      { id: RUN, status: "cancelled", error: null, cappedReason: null, finished_at: null },
+      { id: RUN, status: "cancelled", error: null, cappedReason: null, finishedAt: null },
     );
     const { chat, setMessages } = chatWith([userPart, streamed("Hello")]);
     // Only to mark it: the text is the same.
@@ -516,7 +517,7 @@ describe("syncThread", () => {
         userMessage("Hi"),
         assistantMessage("msg_1", [{ type: "text", text: "Hello" }], "incomplete"),
       ],
-      { id: RUN, status: "failed", error: null, cappedReason: null, finished_at: null },
+      { id: RUN, status: "failed", error: null, cappedReason: null, finishedAt: null },
     );
     const finishedHere = chatWith([userPart, streamed("Hello there, how", "completed")]);
     expect(syncThread(finishedHere.chat, stored)).toBe(true);

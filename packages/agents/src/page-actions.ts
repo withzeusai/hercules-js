@@ -44,7 +44,7 @@ export interface PendingPageActionCall {
   /** The arguments as JSON text. */
   argumentsJson: string;
   /** When the agent called it. */
-  created_at: string;
+  createdAt: string;
   /** `expired` when it came more than two minutes after the agent called it: it is not run. */
   status: "pending" | "expired";
 }

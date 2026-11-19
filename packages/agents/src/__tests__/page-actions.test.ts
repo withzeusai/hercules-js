@@ -13,7 +13,7 @@ function pending(name: string, args: unknown = {}): PendingPageActionCall {
     runId: "run_1",
     name,
     argumentsJson: JSON.stringify(args),
-    created_at: "2026-11-15T12:00:00.000Z",
+    createdAt: "2026-11-15T12:00:00.000Z",
     status: "pending",
   };
 }

@@ -487,11 +487,11 @@ export async function readMessages(
     if (hideTools) parts = parts.map(hideToolDetails);
     messages.push({
       id: head.messageId,
-      thread_id: head.threadId,
-      run_id: head.runId,
+      threadId: head.threadId,
+      runId: head.runId,
       role: head.role,
       parts,
-      created_at: head.createdAt,
+      createdAt: head.createdAt,
       status:
         head.status === "streaming" && head.runId !== activeRunId ? "incomplete" : head.status,
     });

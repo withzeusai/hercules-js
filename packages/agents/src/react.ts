@@ -196,7 +196,7 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   // Messages Convex now shows are no longer pending.
   useEffect(() => {
     if (thread === null || thread === undefined) return;
-    const shown = new Set(thread.messages.flatMap((m) => (m.role === "user" ? [m.run_id] : [])));
+    const shown = new Set(thread.messages.flatMap((m) => (m.role === "user" ? [m.runId] : [])));
     setPending((inputs) => {
       const next = inputs.filter((input) => input.runId === null || !shown.has(input.runId));
       return next.length === inputs.length ? inputs : next;

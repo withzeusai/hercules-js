@@ -370,11 +370,11 @@ export class RunChunks {
     if (message.closed) return [];
     this.completed.set(id, {
       id,
-      thread_id: this.threadId,
-      run_id: this.runId,
+      threadId: this.threadId,
+      runId: this.runId,
       role: "assistant",
       parts: [...parts],
-      created_at: createdAt,
+      createdAt: createdAt,
       status: "completed",
     });
     this.adopt(message);
@@ -488,12 +488,12 @@ export class RunChunks {
     if (this.finished || thread === null || thread === undefined) return [];
     const chunks: StreamChunk[] = [];
     for (const message of thread.messages) {
-      if (message.run_id !== this.runId || message.role !== "assistant") continue;
+      if (message.runId !== this.runId || message.role !== "assistant") continue;
       if (message.status === "streaming") {
         // Convex holds only the text of a message still being written.
         chunks.push(...this.write(this.message(message.id), textOf(message.parts)));
       } else {
-        chunks.push(...this.complete(message.id, message.parts, message.created_at, thread));
+        chunks.push(...this.complete(message.id, message.parts, message.createdAt, thread));
       }
     }
     const latest = thread.latestRun;
@@ -518,7 +518,7 @@ export class RunChunks {
       thread.activeRun?.id !== this.runId &&
       thread.messages.some(
         (message) =>
-          message.run_id === this.runId &&
+          message.runId === this.runId &&
           message.role === "assistant" &&
           message.status !== "streaming",
       )
@@ -650,13 +650,13 @@ export function threadToUIMessages(thread: AgentThread | null | undefined): UIMe
     const parts = uiParts(message);
     // A reply that has not written anything yet is not shown.
     if (parts.length === 0 && message.role === "assistant") continue;
-    const createdAt = new Date(message.created_at);
+    const createdAt = new Date(message.createdAt);
     messages.push({
       id: message.id,
       role: message.role,
       parts,
       ...(!Number.isNaN(createdAt.getTime()) && { createdAt }),
-      metadata: { hercules: { runId: message.run_id, status: message.status } },
+      metadata: { hercules: { runId: message.runId, status: message.status } },
     });
   }
   return messages;
@@ -766,7 +766,7 @@ export function keepCutOffReplies(
   for (const [runId, message] of lastOfRun) {
     if (message.role !== "assistant" || runId === thread.activeRun?.id) continue;
     if (!CUT_OFF_STATUSES.has(message.metadata?.["hercules"]?.status)) continue;
-    const stored = thread.messages.filter((entry) => entry.run_id === runId);
+    const stored = thread.messages.filter((entry) => entry.runId === runId);
     const last = stored[stored.length - 1];
     // A run older than the thread's window: its messages are not Convex's to replace.
     if (last === undefined) continue;

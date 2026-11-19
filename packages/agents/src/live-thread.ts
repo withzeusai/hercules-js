@@ -169,7 +169,16 @@ export class LiveRun {
       if (message.completed !== null) {
         // The user's own message is already shown, from Convex or as pending.
         if (message.completed.role === "assistant") {
-          views.push({ ...message.completed, status: "completed" });
+          // The API's message, under the names the thread gives its messages.
+          views.push({
+            id: message.completed.id,
+            threadId: message.completed.thread_id,
+            runId: message.completed.run_id,
+            role: message.completed.role,
+            parts: message.completed.parts,
+            createdAt: message.completed.created_at,
+            status: "completed",
+          });
         }
         continue;
       }
@@ -187,11 +196,11 @@ export class LiveRun {
       if (parts.length === 0) continue;
       views.push({
         id: message.id,
-        thread_id: this.threadId,
-        run_id: this.runId,
+        threadId: this.threadId,
+        runId: this.runId,
         role: "assistant",
         parts,
-        created_at: message.createdAt,
+        createdAt: message.createdAt,
         status: "streaming",
       });
     }
@@ -229,16 +238,16 @@ export function mergeThread(
   const stored: ViewMessage[] = thread?.messages.map((message) => ({ ...message })) ?? [];
   const overlay = live !== null && thread?.activeRun?.id === live.runId ? live : null;
 
-  const sentRuns = new Set(stored.flatMap((m) => (m.role === "user" ? [m.run_id] : [])));
+  const sentRuns = new Set(stored.flatMap((m) => (m.role === "user" ? [m.runId] : [])));
   const waiting: ViewMessage[] = pending
     .filter((input) => input.runId === null || !sentRuns.has(input.runId))
     .map((input) => ({
       id: input.key,
-      thread_id: thread?.id ?? "",
-      run_id: input.runId ?? "",
+      threadId: thread?.id ?? "",
+      runId: input.runId ?? "",
       role: "user",
       parts: [{ type: "text", text: input.text }],
-      created_at: input.createdAt,
+      createdAt: input.createdAt,
       status: "pending",
     }));
 

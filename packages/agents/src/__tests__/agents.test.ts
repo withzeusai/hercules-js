@@ -252,7 +252,7 @@ describe("send", () => {
     expect(thread.messages).toEqual([
       expect.objectContaining({
         role: "user",
-        run_id: runId,
+        runId: runId,
         parts: [{ type: "text", text: "Where is my order?" }],
         status: "completed",
       }),
@@ -472,7 +472,7 @@ describe("starting a run", () => {
       status: "failed",
       error: { code: "out_of_credits", message: "No credits are left." },
       cappedReason: null,
-      finished_at: new Date(h.now).toISOString(),
+      finishedAt: new Date(h.now).toISOString(),
     });
     await h.runDue();
     expect(finished).toEqual([expect.objectContaining({ runId, status: "failed" })]);
@@ -1891,7 +1891,7 @@ describe("limits and refusals at Hercules", () => {
       status: "failed",
       error: { code, message: detail, retryAfterSeconds: wait },
       cappedReason: null,
-      finished_at: new Date(sentAt).toISOString(),
+      finishedAt: new Date(sentAt).toISOString(),
     });
     expect(finished).toEqual([
       expect.objectContaining({ runId, error: { code, message: detail, retryAfterSeconds: wait } }),
@@ -1963,7 +1963,7 @@ describe("limits and refusals at Hercules", () => {
       code: "thread_busy",
       message: "A run is still going.",
     });
-    expect(Date.parse(thread.latestRun?.finished_at ?? "") - sentAt).toBeLessThan(66_000);
+    expect(Date.parse(thread.latestRun?.finishedAt ?? "") - sentAt).toBeLessThan(66_000);
   });
 
   it("settles a run at once when Hercules answers that it is already over", async () => {
@@ -2739,7 +2739,7 @@ describe("tool details", () => {
         summary: "Searched the web for refund policy",
         resultJson: null,
         argumentsJson: null,
-        created_at: "2026-11-15T12:00:00.000Z",
+        createdAt: "2026-11-15T12:00:00.000Z",
       },
       {
         toolCallId: "call_order",
@@ -2750,7 +2750,7 @@ describe("tool details", () => {
         summary: "Looked up order 123",
         resultJson: '{"id":"123","email":"alice@example.com"}',
         argumentsJson: null,
-        created_at: "2026-11-15T12:00:00.000Z",
+        createdAt: "2026-11-15T12:00:00.000Z",
       },
     ]);
     // Another agent's instance does not read this agent's threads.
@@ -3576,7 +3576,7 @@ describe("a start Hercules refuses", () => {
         message: "The assistant is not available right now.",
       },
       cappedReason: null,
-      finished_at: expect.any(String),
+      finishedAt: expect.any(String),
     });
   });
 
@@ -5029,5 +5029,250 @@ describe("the documented defaults", () => {
     expect((await read(exposed, threadId)).messages[1]?.parts).toEqual([
       { ...part, name: "web_search", summary: "Searched the web" },
     ]);
+  });
+});
+
+// The component's tables did not change when the thread an app reads took
+// camelCase names: the names were the reader's, never the rows'. So a
+// deployment that wrote these rows on 0.3.0 reads them after an upgrade with
+// no migration. The rows below are written out by hand, field for field as
+// 0.3.0's schema has them, and not through the component's own writers.
+describe("rows a deployment stored on 0.3.0", () => {
+  const THREAD_ID = "33333333-3333-4333-8333-333333333333";
+  const RUN_ID = "44444444-4444-4444-8444-444444444444";
+  const AT = "2026-11-15T12:00:01.000Z";
+
+  function runRow(overrides: Record<string, unknown> = {}) {
+    return {
+      runId: RUN_ID,
+      threadId: THREAD_ID,
+      agentId: AGENT_ID,
+      owner: `user:${ALICE}`,
+      endUser: { tokenIdentifier: ALICE },
+      status: "completed",
+      exposeToolDetails: false,
+      output: "Your order shipped.",
+      error: null,
+      cappedReason: null,
+      usage: { credits: 1.5 },
+      progress: null,
+      liveUrl: null,
+      liveToken: null,
+      accepted: true,
+      cancelRequested: false,
+      nextStartAt: null,
+      missingSince: null,
+      quietChecks: 0,
+      lastSeq: 7,
+      lastEventAt: h.now,
+      finishedAt: h.now,
+      onRunFinished: null,
+      ...overrides,
+    };
+  }
+
+  function messageRow(
+    messageId: string,
+    role: "user" | "assistant",
+    parts: unknown[],
+    seq: number,
+  ) {
+    return {
+      messageId,
+      threadId: THREAD_ID,
+      runId: RUN_ID,
+      role,
+      status: "completed",
+      parts,
+      segment: 0,
+      continuesText: false,
+      createdAt: AT,
+      runOrder: h.now,
+      firstSeq: seq,
+    };
+  }
+
+  function toolCallRow(overrides: Record<string, unknown>) {
+    return {
+      threadId: THREAD_ID,
+      runId: RUN_ID,
+      status: "succeeded",
+      summary: null,
+      resultJson: null,
+      argumentsJson: null,
+      claimedAt: null,
+      expired: false,
+      createdAt: h.now,
+      ...overrides,
+    };
+  }
+
+  const lookup = {
+    type: "tool_call",
+    id: "call_lookup",
+    name: "lookup_order",
+    kind: "app",
+    status: "succeeded",
+    summary: "Looked up order 123",
+  };
+
+  async function store(run: Record<string, unknown> = {}) {
+    const finished = run["status"] === undefined;
+    await h.db.insert("threads", {
+      threadId: THREAD_ID,
+      agentId: AGENT_ID,
+      owner: `user:${ALICE}`,
+      activeRunId: finished ? null : RUN_ID,
+      updatedAt: h.now,
+    });
+    await h.db.insert("runs", runRow(run));
+    await h.db.insert(
+      "messages",
+      messageRow(`${RUN_ID}:input`, "user", [{ type: "text", text: "Where is my order?" }], 0),
+    );
+    await h.db.insert(
+      "messages",
+      messageRow("msg_1", "assistant", [lookup, { type: "text", text: "It shipped." }], 4),
+    );
+    await h.db.insert(
+      "tool_calls",
+      toolCallRow({
+        toolCallId: "call_lookup",
+        name: "lookup_order",
+        kind: "app",
+        summary: "Looked up order 123",
+        // The app's own data, as the tool returned it: never renamed.
+        resultJson: JSON.stringify({ order_id: "123", shipped_at: AT }),
+      }),
+    );
+    await h.db.insert(
+      "tool_calls",
+      toolCallRow({
+        toolCallId: "call_open",
+        name: "open_order",
+        kind: "page",
+        status: "sent",
+        argumentsJson: JSON.stringify({ order_id: "123" }),
+      }),
+    );
+  }
+
+  it("are read as they are, under the thread's camelCase names", async () => {
+    await store();
+    const at = new Date(h.now).toISOString();
+    const messages = [
+      {
+        id: `${RUN_ID}:input`,
+        threadId: THREAD_ID,
+        runId: RUN_ID,
+        role: "user",
+        parts: [{ type: "text", text: "Where is my order?" }],
+        createdAt: AT,
+        status: "completed",
+      },
+      {
+        id: "msg_1",
+        threadId: THREAD_ID,
+        runId: RUN_ID,
+        role: "assistant",
+        parts: [lookup, { type: "text", text: "It shipped." }],
+        createdAt: AT,
+        status: "completed",
+      },
+    ];
+    const pageActions = [
+      {
+        toolCallId: "call_open",
+        runId: RUN_ID,
+        name: "open_order",
+        argumentsJson: '{"order_id":"123"}',
+        createdAt: at,
+        status: "pending",
+      },
+    ];
+    const thread = {
+      id: THREAD_ID,
+      agentId: AGENT_ID,
+      messages,
+      hasMore: false,
+      activeRun: null,
+      latestRun: {
+        id: RUN_ID,
+        status: "completed",
+        error: null,
+        cappedReason: null,
+        finishedAt: at,
+      },
+      pageActions,
+    };
+    const support = agents();
+    expect(await support.readThread(h.appCtx(ALICE), { threadId: THREAD_ID })).toEqual(thread);
+    expect(await support.readThreadDetails(h.appCtx(), { threadId: THREAD_ID })).toEqual({
+      ...thread,
+      toolCalls: [
+        {
+          toolCallId: "call_lookup",
+          runId: RUN_ID,
+          name: "lookup_order",
+          kind: "app",
+          status: "succeeded",
+          summary: "Looked up order 123",
+          resultJson: `{"order_id":"123","shipped_at":"${AT}"}`,
+          argumentsJson: null,
+          createdAt: at,
+        },
+        {
+          toolCallId: "call_open",
+          runId: RUN_ID,
+          name: "open_order",
+          kind: "page",
+          status: "sent",
+          summary: null,
+          resultJson: null,
+          argumentsJson: '{"order_id":"123"}',
+          createdAt: at,
+        },
+      ],
+      toolCallsTruncated: false,
+    });
+    // The thread is still the user's to use: a claim and a new message work.
+    expect(
+      await support.claimPageAction(h.appCtx(ALICE), {
+        threadId: THREAD_ID,
+        runId: RUN_ID,
+        toolCallId: "call_open",
+      }),
+    ).toBe(true);
+    await support.send(h.appCtx(ALICE), { threadId: THREAD_ID, text: "Thanks" });
+  });
+
+  it("are read with a run that was still going", async () => {
+    await store({
+      status: "running",
+      output: null,
+      usage: null,
+      finishedAt: null,
+      liveUrl: `${API_URL}/v1/agents/runs/${RUN_ID}/events`,
+      liveToken: "run-token",
+      progress: "Looking up the order",
+    });
+    const thread = await read(agents(), THREAD_ID);
+    const run = h.db.all("runs")[0]!;
+    expect(thread.activeRun).toEqual({
+      id: RUN_ID,
+      status: "running",
+      progress: "Looking up the order",
+      live: { url: `${API_URL}/v1/agents/runs/${RUN_ID}/events`, token: "run-token" },
+      lastSeq: 7,
+      createdAt: new Date(run["_creationTime"] as number).toISOString(),
+      stopping: false,
+    });
+    expect(thread.latestRun).toEqual({
+      id: RUN_ID,
+      status: "running",
+      error: null,
+      cappedReason: null,
+      finishedAt: null,
+    });
   });
 });
