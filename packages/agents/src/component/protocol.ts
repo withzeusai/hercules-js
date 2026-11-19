@@ -221,6 +221,35 @@ export function isSafeApiUrl(url: string): boolean {
   return parsed.protocol === "http:" && local;
 }
 
+/**
+ * The header that names the end user a request is made for, on every
+ * request about a user's thread or run: `Hercules-End-User: <tokenIdentifier>`,
+ * the same `<issuer>|<subject>` a run is started with as
+ * `end_user.token_identifier`. Left out for the app's own threads.
+ */
+export const END_USER_HEADER = "hercules-end-user";
+
+/** What a header can carry as it is: visible ASCII, with spaces only inside. */
+const HEADER_SAFE = /^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/;
+const ENCODED_PREFIX = "UTF-8''";
+/** Half of a surrogate pair with no other half: it has no UTF-8 of its own. */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+/**
+ * A user's `tokenIdentifier` as the `Hercules-End-User` header carries it.
+ * As it is when it is visible ASCII, which an identifier made of an issuer's
+ * URL and a subject is as a rule. One that a header cannot carry (a subject
+ * with other characters) is sent as `UTF-8''` followed by its percent-encoded
+ * UTF-8, the form RFC 8187 gives such values: a request must never fail to
+ * be sent over who it is for.
+ */
+export function endUserHeaderValue(tokenIdentifier: string): string {
+  if (HEADER_SAFE.test(tokenIdentifier) && !tokenIdentifier.startsWith(ENCODED_PREFIX)) {
+    return tokenIdentifier;
+  }
+  // A lone surrogate is sent as the replacement character, as UTF-8 encoders do.
+  return `${ENCODED_PREFIX}${encodeURIComponent(tokenIdentifier.replace(LONE_SURROGATE, "\ufffd"))}`;
+}
 /** Every run ends with exactly one of these. */
 export const FINAL_EVENT_TYPES = [
   "run.completed",

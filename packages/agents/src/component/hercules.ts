@@ -6,6 +6,7 @@
 import { v, type Infer } from "convex/values";
 import { CLIENT_HEADER, CLIENT_ID } from "./protocol.js";
 import { api, internal } from "./_generated/api.js";
+import { END_USER_HEADER, endUserHeaderValue } from "./protocol.js";
 import {
   internalAction,
   internalMutation,
@@ -23,7 +24,14 @@ import {
   type WireEvent,
   type WireRun,
 } from "./protocol.js";
-import { STUCK_AFTER_MS, finishRun, jittered, runById, type RunOutcome } from "./store.js";
+import {
+  STUCK_AFTER_MS,
+  endUserIdOf,
+  finishRun,
+  jittered,
+  runById,
+  type RunOutcome,
+} from "./store.js";
 import {
   vApi,
   vCappedReason,
@@ -126,8 +134,16 @@ function isRetryable(status: number, code: string | null): boolean {
   return status === 408 || status >= 500;
 }
 
+/**
+ * One request to Hercules. `endUser` is the `tokenIdentifier` of the user
+ * whose thread or run the request is about, or null for the app's own: every
+ * caller says which, from what the component stored when the thread was
+ * opened, never from what a page sent. It goes out as `Hercules-End-User`,
+ * so Hercules answers for a user's thread only when asked for that user.
+ */
 export async function callHercules(
   config: ApiConfig,
+  endUser: string | null,
   method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
@@ -143,6 +159,7 @@ export async function callHercules(
         "hercules-version": HERCULES_API_VERSION,
         [CLIENT_HEADER]: CLIENT_ID,
         accept: "application/json",
+        ...(endUser !== null && { [END_USER_HEADER]: endUserHeaderValue(endUser) }),
         ...(body !== undefined && { "content-type": "application/json" }),
       },
       ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -363,6 +380,11 @@ const vLoadedRun = v.object({
   createdAt: v.number(),
 });
 type LoadedRun = Infer<typeof vLoadedRun>;
+
+/** The user a run is for, as the run's row has it: who every request about the run names. */
+function endUserOf(run: LoadedRun): string | null {
+  return run.endUser?.tokenIdentifier ?? null;
+}
 
 export const loadRun = internalQuery({
   args: { runId: v.string() },
@@ -595,6 +617,7 @@ async function pullEvents(
   for (let page = 0; page < MAX_EVENT_PAGES; page++) {
     const response = await callHercules(
       config,
+      endUserOf(run),
       "GET",
       `/v1/agents/runs/${encodeURIComponent(run.runId)}/events?after=${after}&limit=${EVENT_PAGE_SIZE}`,
     );
@@ -653,6 +676,7 @@ async function cancelAtHercules(
 ): Promise<boolean> {
   const response = await callHercules(
     config,
+    endUserOf(run),
     "POST",
     `/v1/agents/runs/${encodeURIComponent(run.runId)}/cancel`,
   );
@@ -695,6 +719,7 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
   }
   const response = await callHercules(
     config,
+    endUserOf(run),
     "POST",
     `/v1/agents/${encodeURIComponent(run.agentId)}/runs`,
     {
@@ -870,9 +895,14 @@ export const cancelRun = internalAction({
     unconfirmed: v.optional(v.boolean()),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
+    // Read first: the request says whose run it is. A run that is gone was
+    // purged with its thread, and deleting the thread at Hercules stops it.
+    const stored = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
+    if (stored === null) return null;
     const response = await callHercules(
       args.api,
+      endUserOf(stored),
       "POST",
       `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
     );
@@ -973,12 +1003,24 @@ async function noteNotDeleted(
  * there.
  */
 export const deleteThread = internalAction({
-  args: { threadId: v.string(), api: vApi, ifRun: v.optional(v.string()) },
+  args: {
+    threadId: v.string(),
+    api: vApi,
+    ifRun: v.optional(v.string()),
+    /**
+     * The `tokenIdentifier` of the user the thread was, from its
+     * `deleted_threads` row. Left out for the app's own threads, and for a
+     * thread deleted before its owner was kept there.
+     */
+    endUser: v.optional(v.string()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const endUser = args.endUser ?? null;
     if (args.ifRun !== undefined) {
       const asked = await callHercules(
         args.api,
+        endUser,
         "GET",
         `/v1/agents/runs/${encodeURIComponent(args.ifRun)}`,
       );
@@ -1004,6 +1046,7 @@ export const deleteThread = internalAction({
     }
     const response = await callHercules(
       args.api,
+      endUser,
       "DELETE",
       `/v1/agents/threads/${encodeURIComponent(args.threadId)}`,
     );
@@ -1108,9 +1151,11 @@ export const deleteTick = internalMutation({
           Math.min(DELETE_FIRST_RETRY_MS * 2 ** Math.min(row.attempts, 10), MAX_RETRY_MS),
         );
         await ctx.db.patch(row._id, { attempts: row.attempts + 1, nextAttemptAt: now + wait });
+        const endUser = endUserIdOf(row.owner);
         await ctx.scheduler.runAfter(0, internal.hercules.deleteThread, {
           ...args,
           ...(row.unconfirmedRunId !== undefined && { ifRun: row.unconfirmedRunId }),
+          ...(endUser !== null && { endUser }),
         });
         next = wait;
       } else {
@@ -1214,6 +1259,7 @@ export const checkRun = internalAction({
   handler: async (ctx, args): Promise<null> => {
     const run = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
     if (run === null || isFinalStatus(run.status)) return null;
+    const endUser = endUserOf(run);
     const now = Date.now();
     // Counted from when the run was last heard of, not from when it was sent:
     // see `tickRun`. A run that was asked to stop is held to its age.
@@ -1229,6 +1275,7 @@ export const checkRun = internalAction({
       if (stillGoing) {
         await callHercules(
           args.api,
+          endUser,
           "POST",
           `/v1/agents/runs/${encodeURIComponent(args.runId)}/cancel`,
         );
@@ -1278,6 +1325,7 @@ export const checkRun = internalAction({
     // way round, a reply written between the two reads would be missed.
     const response = await callHercules(
       args.api,
+      endUserOf(run),
       "GET",
       `/v1/agents/runs/${encodeURIComponent(run.runId)}`,
     );

@@ -530,6 +530,7 @@ export const remove = mutation({
       nextAttemptAt: now,
       purgeProgressAt: now,
       ...(unconfirmedRunId !== undefined && { unconfirmedRunId }),
+      owner: thread.owner,
     });
     await ctx.scheduler.runAfter(0, internal.threads.purge, { threadId: thread.threadId });
     await ctx.scheduler.runAfter(0, internal.hercules.deleteTick, {

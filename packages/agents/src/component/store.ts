@@ -38,8 +38,20 @@ export function jittered(ms: number): number {
 
 export const APP_OWNER = "app";
 
+const USER_OWNER_PREFIX = "user:";
+
 export function ownerOf(endUser: EndUser | null): string {
-  return endUser === null ? APP_OWNER : `user:${endUser.tokenIdentifier}`;
+  return endUser === null ? APP_OWNER : `${USER_OWNER_PREFIX}${endUser.tokenIdentifier}`;
+}
+
+/**
+ * The end user behind a stored owner: their `tokenIdentifier`, or null for
+ * the app's own threads and for an owner that was not stored.
+ */
+export function endUserIdOf(owner: string | undefined): string | null {
+  return owner !== undefined && owner.startsWith(USER_OWNER_PREFIX)
+    ? owner.slice(USER_OWNER_PREFIX.length)
+    : null;
 }
 
 // Exactly what Hercules stores an id under. It takes a ULID in uppercase

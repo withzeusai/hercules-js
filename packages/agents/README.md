@@ -102,6 +102,13 @@ export const thread = query({
    reply from Hercules with the run's read-only token.
 4. When a run ends, `onRunFinished` is called after the last write.
 
+Every request the component makes to Hercules about a user's thread or run
+names that user: starting the run, reading it and its events, stopping it,
+and deleting the thread. The name is the user's `tokenIdentifier`, as the
+component stored it when the thread was opened from `ctx.auth`, never
+anything a page sent, and it travels in a `Hercules-End-User` header.
+Requests about the app's own threads, those `run` opens, name no one.
+
 If nothing has been delivered for a run in three minutes, the component asks
 Hercules for the run and then its events itself, so a delivery that never
 arrives only delays a reply. While Hercules says the run is still going it

@@ -70,6 +70,14 @@ export default defineSchema({
      * was added.
      */
     unconfirmedRunId: v.optional(v.string()),
+    /**
+     * Whose the thread was, as its `threads` row had it: `user:<tokenIdentifier>`
+     * or `app`. Hercules is told the end user with every request about a
+     * user's thread, and the thread's own row is gone by the time it is asked
+     * to delete it. Left out on rows written before the field was added:
+     * Hercules is then asked without one.
+     */
+    owner: v.optional(v.string()),
   }).index("by_thread_id", ["threadId"]),
 
   /**

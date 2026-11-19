@@ -46,9 +46,32 @@ interface Recorded {
   body: any;
 }
 
+/**
+ * Who a request to Hercules must name as its end user, from what the
+ * component stored: the run's row, or the deleted thread's. Undefined when
+ * neither is there to say (a run purged with its thread).
+ */
+function storedEndUser(request: Recorded): string | null | undefined {
+  const ofOwner = (owner: unknown) =>
+    typeof owner === "string" && owner.startsWith("user:") ? owner.slice(5) : null;
+  const runId =
+    /^\/v1\/agents\/runs\/([^/?]+)/.exec(request.path)?.[1] ??
+    (request.body?.run_id as string | undefined);
+  if (runId !== undefined) {
+    const run = h.db.all("runs").find((row) => row["runId"] === runId);
+    return run === undefined ? undefined : ofOwner(run["owner"]);
+  }
+  const threadId = /^\/v1\/agents\/threads\/([^/?]+)/.exec(request.path)?.[1];
+  const deleted = h.db.all("deleted_threads").find((row) => row["threadId"] === threadId);
+  // A row written before the owner was kept says nothing.
+  return deleted === undefined || !("owner" in deleted) ? undefined : ofOwner(deleted["owner"]);
+}
+
 /** A stand-in Hercules API: records every request and answers from `routes`. */
 function createFakeHercules() {
   const requests: Recorded[] = [];
+  /** Requests that did not name the end user the component has stored for them. */
+  const misnamed: string[] = [];
   let answer: (request: Recorded) => Response | undefined = () => undefined;
 
   function defaultAnswer(request: Recorded): Response {
@@ -83,11 +106,24 @@ function createFakeHercules() {
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     };
     requests.push(request);
+    // Held to in every test of this file: whatever path led to a request, it
+    // names the user whose thread or run it is about, and no one otherwise.
+    const expected = storedEndUser(request);
+    const header = request.headers.get("hercules-end-user");
+    // As Hercules reads it: as it is, or percent-encoded after `UTF-8''`.
+    const sent =
+      header !== null && header.startsWith("UTF-8''")
+        ? decodeURIComponent(header.slice("UTF-8''".length))
+        : header;
+    if (expected !== undefined && sent !== expected) {
+      misnamed.push(`${request.method} ${request.path}: sent ${sent}, stored ${expected}`);
+    }
     return answer(request) ?? defaultAnswer(request);
   }) as typeof fetch;
 
   return {
     requests,
+    misnamed,
     fetch: fetchFn,
     answerWith(next: (request: Recorded) => Response | undefined) {
       answer = next;
@@ -192,6 +228,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  expect(api.misnamed).toEqual([]);
   noJitter.mockRestore();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -3603,6 +3640,161 @@ describe("deleting a thread at Hercules", () => {
     expect(api.requests.filter(isDelete)).toHaveLength(1);
     expect(deletedRow()?.["remoteGaveUpAt"]).not.toBeNull();
     expect(deleteJobs()).toEqual([]);
+  });
+});
+
+describe("naming the end user to Hercules", () => {
+  const endUsers = (match: (request: Recorded) => boolean) =>
+    api.requests.filter(match).map((request) => request.headers.get("hercules-end-user"));
+  const isRunRead = (request: Recorded) =>
+    request.method === "GET" && /^\/v1\/agents\/runs\/[^/]+$/.test(request.path);
+  const isEventsRead = (request: Recorded) =>
+    request.method === "GET" && /^\/v1\/agents\/runs\/[^/]+\/events/.test(request.path);
+  const isCancel = (request: Recorded) => request.path.endsWith("/cancel");
+  const isDelete = (request: Recorded) => request.method === "DELETE";
+  const KINDS = [isStart, isRunRead, isEventsRead, isCancel, isDelete];
+
+  it("names the thread's user on every request about their thread or run", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // The stuck-run check reads the run and its events.
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    for (const kind of KINDS) {
+      const sent = endUsers(kind);
+      expect(sent.length).toBeGreaterThan(0);
+      expect([...new Set(sent)]).toEqual([ALICE]);
+    }
+    // The start says it in its body too, as before.
+    expect(api.requests.find(isStart)?.body.end_user).toEqual({ token_identifier: ALICE });
+  });
+
+  it("names no one on requests about the app's own thread", async () => {
+    const support = agents();
+    const { threadId } = await support.run(h.appCtx(), { text: "Nightly summary" });
+    await h.runDue();
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    // The app's own threads answer to the owner `app`.
+    const own = { threadId, agentId: AGENT_ID, owner: "app", api: { url: API_URL, key: "k" } };
+    expect(await h.call(h.component.threads.cancel, own)).toBe(true);
+    await h.runDue();
+    expect(await h.call(h.component.threads.remove, own)).toBe(true);
+    await h.runDue();
+    for (const kind of KINDS) {
+      const sent = endUsers(kind);
+      expect(sent.length).toBeGreaterThan(0);
+      expect([...new Set(sent)]).toEqual([null]);
+    }
+    expect(api.requests.find(isStart)?.body).not.toHaveProperty("end_user");
+  });
+
+  it("names the user when it stops a run from the check, and one it gives up on", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Every cancel call fails, so the check is what asks again.
+    let down = true;
+    api.answerWith((request) =>
+      isCancel(request)
+        ? down
+          ? new Response("down", { status: 503 })
+          : Response.json({ id: runId, thread_id: threadId, status: "running" })
+        : undefined,
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runUntil(h.now + 10 * 60 * 1000);
+    down = false;
+    // A day after it was sent, a run that was asked to stop is given up on,
+    // and Hercules is asked once more to stop it.
+    await h.runUntil(h.now + 25 * 60 * 60 * 1000, 4000);
+    errors.mockRestore();
+    expect((await read(support, threadId)).latestRun?.status).toBe("cancelled");
+    const sent = endUsers(isCancel);
+    expect(sent.length).toBeGreaterThan(8);
+    expect([...new Set(sent)]).toEqual([ALICE]);
+  });
+
+  it("names the user when it asks for a run before deleting a thread whose start was not answered", async () => {
+    const support = agents();
+    api.answerWith((request) => {
+      if (isStart(request)) return new Response("down", { status: 503 });
+      const runRead = /^\/v1\/agents\/runs\/([^/]+)$/.exec(request.path);
+      return request.method === "GET" && runRead !== null
+        ? Response.json({ id: runRead[1], thread_id: threadId, status: "queued" })
+        : undefined;
+    });
+    const { threadId } = await support.send(h.appCtx(BOB), { text: "Hi" });
+    await h.runDue();
+    await support.deleteThread(h.appCtx(BOB), { threadId });
+    // The thread's own row is gone: who it was is kept with what is left to do.
+    expect(h.db.all("threads")).toEqual([]);
+    expect(h.db.all("deleted_threads")[0]).toMatchObject({ owner: `user:${BOB}` });
+    await h.runUntil(h.now + 60_000);
+    expect(endUsers(isRunRead)).toEqual([BOB]);
+    expect(endUsers(isDelete)).toEqual([BOB]);
+  });
+
+  it("asks without a user for a thread deleted before its owner was kept, and takes a 404 as it always has", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(support, event(runId, threadId, 9, "run.completed", {}));
+    await h.runDue();
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    // As a version before this one wrote the row.
+    const row = h.db.all("deleted_threads")[0]!;
+    delete row["owner"];
+    api.answerWith((request) =>
+      isDelete(request) ? problem(404, "not_found", "No such thread.") : undefined,
+    );
+    await h.runUntil(h.now + 30 * 60 * 1000);
+    expect([...new Set(endUsers(isDelete))]).toEqual([null]);
+    // One 404 is not "gone": it has to be the answer for an hour.
+    expect(h.db.all("deleted_threads")[0]).toMatchObject({
+      remoteDeletedAt: null,
+      remoteMissingSince: expect.any(Number),
+    });
+    await h.runUntil(h.now + 60 * 60 * 1000);
+    expect(h.db.all("deleted_threads")[0]).toMatchObject({ remoteDeletedAt: expect.any(Number) });
+  });
+
+  it("takes a 404 for a user's run as it always has: failed only once it was the answer for an hour", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      request.path.startsWith(`/v1/agents/runs/${runId}`)
+        ? problem(404, "not_found", "No such run.")
+        : undefined,
+    );
+    await h.runUntil(h.now + 30 * 60 * 1000);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await h.runUntil(h.now + 60 * 60 * 1000);
+    expect((await read(support, threadId)).latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "run_failed", message: "Hercules has no record of this run." },
+    });
+    expect([...new Set(endUsers(isRunRead))]).toEqual([ALICE]);
+  });
+
+  it("sends an identifier a header cannot carry in a form it can", async () => {
+    const support = agents();
+    const zoe = "https://auth.app.test|zoë 東京\r\nx: y";
+    const { threadId } = await support.send(h.appCtx(zoe), { text: "Hi" });
+    await h.runDue();
+    expect(h.failedActions).toEqual([]);
+    const start = api.requests.find(isStart)!;
+    // The body carries the identifier as it is. The header carries its UTF-8, percent-encoded.
+    expect(start.body.end_user).toEqual({ token_identifier: zoe });
+    const sent = start.headers.get("hercules-end-user")!;
+    expect(sent).toBe(`UTF-8''${encodeURIComponent(zoe)}`);
+    expect(decodeURIComponent(sent.slice("UTF-8''".length))).toBe(zoe);
+    expect((await read(support, threadId, zoe)).activeRun?.live).not.toBeNull();
   });
 });
 
