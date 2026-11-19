@@ -506,6 +506,18 @@ describe("followRun", () => {
     expect(error).toMatchObject({ status: 401, code: "invalid_run_token" });
   });
 
+  it("gives up at once when Hercules no longer takes this version of the package", async () => {
+    const { requests, fetch: fetchFn } = scripted([
+      () => Response.json({ code: "client_upgrade_required" }, { status: 426 }),
+    ]);
+    const error = await collect(followRun({ url: URL_, token: "t", fetch: fetchFn })).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(RunStreamError);
+    expect(error).toMatchObject({ status: 426, code: "client_upgrade_required" });
+    expect(requests).toHaveLength(1);
+  });
+
   it("stops when aborted", async () => {
     const controller = new AbortController();
     const fetchFn = (async () => {

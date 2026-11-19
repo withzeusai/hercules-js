@@ -128,7 +128,8 @@ says so in the 503 it answers while it cannot confirm the run started. A run
 it never takes is failed after a day.
 
 A run Hercules does not take fails with Hercules's own code, and with the
-message Hercules sent unless the package has its own for the code. Two codes
+message Hercules sent unless the package has its own for the code. A code the
+package does not know fails the run the same way, with that code. Some codes
 are the app's setup, not the conversation, so a new chat will not help:
 
 - `agent_not_found`: Hercules has no agent with the id in `convex/agent.ts`
@@ -139,6 +140,14 @@ are the app's setup, not the conversation, so a new chat will not help:
   error tells the developer to upgrade: in the Convex logs, in `onRunFinished`
   and in `readThreadDetails`. The thread a page reads has the same code with
   a message for its user: "The assistant is not available right now."
+- `client_upgrade_required`: Hercules no longer takes requests from the
+  version of `@usehercules/agents` the app runs. Upgrade the package. The run
+  fails at once and is not sent again, and a run that was going is failed the
+  first time Hercules answers for it with this code. The developer and the
+  page read it as they read `hercules_auth_required`: the error tells the
+  developer to upgrade, and the page's message is "The assistant is not
+  available right now." Hercules does not send this code today. It is
+  reserved, so that a version in use can be retired one day.
 
 A run Hercules refuses over a limit (`end_user_rate_limited`,
 `agent_daily_limit_reached`) fails at once with that code. The thread's
@@ -450,7 +459,11 @@ function errorText(error: unknown): string {
   const code = agentErrorCode(error);
   if (code === "sign_in_required") return "Sign in to chat.";
   // The app's setup: sending again will not help.
-  if (code === "hercules_auth_required" || code === "agent_not_found") {
+  if (
+    code === "hercules_auth_required" ||
+    code === "agent_not_found" ||
+    code === "client_upgrade_required"
+  ) {
     return "The assistant is not available right now.";
   }
   return "Not sent. Try again.";
@@ -543,12 +556,15 @@ call itself, so TanStack never runs one or starts a second run.
   `agent_daily_limit_reached`. For a run that failed over a limit,
   `thread.latestRun.error.retryAfterSeconds` says how long it lasts, counted
   from `thread.latestRun.finished_at`.
-- Three codes are not the user's to fix by starting over. `agent_not_found`
+- Some codes are not the user's to fix by starting over. `agent_not_found`
   is the app's setup: Hercules has no agent with the id in `convex/agent.ts`
   for this app, or the agents API is not turned on for it.
   `hercules_auth_required` is the app's setup too: it has to be upgraded to
-  Hercules Auth 2.0 before any run can start. Its message on `chat.error` is
-  for the user, "The assistant is not available right now."; the Convex logs
+  Hercules Auth 2.0 before any run can start. So is
+  `client_upgrade_required`: the app runs a version of this package that
+  Hercules no longer takes, and the package has to be upgraded. For both, the
+  message on `chat.error` is for the user, "The assistant is not available
+  right now."; the Convex logs
   say what to do. `not_found` from `send` is a thread that is not this
   user's or not this agent's.
 - A run's ending is found by the run, not only by the thread's latest run.
@@ -675,10 +691,11 @@ number of at least one, at most 200, and fewer when they come to more than about
 - An `AgentError` with a `code`. The message was not sent (one of `send`'s
   codes), or the latest run failed (the run's code, such as `out_of_credits`
   or `agent_daily_limit_reached`). For a limit it also has
-  `retryAfterSeconds`. `agent_not_found` and `hercules_auth_required` are
-  the app's setup, not the chat: for the second, the message is "The
-  assistant is not available right now." and the app has to be upgraded to
-  Hercules Auth 2.0.
+  `retryAfterSeconds`. `agent_not_found`, `hercules_auth_required` and
+  `client_upgrade_required` are the app's setup, not the chat. For the last
+  two the message is "The assistant is not available right now.": the app
+  has to be upgraded to Hercules Auth 2.0, or this package to a version
+  Hercules still takes.
 - A `RunStreamError`, only while a run is going. The live view of the reply
   could not be read: Hercules refused the stream, or kept answering 429
   because more than ten streams of the run are open (an eleventh tab). The

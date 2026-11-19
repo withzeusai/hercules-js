@@ -247,6 +247,7 @@ const MAX_LISTED_PAGE_ACTIONS = 20;
  */
 const PAGE_ERROR_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["hercules_auth_required", "The assistant is not available right now."],
+  ["client_upgrade_required", "The assistant is not available right now."],
 ]);
 
 /** A run's error as a page reads it. Any code not named above reads as it is stored. */

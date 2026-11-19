@@ -3161,6 +3161,106 @@ describe("a start Hercules refuses", () => {
     });
   });
 
+  it.each([[426], [400], [503]])(
+    "fails with client_upgrade_required (%i), once, telling the developer to upgrade the package",
+    async (status) => {
+      const support = agents();
+      // Reserved: Hercules no longer takes this version of the package.
+      api.answerWith((request) =>
+        isStart(request)
+          ? problem(status, "client_upgrade_required", "Versions before 0.9.0 are retired.")
+          : undefined,
+      );
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+      // Never sent again: not by the start call, and not by the stuck-run check.
+      await h.runUntil(h.now + 10 * 60_000);
+      const logged = errors.mock.calls.map((call) => String(call[0]));
+      errors.mockRestore();
+      expect(api.requests.filter(isStart)).toHaveLength(1);
+      expect(h.scheduled.map((job) => job.name)).not.toContain("hercules:tickRun");
+
+      // The run's own error, the log, and `onRunFinished` are the developer's.
+      const upgrade = /this version of @usehercules\/agents\. Upgrade the package/;
+      const stored = (await support.readThreadDetails(h.appCtx(), { threadId }))?.latestRun;
+      expect(stored).toMatchObject({ id: runId, status: "failed" });
+      expect(stored?.error).toEqual({
+        code: "client_upgrade_required",
+        message: expect.stringMatching(upgrade),
+      });
+      // With what Hercules said about it.
+      expect(stored?.error?.message).toContain("Versions before 0.9.0 are retired.");
+      expect(logged.filter((line) => upgrade.test(line))).toEqual([
+        expect.stringContaining(`Hercules refused run ${runId}: ${status} client_upgrade_required`),
+      ]);
+      expect(finished).toEqual([
+        expect.objectContaining({ runId, status: "failed", error: stored?.error }),
+      ]);
+
+      // The page's thread has the code, and the words of any failure that is the app's setup.
+      const thread = await read(support, threadId);
+      expect(thread.activeRun).toBeNull();
+      expect(thread.latestRun?.error).toEqual({
+        code: "client_upgrade_required",
+        message: "The assistant is not available right now.",
+      });
+    },
+  );
+
+  it("ends a run going when Hercules answers its read with client_upgrade_required, and does not ask again", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // The run was taken. From here Hercules no longer takes this version.
+    api.answerWith(() => problem(426, "client_upgrade_required", "Upgrade Required"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    const asked = api.requests.length;
+    await h.runUntil(h.now + 2 * 60 * 60 * 1000);
+    errors.mockRestore();
+    expect(api.requests).toHaveLength(asked);
+    expect(h.scheduled.map((job) => job.name)).not.toContain("hercules:tickRun");
+    const stored = (await support.readThreadDetails(h.appCtx(), { threadId }))?.latestRun;
+    expect(stored).toMatchObject({
+      id: runId,
+      status: "failed",
+      error: {
+        code: "client_upgrade_required",
+        message: expect.stringMatching(/Upgrade the package to its latest version/),
+      },
+    });
+    expect((await read(support, threadId)).latestRun?.error?.message).toBe(
+      "The assistant is not available right now.",
+    );
+    expect(finished).toHaveLength(1);
+  });
+
+  it("stops asking Hercules to delete a thread once it answers client_upgrade_required", async () => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(h.db.all("runs")[0]!["runId"] as string, threadId, 9, "run.completed", {}),
+    );
+    await h.runDue();
+    api.answerWith((request) =>
+      request.method === "DELETE"
+        ? problem(426, "client_upgrade_required", "Upgrade Required")
+        : undefined,
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 2 * 60 * 60 * 1000);
+    errors.mockRestore();
+    expect(api.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
+    expect(h.db.all("deleted_threads")[0]).toMatchObject({
+      remoteDeletedAt: null,
+      remoteGaveUpAt: expect.any(Number),
+      purgedAt: expect.any(Number),
+    });
+  });
+
   it.each([
     [409, "a_refusal_from_the_future", "Something this version has no name for.", undefined],
     [429, "a_limit_from_the_future", "A limit this version has no name for.", 90],

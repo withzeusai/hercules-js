@@ -82,6 +82,14 @@ const MISSING_FINAL_AFTER_MS = 60 * 60 * 1000;
 /** How soon the check comes back when a run has more events than one check reads. */
 const MORE_EVENTS_DELAY_MS = 1_000;
 
+/**
+ * The code Hercules answers with once it no longer takes requests from this
+ * version of the package. Reserved: nothing sends it today. It is final for
+ * the request, on whatever status it comes (426 or 400), and is never sent
+ * again: only upgrading the package can change the answer.
+ */
+export const UPGRADE_REQUIRED_CODE = "client_upgrade_required";
+
 type HerculesResponse =
   | { ok: true; status: number; body: unknown }
   | {
@@ -173,7 +181,8 @@ export async function callHercules(
     status: response.status,
     code: code ?? `http_${response.status}`,
     message,
-    retryable: isRetryable(response.status, code),
+    // `client_upgrade_required` is final whatever status carries it: only a newer package can pass.
+    retryable: code !== UPGRADE_REQUIRED_CODE && isRetryable(response.status, code),
     retryAfterMs: retryAfterMs(response.headers.get("retry-after")),
     detailsRunId:
       isRecord(problem["details"]) && typeof problem["details"]["run_id"] === "string"
@@ -274,12 +283,33 @@ const AUTH_REQUIRED_MESSAGE =
   "This app has no Hercules Auth 2.0 tenant, so Hercules cannot deliver a run's events to it or call its tools. Upgrade the app to Hercules Auth 2.0: no run can start until then.";
 
 /**
+ * What the app's developer is told when Hercules answers
+ * `client_upgrade_required`, with what Hercules said when it said more. It is
+ * the run's stored error and is logged. A page reads other words for it: see
+ * `pageError` in `./threads`.
+ */
+function upgradeRequiredMessage(response: Extract<HerculesResponse, { ok: false }>): string {
+  const said = response.message === `Hercules answered ${response.status}.` ? "" : response.message;
+  return `Hercules no longer takes requests from this version of @usehercules/agents. Upgrade the package to its latest version: no run can start until then.${
+    said.length > 0 ? ` Hercules said: ${said}` : ""
+  }`;
+}
+
+function isUpgradeRequired(response: HerculesResponse): boolean {
+  return !response.ok && response.code === UPGRADE_REQUIRED_CODE;
+}
+
+/**
  * How a refused start ends the run: with Hercules's own code, and how long
  * its limit lasts. A code this version does not know ends it the same way,
  * with the message Hercules sent.
  */
 function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome {
   const { status } = response;
+  // The app's setup, like the two below: checked first, as its status is not fixed.
+  if (isUpgradeRequired(response)) {
+    return failed(UPGRADE_REQUIRED_CODE, upgradeRequiredMessage(response));
+  }
   if (status === null || status === 408 || status >= 500) {
     return failed("run_failed", "Hercules could not be reached to start the run.");
   }
@@ -560,7 +590,7 @@ async function pullEvents(
   run: LoadedRun,
   /** Set to true when an event was applied. */
   seen: { applied: boolean } = { applied: false },
-): Promise<"done" | "more" | "failed"> {
+): Promise<"done" | "more" | "failed" | "upgrade"> {
   let after = run.lastSeq;
   for (let page = 0; page < MAX_EVENT_PAGES; page++) {
     const response = await callHercules(
@@ -568,6 +598,8 @@ async function pullEvents(
       "GET",
       `/v1/agents/runs/${encodeURIComponent(run.runId)}/events?after=${after}&limit=${EVENT_PAGE_SIZE}`,
     );
+    // Not to be read by this version at all: the caller ends the run on it.
+    if (isUpgradeRequired(response)) return "upgrade";
     if (!response.ok || !isRecord(response.body)) return "failed";
     const data = Array.isArray(response.body["data"]) ? response.body["data"] : [];
     const events = data
@@ -742,7 +774,11 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
   // The log is the developer's: for a refusal that is the app's setup it says what to do.
   console.error(
     `Hercules refused run ${run.runId}: ${response.status ?? "network"} ${response.code}${
-      response.code === "hercules_auth_required" ? `. ${AUTH_REQUIRED_MESSAGE}` : ""
+      response.code === "hercules_auth_required"
+        ? `. ${AUTH_REQUIRED_MESSAGE}`
+        : isUpgradeRequired(response)
+          ? `. ${upgradeRequiredMessage(response)}`
+          : ""
     }`,
   );
   await ctx.runMutation(internal.hercules.refuseRun, {
@@ -897,6 +933,14 @@ async function noteNotDeleted(
 ): Promise<void> {
   if (response.status === 404) {
     await ctx.runMutation(internal.hercules.noteDelete, { threadId, outcome: "missing" });
+    return;
+  }
+  // Hercules no longer takes this version of the package, on whatever status it says so.
+  if (isUpgradeRequired(response)) {
+    console.error(
+      `Hercules refused to delete thread ${threadId}: ${response.status} ${response.code}`,
+    );
+    await ctx.runMutation(internal.hercules.noteDelete, { threadId, outcome: "refused" });
     return;
   }
   // An answer that asking again cannot change: the request or the key is wrong.
@@ -1192,6 +1236,31 @@ export const checkRun = internalAction({
       return null;
     }
 
+    /**
+     * Hercules no longer takes this version of the package, so nothing this
+     * check asks can settle the run. It is ended here, once, with what the
+     * developer has to do: asking again cannot change the answer.
+     */
+    async function upgradeRequired(refusal?: Extract<HerculesResponse, { ok: false }>) {
+      const message = upgradeRequiredMessage(
+        refusal ?? {
+          ok: false,
+          status: null,
+          code: UPGRADE_REQUIRED_CODE,
+          message: "Hercules answered null.",
+          retryable: false,
+          retryAfterMs: null,
+          detailsRunId: null,
+        },
+      );
+      console.error(`Hercules refused to answer for run ${args.runId}: ${message}`);
+      await ctx.runMutation(internal.hercules.endRun, {
+        runId: args.runId,
+        outcome: failed(UPGRADE_REQUIRED_CODE, message),
+      });
+      return null;
+    }
+
     if (!run.accepted || !run.hasLive) {
       const startPending = run.nextStartAt !== null && now < run.nextStartAt + START_GRACE_MS;
       if (!startPending) {
@@ -1220,6 +1289,7 @@ export const checkRun = internalAction({
       const outcome = current === null ? null : outcomeFromRun(current);
       const seen = { applied: false };
       const pulled = await pullEvents(ctx, args.api, run, seen);
+      if (pulled === "upgrade") return upgradeRequired();
       if (pulled === "more") {
         // More events than one pass reads. Soon, if this is not lost; at the next tick if it is.
         await ctx.scheduler.runAfter(MORE_EVENTS_DELAY_MS, internal.hercules.checkRun, args);
@@ -1261,6 +1331,7 @@ export const checkRun = internalAction({
       }
       return null;
     }
+    if (isUpgradeRequired(response)) return upgradeRequired(response);
     if (response.status === 404) {
       const since = run.missingSince ?? now;
       if (now - since >= MISSING_FINAL_AFTER_MS) {
