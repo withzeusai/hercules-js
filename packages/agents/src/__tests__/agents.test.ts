@@ -3,7 +3,13 @@ import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HerculesAgents, type AgentThread } from "../convex";
 import { retryDelayMs } from "../component/hercules";
-import { EVENTS_PATH, runInputText } from "../component/protocol";
+import {
+  EVENTS_PATH,
+  hasRunEnded,
+  isFinalStatus,
+  readRun,
+  runInputText,
+} from "../component/protocol";
 import {
   SEGMENT_MAX_BYTES,
   joinSegments,
@@ -2236,6 +2242,8 @@ function herculesRun(runId: string, threadId: string) {
   const state = {
     status: "running",
     output: null as string | null,
+    /** When Hercules says the run ended. Null while it is going. */
+    finishedAt: null as string | null,
     events: [] as ReturnType<typeof event>[],
     /** What was read, in order. */
     reads: [] as string[],
@@ -2275,7 +2283,13 @@ function herculesRun(runId: string, threadId: string) {
       });
     }
     state.reads.push("run");
-    return Response.json({ id: runId, status: state.status, output: state.output });
+    return Response.json({
+      id: runId,
+      thread_id: threadId,
+      status: state.status,
+      output: state.output,
+      finished_at: state.finishedAt,
+    });
   });
   return state;
 }
@@ -2389,17 +2403,25 @@ describe("the stuck-run check, against a run that moves on while it is read", ()
     expect((await read(support, threadId)).activeRun?.id).toBe(runId);
   });
 
-  it("asks Hercules to stop a run it gives up on while Hercules still has it going", async () => {
+  it("gives up on a run whose answers from Hercules cannot be read for a day, and asks to stop it", async () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     await h.runDue();
     const sentAt = h.now;
-    herculesRun(runId, threadId);
+    // Hercules answers for the run, with nothing that reads as a run.
+    api.answerWith((request) =>
+      request.method === "GET" && request.path === `/v1/agents/runs/${runId}`
+        ? Response.json({ unexpected: true })
+        : undefined,
+    );
     await h.runUntil(sentAt + 24 * 60 * 60 * 1000 + 31 * 60 * 1000, 2000);
     const thread = await read(support, threadId);
     expect(thread.latestRun).toMatchObject({
       status: "failed",
-      error: { code: "run_failed", message: "The run was still going at Hercules after a day." },
+      error: {
+        code: "run_failed",
+        message: "What Hercules answered about this run could not be read for a day.",
+      },
     });
     // The thread is free here. Left going at Hercules, the run would hold it
     // there, and the next message would be refused as `thread_busy`.
@@ -2427,6 +2449,242 @@ describe("the stuck-run check, against a run that moves on while it is read", ()
     errors.mockRestore();
     expect(cancels).toBe(7);
     expect((await read(support, threadId)).latestRun?.status).toBe("cancelled");
+  });
+});
+
+describe("a run status this version does not know", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  // A run that is paused, waiting for a person: a status the API may add.
+  const WAITING = "requires_action";
+  const requested = (from = 0) =>
+    api.requests.slice(from).map((request) => `${request.method} ${request.path}`);
+
+  it("is final only for the four statuses a run ends with", () => {
+    for (const status of ["completed", "failed", "cancelled", "capped"]) {
+      expect(isFinalStatus(status)).toBe(true);
+    }
+    for (const status of ["queued", "running", WAITING, "interrupted", "", "Completed"]) {
+      expect(isFinalStatus(status)).toBe(false);
+    }
+    // A run is over in a status this version does not know only when Hercules
+    // says when it finished. One it knows as going is going.
+    const run = (status: string, finishedAt: string | null) =>
+      hasRunEnded(readRun({ id: "r", status, finished_at: finishedAt })!);
+    expect(run(WAITING, null)).toBe(false);
+    expect(run("expired", "2026-11-15T12:00:09.000Z")).toBe(true);
+    expect(run("running", "2026-11-15T12:00:09.000Z")).toBe(false);
+    expect(run("queued", "2026-11-15T12:00:09.000Z")).toBe(false);
+    expect(run("completed", null)).toBe(true);
+  });
+
+  it("is a run that is going, when the start is answered with it", async () => {
+    const support = agents();
+    api.answerWith((request) =>
+      isStart(request)
+        ? Response.json(
+            {
+              run: { id: request.body.run_id, thread_id: request.body.thread_id, status: WAITING },
+              live: { url: `${API_URL}/v1/agents/runs/x/events`, token: "run-token" },
+            },
+            { status: 202 },
+          )
+        : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Hercules took the run, and its stream is there to read.
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: true, status: "running" });
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toMatchObject({
+      id: runId,
+      status: "running",
+      live: { token: "run-token" },
+      stopping: false,
+    });
+    expect(thread.latestRun).toMatchObject({ id: runId, status: "running", error: null });
+    expect(finished).toEqual([]);
+    // The thread is busy, as behind any run that is going.
+    const busy = await support
+      .send(h.appCtx(ALICE), { threadId, text: "Again" })
+      .catch((e: unknown) => e);
+    expect(errorCode(busy)).toBe("thread_busy");
+  });
+
+  it.each([["running"], [WAITING]])(
+    "keeps a run open for as long as Hercules says it is %s, and checks it every half hour at most",
+    async (status) => {
+      const support = agents();
+      const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+      await h.runDue();
+      const sentAt = h.now;
+      const run = herculesRun(runId, threadId);
+      run.status = status;
+      await h.runUntil(sentAt + 2 * DAY, 4000);
+      const readsAfterTwoDays = run.reads.length;
+      await h.runUntil(sentAt + 3 * DAY, 4000);
+      // Not settled, not failed, and not asked to stop: Hercules has it going.
+      const thread = await read(support, threadId);
+      expect(thread.activeRun).toMatchObject({ id: runId, status: "running" });
+      expect(thread.latestRun).toMatchObject({ status: "running", error: null });
+      expect(finished).toEqual([]);
+      expect(requested().filter((line) => line.endsWith("/cancel"))).toEqual([]);
+      // A bounded pace: one read of the run and one of its events per half hour.
+      expect(run.reads.length - readsAfterTwoDays).toBe(2 * 48);
+      expect(h.scheduled.map((job) => job.name)).toEqual(["hercules:tickRun"]);
+
+      // When it does end, it is settled as it ended, with its reply.
+      run.complete();
+      await h.runUntil(h.now + 31 * 60 * 1000);
+      const settled = await read(support, threadId);
+      expect(settled.activeRun).toBeNull();
+      expect(settled.latestRun?.status).toBe("completed");
+      expect(settled.messages[1]?.parts).toEqual([{ type: "text", text: "Done." }]);
+      expect(finished).toEqual([expect.objectContaining({ runId, status: "completed" })]);
+    },
+  );
+
+  it("still gives up on a run nothing was heard of for a day, counted from when it last was", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const sentAt = h.now;
+    const run = herculesRun(runId, threadId);
+    run.status = WAITING;
+    await h.runUntil(sentAt + 2 * DAY, 4000);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    // From here Hercules cannot be reached at all.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    api.answerWith(() => new Response("down", { status: 503 }));
+    const silentFrom = h.now;
+    await h.runUntil(silentFrom + 23 * 60 * 60 * 1000, 4000);
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await h.runUntil(silentFrom + DAY + 61 * 60 * 1000, 4000);
+    errors.mockRestore();
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({ status: "failed", error: { code: "run_failed" } });
+  });
+
+  it("can be stopped: the stop is sent, and the run ends as Hercules ended it", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    run.status = WAITING;
+    await h.runUntil(h.now + 2 * DAY, 4000);
+    const before = api.requests.length;
+    expect(await support.cancel(h.appCtx(ALICE), { threadId })).toBe(true);
+    expect((await read(support, threadId)).activeRun).toMatchObject({ id: runId, stopping: true });
+    await h.runDue();
+    expect(requested(before)).toContain(`POST /v1/agents/runs/${runId}/cancel`);
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun?.status).toBe("cancelled");
+    expect(finished).toEqual([expect.objectContaining({ runId, status: "cancelled" })]);
+  });
+
+  it("frees the thread of an old run that was asked to stop and that Hercules keeps going", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    run.status = WAITING;
+    await h.runUntil(h.now + 2 * DAY, 4000);
+    // Hercules takes the stop and goes on answering that the run waits.
+    api.answerWith((request) =>
+      request.path.startsWith(`/v1/agents/runs/${runId}`) && !request.path.includes("/events")
+        ? Response.json({ id: runId, thread_id: threadId, status: WAITING, finished_at: null })
+        : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runUntil(h.now + 31 * 60 * 1000, 400);
+    const thread = await read(support, threadId);
+    // The user stopped it, so that is what it reads as, and a message can be sent.
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({ status: "cancelled", error: null });
+    await support.send(h.appCtx(ALICE), { threadId, text: "Next" });
+  });
+
+  it("is an ending when Hercules says the run finished, recorded as failed with what it wrote", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    run.complete();
+    // An ending added after this version was built.
+    run.status = "expired";
+    run.finishedAt = "2026-11-15T12:00:09.000Z";
+    run.events[2] = event(runId, threadId, 9, "run.expired", { output: "Done." });
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({
+      status: "failed",
+      error: {
+        code: "run_failed",
+        message: expect.stringContaining('the status "expired"'),
+      },
+    });
+    // The reply the run wrote is kept.
+    expect(thread.messages[1]?.parts).toEqual([{ type: "text", text: "Done." }]);
+    expect(finished).toEqual([
+      expect.objectContaining({ runId, status: "failed", output: "Done." }),
+    ]);
+    await h.runUntil(h.now + 61 * 60 * 1000);
+    expect(h.scheduled).toEqual([]);
+  });
+
+  it("leaves a run going when an event of a type it does not know is delivered, final or not", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const run = herculesRun(runId, threadId);
+    expect(
+      await deliver(
+        support,
+        event(runId, threadId, 2, "run.started"),
+        event(runId, threadId, 3, "run.requires_action", { action: { type: "approval" } }),
+      ),
+    ).toEqual({ applied: 2, skipped: 0 });
+    await h.runDue();
+    let thread = await read(support, threadId);
+    expect(thread.activeRun).toMatchObject({ id: runId, status: "running", lastSeq: 3 });
+    expect(finished).toEqual([]);
+
+    // A final event of a type added later cannot be told from any other by
+    // its name. The run stays open until the check reads how it stands.
+    await deliver(support, event(runId, threadId, 9, "run.expired", { output: null }));
+    thread = await read(support, threadId);
+    expect(thread.activeRun?.id).toBe(runId);
+    expect(finished).toEqual([]);
+    run.status = "cancelled";
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun?.status).toBe("cancelled");
+    expect(finished).toEqual([expect.objectContaining({ runId, status: "cancelled" })]);
+  });
+
+  it("does not stop a deleted thread from being deleted at Hercules", async () => {
+    const support = agents();
+    // The start is never answered, so the delete asks for the run first.
+    api.answerWith((request) => {
+      if (isStart(request)) return new Response("down", { status: 503 });
+      const runRead = /^\/v1\/agents\/runs\/([^/]+)$/.exec(request.path);
+      if (request.method === "GET" && runRead !== null) {
+        return Response.json({ id: runRead[1], thread_id: threadId, status: WAITING });
+      }
+      return undefined;
+    });
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(await support.deleteThread(h.appCtx(ALICE), { threadId })).toBe(true);
+    await h.runUntil(h.now + 60_000);
+    expect(requested()).toContain(`DELETE /v1/agents/threads/${threadId}`);
+    expect(h.db.all("deleted_threads")[0]).toMatchObject({
+      remoteDeletedAt: expect.any(Number),
+      remoteGaveUpAt: null,
+    });
   });
 });
 

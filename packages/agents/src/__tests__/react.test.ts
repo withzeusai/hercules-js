@@ -448,4 +448,43 @@ describe("useAgentThread", () => {
       retryAfterSeconds: 20_000,
     });
   });
+
+  it("stays busy, with no error, while a run waits in a state it does not know, and can stop it", async () => {
+    const stream = liveStream();
+    const cancel = vi.fn(async () => true);
+    const options: UseAgentThreadOptions = {
+      threadId: THREAD,
+      // The component reads a status it does not know as a run that is going.
+      thread: runningThread(),
+      send: vi.fn(),
+      cancel,
+      fetch: stream.fetch,
+    };
+    const { result, rerender } = renderHook(
+      (props: UseAgentThreadOptions) => useAgentThread(props),
+      { initialProps: options },
+    );
+    await act(async () => {
+      stream.push(frame(1, "run.started"));
+      stream.push(frame(2, "message.delta", { message_id: "msg_1", text: "Let me check." }));
+      // The run now waits for a person: an event and a status added later.
+      stream.push(frame(3, "run.requires_action", { action: { type: "approval" } }));
+    });
+    await waitFor(() => expect(result.current.status).toBe("streaming"));
+    expect(result.current.error).toBeNull();
+    expect(result.current.messages[1]?.parts).toEqual([{ type: "text", text: "Let me check." }]);
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(cancel).toHaveBeenCalledWith({ threadId: THREAD });
+    const stopping = runningThread();
+    rerender({
+      ...options,
+      thread: { ...stopping, activeRun: { ...stopping.activeRun!, stopping: true } },
+    });
+    // Still the run's own state until Convex has its end.
+    expect(result.current.status).toBe("streaming");
+    expect(result.current.error).toBeNull();
+  });
 });

@@ -110,8 +110,15 @@ delivered event starts that over. The same check sends a run again if the call
 that starts it was lost, asks again for a cancel that did not get through,
 and records a run's ending only once every event before it is applied. The
 check is started by a mutation that reschedules itself, which Convex never
-loses, so a run is not left open and its thread busy. A run that cannot be
-settled within a day is failed, so its thread is free again.
+loses, so a run is not left open and its thread busy behind a check that was
+lost.
+
+A run stays open for as long as Hercules says it is going, however long that
+is: a status the package does not know reads as a run that is going, not as
+one that ended. A run is failed, so its thread is free again, only once
+nothing was heard of it for a day: no event delivered, and no answer from
+Hercules that it is still going. A run that was asked to stop is failed a day
+after it was sent, whatever Hercules answers.
 
 A start Hercules cannot answer is not a refusal. On a 503, any other 5xx, a
 timeout or a network error the run stays open and is sent again under the

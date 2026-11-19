@@ -13,6 +13,11 @@ export const DEFAULT_API_URL = "https://api.hercules.app";
 /** Where Hercules delivers a run's durable events in an app. Part of the contract. */
 export const EVENTS_PATH = "/hercules/agents/events";
 
+/**
+ * The statuses this version knows. A run ends with one of the four in
+ * `FinalRunStatus`. Every other status, `queued`, `running` or one added
+ * later, is a run that is still going.
+ */
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "capped";
 export type FinalRunStatus = Exclude<RunStatus, "queued" | "running">;
 export type CappedReason = "steps" | "time" | "credits" | "output";
@@ -189,8 +194,47 @@ export const FINAL_EVENT_TYPES = [
   "run.capped",
 ] as const;
 
-export function isFinalStatus(status: RunStatus): status is FinalRunStatus {
-  return status !== "queued" && status !== "running";
+/** The statuses a run ends with. The list is closed: a status not on it is not an ending. */
+export const FINAL_RUN_STATUSES = ["completed", "failed", "cancelled", "capped"] as const;
+
+/**
+ * Whether `status` is one a run ends with. A status this version does not
+ * know is not: the API may add statuses for a run that is still going, such
+ * as one waiting for a person, and such a run must not read as over.
+ */
+export function isFinalStatus(status: string): status is FinalRunStatus {
+  return (FINAL_RUN_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * A run as read off the wire. `status` is whatever Hercules sent, known to
+ * this version or not: see `isFinalStatus` and `hasRunEnded`.
+ */
+export interface WireRun extends Omit<Run, "status"> {
+  status: string;
+}
+
+/**
+ * Whether a run read from Hercules is over. It is when its status is a final
+ * one. A run in a status this version does not know is over when it carries
+ * `finished_at`, which Hercules sets only on a run that ended: that is how an
+ * ending added after this version was built is told from a run that is still
+ * going. `queued` and `running` are a run that is going, whatever else it
+ * carries.
+ */
+export function hasRunEnded(run: WireRun): boolean {
+  if (isFinalStatus(run.status)) return true;
+  if (run.status === "queued" || run.status === "running") return false;
+  return run.finished_at !== null;
+}
+
+/**
+ * The status this package keeps for a run that is going at Hercules. A
+ * status it does not know reads as `running`: Hercules has the run, and it
+ * is not over.
+ */
+export function goingStatus(status: string): "queued" | "running" {
+  return status === "queued" ? "queued" : "running";
 }
 
 export function isFinalEvent(event: { type: string }): boolean {
@@ -218,14 +262,6 @@ function summaryOf(value: unknown): string | null {
 
 const TOOL_KINDS: readonly string[] = ["hercules", "app", "page"];
 const TOOL_CALL_STATUSES: readonly string[] = ["succeeded", "failed", "sent"];
-const RUN_STATUSES: readonly string[] = [
-  "queued",
-  "running",
-  "completed",
-  "failed",
-  "cancelled",
-  "capped",
-];
 const CAPPED_REASONS: readonly string[] = ["steps", "time", "credits", "output"];
 
 function readToolKind(value: unknown): ToolKind | null {
@@ -294,16 +330,21 @@ export function readMessage(value: unknown): Message | null {
   };
 }
 
-export function readRun(value: unknown): Run | null {
+/**
+ * Reads a run. Null only for a body without an id and a status. A status
+ * this version does not know is kept as it came, so the run can be told
+ * apart from one that could not be read.
+ */
+export function readRun(value: unknown): WireRun | null {
   if (!isRecord(value)) return null;
   const id = stringOr(value["id"], null);
-  const status = value["status"];
-  if (id === null || typeof status !== "string" || !RUN_STATUSES.includes(status)) return null;
+  const status = stringOr(value["status"], null);
+  if (id === null || status === null) return null;
   return {
     id,
     thread_id: stringOr(value["thread_id"], ""),
     agent_id: stringOr(value["agent_id"], ""),
-    status: status as RunStatus,
+    status,
     output: stringOr(value["output"], null),
     error: readRunError(value["error"]),
     capped_reason: readCappedReason(value["capped_reason"]),

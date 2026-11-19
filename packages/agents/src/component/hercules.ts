@@ -14,11 +14,13 @@ import {
 } from "./_generated/server.js";
 import {
   HERCULES_API_VERSION,
+  goingStatus,
+  hasRunEnded,
   isFinalStatus,
   readRun,
   readWireEvent,
-  type Run,
   type WireEvent,
+  type WireRun,
 } from "./protocol.js";
 import { STUCK_AFTER_MS, finishRun, jittered, runById, type RunOutcome } from "./store.js";
 import {
@@ -42,7 +44,11 @@ const START_RETRY_CAP_MS = 2 * 60 * 1000;
 /** The longest wait between two checks of a run Hercules says is still going. */
 const MAX_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const MAX_CANCEL_ATTEMPTS = 6;
-/** A run that could not be settled for this long is given up on. */
+/**
+ * A run is given up on once nothing was heard of it for this long: no event
+ * applied, and no answer from Hercules that it is still going. A run Hercules
+ * keeps saying is going is never given up on for its age alone.
+ */
 const GIVE_UP_AFTER_MS = 24 * 60 * 60 * 1000;
 /**
  * How long past that the check itself is given to end the run, with what it
@@ -192,18 +198,42 @@ export function retryDelayMs(
   return Math.floor(least + Math.random() * Math.max(backoff / 2, asked / 10));
 }
 
-function outcomeFromRun(run: Run): RunOutcome | null {
-  if (!isFinalStatus(run.status)) return null;
+/**
+ * How a run read from Hercules ended, or null while it is going. A run in a
+ * status this version does not know is going, unless Hercules says when it
+ * finished: that one ended in a way added after this version was built, and
+ * is recorded as failed, with its own error when it has one.
+ */
+function outcomeFromRun(run: WireRun): RunOutcome | null {
+  if (isFinalStatus(run.status)) {
+    return {
+      status: run.status,
+      output: run.output,
+      error:
+        run.status === "failed"
+          ? (run.error ?? { code: "run_failed", message: "The run failed." })
+          : null,
+      cappedReason: run.capped_reason,
+      usage: run.usage,
+    };
+  }
+  if (!hasRunEnded(run)) return null;
   return {
-    status: run.status,
+    status: "failed",
     output: run.output,
-    error:
-      run.status === "failed"
-        ? (run.error ?? { code: "run_failed", message: "The run failed." })
-        : null,
-    cappedReason: run.capped_reason,
+    error: run.error ?? {
+      code: "run_failed",
+      message: `The run ended with the status ${JSON.stringify(run.status.slice(0, 64))}, which this version of @usehercules/agents does not know. Upgrade the package to read it.`,
+    },
+    cappedReason: null,
     usage: run.usage,
   };
+}
+
+/** A run's status as `recordAccepted` takes it: one this version does not know is a run that is going. */
+function knownStatus(run: WireRun | null) {
+  if (run === null) return null;
+  return isFinalStatus(run.status) ? run.status : goingStatus(run.status);
 }
 
 const vOutcome = v.object({
@@ -296,6 +326,8 @@ const vLoadedRun = v.object({
   quietChecks: v.number(),
   lastSeq: v.number(),
   lastEventAt: v.number(),
+  /** When Hercules last answered that the run is still going. Null until it has. */
+  goingAt: v.union(v.number(), v.null()),
   createdAt: v.number(),
 });
 type LoadedRun = Infer<typeof vLoadedRun>;
@@ -333,6 +365,7 @@ export const loadRun = internalQuery({
       quietChecks: run.quietChecks,
       lastSeq: run.lastSeq,
       lastEventAt: run.lastEventAt,
+      goingAt: run.goingAt ?? null,
       createdAt: run._creationTime,
     };
   },
@@ -425,20 +458,44 @@ export const noteMissing = internalMutation({
 });
 
 /**
- * Notes that a check found the run still going at Hercules, with nothing new
- * to apply: the next check waits twice as long. A delivered event resets it.
+ * Notes what a check found of a run that is not over at Hercules.
+ *
+ * - `confirmed`: Hercules answered that the run is still going, in whatever
+ *   status. That is a sign of life: the day a run is given to settle counts
+ *   from it (`goingAt`).
+ * - `quiet`, the default: there was nothing new to apply, so the next check
+ *   waits twice as long. A delivered event resets that.
+ * - `started`: Hercules has the run past `queued`, so it reads as `running`
+ *   here too, as it does once an event of it is applied.
  */
 export const noteStillGoing = internalMutation({
-  args: { runId: v.string() },
+  args: {
+    runId: v.string(),
+    confirmed: v.optional(v.boolean()),
+    quiet: v.optional(v.boolean()),
+    started: v.optional(v.boolean()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const run = await runById(ctx, args.runId);
     if (run !== null && !isFinalStatus(run.status)) {
-      await ctx.db.patch(run._id, { quietChecks: run.quietChecks + 1 });
+      await ctx.db.patch(run._id, {
+        ...(args.confirmed === true && { goingAt: Date.now() }),
+        ...(args.quiet !== false && { quietChecks: run.quietChecks + 1 }),
+        ...(args.started === true && run.status === "queued" && { status: "running" as const }),
+      });
     }
     return null;
   },
 });
+
+/**
+ * When a run was last heard of: an event of it was applied, or Hercules
+ * answered that it is still going. Never before the run was created.
+ */
+function lastHeardAt(run: { createdAt: number; lastEventAt: number; goingAt: number | null }) {
+  return Math.max(run.createdAt, run.lastEventAt, run.goingAt ?? 0);
+}
 
 /** How long a run must have been quiet before it is checked: 3 minutes, doubling to 30. */
 function checkIntervalMs(quietChecks: number): number {
@@ -625,7 +682,7 @@ async function sendRun(ctx: ActionCtx, config: ApiConfig, run: LoadedRun): Promi
     const started = readRun(body["run"]);
     const cancelWaiting = await ctx.runMutation(internal.hercules.recordAccepted, {
       runId: run.runId,
-      status: started?.status ?? null,
+      status: knownStatus(started),
       live:
         live !== null && typeof live["url"] === "string" && typeof live["token"] === "string"
           ? { url: live["url"], token: live["token"] }
@@ -1025,10 +1082,11 @@ export const deleteTick = internalMutation({
  *
  * It is a mutation that schedules itself: Convex runs a scheduled mutation
  * exactly once, where a scheduled action runs at most once and can be lost.
- * So a lost check costs one tick, never the run: no run is left open for
- * good, and no thread stays busy behind one. It ends with the run. A run
- * nothing could settle in a day (and half an hour for the check to say why)
- * is failed here.
+ * So a lost check costs one tick, never the run: no run is left open behind
+ * a check that was lost, and no thread stays busy behind one. It ends with
+ * the run. A run nothing was heard of for a day (and half an hour for the
+ * check to say why) is failed here. One Hercules keeps answering for as
+ * still going stays open, and is looked at every half hour at most.
  */
 export const tickRun = internalMutation({
   args: { runId: v.string(), api: vApi },
@@ -1038,9 +1096,23 @@ export const tickRun = internalMutation({
     if (run === null || isFinalStatus(run.status)) return null;
     const now = Date.now();
     const age = now - run._creationTime;
+    // A run Hercules took is given up on once nothing was heard of it for a
+    // day: it can stay unfinished for much longer than that, waiting for a
+    // person say, for as long as Hercules keeps saying it is going. A run
+    // that was asked to stop is held to its age alone, so a stop always
+    // frees the thread.
+    const silentFor = run.cancelRequested
+      ? age
+      : now -
+        lastHeardAt({
+          createdAt: run._creationTime,
+          lastEventAt: run.lastEventAt,
+          goingAt: run.goingAt ?? null,
+        });
     const gaveUp = !run.accepted
       ? age > GIVE_UP_AFTER_MS && "The run could not be started within a day."
-      : age > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS && "The run could not be settled within a day.";
+      : silentFor > GIVE_UP_AFTER_MS + GIVE_UP_GRACE_MS &&
+        "The run could not be settled within a day.";
     if (gaveUp !== false) {
       await finishRun(ctx, run, failed("run_failed", gaveUp));
       // The thread is free here. Hercules may still have the run going and
@@ -1093,11 +1165,14 @@ export const tickRun = internalMutation({
 export const checkRun = internalAction({
   args: { runId: v.string(), api: vApi },
   returns: v.null(),
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<null> => {
     const run = await ctx.runQuery(internal.hercules.loadRun, { runId: args.runId });
     if (run === null || isFinalStatus(run.status)) return null;
     const now = Date.now();
-    const tooOld = now - run.createdAt > GIVE_UP_AFTER_MS;
+    // Counted from when the run was last heard of, not from when it was sent:
+    // see `tickRun`. A run that was asked to stop is held to its age.
+    const tooOld =
+      now - (run.cancelRequested ? run.createdAt : lastHeardAt(run)) > GIVE_UP_AFTER_MS;
     async function giveUp(message: string, stillGoing = false) {
       await ctx.runMutation(internal.hercules.endRun, {
         runId: args.runId,
@@ -1152,15 +1227,35 @@ export const checkRun = internalAction({
         await ctx.runMutation(internal.hercules.recordRun, { runId: run.runId, outcome });
         return null;
       }
-      if (tooOld) {
-        return outcome === null
-          ? giveUp("The run was still going at Hercules after a day.", true)
-          : giveUp("The run ended at Hercules, but its events could not be read for a day.");
+      if (outcome !== null) {
+        return tooOld
+          ? giveUp("The run ended at Hercules, but its events could not be read for a day.")
+          : null;
       }
-      // Still going with nothing new: the next check waits longer. (Events it
-      // just applied reset the wait, as delivered ones do.)
-      if (outcome === null && pulled === "done" && !seen.applied) {
-        await ctx.runMutation(internal.hercules.noteStillGoing, { runId: run.runId });
+      // Hercules answered for the run, and it is not over: `queued`,
+      // `running`, or a status this version does not know, such as a run
+      // waiting for a person. It is kept open for as long as Hercules says
+      // so. Only a run that was asked to stop, or whose answer could not be
+      // read, is still given up on after a day.
+      const confirmed = current !== null && !run.cancelRequested;
+      if (!confirmed && tooOld) {
+        return giveUp(
+          current === null
+            ? "What Hercules answered about this run could not be read for a day."
+            : "The run was still going at Hercules a day after it was sent, and after it was asked to stop.",
+          true,
+        );
+      }
+      // With nothing new, the next check waits longer. (Events it just
+      // applied reset the wait, as delivered ones do.)
+      const quiet = pulled === "done" && !seen.applied;
+      if (confirmed || quiet || current !== null) {
+        await ctx.runMutation(internal.hercules.noteStillGoing, {
+          runId: run.runId,
+          confirmed,
+          quiet,
+          started: current !== null && goingStatus(current.status) === "running",
+        });
       }
       return null;
     }

@@ -111,6 +111,14 @@ export default defineSchema({
     lastSeq: v.number(),
     /** When an event was last applied, or the run was created. The stuck-run check reads it. */
     lastEventAt: v.number(),
+    /**
+     * When Hercules last answered that the run is still going, in a status
+     * this version knows or not. A run is given up on only once nothing was
+     * heard of it for a day, counted from here and from `lastEventAt`. Left
+     * out until Hercules has said so, and on rows written before the field
+     * was added.
+     */
+    goingAt: v.optional(v.number()),
     finishedAt: v.union(v.number(), v.null()),
     /** A function handle into the app, called once the run's last write is done. */
     onRunFinished: v.union(v.string(), v.null()),
