@@ -803,4 +803,63 @@ describe("threadToUIMessages", () => {
       metadata: { hercules: { runId: RUN, messageStatus: "completed" } },
     });
   });
+
+  it("reads a thread from a later version: a part it does not know is left out, never read as a tool call", () => {
+    // A tab that was open before the app was upgraded runs this version's
+    // page code against a backend that may return more than it knows.
+    const later = {
+      id: THREAD,
+      agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
+      hasMore: false,
+      messages: [
+        {
+          id: "msg_note",
+          threadId: THREAD,
+          runId: RUN,
+          role: "system",
+          parts: [{ type: "text", text: "A note from a role added later." }],
+          createdAt: AT,
+          status: "completed",
+        },
+        {
+          id: "msg_1",
+          threadId: THREAD,
+          runId: RUN,
+          role: "assistant",
+          parts: [
+            { type: "text", text: "Here it is." },
+            { type: "image", url: "https://example.test/a.png" },
+            {
+              type: "tool_call",
+              id: "call_1",
+              name: "delegate",
+              kind: "subagent",
+              status: "denied",
+              summary: "Asked a subagent",
+            },
+          ],
+          createdAt: AT,
+          status: "completed",
+        },
+      ],
+      activeRun: null,
+      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: AT },
+      pageActions: [],
+    } as unknown as AgentThread;
+    const messages = threadToUIMessages(later);
+    // The message of a role it does not know is not shown.
+    expect(messages.map((message) => message.id)).toEqual(["msg_1"]);
+    expect(messages[0]?.parts).toEqual([
+      { type: "text", content: "Here it is." },
+      // A kind it does not know reads as a Hercules tool, a status it does not know as failed.
+      expect.objectContaining({
+        type: "tool-call",
+        id: "call_1",
+        name: "delegate",
+        state: "error",
+        output: { kind: "hercules", status: "failed", summary: "Asked a subagent" },
+      }),
+      expect.objectContaining({ type: "tool-result", toolCallId: "call_1", state: "error" }),
+    ]);
+  });
 });

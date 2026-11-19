@@ -197,7 +197,10 @@ function apiEvent(raw: Record<string, unknown>, wire: WireEvent, final: boolean)
  * An event of a type this version does not know is passed on as it came:
  * `String(event.type)` is its name. A run that is quiet for a long time,
  * waiting for a person say, is followed for as long as it takes, with one
- * connection per stream Hercules closes.
+ * connection per stream Hercules closes. A stream that closes at once with
+ * nothing new is such a run too, not a failure: it is connected to again,
+ * less and less often, and only a connection that fails counts toward
+ * `maxAttempts`.
  */
 export async function* followRun(options: RunStreamOptions): AsyncGenerator<AgentEvent> {
   const fetchFn = options.fetch ?? fetch;
@@ -206,6 +209,8 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
   const maxAttempts = options.retry?.maxAttempts ?? 10;
   let lastSeq = Math.max(0, options.after ?? 0);
   let failures = 0;
+  /** Streams in a row that closed cleanly, at once, with nothing new. They only space the next ones out. */
+  let quietCloses = 0;
   /**
    * The `message.completed` events passed on, by sequence number. Hercules
    * sends a finished run's reply again to a reader at or past the run's end.
@@ -267,12 +272,13 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
         if (final) return;
       }
       // The stream closed before the run's final event: pick up where it
-      // stopped. One that closed at once with nothing new counts as a failed
-      // connection, so a run whose ending cannot be read here is not asked
-      // for without end.
-      if (!received && Date.now() - openedAt < QUIET_STREAM_MS) {
-        throw new Error("The run's live stream closed with nothing new");
-      }
+      // stopped. Hercules sends a finished run's ending to any reader,
+      // whatever its cursor, so a stream that closes with nothing new is a
+      // run that is not over: one that waits, in a status Hercules may add
+      // later and close the stream for at once. That is not a failed
+      // connection, and never ends the following. It is come back to less
+      // and less often, up to the longest wait.
+      quietCloses = !received && Date.now() - openedAt < QUIET_STREAM_MS ? quietCloses + 1 : 0;
     } catch (error) {
       if (error instanceof RunStreamError) throw error;
       if (options.signal?.aborted) return;
@@ -285,7 +291,7 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
         );
       }
     }
-    const backoff = Math.min(initialMs * 2 ** Math.max(0, failures - 1), maxMs);
+    const backoff = Math.min(initialMs * 2 ** Math.max(0, failures + quietCloses - 1), maxMs);
     await sleep(waitMs ?? Math.floor(backoff / 2 + (Math.random() * backoff) / 2), options.signal);
   }
 }

@@ -467,36 +467,59 @@ describe("followRun", () => {
     expect(requests).toHaveLength(1);
   });
 
-  it("stops asking for a run whose ending it cannot read, and passes its reply on once", async () => {
-    // Hercules answers a reader at the end of a finished run with the reply
-    // and the final event again, and closes. The final event is of a type
-    // added later, and is not marked.
-    const ending = () =>
-      new Response(streamOf(sse(reply(8)), sse(event(9, "run.expired", { output: "Done." }))));
+  it("keeps following a run whose stream closes at once with nothing new: that is a run that waits", async () => {
+    // A status added later, for a run that waits on a person: Hercules may
+    // close its stream at once, every time. Nothing failed, so nothing is
+    // thrown, however many times it happens.
+    const controller = new AbortController();
+    const waiting = () => new Response(streamOf(": nothing yet\n\n"));
     const { requests, fetch: fetchFn } = scripted([
-      () =>
-        new Response(
-          streamOf(sse(event(1, "run.started")), sse(reply(8)), sse(event(9, "run.expired"))),
-        ),
-      ...Array.from({ length: 5 }, () => ending),
+      () => new Response(streamOf(sse(event(1, "run.started")), sse(event(2, "run.waiting")))),
+      ...Array.from({ length: 8 }, () => waiting),
+      () => new Response(streamOf(sse(event(3, "run.completed", { output: "Done." })))),
     ]);
     const seen: string[] = [];
-    const error = await (async () => {
-      for await (const e of followRun({
-        url: URL_,
-        token: "t",
-        fetch: fetchFn,
-        retry: { initialMs: 1, maxMs: 2, maxAttempts: 4 },
-      })) {
-        seen.push(`${e.seq} ${String(e.type)}`);
-      }
-    })().catch((e: unknown) => e);
-    // The ending is passed on, once, as an event like any other: nothing says it is one.
+    for await (const e of followRun({
+      url: URL_,
+      token: "t",
+      fetch: fetchFn,
+      signal: controller.signal,
+      // Fewer tries than quiet closes: they do not count toward it.
+      retry: { initialMs: 1, maxMs: 2, maxAttempts: 3 },
+    })) {
+      seen.push(`${e.seq} ${String(e.type)}`);
+    }
+    expect(seen).toEqual(["1 run.started", "2 run.waiting", "3 run.completed"]);
+    expect(requests).toHaveLength(10);
+    expect(requests.at(-1)?.headers.get("last-event-id")).toBe("2");
+  });
+
+  it("passes a finished run's reply and ending on once, however often Hercules sends them again", async () => {
+    // Hercules answers a reader at the end of a finished run with the reply
+    // and the final event again, and closes. This ending is of a type added
+    // later that an older Hercules did not mark as final, so nothing here
+    // says the run is over: the reader comes back, quietly, until it is told
+    // to stop. The thread has the ending, and the hooks stop it there.
+    const controller = new AbortController();
+    let asked = 0;
+    const fetchFn = (async () => {
+      if (++asked === 5) controller.abort();
+      return new Response(
+        streamOf(sse(event(1, "run.started")), sse(reply(8)), sse(event(9, "run.expired"))),
+      );
+    }) as unknown as typeof fetch;
+    const seen: string[] = [];
+    for await (const e of followRun({
+      url: URL_,
+      token: "t",
+      fetch: fetchFn,
+      signal: controller.signal,
+      retry: { initialMs: 1, maxMs: 2, maxAttempts: 2 },
+    })) {
+      seen.push(`${e.seq} ${String(e.type)}`);
+    }
     expect(seen).toEqual(["1 run.started", "8 message.completed", "9 run.expired"]);
-    // A bounded number of tries, then the live view gives up: the run's
-    // ending reaches the page through the thread.
-    expect(error).toBeInstanceOf(RunStreamError);
-    expect(requests).toHaveLength(5);
+    expect(asked).toBe(5);
   });
 
   describe("a run that is quiet for a long time", () => {
