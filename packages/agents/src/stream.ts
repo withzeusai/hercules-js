@@ -46,25 +46,18 @@ export class RunStreamError extends Error {
 }
 
 /**
- * Whether the browser names this package on the run's stream request, as the
- * app's backend does on every request it makes. Off: a header the events
- * route does not list among those a page may send makes the browser's
- * preflight fail, and with it the whole live view. It is to be turned on in
- * a release made after Hercules allows the header there.
+ * The headers of a request for a run's live stream, resumed after `lastSeq`
+ * when that is past 0. The page names this package and its version, as the
+ * app's backend does on every request it makes. A browser sends a request
+ * with these headers only when the route lists each of them among those a
+ * page may send, and Hercules's events route lists them all.
  */
-const STREAM_SENDS_CLIENT_HEADER: boolean = false;
-
-/** The headers of a request for a run's live stream, resumed after `lastSeq` when that is past 0. */
-export function runStreamHeaders(
-  token: string,
-  lastSeq: number,
-  sendClient = STREAM_SENDS_CLIENT_HEADER,
-): Record<string, string> {
+export function runStreamHeaders(token: string, lastSeq: number): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
     accept: "text/event-stream",
     "hercules-version": HERCULES_API_VERSION,
-    ...(sendClient && { [CLIENT_HEADER]: CLIENT_ID }),
+    [CLIENT_HEADER]: CLIENT_ID,
     ...(lastSeq > 0 && { "last-event-id": String(lastSeq) }),
   };
 }

@@ -417,8 +417,9 @@ backend and in the page alike:
 So match on the codes and statuses you handle, and keep a default for the
 rest.
 
-Every request the app's backend makes to Hercules names the package and its
-version in a `Hercules-Client` header. Hercules can answer
+Every request the package makes to Hercules names the package and its
+version in a `Hercules-Client` header: the app's backend's requests, and the
+page's request for a run's live stream. Hercules can answer
 `client_upgrade_required` to a version it no longer takes: see "How it
 works" for what the package does then.
 

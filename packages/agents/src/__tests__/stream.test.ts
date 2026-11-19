@@ -3,6 +3,7 @@ import { followRun, parseEventStream, RunStreamError } from "../stream";
 import { readAgentEvent, readWireEvent } from "../component/protocol";
 import { CLIENT_ID } from "../component/protocol";
 import { runStreamHeaders } from "../stream";
+import packageJson from "../../package.json";
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -219,7 +220,7 @@ describe("followRun", () => {
     expect(requests[2]?.url).toContain("after=2");
   });
 
-  it("sends only headers the events route lets a page send", async () => {
+  it("names the package on the stream request, and sends only headers the events route lets a page send", async () => {
     const { requests, fetch: fetchFn } = scripted([
       () => new Response(streamOf(sse(event(1, "run.started")))),
       () => new Response(streamOf(sse(event(2, "run.completed", { output: "" })))),
@@ -227,16 +228,28 @@ describe("followRun", () => {
     await collect(
       followRun({ url: URL_, token: "t", fetch: fetchFn, retry: { initialMs: 1, maxMs: 2 } }),
     );
-    // A header outside this list fails the browser's preflight, and the live
-    // view with it. `Hercules-Client` is not on the list yet, so the page
-    // does not send it: the app's backend names the package.
-    const allowed = ["authorization", "accept", "last-event-id", "hercules-version"];
+    // The headers Hercules's events route lets a page send. One outside this
+    // list fails the browser's preflight, and the live view with it.
+    const allowed = [
+      "authorization",
+      "accept",
+      "last-event-id",
+      "hercules-version",
+      "hercules-client",
+    ];
     for (const request of requests) {
       expect([...request.headers.keys()].filter((name) => !allowed.includes(name))).toEqual([]);
+      // The page names the package and its version, as the app's backend does.
+      expect(request.headers.get("hercules-client")).toBe(CLIENT_ID);
     }
-    expect(runStreamHeaders("t", 0)).not.toHaveProperty("hercules-client");
-    // What turning it on sends, once the route allows it.
-    expect(runStreamHeaders("t", 4, true)).toEqual({
+    expect(CLIENT_ID).toBe(`agents/${packageJson.version}`);
+    expect(runStreamHeaders("t", 0)).toEqual({
+      authorization: "Bearer t",
+      accept: "text/event-stream",
+      "hercules-version": "2025-12-09",
+      "hercules-client": CLIENT_ID,
+    });
+    expect(runStreamHeaders("t", 4)).toEqual({
       authorization: "Bearer t",
       accept: "text/event-stream",
       "hercules-version": "2025-12-09",
