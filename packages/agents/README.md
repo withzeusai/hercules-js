@@ -13,13 +13,13 @@ so it fits in a Convex HTTP action. Convex, React and TanStack AI
 (`@tanstack/ai` and `@tanstack/ai-client`) are optional peers, needed only by
 the entry points that use them.
 
-| Entry point                         | What                                                                |
-| ----------------------------------- | ------------------------------------------------------------------- |
-| `@usehercules/agents/convex.config` | The `herculesAgents` Convex component                               |
-| `@usehercules/agents/convex`        | `HerculesAgents`, and `defineTools`, `tool`, `ToolError`            |
-| `@usehercules/agents/tanstack`      | `herculesConnection` and `useThreadSync`, for TanStack AI's chat    |
-| `@usehercules/agents/react`         | `useAgentThread`, a lighter chat hook with no TanStack              |
-| `@usehercules/agents`               | Backend-neutral: API types, `followRun`, the token verifier and MCP |
+| Entry point                         | What                                                              |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `@usehercules/agents/convex.config` | The `herculesAgents` Convex component                             |
+| `@usehercules/agents/convex`        | `HerculesAgents`, and `defineTools`, `tool`, `ToolError`          |
+| `@usehercules/agents/tanstack`      | `herculesConnection` and `useThreadSync`, for TanStack AI's chat  |
+| `@usehercules/agents/react`         | `useAgentThread`, a lighter chat hook with no TanStack            |
+| `@usehercules/agents`               | The API's types, and `followRun`, which reads a run's live stream |
 
 ## Talking to an agent
 
@@ -992,12 +992,6 @@ overrides both variables must pass `audiences` to `defineTools` with its
 
 Pass `issuer` or `audiences` to `defineTools` to override either.
 
-### Other backends
-
-`@usehercules/agents` exports the backend-neutral core (`createMcpHandler`,
-`createTokenVerifier`): a function from a web `Request` to a `Response`. An
-adapter supplies the tools and the context their handlers receive.
-
 ### Not supported yet
 
 Server-sent events, resources, prompts, sampling and elicitation.
@@ -1010,25 +1004,25 @@ them. They are part of what "Versioning" promises.
 
 ### Options left out
 
-| Option                      | Of                                                                         | When it is left out                                                    |
-| --------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `apiKey`                    | `HerculesAgents`                                                           | The `HERCULES_API_KEY` environment variable                            |
-| `apiUrl`                    | `HerculesAgents`                                                           | `HERCULES_API_URL`, then `https://api.hercules.app`                    |
-| `issuer`                    | `HerculesAgents`, `defineTools`                                            | `HERCULES_OIDC_AUTHORITY`                                              |
-| `onRunFinished`             | `HerculesAgents`                                                           | Nothing is called when a run ends                                      |
-| `pageActions`               | `HerculesAgents`                                                           | None: a run may call no page action                                    |
-| `exposeToolDetails`         | `HerculesAgents`                                                           | `false`                                                                |
-| `limits.runsPerUserPerHour` | `HerculesAgents`                                                           | No limit                                                               |
-| `limit`                     | `thread`, `readThread`, `readThreadDetails`, `useThreadSync`               | 100 messages                                                           |
-| `name`                      | `defineTools`                                                              | One server, routed at `/mcp`. A named one is at `/mcp/<name>`          |
-| `audiences`                 | `defineTools`                                                              | The deployment's own URLs for the server: see "How tokens are checked" |
-| `principals`                | `tool`                                                                     | `["user"]`                                                             |
-| `agentOrigins`              | `tool`, when it lists `"agent"`                                            | `["app"]`                                                              |
-| `pageActions`               | `herculesConnection`, `useAgentThread`                                     | None: the page runs no page action                                     |
-| `settleTimeoutMs`           | `herculesConnection`                                                       | 10,000: ten seconds                                                    |
-| `retry`                     | `herculesConnection`, `followRun`                                          | `{ initialMs: 1000, maxMs: 30000, maxAttempts: 10 }`                   |
-| `after`                     | `followRun`                                                                | 0: the run is read from its start                                      |
-| `fetch`                     | `herculesConnection`, `useAgentThread`, `followRun`, `createTokenVerifier` | The global `fetch`                                                     |
+| Option                      | Of                                                           | When it is left out                                                    |
+| --------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `apiKey`                    | `HerculesAgents`                                             | The `HERCULES_API_KEY` environment variable                            |
+| `apiUrl`                    | `HerculesAgents`                                             | `HERCULES_API_URL`, then `https://api.hercules.app`                    |
+| `issuer`                    | `HerculesAgents`, `defineTools`                              | `HERCULES_OIDC_AUTHORITY`                                              |
+| `onRunFinished`             | `HerculesAgents`                                             | Nothing is called when a run ends                                      |
+| `pageActions`               | `HerculesAgents`                                             | None: a run may call no page action                                    |
+| `exposeToolDetails`         | `HerculesAgents`                                             | `false`                                                                |
+| `limits.runsPerUserPerHour` | `HerculesAgents`                                             | No limit                                                               |
+| `limit`                     | `thread`, `readThread`, `readThreadDetails`, `useThreadSync` | 100 messages                                                           |
+| `name`                      | `defineTools`                                                | One server, routed at `/mcp`. A named one is at `/mcp/<name>`          |
+| `audiences`                 | `defineTools`                                                | The deployment's own URLs for the server: see "How tokens are checked" |
+| `principals`                | `tool`                                                       | `["user"]`                                                             |
+| `agentOrigins`              | `tool`, when it lists `"agent"`                              | `["app"]`                                                              |
+| `pageActions`               | `herculesConnection`, `useAgentThread`                       | None: the page runs no page action                                     |
+| `settleTimeoutMs`           | `herculesConnection`                                         | 10,000: ten seconds                                                    |
+| `retry`                     | `herculesConnection`, `followRun`                            | `{ initialMs: 1000, maxMs: 30000, maxAttempts: 10 }`                   |
+| `after`                     | `followRun`                                                  | 0: the run is read from its start                                      |
+| `fetch`                     | `herculesConnection`, `useAgentThread`, `followRun`          | The global `fetch`                                                     |
 
 ### Limits
 
@@ -1075,13 +1069,13 @@ npm install --save-exact @usehercules/agents
 - The exports of these entry points that this README documents, with their
   options, their return values and the error codes they name:
 
-  | Entry point                         | Exports                                                                               |
-  | ----------------------------------- | ------------------------------------------------------------------------------------- |
-  | `@usehercules/agents/convex.config` | The `herculesAgents` component, as the default export                                 |
-  | `@usehercules/agents/convex`        | `HerculesAgents`, `runFinishedValidator`, `defineTools`, `tool`, `ToolError`          |
-  | `@usehercules/agents/tanstack`      | `herculesConnection`, `useThreadSync`, `agentErrorCode`, `PAGE_ACTION_OUTPUT`         |
-  | `@usehercules/agents/react`         | `useAgentThread`, `AgentError`, `RunStreamError`                                      |
-  | `@usehercules/agents`               | `followRun`, `RunStreamError`, `createMcpHandler`, `createTokenVerifier`, `ToolError` |
+  | Entry point                         | Exports                                                                       |
+  | ----------------------------------- | ----------------------------------------------------------------------------- |
+  | `@usehercules/agents/convex.config` | The `herculesAgents` component, as the default export                         |
+  | `@usehercules/agents/convex`        | `HerculesAgents`, `runFinishedValidator`, `defineTools`, `tool`, `ToolError`  |
+  | `@usehercules/agents/tanstack`      | `herculesConnection`, `useThreadSync`, `agentErrorCode`, `PAGE_ACTION_OUTPUT` |
+  | `@usehercules/agents/react`         | `useAgentThread`, `AgentError`, `RunStreamError`                              |
+  | `@usehercules/agents`               | `followRun`, `RunStreamError`, `ToolError`                                    |
 
   Each entry point also exports the types of what it takes and returns.
 

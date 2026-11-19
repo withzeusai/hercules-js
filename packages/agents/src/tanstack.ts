@@ -60,13 +60,15 @@ export {
 export type { PageActionHandler, PageActionHandlers } from "./page-actions";
 export type { AgentThread } from "./agents";
 
-export type SendArgs = {
+// Not exported: `/convex` has the `SendArgs` an app's backend uses, and these
+// two only spell out `HerculesAgentApi`.
+type SendArgs = {
   threadId?: string;
   text: string;
   context?: Record<string, any>;
 };
 
-export type ThreadQueryArgs = {
+type ThreadQueryArgs = {
   threadId: string;
   limit?: number;
 };

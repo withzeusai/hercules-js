@@ -24,9 +24,7 @@ type AnyAmong<Types extends readonly unknown[]> = {
 
 describe("the values each entry point exports", () => {
   it("are exactly these", () => {
-    expectTypeOf<keyof typeof Root>().toEqualTypeOf<
-      "RunStreamError" | "ToolError" | "createMcpHandler" | "createTokenVerifier" | "followRun"
-    >();
+    expectTypeOf<keyof typeof Root>().toEqualTypeOf<"RunStreamError" | "ToolError" | "followRun">();
     expectTypeOf<keyof typeof Convex>().toEqualTypeOf<
       "HerculesAgents" | "ToolError" | "defineTools" | "runFinishedValidator" | "tool"
     >();
@@ -55,12 +53,8 @@ describe("the types each entry point exports", () => {
           Root.AgentEventType,
           Root.AgentOrigin,
           Root.CappedReason,
-          Root.Event,
           Root.EventDataByType,
           Root.FinalRunStatus,
-          Root.JsonSchema,
-          Root.McpHandlerOptions<unknown>,
-          Root.McpTool<unknown>,
           Root.Message,
           Root.MessagePart,
           Root.Run,
@@ -68,10 +62,6 @@ describe("the types each entry point exports", () => {
           Root.RunStatus,
           Root.RunStreamOptions,
           Root.TextPart,
-          Root.TokenFailure,
-          Root.TokenResult,
-          Root.TokenVerifier,
-          Root.TokenVerifierOptions,
           Root.ToolAnnotations,
           Root.ToolCallPart,
           Root.ToolCallStatus,
@@ -79,12 +69,9 @@ describe("the types each entry point exports", () => {
           Root.ToolKind,
           Root.ToolPrincipal,
           Root.Usage,
-          Root.VerifiedToken,
         ]
       >
     >().toEqualTypeOf<false>();
-    // Two names for one type.
-    expectTypeOf<Root.Event>().toEqualTypeOf<Root.AgentEvent>();
   });
 
   it("are all there from /convex", () => {
@@ -153,9 +140,7 @@ describe("the types each entry point exports", () => {
           Tanstack.HerculesToolOutput,
           Tanstack.PageActionHandler,
           Tanstack.PageActionHandlers,
-          Tanstack.SendArgs,
           Tanstack.SyncableChat,
-          Tanstack.ThreadQueryArgs,
         ]
       >
     >().toEqualTypeOf<false>();

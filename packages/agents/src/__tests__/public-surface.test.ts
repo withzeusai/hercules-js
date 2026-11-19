@@ -42,19 +42,15 @@ interface Surface {
 
 const SURFACE: Record<string, Surface> = {
   ".": {
-    values: ["RunStreamError", "ToolError", "createMcpHandler", "createTokenVerifier", "followRun"],
+    values: ["RunStreamError", "ToolError", "followRun"],
     types: [
       "AgentEvent",
       "AgentEventOf",
       "AgentEventType",
       "AgentOrigin",
       "CappedReason",
-      "Event",
       "EventDataByType",
       "FinalRunStatus",
-      "JsonSchema",
-      "McpHandlerOptions",
-      "McpTool",
       "Message",
       "MessagePart",
       "Run",
@@ -62,10 +58,6 @@ const SURFACE: Record<string, Surface> = {
       "RunStatus",
       "RunStreamOptions",
       "TextPart",
-      "TokenFailure",
-      "TokenResult",
-      "TokenVerifier",
-      "TokenVerifierOptions",
       "ToolAnnotations",
       "ToolCallPart",
       "ToolCallStatus",
@@ -73,7 +65,6 @@ const SURFACE: Record<string, Surface> = {
       "ToolKind",
       "ToolPrincipal",
       "Usage",
-      "VerifiedToken",
     ],
   },
   "./convex": {
@@ -136,9 +127,7 @@ const SURFACE: Record<string, Surface> = {
       "HerculesToolOutput",
       "PageActionHandler",
       "PageActionHandlers",
-      "SendArgs",
       "SyncableChat",
-      "ThreadQueryArgs",
     ],
   },
   // Types only: Convex's code generation reads `ComponentApi` from this path.
