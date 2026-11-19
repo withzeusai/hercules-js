@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineTools, ToolError, tool, type ToolCtx } from "../convex";
 import { validatorToJsonSchema } from "../json-schema";
+import { createToolServer } from "../tool-server";
 import { createTokenVerifier } from "../jwt";
 import { createMcpHandler, type JsonSchema, type McpTool } from "../server";
 import {
@@ -474,13 +475,13 @@ describe("defineTools", () => {
   });
 
   it("routes a default server at /mcp and a named one at /mcp/<name>", () => {
-    expect(defineTools({ tools: {} })).toMatchObject({ name: "default", path: "/mcp" });
-    expect(defineTools({ name: "support", tools: {} })).toMatchObject({
+    expect(createToolServer({ tools: {} })).toMatchObject({ name: "default", path: "/mcp" });
+    expect(createToolServer({ name: "support", tools: {} })).toMatchObject({
       name: "support",
       path: "/mcp/support",
     });
     // Those are the only paths Hercules calls, so there is no other to choose.
-    expect(defineTools({ name: "support", path: "/agents", tools: {} } as never).path).toBe(
+    expect(createToolServer({ name: "support", path: "/agents", tools: {} } as never).path).toBe(
       "/mcp/support",
     );
   });
@@ -500,7 +501,7 @@ describe("defineTools", () => {
     ).toBe("any");
     // Left out, it is left to the default: the app's own job.
     expect(tools.whoami).not.toHaveProperty("agentOrigins");
-    expect(defineTools({ tools: { scheduled } })).toMatchObject({ path: "/mcp" });
+    expect(createToolServer({ tools: { scheduled } })).toMatchObject({ path: "/mcp" });
 
     // A tool for users only has no origins to set. The types refuse it, and so does declaring it.
     const usersOnly = tool({
@@ -529,7 +530,10 @@ describe("defineTools", () => {
 
   it("registers POST and GET on the router", () => {
     const route = vi.fn();
-    defineTools({ name: "support", tools: {} }).registerRoutes({ route } as never);
+    const declared = defineTools({ name: "support", tools: {} });
+    // All an app is handed: the name, the path and the handler stay inside the package.
+    expect(Object.keys(declared)).toEqual(["registerRoutes"]);
+    declared.registerRoutes({ route } as never);
     expect(route.mock.calls.map(([spec]) => [spec.path, spec.method])).toEqual([
       ["/mcp/support", "POST"],
       ["/mcp/support", "GET"],
@@ -540,7 +544,7 @@ describe("defineTools", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const server = createToolServer({ tools: { whoami: tools.whoami } });
 
     // `exp` is checked against the real clock here, so sign for the real now.
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -573,7 +577,7 @@ describe("defineTools", () => {
     vi.stubEnv("CONVEX_SITE_URL", "https://api.example.com");
     vi.stubEnv("CONVEX_CLOUD_URL", "https://happy-otter-123.convex.cloud");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const server = createToolServer({ tools: { whoami: tools.whoami } });
     const nowSeconds = Math.floor(Date.now() / 1000);
     const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
     // Hercules signs for the deployment's own URL, whatever domain the app added.
@@ -591,7 +595,7 @@ describe("defineTools", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const server = createToolServer({ tools: { whoami: tools.whoami } });
     const nowSeconds = Math.floor(Date.now() / 1000);
     const token = await issuer.sign(userClaims({ iat: nowSeconds, exp: nowSeconds + 600 }));
     const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
@@ -609,7 +613,7 @@ describe("defineTools", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", "");
     vi.stubEnv("CONVEX_SITE_URL", "");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const server = defineTools({ tools: {} });
+    const server = createToolServer({ tools: {} });
     const response = await server.handle(ctx, rpcRequest(null, {}));
     expect(response.status).toBe(500);
     errors.mockRestore();
@@ -620,7 +624,7 @@ describe("defineTools", () => {
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
     let seen: string[] = [];
-    const server = defineTools({
+    const server = createToolServer({
       tools: {
         peek: tool({
           description: "Records what its context offers.",

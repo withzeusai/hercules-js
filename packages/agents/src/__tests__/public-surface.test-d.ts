@@ -153,3 +153,62 @@ describe("the types each entry point exports", () => {
     expectTypeOf<Generated.ComponentApi>().toEqualTypeOf<Convex.ComponentApi>();
   });
 });
+
+// A class's public members and an object's keys are API as its exports are.
+describe("the members an app can call", () => {
+  it("are exactly these on HerculesAgents and on what its api() builds", () => {
+    expectTypeOf<keyof Convex.HerculesAgents>().toEqualTypeOf<
+      | "send"
+      | "run"
+      | "readThread"
+      | "readThreadDetails"
+      | "cancel"
+      | "deleteThread"
+      | "claimPageAction"
+      | "api"
+      | "handleEvents"
+      | "registerRoutes"
+    >();
+    expectTypeOf<keyof ReturnType<Convex.HerculesAgents["api"]>>().toEqualTypeOf<
+      "send" | "thread" | "cancel" | "claimPageAction" | "deleteThread"
+    >();
+    expectTypeOf<keyof Convex.HerculesAgentsOptions>().toEqualTypeOf<
+      | "agentId"
+      | "onRunFinished"
+      | "limits"
+      | "exposeToolDetails"
+      | "pageActions"
+      | "apiKey"
+      | "apiUrl"
+      | "issuer"
+    >();
+  });
+
+  it("are exactly these on what defineTools returns and takes", () => {
+    expectTypeOf<keyof Convex.DefinedTools>().toEqualTypeOf<"registerRoutes">();
+    expectTypeOf<keyof Convex.ToolsDefinition>().toEqualTypeOf<
+      "name" | "instructions" | "tools" | "issuer" | "audiences"
+    >();
+    expectTypeOf<keyof Convex.ToolDefinition<{}, undefined, "user">>().toEqualTypeOf<
+      "description" | "args" | "returns" | "annotations" | "principals" | "agentOrigins" | "handler"
+    >();
+  });
+
+  it("are exactly these in the page", () => {
+    expectTypeOf<keyof ReactEntry.UseAgentThreadOptions>().toEqualTypeOf<
+      "threadId" | "thread" | "send" | "cancel" | "claimPageAction" | "pageActions" | "fetch"
+    >();
+    expectTypeOf<keyof ReactEntry.UseAgentThreadResult>().toEqualTypeOf<
+      "messages" | "status" | "send" | "cancel" | "error"
+    >();
+    expectTypeOf<keyof Tanstack.HerculesConnectionOptions>().toEqualTypeOf<
+      "pageActions" | "fetch" | "retry" | "settleTimeoutMs"
+    >();
+    expectTypeOf<keyof Tanstack.HerculesAgentApi>().toEqualTypeOf<
+      "send" | "thread" | "cancel" | "claimPageAction"
+    >();
+    expectTypeOf<keyof Root.RunStreamOptions>().toEqualTypeOf<
+      "url" | "token" | "after" | "signal" | "fetch" | "retry"
+    >();
+  });
+});

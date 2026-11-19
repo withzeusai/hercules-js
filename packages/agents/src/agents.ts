@@ -172,6 +172,88 @@ function tokenRejection(reason: TokenFailure): Response {
 }
 
 /**
+ * Answers one delivery from Hercules: checks its token with `tokens`, then
+ * applies the batch in one mutation. `HerculesAgents.handleEvents` calls it
+ * with the verifier the app's environment gives; tests pass their own. Not
+ * exported from the package.
+ *
+ * Hercules reads the status as a verdict, so each is chosen for what it
+ * does there:
+ *
+ * - 2xx: applied. Events of a type this package does not know, and entries
+ *   it cannot read, are skipped, so what Hercules adds later never stops a
+ *   thread's delivery.
+ * - 401, 403: only for a token that was checked and is not Hercules's for
+ *   this route. Hercules takes either as the whole deployment refusing it
+ *   and stops delivering to it, coming back to try after 30 seconds, 2
+ *   minutes, 10 minutes, then every hour.
+ * - 503 with `Retry-After`: the issuer's keys cannot be fetched. That says
+ *   nothing about the token.
+ * - 500: the app's environment is not set, or one event could not be
+ *   applied. Tried again, with backoff, for a day.
+ * - 413: a batch of several events could not be applied. Hercules sends
+ *   half of it, down to the one event that fails, which then gets a 500.
+ * - 400: a body that is not `{ events: [...] }` at all.
+ */
+export async function answerEvents(
+  component: ComponentApi,
+  ctx: RunMutationCtx,
+  request: Request,
+  tokens: TokenVerifier | null,
+): Promise<Response> {
+  if (tokens === null) {
+    console.error(
+      "Hercules agent events are not configured: HERCULES_OIDC_AUTHORITY or CONVEX_SITE_URL is unset",
+    );
+    return json(500, { error: "not_configured" });
+  }
+  const verified = await tokens.verify(bearerTokenOf(request));
+  if (!verified.ok) return tokenRejection(verified.reason);
+  // Only Hercules itself delivers events; a token for a user or an agent is not enough.
+  if (verified.token.claims["hercules_principal"] !== "hercules") {
+    return json(403, { error: "forbidden" });
+  }
+
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
+  const text = await request.text();
+  if (text.length > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return json(400, { error: "invalid_json" });
+  }
+  const raw =
+    typeof body === "object" && body !== null && "events" in body
+      ? (body as { events: unknown }).events
+      : undefined;
+  if (!Array.isArray(raw)) return json(400, { error: "invalid_request" });
+  const events: WireEvent[] = [];
+  // An entry without a run, a sequence number and a type cannot be placed.
+  // It is skipped, not refused: a refusal would hold up the whole thread.
+  let unreadable = 0;
+  for (const entry of raw) {
+    const event = readWireEvent(entry);
+    if (event === null) unreadable++;
+    else events.push(event);
+  }
+  if (events.length === 0) return json(200, { applied: 0, skipped: unreadable });
+  try {
+    const result = await ctx.runMutation(component.events.apply, { events });
+    return json(200, { applied: result.applied, skipped: result.skipped + unreadable });
+  } catch (error) {
+    console.error("Applying Hercules agent events failed", error);
+    // Several events: whatever went wrong (most often more than one Convex
+    // transaction holds), half the batch may pass, and 413 asks for half.
+    // No error text is read to decide. One event: nothing smaller to send,
+    // and a 413 for it would shelve the thread, so it is a plain failure.
+    if (events.length > 1) return json(413, { error: "batch_too_large" });
+    return json(500, { error: "apply_failed" });
+  }
+}
+
+/**
  * One Hercules agent in a Convex app. Build it once at module scope:
  *
  * ```ts
@@ -192,17 +274,13 @@ function tokenRejection(reason: TokenFailure): Response {
  * infer `support` from an initializer that names `internal` (TS7022).
  */
 export class HerculesAgents {
-  readonly component: ComponentApi;
-  readonly options: HerculesAgentsOptions;
+  private readonly component: ComponentApi;
+  private readonly options: HerculesAgentsOptions;
   private verifier: TokenVerifier | null = null;
 
   constructor(component: ComponentApi, options: HerculesAgentsOptions) {
     this.component = component;
     this.options = options;
-  }
-
-  get agentId(): string {
-    return this.options.agentId;
   }
 
   private apiConfig() {
@@ -458,78 +536,12 @@ export class HerculesAgents {
 
   /**
    * Answers one delivery from Hercules: checks its token, then applies the
-   * batch in one mutation. `registerRoutes` routes it; tests can call it.
-   *
-   * Hercules reads the status as a verdict, so each is chosen for what it
-   * does there:
-   *
-   * - 2xx: applied. Events of a type this package does not know, and entries
-   *   it cannot read, are skipped, so what Hercules adds later never stops a
-   *   thread's delivery.
-   * - 401, 403: only for a token that was checked and is not Hercules's for
-   *   this route. Hercules takes either as the whole deployment refusing it
-   *   and stops delivering to it, coming back to try after 30 seconds, 2
-   *   minutes, 10 minutes, then every hour.
-   * - 503 with `Retry-After`: the issuer's keys cannot be fetched. That says
-   *   nothing about the token.
-   * - 500: the app's environment is not set, or one event could not be
-   *   applied. Tried again, with backoff, for a day.
-   * - 413: a batch of several events could not be applied. Hercules sends
-   *   half of it, down to the one event that fails, which then gets a 500.
-   * - 400: a body that is not `{ events: [...] }` at all.
+   * batch in one mutation. `registerRoutes` routes it. Call it from an
+   * `httpAction` of your own only to route `POST /hercules/agents/events`
+   * by hand: Hercules delivers to that path and no other.
    */
-  async handleEvents(ctx: RunMutationCtx, request: Request, verifier?: TokenVerifier) {
-    const tokens = verifier ?? this.eventsVerifier();
-    if (tokens === null) {
-      console.error(
-        "Hercules agent events are not configured: HERCULES_OIDC_AUTHORITY or CONVEX_SITE_URL is unset",
-      );
-      return json(500, { error: "not_configured" });
-    }
-    const verified = await tokens.verify(bearerTokenOf(request));
-    if (!verified.ok) return tokenRejection(verified.reason);
-    // Only Hercules itself delivers events; a token for a user or an agent is not enough.
-    if (verified.token.claims["hercules_principal"] !== "hercules") {
-      return json(403, { error: "forbidden" });
-    }
-
-    const declared = Number(request.headers.get("content-length") ?? "0");
-    if (declared > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
-    const text = await request.text();
-    if (text.length > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      return json(400, { error: "invalid_json" });
-    }
-    const raw =
-      typeof body === "object" && body !== null && "events" in body
-        ? (body as { events: unknown }).events
-        : undefined;
-    if (!Array.isArray(raw)) return json(400, { error: "invalid_request" });
-    const events: WireEvent[] = [];
-    // An entry without a run, a sequence number and a type cannot be placed.
-    // It is skipped, not refused: a refusal would hold up the whole thread.
-    let unreadable = 0;
-    for (const entry of raw) {
-      const event = readWireEvent(entry);
-      if (event === null) unreadable++;
-      else events.push(event);
-    }
-    if (events.length === 0) return json(200, { applied: 0, skipped: unreadable });
-    try {
-      const result = await ctx.runMutation(this.component.events.apply, { events });
-      return json(200, { applied: result.applied, skipped: result.skipped + unreadable });
-    } catch (error) {
-      console.error("Applying Hercules agent events failed", error);
-      // Several events: whatever went wrong (most often more than one Convex
-      // transaction holds), half the batch may pass, and 413 asks for half.
-      // No error text is read to decide. One event: nothing smaller to send,
-      // and a 413 for it would shelve the thread, so it is a plain failure.
-      if (events.length > 1) return json(413, { error: "batch_too_large" });
-      return json(500, { error: "apply_failed" });
-    }
+  async handleEvents(ctx: RunMutationCtx, request: Request): Promise<Response> {
+    return await answerEvents(this.component, ctx, request, this.eventsVerifier());
   }
 
   /**

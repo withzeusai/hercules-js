@@ -349,7 +349,9 @@ so one agent's `exposeToolDetails` never shows another agent's tool calls.
 
 ### The events route
 
-`support.registerRoutes(http)` routes `POST /hercules/agents/events`. Hercules
+`support.registerRoutes(http)` routes `POST /hercules/agents/events`. To route
+it by hand, call `support.handleEvents(ctx, request)` from an `httpAction` of
+your own at that path: Hercules delivers there and nowhere else. Hercules
 signs each delivery for `https://<deployment>.convex.site/hercules/agents/events`,
 so the route takes a token for that path on `CONVEX_SITE_URL`, and on the
 `.convex.site` origin that goes with `CONVEX_CLOUD_URL`. A deployment that

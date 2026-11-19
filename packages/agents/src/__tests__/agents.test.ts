@@ -1,6 +1,7 @@
 import { httpRouter, makeFunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { answerEvents } from "../agents";
 import { HerculesAgents, type AgentThread } from "../convex";
 import { retryDelayMs } from "../component/hercules";
 import {
@@ -174,8 +175,10 @@ const DELIVERY_TOKEN = {
 };
 
 /** Posts a delivery to the app's HTTP route and returns the route's answer. */
-async function postEvents(support: HerculesAgents, ...events: unknown[]) {
-  return support.handleEvents(
+// One route serves every agent of the app, so the agent only says whose events these are.
+async function postEvents(_support: HerculesAgents, ...events: unknown[]) {
+  return answerEvents(
+    h.component,
     h.appCtx(),
     new Request(`https://app.convex.site${EVENTS_PATH}`, {
       method: "POST",
@@ -186,8 +189,9 @@ async function postEvents(support: HerculesAgents, ...events: unknown[]) {
 }
 
 /** Delivers events the way Hercules does, through the app's HTTP route. */
-async function deliver(support: HerculesAgents, ...events: unknown[]) {
-  const response = await support.handleEvents(
+async function deliver(_support: HerculesAgents, ...events: unknown[]) {
+  const response = await answerEvents(
+    h.component,
     h.appCtx(),
     new Request(`https://app.convex.site${EVENTS_PATH}`, {
       method: "POST",
@@ -736,7 +740,8 @@ describe("what Hercules adds later", () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     await h.runDue();
-    const response = await support.handleEvents(
+    const response = await answerEvents(
+      h.component,
       h.appCtx(),
       new Request(`https://app.convex.site${EVENTS_PATH}`, {
         method: "POST",
@@ -4653,12 +4658,13 @@ describe("the events route", () => {
   const EVENTS_URL = `${SITE}${EVENTS_PATH}`;
 
   async function post(
-    support: HerculesAgents,
+    _support: HerculesAgents,
     token: string | null,
     body: unknown,
     verifier: ReturnType<typeof createTokenVerifier>,
   ) {
-    return support.handleEvents(
+    return answerEvents(
+      h.component,
       h.appCtx(),
       new Request(EVENTS_URL, {
         method: "POST",

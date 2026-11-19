@@ -6,7 +6,7 @@
  */
 import type { FunctionArgs, FunctionReturnType } from "convex/server";
 import { describe, expectTypeOf, it } from "vitest";
-import type { AgentThread, HerculesAgents } from "../convex";
+import type { AgentThread, HerculesAgents, HerculesAgentsOptions } from "../convex";
 import type { api, internal } from "./fixtures/app/_generated/api";
 import type { support } from "./fixtures/app/agent";
 
@@ -14,7 +14,7 @@ describe("an app's convex/agent.ts", () => {
   it("declares the agent with an annotation, next to an onRunFinished from internal", () => {
     expectTypeOf<typeof support>().toEqualTypeOf<HerculesAgents>();
     expectTypeOf<typeof internal.orders.onAgentRunFinished>().toExtend<
-      NonNullable<HerculesAgents["options"]["onRunFinished"]>
+      NonNullable<HerculesAgentsOptions["onRunFinished"]>
     >();
   });
 
