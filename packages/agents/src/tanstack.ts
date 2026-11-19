@@ -522,9 +522,10 @@ export function herculesConnection(
  * Keeps the chat in step with the thread in Convex: a reply another tab or
  * device got shows here too, as far as Convex has it while it is written
  * (what Hercules has delivered of it, not the live stream) and whole once it
- * is done. It sets the chat's messages only while no reply is streaming on
- * this page. Returns the thread, for its `activeRun.progress` and
- * `latestRun`.
+ * is done. It sets the chat's messages when the thread changes and when this
+ * page's stream ends, and only while no reply is streaming on this page.
+ * After it, each message's `metadata.hercules` reads as a reload would give
+ * it. Returns the thread, for its `activeRun.progress` and `latestRun`.
  *
  * ```tsx
  * const chat = useChat({ connection, threadId, persistence: true });
@@ -540,8 +541,12 @@ export function useThreadSync(
   const chatRef = useRef(chat);
   chatRef.current = chat;
   const hydrating = chat.isHydrating === true;
+  // Also when this page's stream ends. The thread often has the run's end
+  // before the stream does, and does not change again once the run is over:
+  // without this the chat would wait for an update that never comes.
+  const loading = chat.isLoading;
   useEffect(() => {
     syncThread(chatRef.current, value);
-  }, [value, hydrating]);
+  }, [value, hydrating, loading]);
   return value;
 }

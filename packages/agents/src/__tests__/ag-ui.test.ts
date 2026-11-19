@@ -95,9 +95,15 @@ function orderRun(): AgentEvent[] {
   ];
 }
 
-function translate(events: AgentEvent[]): StreamChunk[] {
+/** A run's chunks. With `settled`, the thread once it has the run's end, as the connection ends a run. */
+function translate(events: AgentEvent[], settled?: AgentThread): StreamChunk[] {
   const run = new RunChunks(THREAD, RUN);
-  return [run.started(), ...events.flatMap((event) => run.apply(event)), ...run.finish()];
+  return [
+    run.started(),
+    ...events.flatMap((event) => run.apply(event)),
+    ...(settled === undefined ? [] : run.reconcile(settled)),
+    ...run.finish(),
+  ];
 }
 
 function settledThread(): AgentThread {
@@ -181,14 +187,18 @@ describe("RunChunks", () => {
   it("builds in TanStack the same transcript a reload hydrates, with no tool left to run", () => {
     const onToolCall = vi.fn();
     const processor = new StreamProcessor({ events: { onToolCall } });
-    for (const chunk of translate(orderRun())) processor.processChunk(chunk);
+    const events = orderRun();
+    for (const chunk of translate(events, settledThread())) processor.processChunk(chunk);
     expect(onToolCall).not.toHaveBeenCalled();
     expect(processor.areAllToolsComplete()).toBe(true);
 
     const streamed = processor.getMessages();
     const hydrated = threadToUIMessages(settledThread()).filter((m) => m.role === "assistant");
+    // The reply's text, its tool calls, and what its metadata says of it.
     expect(transcriptKey(streamed)).toBe(transcriptKey(hydrated));
-    expect(streamed[0]?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "completed" });
+    const said = { runId: RUN, messageStatus: "completed", runStatus: "completed" };
+    expect(streamed[0]?.metadata?.["hercules"]).toEqual(said);
+    expect(hydrated[0]?.metadata?.["hercules"]).toEqual(said);
     // Only the live stream has a page action's arguments.
     const open = streamed[0]?.parts.find((p) => p.type === "tool-call" && p.id === "call_open");
     expect(open).toMatchObject({ input: { orderId: "123" }, output: PAGE_ACTION_OUTPUT });
@@ -436,6 +446,55 @@ describe("RunChunks", () => {
     });
   });
 
+  it("keeps what it streamed of a reply the thread holds in part once the run is over", () => {
+    const partial = (text: string): AgentThread => ({
+      ...settledThread(),
+      messages: [
+        {
+          id: "msg_1",
+          threadId: THREAD,
+          runId: RUN,
+          role: "assistant",
+          parts: [{ type: "text", text }],
+          createdAt: AT,
+          // The run ended before the app got the reply whole.
+          status: "incomplete",
+        },
+      ],
+      latestRun: {
+        id: RUN,
+        status: "failed",
+        error: { code: "run_failed", message: "The run failed." },
+        cappedReason: null,
+        finishedAt: null,
+      },
+    });
+    function shown(streamed: string, held: string) {
+      seq = 0;
+      const thread = partial(held);
+      const run = new RunChunks(THREAD, RUN, { thread: () => thread });
+      const chunks = [
+        run.started(),
+        ...run.apply(ev("run.started")),
+        ...run.apply(ev("message.delta", { message_id: "msg_1", text: streamed })),
+        ...run.reconcile(thread),
+        ...run.finish(),
+      ];
+      const processor = new StreamProcessor({});
+      for (const chunk of chunks) processor.processChunk(chunk);
+      // The chat's messages are not replaced with the thread's.
+      expect(chunks.some((chunk) => chunk.type === "MESSAGES_SNAPSHOT")).toBe(false);
+      expect(chunks.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "run_failed" });
+      return processor.getMessages().map((message) => message.parts);
+    }
+    // The page streamed further than the app got: its text stays.
+    expect(shown("Your order is on its way", "Your order")).toEqual([
+      [{ type: "text", content: "Your order is on its way" }],
+    ]);
+    // The app got further than the page streamed: the rest is added.
+    expect(shown("Your", "Your order")).toEqual([[{ type: "text", content: "Your order" }]]);
+  });
+
   it("takes a failed run's error from Convex", () => {
     const run = new RunChunks(THREAD, RUN);
     run.reconcile({
@@ -551,18 +610,9 @@ describe("RunChunks, when a step was retried", () => {
       "TEXT_MESSAGE_END",
     ]);
     chunks.push(...completed, ...run.apply(ev("run.completed", { output: "", usage: null })));
-    chunks.push(...run.finish());
-
-    const chat = chatAfter(thread, chunks);
-    const messages = chat.getMessages();
-    expect(messages.map((message) => [message.role, textOf(message)])).toEqual([
-      ["user", "Hello"],
-      ["assistant", "Hi! How can I help?"],
-      ["user", "Where is my order?"],
-      ["assistant", "Your order shipped today."],
-    ]);
-    // It reads exactly as a reload would.
-    const settled = goingThread({
+    // The connection ends a run with the thread as Convex has it then: the reply, and the run over.
+    const settled: AgentThread = {
+      ...thread,
       messages: [
         ...thread.messages,
         {
@@ -575,9 +625,26 @@ describe("RunChunks, when a step was retried", () => {
           status: "completed",
         },
       ],
-    });
+      activeRun: null,
+      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: AT },
+    };
+    chunks.push(...run.reconcile(settled), ...run.finish());
+
+    const chat = chatAfter(thread, chunks);
+    const messages = chat.getMessages();
+    expect(messages.map((message) => [message.role, textOf(message)])).toEqual([
+      ["user", "Hello"],
+      ["assistant", "Hi! How can I help?"],
+      ["user", "Where is my order?"],
+      ["assistant", "Your order shipped today."],
+    ]);
+    // It reads exactly as a reload would, in what it says and in what its metadata says of it.
     expect(transcriptKey(messages)).toBe(transcriptKey(threadToUIMessages(settled)));
-    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "completed" });
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({
+      runId: RUN,
+      messageStatus: "completed",
+      runStatus: "completed",
+    });
     // The run still ends once, and nothing is left for TanStack to run.
     expect(chunks.filter((chunk) => chunk.type === "RUN_FINISHED")).toHaveLength(1);
     expect(chunks.at(-1)?.type).toBe("RUN_FINISHED");
