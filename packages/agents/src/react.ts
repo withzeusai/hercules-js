@@ -35,14 +35,7 @@ import { followRun, RunStreamError } from "./stream";
 
 export { AgentError } from "./errors";
 export { RunStreamError } from "./stream";
-export {
-  LiveRun,
-  mergeThread,
-  type PendingInput,
-  type ViewMessage,
-  type ViewPart,
-  type ViewToolCallPart,
-} from "./live-thread";
+export type { ViewMessage, ViewPart, ViewToolCallPart } from "./live-thread";
 export type { PageActionHandler } from "./page-actions";
 export type { AgentThread } from "./agents";
 

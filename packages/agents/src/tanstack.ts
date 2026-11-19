@@ -38,12 +38,11 @@ import { useQuery } from "convex/react";
 import type { FunctionReference } from "convex/server";
 import { useEffect, useRef } from "react";
 import {
-  keepCutOffReplies,
   notSentChunk,
   RunChunks,
-  showsStreamOf,
+  syncThread,
   threadToUIMessages,
-  transcriptKey,
+  type SyncableChat,
 } from "./ag-ui";
 import type { AgentThread } from "./agents";
 import { AgentError, toAgentError } from "./errors";
@@ -54,9 +53,9 @@ export {
   agentErrorCode,
   PAGE_ACTION_OUTPUT,
   PROGRESS_EVENT,
-  threadToUIMessages,
   type HerculesMessageMetadata,
   type HerculesToolOutput,
+  type SyncableChat,
 } from "./ag-ui";
 export type { PageActionHandler, PageActionHandlers } from "./page-actions";
 export type { AgentThread } from "./agents";
@@ -502,49 +501,6 @@ export function herculesConnection(
       pageActions = next;
     },
   };
-}
-
-/** What `useThreadSync` needs of `useChat`'s result. */
-export interface SyncableChat {
-  readonly messages: ReadonlyArray<{
-    id: string;
-    role: string;
-    parts: ReadonlyArray<unknown>;
-    metadata?: Record<string, any> | undefined;
-  }>;
-  readonly isLoading: boolean;
-  readonly isHydrating?: boolean;
-  setMessages(messages: Array<UIMessage>): void;
-}
-
-/**
- * Puts the thread as Convex has it into the chat, when it reads differently
- * from what the chat shows and no reply is streaming here. Returns whether
- * it did. A run this page streamed is left alone until Convex has its end; a
- * run another tab started is taken with every update of the thread.
- * Messages older than the thread's window stay as they are. So does
- * what this page streamed of a reply that was stopped while it was written,
- * when the thread holds less of it: it is kept with
- * `metadata.hercules.status` set to `"incomplete"`.
- */
-export function syncThread(chat: SyncableChat, thread: ThreadValue | undefined): boolean {
-  if (thread === null || thread === undefined) return false;
-  if (chat.isLoading || chat.isHydrating === true) return false;
-  // This page streamed that run, and Convex has not caught up with it yet.
-  // What an earlier sync put here of a run another tab started is Convex's
-  // own copy, and each update of the thread replaces it.
-  const active = thread.activeRun?.id;
-  if (active !== undefined && showsStreamOf(chat.messages, thread, active)) return false;
-  let next = threadToUIMessages(thread);
-  const first = next[0];
-  if (thread.hasMore && first !== undefined) {
-    const index = chat.messages.findIndex((message) => message.id === first.id);
-    if (index > 0) next = [...(chat.messages.slice(0, index) as UIMessage[]), ...next];
-  }
-  next = keepCutOffReplies(chat.messages, next, thread);
-  if (transcriptKey(next) === transcriptKey(chat.messages)) return false;
-  chat.setMessages(next);
-  return true;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineTools, ToolError, tool, validatorToJsonSchema, type ToolCtx } from "../convex";
+import { defineTools, ToolError, tool, type ToolCtx } from "../convex";
+import { validatorToJsonSchema } from "../json-schema";
 import { createTokenVerifier } from "../jwt";
 import { createMcpHandler, type JsonSchema, type McpTool } from "../server";
 import {

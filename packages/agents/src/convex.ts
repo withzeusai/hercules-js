@@ -47,13 +47,13 @@ import {
   type ObjectType,
   type PropertyValidators,
 } from "convex/values";
+import { fieldsToJsonSchema, INT64_PATTERN, validatorToJsonSchema } from "./json-schema";
 import { createTokenVerifier, deploymentOrigins } from "./jwt";
 import {
   checkToolAccess,
   createMcpHandler,
   ToolError,
   type AgentOrigin,
-  type JsonSchema,
   type ToolCaller,
   type ToolPrincipal,
   type McpTool,
@@ -147,7 +147,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-const INT64_PATTERN = /^-?[0-9]+$/;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 
@@ -160,59 +159,6 @@ function base64ToBuffer(value: string): ArrayBuffer | null {
   } catch {
     return null;
   }
-}
-
-/** JSON Schema for a Convex validator, as MCP clients read a tool's input and output. */
-export function validatorToJsonSchema(validator: GenericValidator): JsonSchema {
-  switch (validator.kind) {
-    case "string":
-      return { type: "string" };
-    case "float64":
-      return { type: "number" };
-    case "int64":
-      return {
-        type: "string",
-        pattern: INT64_PATTERN.source,
-        description: "A 64-bit integer, written as a decimal string",
-      };
-    case "boolean":
-      return { type: "boolean" };
-    case "null":
-      return { type: "null" };
-    case "bytes":
-      return { type: "string", contentEncoding: "base64" };
-    case "id":
-      return {
-        type: "string",
-        description: `The id of a document in the "${validator.tableName}" table`,
-      };
-    case "literal":
-      return {
-        const: typeof validator.value === "bigint" ? validator.value.toString() : validator.value,
-      };
-    case "array":
-      return { type: "array", items: validatorToJsonSchema(validator.element) };
-    case "record":
-      return { type: "object", additionalProperties: validatorToJsonSchema(validator.value) };
-    case "object":
-      return fieldsToJsonSchema(validator.fields);
-    case "union":
-      return { anyOf: validator.members.map(validatorToJsonSchema) };
-    default:
-      return {};
-  }
-}
-
-function fieldsToJsonSchema(fields: PropertyValidators): JsonSchema {
-  const entries = Object.entries(fields);
-  return {
-    type: "object",
-    properties: Object.fromEntries(
-      entries.map(([name, field]) => [name, validatorToJsonSchema(field)]),
-    ),
-    required: entries.filter(([, field]) => field.isOptional !== "optional").map(([name]) => name),
-    additionalProperties: false,
-  };
 }
 
 function fitFields(
