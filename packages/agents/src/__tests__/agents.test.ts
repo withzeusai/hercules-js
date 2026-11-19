@@ -4903,6 +4903,34 @@ describe("naming the package to Hercules", () => {
   });
 });
 
+describe("what is private", () => {
+  it("is not reachable on an agent at run time: its options, the component, its helpers", () => {
+    const support = agents({ apiKey: "a-secret-key" });
+    const open = support as unknown as Record<string, unknown>;
+    for (const name of ["options", "component", "verifier", "apiConfig", "start", "agentId"]) {
+      expect(open[name]).toBeUndefined();
+    }
+    expect(Object.keys(support)).toEqual([]);
+    expect(JSON.stringify(support)).toBe("{}");
+    // What an app calls is all that is on it.
+    expect(Object.getOwnPropertyNames(HerculesAgents.prototype).sort()).toEqual(
+      [
+        "constructor",
+        "send",
+        "run",
+        "readThread",
+        "readThreadDetails",
+        "cancel",
+        "deleteThread",
+        "claimPageAction",
+        "api",
+        "handleEvents",
+        "registerRoutes",
+      ].sort(),
+    );
+  });
+});
+
 // The README states these under "Defaults and limits". An app built against
 // one keeps running against it: see `defaults.test.ts`.
 describe("the documented defaults", () => {

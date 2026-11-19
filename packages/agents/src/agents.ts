@@ -280,21 +280,23 @@ export async function answerEvents(
  * infer `support` from an initializer that names `internal` (TS7022).
  */
 export class HerculesAgents {
-  private readonly component: ComponentApi;
-  private readonly options: HerculesAgentsOptions;
-  private verifier: TokenVerifier | null = null;
+  // Private at run time too, not only to the compiler: the options hold the
+  // app's key, and the component's functions take whose thread to read.
+  readonly #component: ComponentApi;
+  readonly #options: HerculesAgentsOptions;
+  #verifier: TokenVerifier | null = null;
 
   constructor(component: ComponentApi, options: HerculesAgentsOptions) {
-    this.component = component;
-    this.options = options;
+    this.#component = component;
+    this.#options = options;
   }
 
-  private apiConfig() {
-    const key = this.options.apiKey ?? env("HERCULES_API_KEY");
+  #apiConfig() {
+    const key = this.#options.apiKey ?? env("HERCULES_API_KEY");
     if (key === undefined) {
       throw new Error("HERCULES_API_KEY is not set, so the agent cannot be called");
     }
-    const url = this.options.apiUrl ?? env("HERCULES_API_URL") ?? DEFAULT_API_URL;
+    const url = this.#options.apiUrl ?? env("HERCULES_API_URL") ?? DEFAULT_API_URL;
     if (!isSafeApiUrl(url)) {
       throw new Error(
         "HERCULES_API_URL must be an https URL (or http://localhost): the app key is sent to it",
@@ -304,38 +306,38 @@ export class HerculesAgents {
   }
 
   /** The signed-in user, or null. */
-  private async endUserOf(ctx: AuthCtx): Promise<EndUser | null> {
+  async #endUserOf(ctx: AuthCtx): Promise<EndUser | null> {
     const identity = await ctx.auth.getUserIdentity();
     return identity === null ? null : { tokenIdentifier: identity.tokenIdentifier };
   }
 
-  private async ownerFor(ctx: AuthCtx): Promise<string | null> {
-    const endUser = await this.endUserOf(ctx);
+  async #ownerFor(ctx: AuthCtx): Promise<string | null> {
+    const endUser = await this.#endUserOf(ctx);
     return endUser === null ? null : ownerOf(endUser);
   }
 
-  private async start(
+  async #start(
     ctx: RunMutationCtx,
     endUser: EndUser | null,
     args: SendArgs,
   ): Promise<{ threadId: string; runId: string }> {
     const onRunFinished =
-      this.options.onRunFinished === undefined
+      this.#options.onRunFinished === undefined
         ? undefined
-        : await createFunctionHandle(this.options.onRunFinished);
-    const pageActions = args.pageActions ?? this.options.pageActions;
-    const runsPerHour = endUser === null ? undefined : this.options.limits?.runsPerUserPerHour;
-    const result = await ctx.runMutation(this.component.threads.send, {
-      agentId: this.options.agentId,
+        : await createFunctionHandle(this.#options.onRunFinished);
+    const pageActions = args.pageActions ?? this.#options.pageActions;
+    const runsPerHour = endUser === null ? undefined : this.#options.limits?.runsPerUserPerHour;
+    const result = await ctx.runMutation(this.#component.threads.send, {
+      agentId: this.#options.agentId,
       endUser,
       text: args.text,
-      api: this.apiConfig(),
+      api: this.#apiConfig(),
       ...(args.threadId !== undefined && { threadId: args.threadId }),
       ...(args.context !== undefined && { context: args.context }),
       ...(pageActions !== undefined && { pageActions: [...pageActions] }),
       ...(runsPerHour !== undefined && { runsPerHour }),
       ...(onRunFinished !== undefined && { onRunFinished }),
-      ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
+      ...(this.#options.exposeToolDetails === true && { exposeToolDetails: true }),
     });
     if (!result.ok) fail(result.code as AgentErrorCode, result.message, result.retryAfterSeconds);
     return { threadId: result.threadId, runId: result.runId };
@@ -348,9 +350,9 @@ export class HerculesAgents {
    * Throws a `ConvexError` with `AgentErrorData`.
    */
   async send(ctx: AuthCtx & RunMutationCtx, args: SendArgs) {
-    const endUser = await this.endUserOf(ctx);
+    const endUser = await this.#endUserOf(ctx);
     if (endUser === null) fail("sign_in_required", "Sign in to talk to the agent.");
-    return await this.start(ctx, endUser, args);
+    return await this.#start(ctx, endUser, args);
   }
 
   /**
@@ -363,7 +365,7 @@ export class HerculesAgents {
    * public function as it is: `api()` leaves it out for that reason.
    */
   async run(ctx: RunMutationCtx, args: SendArgs) {
-    return await this.start(ctx, null, args);
+    return await this.#start(ctx, null, args);
   }
 
   /**
@@ -389,14 +391,14 @@ export class HerculesAgents {
     ctx: AuthCtx & RunQueryCtx,
     args: ThreadArgs & { limit?: number },
   ): Promise<AgentThread | null> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return null;
-    return await ctx.runQuery(this.component.threads.read, {
+    return await ctx.runQuery(this.#component.threads.read, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       owner,
       ...(args.limit !== undefined && { limit: args.limit }),
-      ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
+      ...(this.#options.exposeToolDetails === true && { exposeToolDetails: true }),
     });
   }
 
@@ -420,9 +422,9 @@ export class HerculesAgents {
     ctx: RunQueryCtx,
     args: ThreadArgs & { limit?: number },
   ): Promise<AgentThreadDetails | null> {
-    return await ctx.runQuery(this.component.threads.readDetails, {
+    return await ctx.runQuery(this.#component.threads.readDetails, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       ...(args.limit !== undefined && { limit: args.limit }),
     });
   }
@@ -433,13 +435,13 @@ export class HerculesAgents {
    * the thread's `activeRun.stopping` is true and `send` throws `thread_busy`.
    */
   async cancel(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return false;
-    return await ctx.runMutation(this.component.threads.cancel, {
+    return await ctx.runMutation(this.#component.threads.cancel, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       owner,
-      api: this.apiConfig(),
+      api: this.#apiConfig(),
     });
   }
 
@@ -453,13 +455,13 @@ export class HerculesAgents {
    * still count toward `limits.runsPerUserPerHour` until their hour is up.
    */
   async deleteThread(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return false;
-    return await ctx.runMutation(this.component.threads.remove, {
+    return await ctx.runMutation(this.#component.threads.remove, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       owner,
-      api: this.apiConfig(),
+      api: this.#apiConfig(),
     });
   }
 
@@ -474,11 +476,11 @@ export class HerculesAgents {
     ctx: AuthCtx & RunMutationCtx,
     args: ThreadArgs & { runId: string; toolCallId: string },
   ): Promise<boolean> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return false;
-    return await ctx.runMutation(this.component.threads.claimPageAction, {
+    return await ctx.runMutation(this.#component.threads.claimPageAction, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       runId: args.runId,
       toolCallId: args.toolCallId,
       owner,
@@ -533,18 +535,18 @@ export class HerculesAgents {
     };
   }
 
-  private eventsVerifier(): TokenVerifier | null {
-    if (this.verifier !== null) return this.verifier;
-    const issuer = this.options.issuer ?? env("HERCULES_OIDC_AUTHORITY");
+  #eventsVerifier(): TokenVerifier | null {
+    if (this.#verifier !== null) return this.#verifier;
+    const issuer = this.#options.issuer ?? env("HERCULES_OIDC_AUTHORITY");
     // Hercules signs for the deployment's own `.convex.site` URL, which
     // `CONVEX_SITE_URL` is unless the app points it at a custom domain.
     const origins = deploymentOrigins(env("CONVEX_SITE_URL"), env("CONVEX_CLOUD_URL"));
     if (issuer === undefined || origins.length === 0) return null;
-    this.verifier = createTokenVerifier({
+    this.#verifier = createTokenVerifier({
       issuer,
       audiences: origins.map((origin) => `${origin}${EVENTS_PATH}`),
     });
-    return this.verifier;
+    return this.#verifier;
   }
 
   /**
@@ -554,7 +556,7 @@ export class HerculesAgents {
    * by hand: Hercules delivers to that path and no other.
    */
   async handleEvents(ctx: RunMutationCtx, request: Request): Promise<Response> {
-    return await answerEvents(this.component, ctx, request, this.eventsVerifier());
+    return await answerEvents(this.#component, ctx, request, this.#eventsVerifier());
   }
 
   /**
