@@ -689,6 +689,12 @@ can be left out:
 - The chat is for signed-in users: gate it with `useConvexAuth()`, as
   `AgentChat` does above. Without a signed-in user every message fails with
   `sign_in_required`.
+- There is no regenerate. `useChat` also returns `reload()`, and the
+  connection cannot tell it from a new message: it sends the last user
+  message again, as a new run on the same thread. The agent then reads the
+  question twice, the thread keeps both copies and both replies, and the
+  second run is charged and counts toward the user's limits like any other.
+  Do not wire a Regenerate button to `chat.reload()`.
 
 ### How it maps
 
@@ -919,9 +925,18 @@ other names: a teammate's message, sent from the console, on a thread one of
 the app's jobs opened, or a job another app started on the same agent. It
 says only that the run is not this app's own job.
 
-Hercules may add origins. One this version of the package does not know
-reaches the handler as the string Hercules signed. It is not read as
-`"other"`: a tool takes it only by its own name, or with `"any"`.
+Hercules may add origins. The rule for one this version of the package does
+not know is the rule for every origin: **a tool takes a call only from an
+origin it lists, or with `"any"`.** So an origin the package has never heard
+of is refused by every tool that does not name it, a tool that lists
+`"other"` among them: it is not read as `"other"`, and it is never read as
+`"app"`. It reaches a handler that does take it as the string Hercules
+signed.
+
+That rule is safe to pin an app to because of a promise on Hercules's side:
+Hercules never moves an existing way of starting a run to a different origin
+value. A new value is only ever for a new way of starting a run, so a tool
+never loses a caller it has today.
 
 **A tool that lists `"agent"` takes the app's own job, and nothing else,
 unless it says so.** That is the origin `"app"`. To take a call from other
@@ -1094,20 +1109,51 @@ describes it, and a change to any of it will take a new major version.
   with.
 - The routes the package serves in the app: `POST /hercules/agents/events`,
   and `/mcp` or `/mcp/<name>`.
-- Every value under "Defaults and limits": the option defaults and the
-  limits.
+- The option defaults that decide what an app's code means: what `apiKey`,
+  `apiUrl` and `issuer` are read from, that `pageActions` is none, that
+  `exposeToolDetails` is `false`, that there is no hourly limit unless
+  `limits` sets one, that a tool's `principals` is `["user"]` and its
+  `agentOrigins` is `["app"]`, and where a tool server is routed. A change to
+  one of these changes who can call a tool or what a page sees, so it takes
+  a new major version.
 
-A later version may add to these without that being a breaking change: an
-export, an option, a field on something the package returns or passes to the
-app's functions, or a member of a union that mirrors the Hercules API (event
-types, run statuses, tool kinds, origins, error codes). So:
+### What may change in a minor version
 
-- Match on the codes and statuses you handle, and keep a default for the
-  rest.
+- **Additions.** An export, an option, a field on something the package
+  returns or passes to the app's functions, and a value of any set under
+  "Open sets".
+- **Limits and tuning.** The other values under "Defaults and limits" are
+  stated so that an app can be designed around them, and are not frozen: a
+  message's length and the size of a thread read are limits Hercules sets,
+  and may be raised; the page-action expiry, `settleTimeoutMs`, `retry` and
+  the default `limit` are tuning. The changelog names any that changes. How
+  the package recovers when something goes wrong is not stated at all, and
+  may change in any version.
+- **Peer ranges.** Taking a newer version of a peer, or raising the lowest
+  version of one within the same major, is a minor change of this package.
+
+So:
+
+- Match on the codes, statuses, kinds and types you handle, and keep a
+  default for the rest: see "Open sets".
 - Take `onRunFinished`'s arguments as `runFinishedValidator.fields`, which
   holds whatever fields the installed version sends.
 - When you wrap a method in a function of your own, do not copy the shape of
   what it returns into a `returns` validator.
+
+### What it runs on
+
+- **TypeScript.** The declarations are checked with TypeScript 6.0 and 7.0,
+  and need `moduleResolution` set to `bundler`, `node16` or `nodenext`: the
+  package has an `exports` map and no other way in.
+- **Runtimes.** The backend entry points run in Convex's runtime. The page's
+  run in a browser that has `fetch`, streams and `AbortController`. Under
+  Node, as in tests and builds, the package needs Node 22 or later, and is
+  tested on Node 24.
+- **Peers.** `convex`, `react`, `@tanstack/ai` and `@tanstack/ai-client` are
+  optional peers: install the ones the entry points you import need.
+  `/tanstack` needs all four, `/convex` needs `convex`, `/react` needs
+  `react`, and `@usehercules/agents` needs none.
 
 ### Naming
 
@@ -1150,7 +1196,10 @@ passed on as they are.
 - The component's own functions and tables. An app reaches them only through
   `HerculesAgents`: do not call `components.herculesAgents` functions or read
   its tables directly. From 1.0.0, a version will read what earlier versions
-  of the same major stored, so that an upgrade keeps an app's threads.
+  of the same major stored, so that an upgrade keeps an app's threads. An
+  upgrade is one-way for what is stored: once a newer version has run in a
+  deployment, going back to an older version of the package there is not
+  supported, in 0.x or after.
 - What the package logs: the wording, the level, and when.
 - The exact requests the package makes to Hercules: their paths, headers and
   bodies, how many it makes, and when it makes one again.
@@ -1204,6 +1253,34 @@ a tool's caller by its `principal`. Narrowing works as usual
 (`if (event.type === "message.delta")`), and what is left in a `default`
 branch is that member. Its name is typed `UnknownName`, which TypeScript does
 not compare with a string. Read it with `String(event.type)`.
+
+### Error codes
+
+A `code` is an open set wherever an app reads one: any string. Two parties
+write it. Hercules writes most of them, such as `out_of_credits`,
+`agent_daily_limit_reached` and `rate_limited`: the
+[API reference](https://hercules.app/docs/agents/api-reference) lists them,
+and it may add more. The package passes those on as they came. The codes the
+package writes itself are these:
+
+| Code                                                                     | Where it shows                                       | What it means                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sign_in_required`                                                       | `send` throws it                                     | No user is signed in                                                                                                                                                                                           |
+| `not_found`                                                              | `send` throws it; `chat.error` in the TanStack path  | The thread is not this user's, or not this agent's. In the TanStack path also: the thread was deleted while its run was streaming                                                                              |
+| `thread_deleted`                                                         | `send` throws it                                     | The thread was deleted, and its id is retired                                                                                                                                                                  |
+| `thread_busy`                                                            | `send` throws it                                     | A run is going on the thread. Hercules has a code of the same name and meaning, which a run fails with when Hercules kept refusing its start                                                                   |
+| `end_user_rate_limited`                                                  | `send` throws it                                     | The user reached `limits.runsPerUserPerHour`. Hercules has a code of the same name for its own limit on a user, which a run fails with                                                                         |
+| `message_too_long`                                                       | `send` throws it                                     | The text and its context are over the limit                                                                                                                                                                    |
+| `invalid_request`                                                        | `send` throws it; `chat.error` in the TanStack path  | The thread's id is in no form Hercules keeps, or, in the TanStack path, there was no message to send. Hercules has a code of the same name for a start it refuses                                              |
+| `run_failed`                                                             | `latestRun.error`, `onRunFinished`, the hooks' error | The package ended the run: Hercules could not be reached to start it, nothing was heard of it for a long time, or it ended in a way this version does not know. Hercules ends a run it lost with the same code |
+| `agent_not_found`                                                        | the same                                             | Hercules answered 404 to the run's start: see "How it works"                                                                                                                                                   |
+| `agent_unavailable`, `hercules_auth_required`, `client_upgrade_required` | the same                                             | Hercules's own codes, with a message the package writes for the developer and another for the page: see "How it works"                                                                                         |
+| `http_<status>`, such as `http_403`                                      | the same                                             | Hercules refused the run's start and its answer named no code                                                                                                                                                  |
+| `send_failed`                                                            | `chat.error` in the TanStack path                    | The app's `send` function threw something that carries no code: a lost connection, say, or an error of the app's own                                                                                           |
+
+Where a name is both the package's and Hercules's, the two mean the same
+thing, so an app can treat them alike. `RunStreamError.code` is Hercules's
+code for a stream it refused, or null.
 
 ### Compatibility with the Hercules API
 
