@@ -1,11 +1,16 @@
 /**
- * The defaults and limits the README states under "Defaults and limits",
- * pinned by value. They are part of the package's public API from 1.0.0: an
- * app that was built against one keeps running against it, so a change to
- * any of them is a breaking change. A test here that fails means the README
- * and the changelog have to say so too.
+ * The package's defaults and limits, held to their values.
  *
- * The ones that need the component are pinned where its harness is, under
+ * - The documented ones: what the README states under "Defaults and limits"
+ *   (what an option is when left out, and the limits an app is designed
+ *   around). An app that was built against one keeps running against it, so
+ *   a change to any of them is a breaking change, and the README and the
+ *   changelog have to say so.
+ * - The package's own timing: how soon it asks again, how long it keeps a
+ *   key. The README does not state these and they may be tuned. They are
+ *   held here so that a change to one is made on purpose.
+ *
+ * The ones that need the component are held where its harness is, under
  * "the documented defaults" in `agents.test.ts`; `settleTimeoutMs` in
  * `tanstack.test.ts`; `principals` and `agentOrigins` in `server.test.ts`.
  */
@@ -52,17 +57,22 @@ describe("the documented defaults", () => {
     expect(READ_BUDGET_BYTES).toBe(4 * 1024 * 1024);
   });
 
-  it("lets a page action be claimed for 120 seconds, and lists it for ten minutes", () => {
+  it("lets a page action be claimed for 120 seconds", () => {
     expect(PAGE_ACTION_TTL_MS).toBe(120 * SECOND);
-    expect(PAGE_ACTION_LISTED_MS).toBe(10 * MINUTE);
     const calledAt = "2026-11-15T12:00:00.000Z";
     const at = Date.parse(calledAt);
     expect(isPageActionFresh(calledAt, at + 120 * SECOND - 1)).toBe(true);
     expect(isPageActionFresh(calledAt, at + 120 * SECOND)).toBe(false);
   });
+});
 
+describe("the package's own timing, which the README does not state", () => {
   it("asks Hercules about a run with nothing delivered after three minutes", () => {
     expect(STUCK_AFTER_MS).toBe(3 * MINUTE);
+  });
+
+  it("lists a page action no tab ran for ten minutes", () => {
+    expect(PAGE_ACTION_LISTED_MS).toBe(10 * MINUTE);
   });
 });
 
@@ -101,7 +111,7 @@ describe("followRun's retry, left out", () => {
   });
 });
 
-describe("the issuer's keys", () => {
+describe("the issuer's keys, whose timing the README does not state", () => {
   async function setup() {
     let nowMs = NOW_MS;
     const issuer = await createTestIssuer();

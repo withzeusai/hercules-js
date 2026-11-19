@@ -1,12 +1,13 @@
 /**
- * The package's public surface, pinned: every entry point in `package.json`
- * and, for each, the exact list of names it exports, values and types. From
- * 1.0.0 all of it is frozen under semantic versioning (see "Versioning" in
- * the README), so this fails when a change adds, removes or renames one.
+ * The package's public surface, held: every entry point in `package.json`
+ * and, for each, the exact list of names it exports, values and types. It is
+ * the public API "Versioning" in the README describes, so this fails when a
+ * change adds, removes or renames one.
  *
- * - Adding a name here is a minor version. Add it on purpose, and document
- *   it in the README: an export is a promise to keep it.
- * - Removing or renaming one is a major version.
+ * - Add a name here on purpose, and document it in the README: an export is
+ *   something apps come to depend on.
+ * - Removing or renaming one breaks the apps that import it, and the
+ *   changelog has to say so.
  *
  * It reads what is published, the built `dist`, as the version test in
  * `agents.test.ts` does: `turbo test` builds first, and a package that was
