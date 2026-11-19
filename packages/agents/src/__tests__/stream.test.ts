@@ -333,6 +333,36 @@ describe("followRun", () => {
     expect(requests).toHaveLength(3);
   });
 
+  it.each([[500], [503], [520], [599], [429], [408]])(
+    "connects again after a %i, whatever its code",
+    async (status) => {
+      const { requests, fetch: fetchFn } = scripted([
+        () => Response.json({ code: "a_code_added_later" }, { status }),
+        () => new Response(streamOf(sse(event(1, "run.completed", { output: "" })))),
+      ]);
+      const events = await collect(
+        followRun({ url: URL_, token: "t", fetch: fetchFn, retry: { initialMs: 1, maxMs: 2 } }),
+      );
+      expect(events.map((e) => e.seq)).toEqual([1]);
+      expect(requests).toHaveLength(2);
+    },
+  );
+
+  it.each([[400], [401], [403], [404], [410], [422]])(
+    "gives up at once on a %i, with the code Hercules sent, known or not",
+    async (status) => {
+      const { requests, fetch: fetchFn } = scripted([
+        () => Response.json({ code: "a_code_added_later" }, { status }),
+      ]);
+      const error = await collect(followRun({ url: URL_, token: "t", fetch: fetchFn })).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(RunStreamError);
+      expect(error).toMatchObject({ status, code: "a_code_added_later" });
+      expect(requests).toHaveLength(1);
+    },
+  );
+
   it("picks the run up again when Hercules closes a stream that has been open ten minutes", async () => {
     const { requests, fetch: fetchFn } = scripted([
       // Closed by Hercules with the run still going.

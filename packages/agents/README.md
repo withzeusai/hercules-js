@@ -141,6 +141,12 @@ are the app's setup, not the conversation, so a new chat will not help:
 
 - `agent_not_found`: Hercules has no agent with the id in `convex/agent.ts`
   for this app, or the agents API is not turned on for it. Fix the id.
+- `agent_unavailable`: Hercules will not run the agent for the app. The
+  agent is turned off, is not open to apps, has no owner, or its
+  organization is suspended. Check the agent in Hercules. The run fails at
+  once and is not sent again. Its error tells the developer what to check,
+  with what Hercules said, and the thread a page reads has the same code
+  with "The assistant is not available right now."
 - `hercules_auth_required`: the app has no Hercules Auth 2.0 tenant, so
   Hercules cannot deliver a run's events to it or call its tools. Upgrade the
   app to Hercules Auth 2.0. The run fails at once and is not sent again. Its
@@ -160,6 +166,29 @@ A run Hercules refuses over a limit (`end_user_rate_limited`,
 `agent_daily_limit_reached`) fails at once with that code. The thread's
 `latestRun.error` then carries `retryAfterSeconds`, counted from
 `latestRun.finished_at`.
+
+What the package does with an answer is decided by its code when the package
+has a rule for it, and by its HTTP status otherwise. Hercules may add codes,
+so a code the package does not know is handled by the status it came with:
+
+| Hercules answers a start with                                 | The package                                                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 202, or 200                                                   | Takes the run. One that is already over is settled at once, with what it wrote                           |
+| 404                                                           | Fails the run as `agent_not_found`. Not sent again                                                       |
+| 403 `agent_unavailable`                                       | Fails the run with that code. Not sent again. The page reads "The assistant is not available right now." |
+| 409 `hercules_auth_required`, 426 `client_upgrade_required`   | The same, with what the developer has to upgrade                                                         |
+| 409 `thread_busy`                                             | Sends it again for up to a minute, then fails the run as `thread_busy`                                   |
+| 429 `end_user_rate_limited`, `agent_daily_limit_reached`      | Fails the run with that code and `retryAfterSeconds`. Not sent again                                     |
+| 429 with any other code, or none                              | Sends it again once `Retry-After` is over, eight times at most, then fails the run with that code        |
+| 408, any 5xx, or no answer                                    | Sends it again under the same run id, as `Retry-After` says and then further apart, for up to a day      |
+| Any other 4xx, with any code: 400, 401, 402, 403, 409, 413... | Fails the run with Hercules's code and message. Not sent again                                           |
+
+The other requests follow the same rule. A delete Hercules refuses with a 4xx
+is not asked for again, except a 404 (which has to stay the answer for an
+hour) and a 409 `thread_busy` (the thread's run is still stopping). A run
+whose read is refused with a 4xx is left for delivery to settle, and is asked
+about less and less often. `followRun` connects again after a 408, a 429 or a
+5xx, and throws a `RunStreamError` on any other answer.
 
 `cancel` asks Hercules to stop the run. Until Hercules has, the run is still
 the thread's: `activeRun.stopping` is true, and `send` throws `thread_busy`.
@@ -518,6 +547,8 @@ function errorText(error: unknown): string {
   ) {
     return "The assistant is not available right now.";
   }
+  // The agent is turned off, or not open to this app.
+  if (code === "agent_unavailable") return "The assistant is not available right now.";
   return "Not sent. Try again.";
 }
 ```
@@ -619,6 +650,10 @@ call itself, so TanStack never runs one or starts a second run.
   right now."; the Convex logs
   say what to do. `not_found` from `send` is a thread that is not this
   user's or not this agent's.
+- `agent_unavailable` is the app's setup as well: Hercules will not run the
+  agent for the app, because the agent is turned off, is not open to apps,
+  has no owner, or its organization is suspended. Its message on
+  `chat.error` is "The assistant is not available right now."
 - A run's ending is found by the run, not only by the thread's latest run.
   When the thread already has a newer run (the app's `onRunFinished` started
   a follow-up, or another tab sent a message) and this run's reply is stored,
@@ -763,7 +798,7 @@ if (chat.error instanceof RunStreamError) {
   // Nothing to tell the user: the reply is on its way through Convex.
 } else if (
   chat.error instanceof AgentError &&
-  (chat.error.code === "agent_not_found" || chat.error.code === "hercules_auth_required")
+  ["agent_not_found", "agent_unavailable", "hercules_auth_required"].includes(chat.error.code)
 ) {
   // The app is set up wrong. Starting a new chat will not help.
 }

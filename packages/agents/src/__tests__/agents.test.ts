@@ -454,8 +454,8 @@ describe("starting a run", () => {
     api.answerWith((request) =>
       request.method === "POST"
         ? Response.json(
-            { code: "agent_disabled", title: "Conflict", detail: "The agent is turned off." },
-            { status: 409 },
+            { code: "out_of_credits", title: "Payment Required", detail: "No credits are left." },
+            { status: 402 },
           )
         : undefined,
     );
@@ -466,7 +466,7 @@ describe("starting a run", () => {
     expect(thread.latestRun).toEqual({
       id: runId,
       status: "failed",
-      error: { code: "agent_disabled", message: "The agent is turned off." },
+      error: { code: "out_of_credits", message: "No credits are left." },
       cappedReason: null,
       finished_at: new Date(h.now).toISOString(),
     });
@@ -1996,6 +1996,341 @@ describe("limits and refusals at Hercules", () => {
   });
 });
 
+describe("an answer from Hercules, by its code and by its status", () => {
+  const NEUTRAL = "The assistant is not available right now.";
+  let errors: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    errors.mockRestore();
+  });
+
+  /** Sends one message with every start answered by `answer`, and lets a minute pass. */
+  async function refusedStart(answer: () => Response) {
+    const support = agents();
+    api.answerWith((request) => (isStart(request) ? answer() : undefined));
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runUntil(h.now + 60_000);
+    return {
+      runId,
+      starts: api.requests.filter(isStart).length,
+      page: (await read(support, threadId)).latestRun,
+      stored: (await support.readThreadDetails(h.appCtx(), { threadId }))?.latestRun,
+      ticking: h.scheduled.some((job) => job.name === "hercules:tickRun"),
+    };
+  }
+
+  it.each([
+    // What Hercules answers now: one code, on a 403.
+    [403, "agent_unavailable", "The agent is turned off."],
+    // What a Hercules that has not been updated answers for the same four cases.
+    [403, "agent_not_exposed", "Let apps run this agent is off."],
+    [403, "organization_suspended", "The organization is suspended."],
+    [409, "agent_disabled", "The agent is turned off."],
+    [409, "agent_has_no_owner", "The agent has no owner to run as."],
+  ])(
+    "fails with agent_unavailable, once, for %i %s: the app's setup, in other words for the page",
+    async (status, code, detail) => {
+      const { runId, starts, page, stored } = await refusedStart(() =>
+        problem(status, code, detail),
+      );
+      expect(starts).toBe(1);
+      // One code for an app to handle, under whichever name Hercules sent it.
+      expect(stored).toMatchObject({ id: runId, status: "failed" });
+      expect(stored?.error?.code).toBe("agent_unavailable");
+      // The developer reads what to check, and what Hercules said.
+      expect(stored?.error?.message).toMatch(/^Hercules will not run this agent for the app/);
+      expect(stored?.error?.message).toContain(`Hercules said: ${detail}`);
+      expect(errors.mock.calls.map((call: unknown[]) => String(call[0]))).toContainEqual(
+        expect.stringContaining(`Hercules refused run ${runId}: ${status} ${code}`),
+      );
+      expect(page?.error).toEqual({ code: "agent_unavailable", message: NEUTRAL });
+      expect(finished).toEqual([
+        expect.objectContaining({ runId, status: "failed", error: stored?.error }),
+      ]);
+    },
+  );
+
+  it.each([
+    // The codes Hercules answers a start with now.
+    [400, "invalid_request"],
+    [400, "message_too_long"],
+    [401, "invalid_api_key"],
+    [401, "invalid_run_token"],
+    [402, "out_of_credits"],
+    [403, "missing_scope"],
+    [409, "run_id_conflict"],
+    [413, "request_too_large"],
+    // The ones it answered before, which `invalid_request` and `invalid_api_key` now cover.
+    [400, "invalid_api_version"],
+    [400, "invalid_authorization"],
+    [400, "unsupported_content"],
+    [401, "credential_required"],
+  ])("fails at once with Hercules's own code and words for %i %s", async (status, code) => {
+    const { starts, page, stored } = await refusedStart(() =>
+      problem(status, code, `Detail of ${code}.`),
+    );
+    expect(starts).toBe(1);
+    const error = { code, message: `Detail of ${code}.` };
+    expect(stored?.error).toEqual(error);
+    expect(page?.error).toEqual(error);
+  });
+
+  it.each([[400], [401], [402], [403], [405], [409], [410], [413], [418], [422], [451]])(
+    "takes a %i with a code it does not know as final: sent once, failed with that code",
+    async (status) => {
+      const { starts, page } = await refusedStart(() =>
+        problem(status, "a_code_added_later", "Something new."),
+      );
+      expect(starts).toBe(1);
+      expect(page).toMatchObject({
+        status: "failed",
+        error: { code: "a_code_added_later", message: "Something new." },
+      });
+    },
+  );
+
+  it.each([[400], [403], [422]])(
+    "takes a %i with no code at all as final too, under a code made of its status",
+    async (status) => {
+      const { starts, page } = await refusedStart(() => new Response("no", { status }));
+      expect(starts).toBe(1);
+      expect(page?.error).toEqual({
+        code: `http_${status}`,
+        message: `Hercules answered ${status}.`,
+      });
+    },
+  );
+
+  it.each([[408], [500], [502], [503], [504], [520], [599]])(
+    "sends again after a %i with a code it does not know, and the run stays open",
+    async (status) => {
+      const { runId, starts, page, ticking } = await refusedStart(() =>
+        problem(status, "a_code_added_later", "Something new."),
+      );
+      // 1, 2, 4, 8, 16 seconds apart, and on: never given up on within a day.
+      expect(starts).toBeGreaterThanOrEqual(6);
+      expect(page).toMatchObject({ id: runId, status: "queued", error: null });
+      expect(ticking).toBe(true);
+      expect(finished).toEqual([]);
+    },
+  );
+
+  it("waits as a 503 says before it sends again", async () => {
+    const support = agents();
+    let calls = 0;
+    api.answerWith((request) =>
+      isStart(request) && ++calls <= 2
+        ? problem(503, "a_code_added_later", "Not just now.", 20)
+        : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    const sentAt = h.now;
+    await h.runUntil(sentAt + 19_999);
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    await h.runUntil(sentAt + 39_999);
+    expect(api.requests.filter(isStart)).toHaveLength(2);
+    await h.runUntil(sentAt + 40_000);
+    expect(api.requests.filter(isStart)).toHaveLength(3);
+    expect((await read(support, threadId)).activeRun?.live?.token).toBe(`token-${runId}`);
+  });
+
+  it("waits as a 429 with a code it does not know says, and fails with that code when it never passes", async () => {
+    const support = agents();
+    let calls = 0;
+    let open = false;
+    api.answerWith((request) =>
+      isStart(request) && !open && ++calls > 0
+        ? problem(429, "a_limit_added_later", "Too many just now.", 7)
+        : undefined,
+    );
+    const first = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    const sentAt = h.now;
+    // Not sooner than asked.
+    await h.runUntil(sentAt + 6_999);
+    expect(calls).toBe(1);
+    await h.runUntil(sentAt + 7_000);
+    expect(calls).toBe(2);
+    // A limit that never lifts is an answer: after eight tries the run fails with it.
+    await h.runUntil(sentAt + 10 * 60_000);
+    expect(calls).toBe(8);
+    expect((await read(support, first.threadId)).latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "a_limit_added_later", message: "Too many just now.", retryAfterSeconds: 7 },
+    });
+
+    // One that lifts lets the run through.
+    calls = 0;
+    const second = await support.send(h.appCtx(BOB), { text: "Hi" });
+    await h.runUntil(h.now + 7_000);
+    expect(calls).toBe(2);
+    open = true;
+    await h.runUntil(h.now + 60_000);
+    expect((await read(support, second.threadId, BOB)).activeRun?.live).not.toBeNull();
+  });
+
+  it.each([["end_user_rate_limited"], ["agent_daily_limit_reached"]])(
+    "does not send again after a 429 %s: a quota stands for hours",
+    async (code) => {
+      const { starts, page } = await refusedStart(() =>
+        problem(429, code, "Come back later.", 900),
+      );
+      expect(starts).toBe(1);
+      expect(page?.error).toEqual({
+        code,
+        message: "Come back later.",
+        retryAfterSeconds: 900,
+      });
+    },
+  );
+
+  it.each([
+    [402, "a_code_added_later", "stops"],
+    [410, "a_code_added_later", "stops"],
+    [409, "a_code_added_later", "stops"],
+    [422, "invalid_request", "stops"],
+    [409, "thread_busy", "asks again"],
+    [429, "a_code_added_later", "asks again"],
+    [500, "a_code_added_later", "asks again"],
+    [503, "service_unavailable", "asks again"],
+  ])("deleting a thread, a %i %s: it %s", async (status, code, expected) => {
+    const support = agents();
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) =>
+      request.method === "DELETE" ? problem(status, code, "No.") : undefined,
+    );
+    await support.deleteThread(h.appCtx(ALICE), { threadId });
+    await h.runUntil(h.now + 10 * 60 * 1000);
+    const asked = api.requests.filter((request) => request.method === "DELETE").length;
+    const row = h.db.all("deleted_threads")[0];
+    if (expected === "stops") {
+      expect(asked).toBe(1);
+      expect(row).toMatchObject({ remoteGaveUpAt: expect.any(Number), remoteDeletedAt: null });
+    } else {
+      expect(asked).toBeGreaterThan(3);
+      expect(row).toMatchObject({ remoteGaveUpAt: null, remoteDeletedAt: null });
+    }
+  });
+
+  it("asks less and less often for a run whose read is refused for good, and leaves the run to delivery", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const sentAt = h.now;
+    // As after the app key was rotated: the key the check was scheduled with is refused.
+    const reads: number[] = [];
+    api.answerWith((request) => {
+      if (request.method !== "GET") return undefined;
+      reads.push(Math.round((h.now - sentAt) / 60_000));
+      return problem(401, "invalid_api_key", "The key is not valid.");
+    });
+    await h.runUntil(sentAt + 90 * 60 * 1000);
+    // Every 3 minutes it would be 30 reads. The wait doubles, up to half an hour.
+    expect(reads).toEqual([3, 6, 12, 24, 48, 78]);
+    // The run is not ended over it: what Hercules delivers still settles it.
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await deliver(support, event(runId, threadId, 9, "run.completed", { output: "Done." }));
+    expect((await read(support, threadId)).latestRun?.status).toBe("completed");
+  });
+});
+
+describe("the answer to a start", () => {
+  const started = (request: Recorded, status: string, extra: object = {}) => ({
+    run: { id: request.body.run_id, thread_id: request.body.thread_id, status, ...extra },
+    live: { url: `${API_URL}/v1/agents/runs/${request.body.run_id}/events`, token: "run-token" },
+  });
+
+  it.each([[202], [200]])("takes a %i with a run that is going", async (status) => {
+    const support = agents();
+    api.answerWith((request) =>
+      isStart(request) ? Response.json(started(request, "queued"), { status }) : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    expect(h.db.all("runs")[0]).toMatchObject({ accepted: true, status: "queued" });
+    expect((await read(support, threadId)).activeRun).toMatchObject({
+      id: runId,
+      live: { token: "run-token" },
+    });
+    expect(finished).toEqual([]);
+  });
+
+  it.each([[200], [202]])(
+    "takes a %i with a run that is already over, and settles it with what it wrote",
+    async (status) => {
+      const support = agents();
+      api.answerWith((request) => {
+        if (isStart(request)) {
+          // As a start sent again for a run that finished meanwhile is answered.
+          return Response.json(
+            started(request, "completed", {
+              output: "Done.",
+              usage: { credits: 1 },
+              finished_at: "2026-11-15T12:00:09.000Z",
+            }),
+            { status },
+          );
+        }
+        const events = /^\/v1\/agents\/runs\/([^/]+)\/events/.exec(request.path);
+        if (events === null) return undefined;
+        const run = h.db.all("runs")[0]!;
+        const threadId = run["threadId"] as string;
+        return Response.json({
+          data: [
+            event(events[1]!, threadId, 8, "message.completed", {
+              message: {
+                id: "msg_1",
+                thread_id: threadId,
+                run_id: events[1],
+                role: "assistant",
+                parts: [{ type: "text", text: "Done." }],
+                created_at: "2026-11-15T12:00:08.000Z",
+              },
+            }),
+            event(events[1]!, threadId, 9, "run.completed", { output: "Done." }),
+          ],
+          has_more: false,
+        });
+      });
+      const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+      await h.runDue();
+      const thread = await read(support, threadId);
+      expect(thread.activeRun).toBeNull();
+      expect(thread.latestRun?.status).toBe("completed");
+      expect(thread.messages[1]?.parts).toEqual([{ type: "text", text: "Done." }]);
+      expect(finished).toEqual([
+        expect.objectContaining({ runId, status: "completed", output: "Done." }),
+      ]);
+    },
+  );
+
+  it("never asks Hercules to wait for the run: a start is answered at once", async () => {
+    const support = agents({ pageActions: ["open_order"], exposeToolDetails: true });
+    await support.send(h.appCtx(ALICE), { text: "Hi", context: { page: "/orders" } });
+    await support.run(h.appCtx(), { text: "A job" });
+    await h.runDue();
+    const starts = api.requests.filter(isStart);
+    expect(starts).toHaveLength(2);
+    for (const start of starts) {
+      expect(start.body).not.toHaveProperty("wait_seconds");
+      expect(start.path).not.toContain("wait_seconds");
+    }
+    // Everything a start may carry, and nothing else.
+    expect(Object.keys(starts[0]!.body).sort()).toEqual([
+      "context",
+      "end_user",
+      "expose_tool_details",
+      "input",
+      "page_actions",
+      "run_id",
+      "thread_id",
+    ]);
+  });
+});
+
 describe("a start call that was lost", () => {
   const notStart = (name: string) => name !== "hercules:startRun";
 
@@ -3300,7 +3635,7 @@ describe("a start Hercules refuses", () => {
 
   it.each([
     [409, "a_refusal_from_the_future", "Something this version has no name for.", undefined],
-    [429, "a_limit_from_the_future", "A limit this version has no name for.", 90],
+    [403, "a_refusal_from_the_future", "Something this version has no name for.", undefined],
   ])(
     "fails with a code it does not know as Hercules sent it: %i %s",
     async (status, code, detail, wait) => {

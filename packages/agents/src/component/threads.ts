@@ -246,6 +246,7 @@ const MAX_LISTED_PAGE_ACTIONS = 20;
  * `onRunFinished` give the app's backend that one.
  */
 const PAGE_ERROR_MESSAGES: ReadonlyMap<string, string> = new Map([
+  ["agent_unavailable", "The assistant is not available right now."],
   ["hercules_auth_required", "The assistant is not available right now."],
   ["client_upgrade_required", "The assistant is not available right now."],
 ]);

@@ -203,7 +203,9 @@ export async function* followRun(options: RunStreamOptions): AsyncGenerator<Agen
         ...(options.signal !== undefined && { signal: options.signal }),
       });
       if (!response.ok || response.body === null) {
-        if (!RETRYABLE_STATUSES.has(response.status)) {
+        // By its status, whatever its code: Hercules could not answer (these
+        // and every 5xx), or the request is refused (any other 4xx).
+        if (!RETRYABLE_STATUSES.has(response.status) && response.status < 500) {
           const code = await problemCode(response);
           throw new RunStreamError(
             `The run's live stream was refused (${response.status}${code === null ? "" : ` ${code}`})`,

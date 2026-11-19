@@ -124,13 +124,27 @@ function retryAfterMs(header: string | null): number | null {
 }
 
 /**
- * Whether a refusal may pass if the same request is sent again. Of the 429s
- * only `rate_limited` (too many requests just now) and one with no code (a
- * proxy's) may: `end_user_rate_limited` and `agent_daily_limit_reached` are
- * quotas, which stand for hours.
+ * The 429s that are quotas, which stand for hours: sending again soon cannot
+ * pass. Every other 429 is too many requests just now.
+ */
+const QUOTA_CODES: ReadonlySet<string> = new Set([
+  "end_user_rate_limited",
+  "agent_daily_limit_reached",
+]);
+
+/**
+ * Whether a refusal may pass if the same request is sent again. The HTTP
+ * status decides, as the API documents for a code a client does not know:
+ * its list of codes may grow.
+ *
+ * - 408 and every 5xx may pass: Hercules could not answer.
+ * - A 429 may pass once `Retry-After` is over, whatever its code, one with
+ *   no code (a proxy's) and one added later among them. Only the two quotas
+ *   above may not.
+ * - Any other 4xx may not: the request itself is what is refused.
  */
 function isRetryable(status: number, code: string | null): boolean {
-  if (status === 429) return code === null || code === "rate_limited";
+  if (status === 429) return code === null || !QUOTA_CODES.has(code);
   return status === 408 || status >= 500;
 }
 
@@ -291,6 +305,34 @@ const CANCELLED: RunOutcome = {
 };
 
 /**
+ * Hercules will not run the agent for this app: the agent is turned off, is
+ * not open to apps, has no owner, or its organization is suspended. One code,
+ * `agent_unavailable`, on a 403. A Hercules that names the four cases apart
+ * (two of them on a 409) is read the same: all are stored as the one code,
+ * so an app has one to handle.
+ */
+const AGENT_UNAVAILABLE_CODE = "agent_unavailable";
+const AGENT_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  AGENT_UNAVAILABLE_CODE,
+  "agent_not_exposed",
+  "organization_suspended",
+  "agent_disabled",
+  "agent_has_no_owner",
+]);
+
+/**
+ * What the app's developer is told of it, with what Hercules said. It is the
+ * run's stored error. A page reads other words for it: see `pageError` in
+ * `./threads`.
+ */
+function agentUnavailableMessage(response: Extract<HerculesResponse, { ok: false }>): string {
+  const said = response.message === `Hercules answered ${response.status}.` ? "" : response.message;
+  return `Hercules will not run this agent for the app: the agent is turned off, is not open to apps, has no owner, or its organization is suspended. Check the agent in Hercules: no run can start until then.${
+    said.length > 0 ? ` Hercules said: ${said}` : ""
+  }`;
+}
+
+/**
  * What the app's developer is told when Hercules refuses a run as
  * `hercules_auth_required`: the app has no Hercules Auth 2.0 tenant, whose
  * key signs what Hercules sends the app. It is the run's stored error and is
@@ -340,6 +382,10 @@ function refused(response: Extract<HerculesResponse, { ok: false }>): RunOutcome
   // The app's setup as well. A 409, so it was sent once: sending again cannot pass.
   if (response.code === "hercules_auth_required") {
     return failed("hercules_auth_required", AUTH_REQUIRED_MESSAGE);
+  }
+  // And so is an agent Hercules will not run for the app, under whichever name it came.
+  if (AGENT_UNAVAILABLE_CODES.has(response.code)) {
+    return failed(AGENT_UNAVAILABLE_CODE, agentUnavailableMessage(response));
   }
   return failed(
     response.code,
@@ -951,6 +997,18 @@ async function deletedThread(ctx: QueryCtx, threadId: string) {
 }
 
 /**
+ * Whether a delete Hercules did not do may be done if asked again: when
+ * Hercules could not answer (no answer, 408, 429, a 5xx), and when it said
+ * the thread's run is still stopping (409 `thread_busy`). Any other 4xx, with
+ * a code this version knows or not, is an answer that stands.
+ */
+function mayDeleteLater(response: Extract<HerculesResponse, { ok: false }>): boolean {
+  const { status } = response;
+  if (status === null || status === 408 || status === 429 || status >= 500) return true;
+  return status === 409 && response.code === "thread_busy";
+}
+
+/**
  * Records an answer about a deleted thread that was not a yes. A 404 is "it
  * is not there". But Hercules also answers 404 on every route while the
  * agents API is off for the app, so one 404 is not taken for it: it must
@@ -974,7 +1032,7 @@ async function noteNotDeleted(
     return;
   }
   // An answer that asking again cannot change: the request or the key is wrong.
-  if (response.status === 400 || response.status === 401 || response.status === 403) {
+  if (!mayDeleteLater(response)) {
     console.error(
       `Hercules refused to delete thread ${threadId}: ${response.status} ${response.code}`,
     );
@@ -1391,6 +1449,12 @@ export const checkRun = internalAction({
       return null;
     }
     if (tooOld) return giveUp("Nothing was heard from Hercules about this run for a day.");
+    // An answer that asking again cannot change (the app key was rotated,
+    // say) does not end the run: delivery may still settle it. But it is not
+    // asked for every three minutes either: the next check waits longer.
+    if (!response.retryable) {
+      await ctx.runMutation(internal.hercules.noteStillGoing, { runId: run.runId });
+    }
     return null;
   },
 });
