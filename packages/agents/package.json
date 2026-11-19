@@ -1,6 +1,6 @@
 {
   "name": "@usehercules/agents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hercules agents in a Hercules app: talk to an agent from a Convex app, with TanStack AI or React, and serve it the app's tools over MCP",
   "type": "module",
   "sideEffects": false,

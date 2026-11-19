@@ -1,5 +1,71 @@
 # @usehercules/agents
 
+## 0.3.0
+
+### Minor Changes
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - A tool that lists `"agent"` in `principals` now takes a call with no end user only from the app's own job, unless it says otherwise.
+
+  - **Breaking for a tool that lists `"agent"` and is called by anything but the app's own job.** Hercules signs where a run with no end user was started into its tokens, as the claim `hercules_origin`: `app` (the app's own backend started the run with its app key and no end user), `organization`, `console`, `trigger`, `channel`, `schedule` or `test`. A tool that lists `"agent"` used to take every one of them. It now takes `app` alone. A call whose token names another origin, an origin the package does not know, or no origin at all is refused, and the tool is not listed to that caller. The package is not at 1.0 and Hercules apps pin its exact version, so this ships as a minor version.
+  - **To keep the old behavior for a tool, add one line to it: `agentOrigins: "any"`.** To take only some origins, list them: `agentOrigins: ["app", "schedule"]`.
+  - `agentOrigins` is only for a tool that lists `"agent"`. On any other tool it is a type error, and `defineTools` throws when the module loads. An empty list throws too.
+  - The `agent` caller a handler receives has a new field, `origin`: the origin Hercules signed, or `null` when the token names none. `AgentOrigin` is its type.
+  - A signed-in user's calls are not affected, with an agent acting for them or not.
+  - An inspection listing carries each agent tool's origins beside its principals, under `hercules.app/agent-origins`.
+
+### Patch Changes
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - Name the package and its version on every request the app's backend makes to Hercules, in a `Hercules-Client: agents/<version>` header beside `Hercules-Version`: starting a run, reading it and its events, cancelling it, and deleting a thread. The version is the one in the package's `package.json`, written in by the build. The page's request for a run's live stream does not carry the header yet.
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - Reserve the error code `client_upgrade_required`, for the day Hercules no longer takes requests from a version of this package. Hercules does not send it today.
+
+  - A start answered with it fails the run at once, with that code, and is not sent again, whatever HTTP status carries it (426 or 400).
+  - A run that was going is failed the first time Hercules answers for it with the code, and a deleted thread is no longer asked about.
+  - The run's stored error, the Convex log and `onRunFinished` tell the developer to upgrade `@usehercules/agents`, with what Hercules said. The thread a page reads carries the same code with "The assistant is not available right now.", as for `hercules_auth_required`.
+  - `followRun` throws a `RunStreamError` with the code at once, as for any refusal.
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - The README has a "Compatibility" section: what the package promises to do with event types, fields, statuses, part types and error codes the API adds after an app was built, and that a run can stay unfinished for a long time.
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - Name the end user on every request the component makes to Hercules about a user's thread or run, not only on the request that starts the run.
+
+  - Reading a run, reading its events, stopping it, and deleting its thread now carry a `Hercules-End-User` header with the user's `tokenIdentifier`, the same string a run is started with as `end_user.token_identifier`. Starting a run carries it too, beside the body.
+  - The identifier is the one the component stored when the thread was opened, never one a page sent. Requests about the app's own threads, those `run` opens, carry no such header.
+  - An identifier a header cannot carry as it is (characters outside visible ASCII) is sent as `UTF-8''` followed by its percent-encoded UTF-8.
+  - A 404 on any of these requests is handled as before.
+
+  The component's `deleted_threads` table gains one optional field, `owner`, so a deleted thread's user is still known when Hercules is asked to delete it. A thread deleted before the upgrade is asked about without the header. No stored document changes shape and no function's arguments change.
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - Handle an answer from Hercules by its HTTP status when the package has no rule for its code, and add the code `agent_unavailable`.
+
+  - `agent_unavailable` (403) fails a run at once and is not sent again. It is the app's setup: the agent is turned off, is not open to apps, has no owner, or its organization is suspended. The run's stored error tells the developer what to check, with what Hercules said, and the thread a page reads carries the code with "The assistant is not available right now." The codes Hercules used for the four cases before (`agent_not_exposed`, `organization_suspended`, `agent_disabled`, `agent_has_no_owner`) are read the same, and stored as `agent_unavailable`, so an app has one code to handle.
+  - A code the package does not know is handled by its status: a 4xx other than 408 and 429 is final, a 408 or a 5xx is sent again, and a 429 is sent again once `Retry-After` is over, eight times at most. A 429 with a code the package does not know used to be final. `end_user_rate_limited` and `agent_daily_limit_reached` are still final: they are quotas.
+  - A delete Hercules refuses with any 4xx other than 404, 408, 429 and a 409 `thread_busy` is not asked for again. It used to be asked for a day unless the status was 400, 401 or 403.
+  - A run whose read Hercules refuses with a 4xx (after the app key was rotated, say) is asked about less and less often, up to every half hour, where it was asked every three minutes. The run stays open for delivery to settle.
+  - `followRun` connects again after any 5xx, not only 500, 502, 503 and 504.
+  - The README has a table of what the package does with each answer to a start.
+
+  The codes Hercules answered before it reduced its list (`invalid_api_version`, `invalid_authorization`, `unsupported_content`, `credential_required`) are handled as they were: each is a 4xx, and fails the run with Hercules's code and message. A start is taken on a 202 and on a 200 alike. The package never sent `wait_seconds`.
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - Read what the API adds later without dropping what is known, in the app's backend and in the page.
+
+  - A tool call of a kind the package does not know is kept, as a `hercules` tool call: the kind whose name and summary a page is not shown unless the app set `exposeToolDetails`. It used to be left out of its message, and its `tool_call.completed` was not stored.
+  - A tool call that ended with a status the package does not know is kept, with the status `failed`: it is not known to have worked. It used to be left out of its message.
+  - The events `followRun`, `useAgentThread` and `herculesConnection` read from a run's live stream are now read as the delivered ones are. A completed message holds only parts of the types the package knows, so a part type added later is no longer taken for a tool call. A `run.failed` always carries an `error`, and a `run.capped` with a reason the package does not know carries `capped_reason: null` (its type is now `CappedReason | null`). Fields the package does not know are passed on as they came.
+  - `followRun` resumes after an event of a type it does not know, follows a run that is quiet for a long time without counting the streams Hercules closes as failures, and passes a finished run's reply on once however often Hercules sends it again.
+  - An event of a type the package does not know that Hercules marks with `final: true` ends its run, here as `failed` with the code `run_failed` and with what the run wrote. No event carries the mark today.
+  - A `run.progress` label, an error message and an error code are cut to a length a document can hold.
+
+- [#254](https://github.com/withzeusai/hercules-js/pull/254) [`cabf04f`](https://github.com/withzeusai/hercules-js/commit/cabf04f4d8d442f867956faf07d390a9b3241aa2) Thanks [@grant0417](https://github.com/grant0417)! - Treat a run status the package does not know as a run that is still going.
+
+  - The statuses a run ends with are a closed list: `completed`, `failed`, `cancelled`, `capped`. Every other status, one added to the API later among them, is a run that is going. It used to read as over, and a run read with such a status could not be read at all.
+  - `isFinalStatus` takes any string, and is true only for those four.
+  - A run in a status the package does not know keeps its thread's `activeRun`, with `status: "running"`, so a page shows it as going and can stop it. `onRunFinished` is not called for it, and `send` on its thread throws `thread_busy`, as for any run that is going.
+  - A run is kept open for as long as Hercules answers that it is going, and is looked at every half hour at most. It used to be failed, and stopped at Hercules, a day after it was sent. A run is now failed only once nothing was heard of it for a day (no event delivered, and no answer that it is going), or a day after it was sent when it was asked to stop.
+  - A run Hercules reports with a status the package does not know and a `finished_at` has ended: it is recorded as `failed` with the code `run_failed` (or the run's own error), and keeps the reply it wrote.
+  - A thread deleted before its first start was answered is still deleted at Hercules when that run reads with a status the package does not know.
+
+  The component's `runs` table gains one optional field, `goingAt`. No stored document changes shape and no function's arguments change, so an app on 0.2.0 upgrades with a plain deploy.
+
 ## 0.2.0
 
 ### Minor Changes
