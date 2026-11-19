@@ -788,10 +788,25 @@ function Chat() {
     const started = await chat.send(text);
     if (started !== null) setThreadId(started.threadId);
   }
-  // chat.messages, chat.status ("loading" | "ready" | "submitted" | "streaming"),
-  // chat.cancel(), chat.error
+  // chat.messages, chat.status, chat.cancel(), chat.error
 }
 ```
+
+`chat.status` says what is going:
+
+| `chat.status` | Means                                                       |
+| ------------- | ----------------------------------------------------------- |
+| `loading`     | The thread is being read                                    |
+| `submitted`   | A message is on its way, or the run has not started writing |
+| `streaming`   | The reply is being written                                  |
+| `ready`       | Nothing is going: a new message can be sent                 |
+
+Enable Send on `ready` and on nothing else. The set is open: a later version
+of the package may add a status, for a run that waits on a person, say, and
+any status but `ready` means something is going. Each message in
+`chat.messages` has the `status` the thread gives it (`streaming`,
+`completed`, `incomplete`), or `pending` for the user's message on its way
+to Convex.
 
 The reply streams from the run's live URL, resuming with `Last-Event-ID`
 after a dropped connection, until Convex has the completed message. Page
@@ -1254,14 +1269,24 @@ comparing with a value this version does not know does.
 | Origin                         | `caller.origin`, `agentOrigins`                                              | `app`, `organization`, `console`, `trigger`, `channel`, `schedule`, `test`, `other` | Not this app's own job, and not `other`                                   | The call is refused unless the tool names that origin, or takes `"any"` |
 | Kind of caller                 | `caller.principal`                                                           | `user`, `agent`                                                                     | A caller this version cannot read                                         | The call is refused before any handler runs                             |
 
-Two things stay closed, and code may rely on that:
+Three more sets are the package's own. Hercules does not add to them, so a
+value you do not know never reaches an app that has not upgraded the
+package: only a new minor version adds one, and the changelog names it. They
+are open so that one can, for a message held for a person, a page action
+that waits for approval, or a run that is paused:
 
-- **The four statuses a run ends with**: `completed`, `failed`, `cancelled`,
-  `capped`. A run is over exactly when its status is one of them, and
-  `onRunFinished` is called with one of them and no other.
-- **The sets the package defines for itself**: a thread message's `status`
-  (`streaming`, `completed`, `incomplete`), a page action's `status`
-  (`pending`, `expired`), and `useAgentThread`'s `status`.
+| Set                       | Where an app reads it                                                                        | Known in this version                                                     | A value you do not know means                                             |
+| ------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Message status            | a thread message's `status`, `metadata.hercules.messageStatus`, a `useAgentThread` message's | `streaming`, `completed`, `incomplete`, and `pending` in `useAgentThread` | Show the message as it is, marked neither as being written nor as cut off |
+| Page-action status        | `thread.pageActions[].status`                                                                | `pending`, `expired`                                                      | Not the page's to run, and not expired: say nothing of it                 |
+| `useAgentThread`'s status | `chat.status`                                                                                | `loading`, `ready`, `submitted`, `streaming`                              | Something is going: only `ready` takes a new message                      |
+
+One set stays closed, and code may rely on that: **the four statuses a run
+ends with**, `completed`, `failed`, `cancelled` and `capped`. A run is over
+exactly when its status is one of them, `onRunFinished` is called with one
+of them and no other, and `metadata.hercules.runStatus` is one of them. A
+run Hercules ends in a way added later is recorded as `failed`: see
+"Compatibility with the Hercules API".
 
 The last column is about the thread: what the component stores, and so what
 `thread`, `readThreadDetails`, the two hooks and `onRunFinished` hand an app.

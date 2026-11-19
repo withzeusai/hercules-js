@@ -47,14 +47,16 @@ export interface HerculesMessageMetadata {
    * `completed`, or `incomplete` when its run ended before the app got it
    * whole. A reply this page keeps because the thread holds less of it, or
    * none, is `incomplete` too. Not set on a message the page is streaming,
-   * until its run ends.
+   * until its run ends. An open set, as a thread message's `status` is: a
+   * later version of the package may add a status.
    */
-  messageStatus?: "streaming" | "completed" | "incomplete";
+  messageStatus?: "streaming" | "completed" | "incomplete" | (string & {});
   /**
    * How the message's run ended. Set on the last reply of a run that is
    * over: the run this page streamed, and after a reload, the thread's
    * latest run. The thread keeps how its latest run ended and no earlier
-   * one, so an older reply has none.
+   * one, so an older reply has none. A closed set: a run ends in one of
+   * these four ways and no other.
    */
   runStatus?: "completed" | "failed" | "cancelled" | "capped";
 }
