@@ -109,11 +109,12 @@ component stored it when the thread was opened from `ctx.auth`, never
 anything a page sent, and it travels in a `Hercules-End-User` header.
 Requests about the app's own threads, those `run` opens, name no one.
 
-If nothing has been delivered for a run in three minutes, the component asks
+If nothing has been delivered for a run for a few minutes, the component asks
 Hercules for the run and then its events itself, so a delivery that never
 arrives only delays a reply. While Hercules says the run is still going it
-asks less and less often (after 3, 6, 12 minutes, up to every 30), and any
-delivered event starts that over. The same check sends a run again if the call
+asks less and less often, and any delivered event starts that over. Every
+time and limit named in this README has its value in one place, "Defaults
+and limits". The same check sends a run again if the call
 that starts it was lost, asks again for a cancel that did not get through,
 and records a run's ending only once every event before it is applied. The
 check is started by a mutation that reschedules itself, which Convex never
@@ -123,16 +124,16 @@ lost.
 A run stays open for as long as Hercules says it is going, however long that
 is: a status the package does not know reads as a run that is going, not as
 one that ended. A run is failed, so its thread is free again, only once
-nothing was heard of it for a day: no event delivered, and no answer from
-Hercules that it is still going. A run that was asked to stop is failed a day
-after it was sent, whatever Hercules answers.
+nothing was heard of it for the give-up time: no event delivered, and no
+answer from Hercules that it is still going. A run that was asked to stop is
+failed that long after it was sent, whatever Hercules answers.
 
 A start Hercules cannot answer is not a refusal. On a 503, any other 5xx, a
 timeout or a network error the run stays open and is sent again under the
 same id, as told by `Retry-After` and then further apart, until Hercules
 answers with the run or refuses it: Hercules may have the run already, and
 says so in the 503 it answers while it cannot confirm the run started. A run
-it never takes is failed after a day.
+it never takes is failed after the give-up time.
 
 A run Hercules does not take fails with Hercules's own code, and with the
 message Hercules sent unless the package has its own for the code. A code the
@@ -177,15 +178,16 @@ so a code the package does not know is handled by the status it came with:
 | 404                                                           | Fails the run as `agent_not_found`. Not sent again                                                       |
 | 403 `agent_unavailable`                                       | Fails the run with that code. Not sent again. The page reads "The assistant is not available right now." |
 | 409 `hercules_auth_required`, 426 `client_upgrade_required`   | The same, with what the developer has to upgrade                                                         |
-| 409 `thread_busy`                                             | Sends it again for up to a minute, then fails the run as `thread_busy`                                   |
+| 409 `thread_busy`                                             | Sends it again for the busy wait, then fails the run as `thread_busy`                                    |
 | 429 `end_user_rate_limited`, `agent_daily_limit_reached`      | Fails the run with that code and `retryAfterSeconds`. Not sent again                                     |
-| 429 with any other code, or none                              | Sends it again once `Retry-After` is over, eight times at most, then fails the run with that code        |
-| 408, any 5xx, or no answer                                    | Sends it again under the same run id, as `Retry-After` says and then further apart, for up to a day      |
+| 429 with any other code, or none                              | Sends it again once `Retry-After` is over, up to the rate-limit tries, then fails the run with that code |
+| 408, any 5xx, or no answer                                    | Sends it again under the same run id, as `Retry-After` says and then further apart, for the give-up time |
 | Any other 4xx, with any code: 400, 401, 402, 403, 409, 413... | Fails the run with Hercules's code and message. Not sent again                                           |
 
 The other requests follow the same rule. A delete Hercules refuses with a 4xx
-is not asked for again, except a 404 (which has to stay the answer for an
-hour) and a 409 `thread_busy` (the thread's run is still stopping). A run
+is not asked for again, except a 404 (which has to stay the answer for a
+while: see "Deleting a thread") and a 409 `thread_busy` (the thread's run is
+still stopping). A run
 whose read is refused with a 4xx is left for delivery to settle, and is asked
 about less and less often. `followRun` connects again after a 408, a 429 or a
 5xx, and throws a `RunStreamError` on any other answer.
@@ -297,8 +299,8 @@ A page action is the agent's command to the page, such as opening a record.
 List its name in `pageActions`, and give the page a handler for it (below).
 One open tab claims each call with `claimPageAction` and runs it. A page
 action can be claimed once Hercules has delivered it to the app, and only
-while it is less than two minutes old by the time the agent called it. The
-claim decides that on the server's clock, so a browser's clock plays no part.
+until it expires, a set time after the agent called it. The claim decides
+that on the server's clock, so a browser's clock plays no part.
 
 A run sends the page only the page actions it was started with. One under any
 other name is dropped when Hercules delivers it, with a warning in the Convex
@@ -306,9 +308,9 @@ logs that names it, so no page lists or claims it. In the page, a handler runs
 only when the page set a function under that exact name.
 
 One that came too late is not run, and the page is told: `thread.pageActions`
-lists the page actions no tab has run (the twenty that have waited longest),
-each with `status: "pending"` or `"expired"`, for ten minutes from when it
-arrived. The status is as of the thread's last update: a Convex query is not
+lists the page actions no tab has run (up to a set number: those that have
+waited longest), each with `status: "pending"` or `"expired"`, for a set time
+from when it arrived. The status is as of the thread's last update: a Convex query is not
 run again as time passes, so a page sees `expired` with the next update of
 the thread. A claim that is refused as too late is such an update. Show the expired ones, so
 the user is not left waiting for something that will not happen:
@@ -323,8 +325,8 @@ const late = thread?.pageActions.filter((action) => action.status === "expired")
 `deleteThread` removes the thread from the app at once. Its other rows are
 purged in batches, and Hercules is asked to delete its copy until it confirms:
 it answers `thread_busy` while the thread's run is still stopping, and the
-component asks again as told, for up to a day. A 404 counts as "gone" only
-once it has been the answer for an hour, since Hercules also answers 404
+component asks again as told, for a set time. A 404 counts as "gone" only
+once it has been the answer for a while, since Hercules also answers 404
 while the agents API is off for the app. Both are driven by a mutation
 that reschedules itself, so neither stops halfway.
 
@@ -336,7 +338,7 @@ One deleted while its first run is still being started is deleted at Hercules
 once Hercules says it has that run.
 
 Deleting a thread does not give its runs back: they count toward
-`limits.runsPerUserPerHour` until an hour after they were sent.
+`limits.runsPerUserPerHour` for as long as any run does.
 
 ### Several agents
 
@@ -368,14 +370,19 @@ know are accepted and skipped: see "Compatibility".
 
 ### Configuration
 
-| Option                      | Default                                             |
-| --------------------------- | --------------------------------------------------- |
-| `apiKey`                    | `HERCULES_API_KEY`                                  |
-| `apiUrl`                    | `HERCULES_API_URL`, then `https://api.hercules.app` |
-| `issuer`                    | `HERCULES_OIDC_AUTHORITY`                           |
-| `pageActions`               | none: the page actions every run may call           |
-| `exposeToolDetails`         | `false`: see "What the page sees of tools"          |
-| `limits.runsPerUserPerHour` | no limit                                            |
+`HerculesAgents` takes the agent's id, and these options:
+
+| Option                      | What it sets                                                           |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `onRunFinished`             | The app's function to call when a run ends                             |
+| `limits.runsPerUserPerHour` | How many runs one signed-in user may start in an hour                  |
+| `pageActions`               | The page actions every run may call, by name                           |
+| `exposeToolDetails`         | Whether a page sees tool calls as they are: see the section above      |
+| `apiKey`                    | The app's Hercules key. Never send it to a browser                     |
+| `apiUrl`                    | The Hercules API's URL                                                 |
+| `issuer`                    | The app's Hercules Auth URL, which signs the deliveries Hercules sends |
+
+What each is when left out is under "Defaults and limits".
 
 A component cannot read the app's environment, so the app key travels to the
 component's scheduled functions as an argument. It never reaches a browser,
@@ -405,9 +412,9 @@ backend and in the page alike:
   it, `send` throws `thread_busy`, and `onRunFinished` is not called.
 - **A run can stay unfinished for a long time.** A run that waits, for a
   person say, is kept open for as long as Hercules says it is going, and is
-  asked about every half hour at most. It is failed only once nothing was
-  heard of it for a day. The live stream of a quiet run is followed for as
-  long as it takes.
+  asked about less and less often. It is failed only once nothing was heard
+  of it for the give-up time. The live stream of a quiet run is followed for
+  as long as it takes.
 - **An ending it does not know still ends the run.** A run Hercules reports
   as finished, in a status or with a final event added later, is recorded as
   `failed` with the code `run_failed`, and keeps the reply it wrote.
@@ -599,7 +606,7 @@ List its name in `pageActions` in `convex/agent.ts`, and register its handler
 on the connection in `SignedInChat`. One open tab claims each call through the
 app's `claimPageAction` mutation, from `support.api()`, and runs it. It runs
 when Hercules has delivered the call to the app, a moment after it shows in
-the chat, and not at all once it is two minutes old by the server's clock.
+the chat, and not at all once it has expired by the server's clock.
 
 ```tsx
 // What an order's id looks like in this app. At module scope.
@@ -633,6 +640,19 @@ one-way: it shows in the chat as a tool call with the result "sent to the
 page", and nothing goes back to the run.
 Do not register it as a TanStack client tool: the adapter answers every tool
 call itself, so TanStack never runs one or starts a second run.
+
+### The connection's options
+
+`herculesConnection(convex, api.agent, options)` takes the app's Convex
+client, the functions `support.api()` built, and these options, each of which
+can be left out:
+
+| Option            | What it sets                                                                                                                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pageActions`     | The page's handlers, by name: see "Page actions"                                                                                                                                    |
+| `fetch`           | The `fetch` that reads a run's live stream                                                                                                                                          |
+| `retry`           | How the live stream is connected to again: the first wait and the longest, in milliseconds, and how many tries in a row                                                             |
+| `settleTimeoutMs` | How long the connection waits for Convex to have a run's end: after the live stream ends, and before a message sent while a stopped run is still ending is refused as `thread_busy` |
 
 ### Context, errors and progress
 
@@ -672,15 +692,16 @@ call itself, so TanStack never runs one or starts a second run.
   also stops waiting on the stream as soon as Convex has the run's end.
 - A page action that reached the app too late is not run. `useThreadSync`
   returns the thread, and `thread.pageActions` lists it with
-  `status: "expired"` for ten minutes, for the page to tell the user.
+  `status: "expired"` for a while, for the page to tell the user.
 - `useThreadSync` returns the thread: `thread.activeRun?.progress` is the
   run's latest progress label. Each also comes to `useChat`'s
   `onCustomEvent` as `hercules.progress` with `{ label }`.
 - `chat.stop()` stops the run with the app's `cancel` mutation. The chat is
   free at once, and the run takes a moment longer to end. A message sent in
   that moment waits for the run to end (for `settleTimeoutMs` at most) and is
-  then sent. `thread.activeRun?.stopping` says a stop is on its way, for a
-  page that would rather hold its Send button.
+  then sent, or is refused as `thread_busy` when the run has not ended by
+  then. `thread.activeRun?.stopping` says a stop is on its way, for a page
+  that would rather hold its Send button.
 - A reply that was stopped while it was written is kept as far as it was
   written. When the run ends, Hercules delivers that text as the run's reply
   and the thread holds it as a `completed` message, so the chat shows the
@@ -783,8 +804,8 @@ back to the run. The hook takes them from `thread.pageActions`, so one runs
 when Hercules has delivered it. A handler's arguments are untrusted input:
 the rules under "Page actions" above hold here too.
 
-`thread` returns the thread's newest messages: 100 unless `limit` is a whole
-number of at least one, at most 200, and fewer when they come to more than about 4 MiB.
+`thread` returns the thread's newest messages: as many as `limit` says, when
+it is a whole number of at least one, up to the most one read returns.
 `thread.hasMore` says there are older ones.
 
 `chat.error` is one of three things, or null:
@@ -800,8 +821,7 @@ number of at least one, at most 200, and fewer when they come to more than about
   still takes.
 - A `RunStreamError`, only while a run is going. The live view of the reply
   could not be read: Hercules refused the stream, or kept answering 429
-  because more than ten streams of the run are open (an eleventh tab). The
-  run is not affected. The reply still arrives through `thread`, without the
+  because too many streams of the run are open. The run is not affected. The reply still arrives through `thread`, without the
   typing effect, and the error clears when the run is over. Do not show it as
   a failed message.
 - Any other `Error` a mutation threw, such as a lost connection.
@@ -896,8 +916,9 @@ export const createFor = internalMutation({
 });
 ```
 
-Tools accept signed-in users only. A tool an agent may run with no end user
-says so with `"agent"`, and its handler then has to handle both:
+Tools accept signed-in users only, unless `principals` says otherwise. A
+tool an agent may run with no end user says so with `"agent"`, and its
+handler then has to handle both:
 
 ```ts
 list_open_hours: tool({
@@ -944,7 +965,7 @@ send_daily_digest: tool({
 }),
 ```
 
-- Left out, `agentOrigins` is `["app"]`.
+- Left out, `agentOrigins` is that one origin.
 - A call whose token names an origin the tool does not list is refused. So is
   one whose token names no origin, or one the package does not know: neither
   is taken for the app's own job.
@@ -997,9 +1018,9 @@ A request must carry an RS256 JWT signed by the app's Hercules Auth
 (`HERCULES_OIDC_AUTHORITY`), issued for this server's own URL, and not
 expired. It must say who is calling in its `hercules_principal` claim: a
 token without one is refused. Keys come from the issuer's OpenID discovery
-document and are cached for five minutes. While they cannot be fetched, and
-for a key the cached set lacks until the keys may be fetched again (at most
-30 seconds, as after a key rotation), the server answers 503 with
+document and are cached for a few minutes. While they cannot be fetched, and
+for a key the cached set lacks until the keys may be fetched again (a short
+wait, as after a key rotation), the server answers 503 with
 `Retry-After`, never 401: that says nothing about the token. It answers 401
 for an unknown key only when the keys were fetched after the token came and
 its key is still not among them.
@@ -1023,3 +1044,56 @@ adapter supplies the tools and the context their handlers receive.
 ### Not supported yet
 
 Server-sent events, resources, prompts, sampling and elicitation.
+
+## Defaults and limits
+
+Every default, limit and time the package keeps to is stated here, and only
+here: the other sections name them without their values. An app may rely on
+them. They are part of what "Versioning" promises.
+
+### Options left out
+
+| Option                      | Of                                                                         | When it is left out                                                    |
+| --------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `apiKey`                    | `HerculesAgents`                                                           | The `HERCULES_API_KEY` environment variable                            |
+| `apiUrl`                    | `HerculesAgents`                                                           | `HERCULES_API_URL`, then `https://api.hercules.app`                    |
+| `issuer`                    | `HerculesAgents`, `defineTools`                                            | `HERCULES_OIDC_AUTHORITY`                                              |
+| `onRunFinished`             | `HerculesAgents`                                                           | Nothing is called when a run ends                                      |
+| `pageActions`               | `HerculesAgents`                                                           | None: a run may call no page action                                    |
+| `exposeToolDetails`         | `HerculesAgents`                                                           | `false`                                                                |
+| `limits.runsPerUserPerHour` | `HerculesAgents`                                                           | No limit                                                               |
+| `limit`                     | `thread`, `readThread`, `readThreadDetails`, `useThreadSync`               | 100 messages                                                           |
+| `name`                      | `defineTools`                                                              | One server, routed at `/mcp`. A named one is at `/mcp/<name>`          |
+| `audiences`                 | `defineTools`                                                              | The deployment's own URLs for the server: see "How tokens are checked" |
+| `principals`                | `tool`                                                                     | `["user"]`                                                             |
+| `agentOrigins`              | `tool`, when it lists `"agent"`                                            | `["app"]`                                                              |
+| `pageActions`               | `herculesConnection`, `useAgentThread`                                     | None: the page runs no page action                                     |
+| `settleTimeoutMs`           | `herculesConnection`                                                       | 10,000: ten seconds                                                    |
+| `retry`                     | `herculesConnection`, `followRun`                                          | `{ initialMs: 1000, maxMs: 30000, maxAttempts: 10 }`                   |
+| `after`                     | `followRun`                                                                | 0: the run is read from its start                                      |
+| `fetch`                     | `herculesConnection`, `useAgentThread`, `followRun`, `createTokenVerifier` | The global `fetch`                                                     |
+
+### Limits
+
+| Limit                                                           | Value                                                               |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- |
+| A message: its `text`, plus its `context` as the agent reads it | 262,144 characters. A longer one is refused with `message_too_long` |
+| The messages one read of a thread returns                       | 200 at most, and fewer once they come to more than about 4 MiB      |
+| How long a run counts toward `limits.runsPerUserPerHour`        | One hour from when it was sent                                      |
+| The page-action expiry: how long a page action can be claimed   | Two minutes (120 seconds) from when the agent called it             |
+| How long a page action no tab ran stays listed on its thread    | Ten minutes from when it reached the app                            |
+| The page actions a thread lists                                 | 20 at most                                                          |
+
+### Times
+
+| What                                                                                                                                                                                          | When                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| A run with nothing delivered is asked about at Hercules                                                                                                                                       | After 3 minutes                                                                |
+| A run Hercules says is still going is asked about again                                                                                                                                       | After twice the wait before: at 3, 6, 12 and 24 minutes, then every 30 minutes |
+| The give-up time: how long a run is kept with nothing heard of it, how long a start Hercules cannot answer is sent again, and how long after it was sent a run that was asked to stop is kept | One day                                                                        |
+| The busy wait: a start refused as `thread_busy` is sent again                                                                                                                                 | For one minute                                                                 |
+| The rate-limit tries: how often a start answered 429, with a code that is not a quota, is sent                                                                                                | 8 times in all                                                                 |
+| Hercules is asked to delete a deleted thread's copy                                                                                                                                           | For one day                                                                    |
+| A 404 from Hercules for a run, or for a deleted thread, is taken as final                                                                                                                     | Once it has been the answer for one hour                                       |
+| The issuer's signing keys are kept                                                                                                                                                            | 5 minutes                                                                      |
+| The keys are fetched again for a key the kept ones lack                                                                                                                                       | 30 seconds after the last fetch, at the soonest                                |

@@ -4896,3 +4896,132 @@ describe("naming the package to Hercules", () => {
     }
   });
 });
+
+// The README states these under "Defaults and limits". An app built against
+// one keeps running against it: see `defaults.test.ts`.
+describe("the documented defaults", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("calls https://api.hercules.app with HERCULES_API_KEY when neither is passed", async () => {
+    const urls: string[] = [];
+    const keys: Array<string | null> = [];
+    vi.stubGlobal("fetch", ((input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      keys.push(new Headers(init?.headers).get("authorization"));
+      return api.fetch(input, init);
+    }) as typeof fetch);
+    vi.stubEnv("HERCULES_API_KEY", "key-from-the-environment");
+    vi.stubEnv("HERCULES_API_URL", "");
+    const byDefault = new HerculesAgents(h.component, { agentId: AGENT_ID });
+    await byDefault.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(urls).toEqual([`https://api.hercules.app/v1/agents/${AGENT_ID}/runs`]);
+    expect(keys).toEqual(["Bearer key-from-the-environment"]);
+
+    // HERCULES_API_URL comes before the built-in URL, and the option before both.
+    vi.stubEnv("HERCULES_API_URL", "https://api.from-the-environment.test");
+    await byDefault.send(h.appCtx(BOB), { text: "Hi" });
+    await h.runDue();
+    expect(urls[1]).toBe(`https://api.from-the-environment.test/v1/agents/${AGENT_ID}/runs`);
+    await agents().send(h.appCtx(BOB), { text: "Hi" });
+    await h.runDue();
+    expect(urls[2]).toBe(`${API_URL}/v1/agents/${AGENT_ID}/runs`);
+    expect(keys[2]).toBe("Bearer hercules-app-key");
+  });
+
+  it("sets no hourly limit unless limits.runsPerUserPerHour does", async () => {
+    const support = agents();
+    for (let n = 0; n < 40; n++) await support.send(h.appCtx(ALICE), { text: `Message ${n}` });
+    expect(h.db.all("runs")).toHaveLength(40);
+  });
+
+  it("takes a message of exactly 262,144 characters, context included", async () => {
+    const context = { page: "/orders" };
+    const overhead = runInputText("", context).length;
+    const support = agents();
+    await support.send(h.appCtx(ALICE), { text: "x".repeat(262_144 - overhead), context });
+    const error = await support
+      .send(h.appCtx(ALICE), { text: "x".repeat(262_144 - overhead + 1), context })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("message_too_long");
+  });
+
+  it("reads a thread's newest 100 messages unless limit says otherwise, and 200 at most", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // 249 replies after the user's message: 250 messages.
+    await deliver(
+      support,
+      ...Array.from({ length: 249 }, (_, n) =>
+        event(runId, threadId, 2 + n, "message.completed", {
+          message: {
+            id: `msg_${n}`,
+            thread_id: threadId,
+            run_id: runId,
+            role: "assistant",
+            parts: [{ type: "text", text: `Reply ${n}` }],
+            created_at: "2026-11-15T12:00:01.000Z",
+          },
+        }),
+      ),
+    );
+    const count = async (limit?: number) => {
+      const thread = await support.readThread(h.appCtx(ALICE), {
+        threadId,
+        ...(limit !== undefined && { limit }),
+      });
+      expect(thread?.hasMore).toBe(true);
+      expect(thread?.messages.at(-1)?.id).toBe("msg_248");
+      return thread?.messages.length;
+    };
+    expect(await count()).toBe(100);
+    expect(await count(3)).toBe(3);
+    expect(await count(200)).toBe(200);
+    expect(await count(201)).toBe(200);
+    expect(await count(10_000)).toBe(200);
+    // Not a whole number of at least one: read as left out.
+    expect(await count(0)).toBe(100);
+    expect(await count(Number.NaN)).toBe(100);
+    const details = await support.readThreadDetails(h.appCtx(), { threadId });
+    expect(details?.messages).toHaveLength(100);
+  });
+
+  it("shows a page no tool details unless exposeToolDetails is set", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(runId, threadId, 2, "message.completed", {
+        message: {
+          id: "msg_1",
+          thread_id: threadId,
+          run_id: runId,
+          role: "assistant",
+          parts: [
+            {
+              type: "tool_call",
+              id: "call_1",
+              name: "web_search",
+              kind: "hercules",
+              status: "succeeded",
+              summary: "Searched the web",
+            },
+          ],
+          created_at: "2026-11-15T12:00:01.000Z",
+        },
+      }),
+    );
+    const part = { type: "tool_call", id: "call_1", kind: "hercules", status: "succeeded" };
+    expect((await read(support, threadId)).messages[1]?.parts).toEqual([
+      { ...part, name: "tool", summary: "Used a tool" },
+    ]);
+    const exposed = agents({ exposeToolDetails: true });
+    expect((await read(exposed, threadId)).messages[1]?.parts).toEqual([
+      { ...part, name: "web_search", summary: "Searched the web" },
+    ]);
+  });
+});

@@ -541,6 +541,29 @@ describe("herculesConnection", () => {
     expect(app.watching()).toBe(0);
   });
 
+  it("waits ten seconds for a stop to land when settleTimeoutMs is left out", async () => {
+    const stopped = runningThread([userMessage("Write a report", STOPPED_RUN)], STOPPED_RUN);
+    const app = createApp({ ...stopped, activeRun: { ...stopped.activeRun!, stopping: true } });
+    app.failSendWith("thread_busy", "The agent is still answering in this thread.");
+    const { chat } = chatFor(app);
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const sending = chat.sendMessage("Never mind").then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      expect(chat.getError()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await sending;
+      expect(agentErrorCode(chat.getError())).toBe("thread_busy");
+      expect(app.callsTo("agent:send")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hydrates a thread for persistence, runs a page action left waiting, and joins the run going", async () => {
     const app = createApp({
       ...runningThread([
