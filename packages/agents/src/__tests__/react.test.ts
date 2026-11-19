@@ -71,6 +71,181 @@ function runningThread(overrides: Partial<AgentThread> = {}): AgentThread {
   };
 }
 
+// The hook shows a run as going until the thread has its end, and from then
+// on shows the thread alone. So what a page reads when the run ends (each
+// message's `status`, and `thread.latestRun`) is what it reads after a
+// reload, with no further update of the thread.
+describe("a reply when its run ends, live and after a reload", () => {
+  const SAID = "Your order is on its way";
+  const input = runningThread().messages[0] as AgentThread["messages"][number];
+  const reply = (text: string, status: "completed" | "incomplete"): typeof input => ({
+    id: "msg_1",
+    threadId: THREAD,
+    runId: RUN,
+    role: "assistant",
+    parts: [{ type: "text", text }],
+    createdAt: "2026-11-15T12:00:00.000Z",
+    status,
+  });
+  const apiReply = {
+    id: "msg_1",
+    thread_id: THREAD,
+    run_id: RUN,
+    role: "assistant",
+    parts: [{ type: "text", text: SAID }],
+    created_at: "2026-11-15T12:00:00.000Z",
+  };
+  const whole = frame(3, "message.completed", { message: apiReply });
+  const failure = { code: "run_failed", message: "The run failed." };
+  /** A final event of a type this version does not know: Hercules marks it `final`. */
+  const unknownEnding = `id: 3\ndata: ${JSON.stringify({
+    id: `${RUN}:3`,
+    seq: 3,
+    run_id: RUN,
+    thread_id: THREAD,
+    type: "run.expired",
+    created_at: "2026-11-15T12:00:00.000Z",
+    final: true,
+    data: {},
+  })}\n\n`;
+  const ended = (
+    messages: AgentThread["messages"],
+    status: string,
+    extra: object = {},
+  ): AgentThread =>
+    runningThread({
+      messages: [input, ...messages],
+      activeRun: null,
+      latestRun: { id: RUN, status, error: null, cappedReason: null, finishedAt: null, ...extra },
+    });
+
+  const endings = [
+    {
+      name: "fails while it is writing, with part of the reply in the thread",
+      // What the stream sends after the reply's text, and the thread once it has the run's end.
+      frames: [frame(3, "run.failed", { error: failure, usage: null })],
+      thread: ended([reply("Your order", "incomplete")], "failed", { error: failure }),
+      expected: { text: "Your order", status: "incomplete", error: "run_failed" },
+    },
+    {
+      name: "fails while it is writing, with none of the reply in the thread",
+      frames: [frame(3, "run.failed", { error: failure, usage: null })],
+      thread: ended([], "failed", { error: failure }),
+      expected: { text: null, status: null, error: "run_failed" },
+    },
+    {
+      name: "is stopped, and the thread keeps the reply as far as it was written",
+      frames: [whole, frame(4, "run.cancelled", { usage: null })],
+      thread: ended([reply(SAID, "completed")], "cancelled"),
+      expected: { text: SAID, status: "completed", error: null },
+    },
+    {
+      name: "is capped after its reply",
+      frames: [whole, frame(4, "run.capped", { capped_reason: "steps", output: null })],
+      thread: ended([reply(SAID, "completed")], "capped", { cappedReason: "steps" }),
+      expected: { text: SAID, status: "completed", error: null },
+    },
+    {
+      name: "is capped while it is writing",
+      frames: [frame(3, "run.capped", { capped_reason: "steps", output: null })],
+      thread: ended([reply("Your order", "incomplete")], "capped", { cappedReason: "steps" }),
+      expected: { text: "Your order", status: "incomplete", error: null },
+    },
+    {
+      name: "ends in a way this version does not know",
+      // The component records such an ending as a failure, with what the run wrote.
+      frames: [unknownEnding],
+      thread: ended([reply("Your order", "incomplete")], "failed", { error: failure }),
+      expected: { text: "Your order", status: "incomplete", error: "run_failed" },
+    },
+    {
+      name: "completes",
+      frames: [whole, frame(4, "run.completed", { output: SAID, usage: null })],
+      thread: ended([reply(SAID, "completed")], "completed"),
+      expected: { text: SAID, status: "completed", error: null },
+    },
+  ];
+  const orders = [
+    { order: "the stream says so first", streamEnds: true },
+    { order: "the thread has it first", streamEnds: false },
+  ];
+  const cases = endings.flatMap((ending) => orders.map((order) => ({ ...ending, ...order })));
+
+  /** What a page reads of the hook: the chat's state, each message, and the error's code. */
+  function read(result: ReturnType<typeof useAgentThread>) {
+    return {
+      status: result.status,
+      messages: result.messages,
+      error: result.error === null ? null : (result.error as { code?: string }).code,
+    };
+  }
+
+  it.each(cases)(
+    "reads the same when the run $name ($order)",
+    async ({ frames, thread, expected, streamEnds }) => {
+      const stream = liveStream();
+      const options: UseAgentThreadOptions = {
+        threadId: THREAD,
+        thread: runningThread(),
+        send: vi.fn(),
+        fetch: stream.fetch,
+      };
+      const renders: Array<ReturnType<typeof read>> = [];
+      const { result, rerender } = renderHook(
+        (props: UseAgentThreadOptions) => {
+          const value = useAgentThread(props);
+          renders.push(read(value));
+          return value;
+        },
+        { initialProps: options },
+      );
+      await act(async () => {
+        stream.push(frame(1, "run.started"));
+        stream.push(frame(2, "message.delta", { message_id: "msg_1", text: SAID }));
+      });
+      await waitFor(() =>
+        expect(result.current.messages[1]?.parts[0]).toMatchObject({ text: SAID }),
+      );
+      expect(result.current.status).toBe("streaming");
+      if (streamEnds) {
+        await act(async () => {
+          for (const text of frames) stream.push(text);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        // The stream's end alone does not end the run for the page: the thread's does.
+        expect(result.current.status).toBe("streaming");
+      }
+
+      // The thread gets the run's end, once. Nothing updates it again.
+      const before = renders.length;
+      rerender({ ...options, thread });
+      const live = read(result.current);
+      expect(live.status).toBe("ready");
+      expect(live.error).toBe(expected.error);
+      const last = live.messages.at(-1);
+      if (expected.status === null) {
+        // The thread got none of the reply: the user's message is the last.
+        expect(last?.role).toBe("user");
+      } else {
+        expect(last).toMatchObject({
+          id: "msg_1",
+          role: "assistant",
+          status: expected.status,
+          parts: [{ type: "text", text: expected.text }],
+        });
+      }
+      // The run is over in the very render that got the thread's end, and in every one since.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      for (const render of renders.slice(before)) expect(render).toEqual(live);
+
+      // A reload reads the thread and nothing else, and shows the same.
+      const reloaded = renderHook(() => useAgentThread({ ...options, thread, fetch: vi.fn() }));
+      expect(read(reloaded.result.current)).toEqual(live);
+      expect(reloaded.result.current.messages).toEqual(thread.messages);
+    },
+  );
+});
+
 describe("useAgentThread", () => {
   function pageAction(
     toolCallId: string,
