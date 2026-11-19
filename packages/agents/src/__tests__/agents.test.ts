@@ -644,6 +644,386 @@ describe("delivered events", () => {
   });
 });
 
+describe("what Hercules adds later", () => {
+  /** A reply with every kind of thing this version does not know, beside what it does. */
+  function replyWithNewThings(threadId: string, runId: string) {
+    return {
+      id: "msg_1",
+      thread_id: threadId,
+      run_id: runId,
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Here you go.", annotations: [{ start: 0, end: 4 }] },
+        // A part type added later.
+        { type: "reasoning", text: "Thinking it over.", signature: "abc" },
+        // A tool kind added later.
+        {
+          type: "tool_call",
+          id: "call_new_kind",
+          name: "search_tickets",
+          kind: "connector",
+          status: "succeeded",
+          summary: "Searched tickets",
+        },
+        // A tool status added later.
+        {
+          type: "tool_call",
+          id: "call_new_status",
+          name: "refund_order",
+          kind: "app",
+          status: "denied",
+          summary: "Refund order was not approved",
+        },
+        { type: "image", url: "https://example.test/a.png" },
+        { type: "text", text: " Anything else?" },
+      ],
+      created_at: "2026-11-15T12:00:01.000Z",
+      // A field added later.
+      model: "a-model",
+    };
+  }
+
+  it("applies the events it knows from a batch that mixes in ones it does not, and answers 2xx", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    const response = await support.handleEvents(
+      h.appCtx(),
+      new Request(`https://app.convex.site${EVENTS_PATH}`, {
+        method: "POST",
+        body: JSON.stringify({
+          // Keys of the batch itself that this version does not know.
+          delivery_id: "dlv_1",
+          attempt: 3,
+          events: [
+            event(runId, threadId, 1, "run.queued"),
+            { ...event(runId, threadId, 2, "run.started"), trace: { id: "t" }, final: false },
+            event(runId, threadId, 3, "reasoning.delta", { text: "Hm." }),
+            event(runId, threadId, 4, "message.appended", { message_id: "msg_1", text: "Here" }),
+            event(runId, threadId, 5, "run.requires_action", { action: { $ref: "#/x" } }),
+            // Entries that are not events at all.
+            "not an event",
+            { type: "no.envelope" },
+            event(runId, threadId, 6, "run.progress", { label: "Looking", percent: 40 }),
+          ],
+        }),
+      }),
+      DELIVERY_TOKEN,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ applied: 6, skipped: 2 });
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toMatchObject({ status: "running", lastSeq: 6, progress: "Looking" });
+    expect(thread.messages[1]).toMatchObject({
+      status: "streaming",
+      parts: [{ type: "text", text: "Here" }],
+    });
+    expect(finished).toEqual([]);
+  });
+
+  it("keeps a message's known parts beside ones it does not know, and reads new tool kinds and statuses", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(
+      await deliver(
+        support,
+        event(runId, threadId, 2, "run.started"),
+        event(runId, threadId, 5, "tool_call.completed", {
+          tool_call_id: "call_new_kind",
+          name: "search_tickets",
+          kind: "connector",
+          status: "succeeded",
+          summary: "Searched tickets",
+          result: { tickets: 3 },
+          duration_ms: 12,
+        }),
+        event(runId, threadId, 6, "tool_call.completed", {
+          tool_call_id: "call_new_status",
+          name: "refund_order",
+          kind: "app",
+          status: "denied",
+          summary: "Refund order was not approved",
+        }),
+        event(runId, threadId, 8, "message.completed", {
+          message: replyWithNewThings(threadId, runId),
+          citations: [],
+        }),
+        event(runId, threadId, 9, "run.completed", {
+          output: "Here you go. Anything else?",
+          usage: { credits: 1, tokens: { input: 10, output: 20 } },
+          stop_reason: "end_turn",
+        }),
+      ),
+    ).toEqual({ applied: 5, skipped: 0 });
+    await h.runDue();
+
+    // The page: a tool of a kind this version does not know is shown as a
+    // Hercules tool, whose name and summary a page is not shown.
+    const thread = await read(support, threadId);
+    expect(thread.latestRun?.status).toBe("completed");
+    expect(thread.messages[1]?.parts).toEqual([
+      { type: "text", text: "Here you go." },
+      {
+        type: "tool_call",
+        id: "call_new_kind",
+        name: "tool",
+        kind: "hercules",
+        status: "succeeded",
+        summary: "Used a tool",
+      },
+      // A call that ended with a status this version does not know is not known to have worked.
+      {
+        type: "tool_call",
+        id: "call_new_status",
+        name: "refund_order",
+        kind: "app",
+        status: "failed",
+        summary: "Refund order was not approved",
+      },
+      { type: "text", text: " Anything else?" },
+    ]);
+
+    // The app's backend: the same calls under their own names.
+    const details = await support.readThreadDetails(h.appCtx(), { threadId });
+    expect(details?.toolCalls).toEqual([
+      expect.objectContaining({
+        toolCallId: "call_new_kind",
+        name: "search_tickets",
+        kind: "hercules",
+        status: "succeeded",
+        // Only the app's own tools carry a result.
+        resultJson: null,
+      }),
+      expect.objectContaining({
+        toolCallId: "call_new_status",
+        name: "refund_order",
+        kind: "app",
+        status: "failed",
+      }),
+    ]);
+    expect(finished).toEqual([
+      expect.objectContaining({ runId, status: "completed", usage: { credits: 1 } }),
+    ]);
+  });
+
+  it("ends a capped run whose reason it does not know, and a failed one with a code it does not know", async () => {
+    const support = agents();
+    const first = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(first.runId, first.threadId, 9, "run.capped", {
+        capped_reason: "tool_calls",
+        output: "So far.",
+        usage: { credits: 2 },
+      }),
+    );
+    await h.runDue();
+    let thread = await read(support, first.threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({ status: "capped", cappedReason: null, error: null });
+
+    const second = await support.send(h.appCtx(ALICE), { threadId: first.threadId, text: "More" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(second.runId, second.threadId, 9, "run.failed", {
+        error: {
+          code: "model_overloaded",
+          message: "The model is overloaded.",
+          details: { region: "x" },
+        },
+        usage: null,
+      }),
+    );
+    await h.runDue();
+    thread = await read(support, first.threadId);
+    expect(thread.latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "model_overloaded", message: "The model is overloaded." },
+    });
+    expect(finished).toEqual([
+      expect.objectContaining({ status: "capped", cappedReason: null, output: "So far." }),
+      expect.objectContaining({
+        status: "failed",
+        error: expect.objectContaining({ code: "model_overloaded" }),
+      }),
+    ]);
+  });
+
+  it("ends a run on an event of a type it does not know that Hercules marks as final", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(runId, threadId, 2, "run.started"),
+      // Not marked: an event like any other.
+      event(runId, threadId, 3, "run.paused", { reason: "approval" }),
+    );
+    expect((await read(support, threadId)).activeRun?.id).toBe(runId);
+    await deliver(support, {
+      ...event(runId, threadId, 9, "run.expired", { output: "So far.", usage: { credits: 1 } }),
+      final: true,
+    });
+    await h.runDue();
+    const thread = await read(support, threadId);
+    expect(thread.activeRun).toBeNull();
+    expect(thread.latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "run_failed", message: expect.stringContaining('"run.expired"') },
+    });
+    expect(finished).toEqual([
+      expect.objectContaining({
+        runId,
+        status: "failed",
+        output: "So far.",
+        usage: { credits: 1 },
+      }),
+    ]);
+    // The thread is free.
+    await support.send(h.appCtx(ALICE), { threadId, text: "Next" });
+  });
+
+  it("skips a known event whose data is not the shape it knows, and cuts text it stores on the run", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(
+      await deliver(
+        support,
+        // A message from a role added later.
+        event(runId, threadId, 2, "message.completed", {
+          message: { id: "m_sys", thread_id: threadId, run_id: runId, role: "tool", parts: [] },
+        }),
+        event(runId, threadId, 3, "message.appended", { message_id: 7, text: ["not", "text"] }),
+        event(runId, threadId, 4, "tool_call.completed", { tool_call_id: "c", kind: 3 }),
+        event(runId, threadId, 5, "page_action", { name: null }),
+        event(runId, threadId, 6, "run.progress", { label: "x".repeat(10_000) }),
+        { ...event(runId, threadId, 7, "run.started"), data: "not an object" },
+      ),
+    ).toEqual({ applied: 6, skipped: 0 });
+    const thread = await read(support, threadId);
+    expect(thread.messages).toHaveLength(1);
+    expect(thread.activeRun).toMatchObject({ lastSeq: 7, status: "running" });
+    expect(thread.activeRun?.progress).toHaveLength(4000);
+    expect(h.db.all("tool_calls")).toEqual([]);
+  });
+
+  it("takes a start answered with fields it does not know, on the run and on its live stream", async () => {
+    const support = agents();
+    api.answerWith((request) =>
+      isStart(request)
+        ? Response.json(
+            {
+              run: {
+                id: request.body.run_id,
+                thread_id: request.body.thread_id,
+                status: "queued",
+                // Fields added later.
+                priority: "high",
+                required_action: null,
+                capped_reason: "tool_calls",
+                usage: { credits: 0, tokens: {} },
+              },
+              live: {
+                url: `${API_URL}/v1/agents/runs/x/events`,
+                token: "run-token",
+                expires_at: "2026-11-15T13:00:00.000Z",
+                transports: ["sse", "websocket"],
+              },
+              warnings: [{ code: "deprecated_field" }],
+            },
+            { status: 202 },
+          )
+        : undefined,
+    );
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(h.failedActions).toEqual([]);
+    expect((await read(support, threadId)).activeRun).toMatchObject({
+      id: runId,
+      status: "queued",
+      live: { url: `${API_URL}/v1/agents/runs/x/events`, token: "run-token" },
+    });
+  });
+
+  it("fails a run Hercules refuses with a code it does not know, with that code and Hercules's words", async () => {
+    const support = agents();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    api.answerWith((request) =>
+      isStart(request)
+        ? new Response(
+            JSON.stringify({
+              type: "about:blank",
+              status: 422,
+              code: "agent_paused",
+              detail: "The agent is paused.",
+              // Fields of the problem this version does not know.
+              docs_url: "https://example.test/docs",
+              details: { until: "tomorrow" },
+            }),
+            { status: 422, headers: { "content-type": "application/problem+json" } },
+          )
+        : undefined,
+    );
+    const { threadId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runUntil(h.now + 60_000);
+    errors.mockRestore();
+    // Sent once: a refusal is not sent again.
+    expect(api.requests.filter(isStart)).toHaveLength(1);
+    expect((await read(support, threadId)).latestRun).toMatchObject({
+      status: "failed",
+      error: { code: "agent_paused", message: "The agent is paused." },
+    });
+    expect(finished).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        error: expect.objectContaining({ code: "agent_paused" }),
+      }),
+    ]);
+  });
+
+  it("reads what delivery missed from a page of events with entries and keys it does not know", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    api.answerWith((request) => {
+      if (request.path.startsWith(`/v1/agents/runs/${runId}/events`)) {
+        return Response.json({
+          object: "list",
+          next_cursor: "abc",
+          data: [
+            event(runId, threadId, 2, "run.started"),
+            event(runId, threadId, 3, "reasoning.completed", { summary: "Thought." }),
+            null,
+            event(runId, threadId, 8, "message.completed", {
+              message: replyWithNewThings(threadId, runId),
+            }),
+            event(runId, threadId, 9, "run.completed", { output: "Here you go." }),
+          ],
+          has_more: false,
+        });
+      }
+      if (request.path === `/v1/agents/runs/${runId}`) {
+        return Response.json({ id: runId, status: "completed", output: "Here you go.", tier: 2 });
+      }
+      return undefined;
+    });
+    await h.runUntil(h.now + 3 * 60 * 1000);
+    expect(h.failedActions).toEqual([]);
+    const thread = await read(support, threadId);
+    expect(thread.latestRun?.status).toBe("completed");
+    expect(thread.messages[1]?.parts.map((part) => part.type)).toEqual([
+      "text",
+      "tool_call",
+      "tool_call",
+      "text",
+    ]);
+  });
+});
+
 describe("segments", () => {
   it("cuts text without splitting a character", () => {
     const text = "a😀".repeat(10);

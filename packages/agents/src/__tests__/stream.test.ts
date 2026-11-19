@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { followRun, parseEventStream, RunStreamError } from "../stream";
 import { readAgentEvent, readWireEvent } from "../component/protocol";
 
@@ -65,6 +65,99 @@ describe("readAgentEvent", () => {
     expect(readAgentEvent(event(3, "message.delta", { text: "no id" }))).toBeNull();
     expect(readAgentEvent(event(4, "brand.new"))).toBeNull();
     expect(readAgentEvent({ ...event(0, "run.started") })).toBeNull();
+  });
+
+  it("reads a known event that carries fields it does not know, and passes them on", () => {
+    const read = readAgentEvent({
+      ...event(3, "message.delta", { message_id: "m", text: "Hi", logprobs: [0.1] }),
+      trace_id: "t_1",
+    });
+    expect(read).toMatchObject({
+      seq: 3,
+      type: "message.delta",
+      data: { message_id: "m", text: "Hi", logprobs: [0.1] },
+    });
+  });
+
+  it("keeps a completed message's known parts, and reads new tool kinds and statuses", () => {
+    const read = readAgentEvent(
+      event(8, "message.completed", {
+        message: {
+          id: "m",
+          thread_id: "thread_1",
+          run_id: "run_1",
+          role: "assistant",
+          parts: [
+            { type: "text", text: "Done." },
+            { type: "reasoning", text: "Thinking." },
+            { type: "tool_call", id: "c1", name: "search", kind: "connector", status: "succeeded" },
+            { type: "tool_call", id: "c2", name: "refund", kind: "app", status: "denied" },
+            { type: "tool_call", name: "no id", kind: "app", status: "succeeded" },
+            "not a part",
+          ],
+          created_at: "2026-11-15T12:00:00.000Z",
+        },
+      }),
+    );
+    if (read?.type !== "message.completed") throw new Error("not read as message.completed");
+    expect(read.data.message.parts).toEqual([
+      { type: "text", text: "Done." },
+      {
+        type: "tool_call",
+        id: "c1",
+        name: "search",
+        kind: "hercules",
+        status: "succeeded",
+        summary: null,
+      },
+      { type: "tool_call", id: "c2", name: "refund", kind: "app", status: "failed", summary: null },
+    ]);
+  });
+
+  it("reads a tool call of a kind or with a status it does not know", () => {
+    expect(
+      readAgentEvent(event(4, "tool_call.started", { tool_call_id: "c", name: "n", kind: "mcp" })),
+    ).toMatchObject({ data: { tool_call_id: "c", name: "n", kind: "hercules" } });
+    expect(
+      readAgentEvent(
+        event(5, "tool_call.completed", {
+          tool_call_id: "c",
+          name: "n",
+          kind: "app",
+          status: "timed_out",
+          summary: "Timed out",
+          result: { partial: true },
+        }),
+      ),
+    ).toMatchObject({
+      data: { kind: "app", status: "failed", summary: "Timed out", result: { partial: true } },
+    });
+  });
+
+  it("reads a run's ending whose reason or error it does not know", () => {
+    expect(
+      readAgentEvent(event(9, "run.capped", { capped_reason: "tool_calls", output: "So far." })),
+    ).toMatchObject({ data: { capped_reason: null, output: "So far.", usage: null } });
+    expect(
+      readAgentEvent(event(9, "run.failed", { error: { code: "model_overloaded" } })),
+    ).toMatchObject({ data: { error: { code: "model_overloaded", message: "model_overloaded" } } });
+    // A failed run always has an error to show, whatever the event carried.
+    expect(readAgentEvent(event(9, "run.failed", { error: "boom" }))).toMatchObject({
+      data: { error: { code: "run_failed", message: "The run failed." }, usage: null },
+    });
+  });
+
+  it("does not pass on an event of a type it does not know, marked final or not", () => {
+    expect(readAgentEvent(event(4, "run.requires_action", { action: {} }))).toBeNull();
+    expect(readAgentEvent({ ...event(9, "run.expired"), final: true })).toBeNull();
+    expect(readWireEvent({ ...event(9, "run.expired"), final: true })).toMatchObject({
+      seq: 9,
+      data: { kind: "final", status: "failed", error: { code: "run_failed" } },
+    });
+    // The mark changes nothing about an event this version knows.
+    expect(
+      readWireEvent({ ...event(4, "run.progress", { label: "x" }), final: true }),
+    ).toMatchObject({ data: { kind: "progress", label: "x" } });
   });
 
   it("keeps an unknown type's place in the sequence when delivered", () => {
@@ -236,6 +329,143 @@ describe("followRun", () => {
     expect(events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
     expect(requests[1]?.headers.get("last-event-id")).toBe("2");
     expect(requests[1]?.url).toContain("after=2");
+  });
+
+  const reply = (seq: number) =>
+    event(seq, "message.completed", {
+      message: {
+        id: "m",
+        thread_id: "thread_1",
+        run_id: "run_1",
+        role: "assistant",
+        parts: [{ type: "text", text: "Done." }],
+        created_at: "2026-11-15T12:00:00.000Z",
+      },
+    });
+
+  it("skips events of types it does not know, and resumes after them", async () => {
+    const { requests, fetch: fetchFn } = scripted([
+      () =>
+        new Response(
+          streamOf(
+            sse(event(1, "run.started")),
+            sse(event(2, "reasoning.delta", { text: "Hm." })),
+            sse(event(3, "message.delta", { message_id: "m", text: "Done." })),
+            sse(event(4, "run.requires_action", { action: { type: "approval" } })),
+          ),
+        ),
+      () =>
+        new Response(streamOf(sse(reply(6)), sse(event(7, "run.completed", { output: "Done." })))),
+    ]);
+    const events = await collect(
+      followRun({ url: URL_, token: "t", fetch: fetchFn, retry: { initialMs: 1, maxMs: 2 } }),
+    );
+    expect(events.map((e) => [e.seq, e.type])).toEqual([
+      [1, "run.started"],
+      [3, "message.delta"],
+      [6, "message.completed"],
+      [7, "run.completed"],
+    ]);
+    // After the last event it was sent, though that one is not one it knows.
+    expect(requests[1]?.headers.get("last-event-id")).toBe("4");
+  });
+
+  it("ends on an ending of a type it does not know that Hercules marks as final", async () => {
+    const { requests, fetch: fetchFn } = scripted([
+      () =>
+        new Response(
+          streamOf(
+            sse(event(1, "run.started")),
+            sse(reply(8)),
+            sse({ ...event(9, "run.expired", { output: "Done." }), final: true }),
+            sse(event(10, "message.delta", { message_id: "m", text: "never read" })),
+          ),
+        ),
+    ]);
+    const events = await collect(followRun({ url: URL_, token: "t", fetch: fetchFn }));
+    expect(events.map((e) => [e.seq, e.type])).toEqual([
+      [1, "run.started"],
+      [8, "message.completed"],
+    ]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("stops asking for a run whose ending it cannot read, and passes its reply on once", async () => {
+    // Hercules answers a reader at the end of a finished run with the reply
+    // and the final event again, and closes. The final event is of a type
+    // added later, and is not marked.
+    const ending = () =>
+      new Response(streamOf(sse(reply(8)), sse(event(9, "run.expired", { output: "Done." }))));
+    const { requests, fetch: fetchFn } = scripted([
+      () =>
+        new Response(
+          streamOf(sse(event(1, "run.started")), sse(reply(8)), sse(event(9, "run.expired"))),
+        ),
+      ...Array.from({ length: 5 }, () => ending),
+    ]);
+    const seen: string[] = [];
+    const error = await (async () => {
+      for await (const e of followRun({
+        url: URL_,
+        token: "t",
+        fetch: fetchFn,
+        retry: { initialMs: 1, maxMs: 2, maxAttempts: 4 },
+      })) {
+        seen.push(`${e.seq} ${e.type}`);
+      }
+    })().catch((e: unknown) => e);
+    expect(seen).toEqual(["1 run.started", "8 message.completed"]);
+    // A bounded number of tries, then the live view gives up: the run's
+    // ending reaches the page through the thread.
+    expect(error).toBeInstanceOf(RunStreamError);
+    expect(requests).toHaveLength(5);
+  });
+
+  describe("a run that is quiet for a long time", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("is followed for as long as it takes: a stream Hercules closes after minutes is not a failure", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const start = Date.UTC(2026, 10, 15, 12, 0, 0);
+      vi.setSystemTime(start);
+      let opened = 0;
+      const encoder = new TextEncoder();
+      const fetchFn = (async () => {
+        const nth = ++opened;
+        // Each stream stays open ten minutes with only a keep-alive and an
+        // event of a type added later, as for a run that waits for a person.
+        // The twelfth brings the run's ending.
+        return new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                vi.setSystemTime(start + nth * 10 * 60 * 1000);
+                const frames =
+                  nth < 12
+                    ? [": keep-alive\n\n", sse(event(2, "run.requires_action"))]
+                    : [sse(event(3, "run.completed", { output: "Done." }))];
+                for (const text of frames) controller.enqueue(encoder.encode(text));
+                controller.close();
+              },
+            },
+            // Nothing is written until the stream is read.
+            { highWaterMark: 0 },
+          ),
+        );
+      }) as unknown as typeof fetch;
+      const events = await collect(
+        followRun({
+          url: URL_,
+          token: "t",
+          fetch: fetchFn,
+          retry: { initialMs: 1, maxMs: 2, maxAttempts: 3 },
+        }),
+      );
+      expect(events.map((e) => e.seq)).toEqual([3]);
+      expect(opened).toBe(12);
+    });
   });
 
   it("gives up at once when the token is refused", async () => {
