@@ -188,7 +188,7 @@ describe("RunChunks", () => {
     const streamed = processor.getMessages();
     const hydrated = threadToUIMessages(settledThread()).filter((m) => m.role === "assistant");
     expect(transcriptKey(streamed)).toBe(transcriptKey(hydrated));
-    expect(streamed[0]?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "completed" });
+    expect(streamed[0]?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "completed" });
     // Only the live stream has a page action's arguments.
     const open = streamed[0]?.parts.find((p) => p.type === "tool-call" && p.id === "call_open");
     expect(open).toMatchObject({ input: { orderId: "123" }, output: PAGE_ACTION_OUTPUT });
@@ -577,7 +577,7 @@ describe("RunChunks, when a step was retried", () => {
       ],
     });
     expect(transcriptKey(messages)).toBe(transcriptKey(threadToUIMessages(settled)));
-    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "completed" });
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "completed" });
     // The run still ends once, and nothing is left for TanStack to run.
     expect(chunks.filter((chunk) => chunk.type === "RUN_FINISHED")).toHaveLength(1);
     expect(chunks.at(-1)?.type).toBe("RUN_FINISHED");
@@ -660,7 +660,7 @@ describe("RunChunks, when a step was retried", () => {
       ["user", "Where is my order?"],
       ["assistant", "Your order "],
     ]);
-    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "failed" });
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "failed" });
   });
 
   it("corrects from Convex's copy when the completed message never streamed", () => {
@@ -800,7 +800,7 @@ describe("threadToUIMessages", () => {
       role: "user",
       parts: [{ type: "text", content: "Where is my order?" }],
       createdAt: new Date(AT),
-      metadata: { hercules: { runId: RUN, status: "completed" } },
+      metadata: { hercules: { runId: RUN, messageStatus: "completed" } },
     });
   });
 });

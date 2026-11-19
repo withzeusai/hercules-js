@@ -671,7 +671,8 @@ can be left out:
   stopped before it wrote any text leaves no reply.
 - When a run ends and the thread holds less of its reply than this page
   streamed (a run that failed while it was writing, say), the page's text
-  stays in the chat, with `metadata.hercules.status` set to `"incomplete"`. A
+  stays in the chat, with `metadata.hercules.messageStatus` set to
+  `"incomplete"`. A
   reload, or another tab, shows what the thread holds.
 - `chat.error` is not kept across a reload. To say why the last message got
   no reply after one, read the thread: when `thread.latestRun.status` is
@@ -697,10 +698,13 @@ can be left out:
   call, then one `RUN_FINISHED` or `RUN_ERROR`. It ends once Convex has the
   run's end, so the next message never finds the thread busy.
 - `hydrate` reads the thread once as TanStack `UIMessage`s. A message's
-  `metadata.hercules` is a `HerculesMessageMetadata`: its `runId`, and a
-  `status` once the thread or the run's ending has said one. Page action
-  arguments are not kept with the messages, so a reloaded page action has
-  none.
+  `metadata.hercules` is a `HerculesMessageMetadata`: its `runId`, and one of
+  two statuses, never both. A message read from the thread has
+  `messageStatus`, where the thread has it: `streaming`, `completed` or
+  `incomplete`. A message this page streamed has `runStatus` once its run is
+  over, how the run ended: `completed`, `failed`, `cancelled` or `capped`.
+  Page action arguments are not kept with the messages, so a reloaded page
+  action has none.
 - `joinRun` replays a run that is still going from its start.
 - If Hercules refuses the live stream, the reply is read from Convex.
 - A completed message is the truth. When Hercules retries a step, the step's

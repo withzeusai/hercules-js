@@ -321,7 +321,7 @@ describe("useThreadSync", () => {
     });
     await waitFor(() =>
       expect(result.current.chat.messages[1]?.metadata).toMatchObject({
-        hercules: { runId: RUN, status: "incomplete" },
+        hercules: { runId: RUN, messageStatus: "incomplete" },
       }),
     );
     expect(texts(result.current.chat.messages)).toEqual([
@@ -435,7 +435,7 @@ describe("syncThread", () => {
         type: "text",
         content: part.type === "text" ? part.text : "",
       })),
-      metadata: { hercules: { runId: message.runId, status: message.status } },
+      metadata: { hercules: { runId: message.runId, messageStatus: message.status } },
     });
     // The message that started the run carries the run's id, and is Convex's copy.
     const checkpoint = assistantMessage("msg_1", [{ type: "text", text: "Hel" }], "streaming");
@@ -454,11 +454,11 @@ describe("syncThread", () => {
   });
 
   it("does not take Convex's copy of a run whose stream ended here before Convex has its end", () => {
-    const ended = (status: string) => ({
+    const ended = (runStatus: string) => ({
       id: "msg_1",
       role: "assistant",
       parts: [{ type: "text", content: "Hello! How are you?" }],
-      metadata: { hercules: { runId: RUN, status } },
+      metadata: { hercules: { runId: RUN, runStatus } },
     });
     const behind = runningThread([
       userMessage("Hi"),
@@ -477,11 +477,11 @@ describe("syncThread", () => {
     expect(texts(caughtUp.setMessages.mock.calls[0]?.[0])).toEqual(["Hi", "Hello!"]);
   });
 
-  const streamed = (text: string, status?: string) => ({
+  const streamed = (text: string, runStatus?: string) => ({
     id: "msg_1",
     role: "assistant",
     parts: [{ type: "text", content: text }],
-    metadata: { hercules: { runId: RUN, ...(status !== undefined && { status }) } },
+    metadata: { hercules: { runId: RUN, ...(runStatus !== undefined && { runStatus }) } },
   });
   const userPart = { id: "local-1", role: "user", parts: [{ type: "text", content: "Hi" }] };
 
@@ -505,9 +505,15 @@ describe("syncThread", () => {
     expect(syncThread(chat, stored)).toBe(true);
     expect(setMessages.mock.calls[0]?.[0][1]).toMatchObject({
       parts: [{ type: "text", content: "Hello" }],
-      metadata: { hercules: { runId: RUN, status: "incomplete" } },
+      metadata: { hercules: { runId: RUN, messageStatus: "incomplete" } },
     });
-    const marked = chatWith([userPart, streamed("Hello", "incomplete")]);
+    const marked = chatWith([
+      userPart,
+      {
+        ...streamed("Hello"),
+        metadata: { hercules: { runId: RUN, messageStatus: "incomplete" } },
+      },
+    ]);
     expect(syncThread(marked.chat, stored)).toBe(false);
   });
 

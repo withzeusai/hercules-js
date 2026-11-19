@@ -153,7 +153,9 @@ describe("what the hooks build from the API's events", () => {
 
   it("has no snake_case key in the metadata the TanStack path puts on a message", () => {
     const messages = threadToUIMessages(thread);
-    expect(messages[0]?.metadata).toEqual({ hercules: { runId: RUN, status: "completed" } });
+    expect(messages[0]?.metadata).toEqual({
+      hercules: { runId: RUN, messageStatus: "completed" },
+    });
     expect(snake(keysOf(messages))).toEqual([]);
   });
 

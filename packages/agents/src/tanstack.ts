@@ -68,16 +68,18 @@ export type { AgentThread } from "./thread";
 export type { UnknownName } from "./api";
 
 // Not exported: `/convex` has the `SendArgs` an app's backend uses, and these
-// two only spell out `HerculesAgentApi`.
+// two only spell out `HerculesAgentApi`. Each optional member says
+// `| undefined`, as the argument types Convex generates do, so `api.agent`
+// fits under `exactOptionalPropertyTypes` too.
 type SendArgs = {
-  threadId?: string;
+  threadId?: string | undefined;
   text: string;
-  context?: Record<string, any>;
+  context?: Record<string, any> | undefined;
 };
 
 type ThreadQueryArgs = {
   threadId: string;
-  limit?: number;
+  limit?: number | undefined;
 };
 
 /**
