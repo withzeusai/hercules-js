@@ -54,18 +54,27 @@ export function endUserIdOf(owner: string | undefined): string | null {
     : null;
 }
 
-// Exactly what Hercules stores an id under. It takes a ULID in uppercase
-// only, and keeps a UUID in lowercase whatever case it was sent in: an id
-// in any other form would name a different thread there than here.
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Exactly what Hercules opens a new thread under, and stores it as. It takes
+// a ULID in uppercase only, and keeps a UUID in lowercase whatever case it
+// was sent in: an id in any other form would name a different thread there
+// than here. And a UUID has to be one that is made at random: version 4,
+// which `crypto.randomUUID()` makes, or version 7, with the RFC's variant
+// bits. Ids are unique across all of Hercules, so one derived from a name
+// (version 3 or 5) or from a clock and a node (version 1) is refused there.
+const RANDOM_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
-/** Whether `id` can name a new thread: a UUID in lowercase, or a ULID in uppercase. */
+/**
+ * Whether `id` can name a new thread: a random UUID (version 4 or 7) in
+ * lowercase, or a ULID in uppercase. Only for a thread that does not exist
+ * yet: one that exists is found by its id, whatever form that has.
+ */
 export function isThreadId(id: string): boolean {
-  return UUID_PATTERN.test(id) || ULID_PATTERN.test(id);
+  return RANDOM_UUID_PATTERN.test(id) || ULID_PATTERN.test(id);
 }
 
-/** A random UUID in lowercase: the API takes ULIDs or UUIDs for run and thread ids. */
+/** A random UUID (version 4) in lowercase: what the API takes for a new run or thread, beside a ULID. */
 export function newId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
