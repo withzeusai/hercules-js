@@ -111,17 +111,26 @@ function settledThread(): AgentThread {
     messages: [
       {
         id: `${RUN}:input`,
-        thread_id: THREAD,
-        run_id: RUN,
+        threadId: THREAD,
+        runId: RUN,
         role: "user",
         parts: [{ type: "text", text: "Where is my order?" }],
-        created_at: AT,
+        createdAt: AT,
         status: "completed",
       },
-      { ...completed.data.message, status: "completed" },
+      // The API's message, as the thread holds it: under the package's names.
+      {
+        id: completed.data.message.id,
+        threadId: completed.data.message.thread_id,
+        runId: completed.data.message.run_id,
+        role: completed.data.message.role,
+        parts: completed.data.message.parts,
+        createdAt: completed.data.message.created_at,
+        status: "completed",
+      },
     ],
     activeRun: null,
-    latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finished_at: null },
+    latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: null },
     pageActions: [],
   };
 }
@@ -179,7 +188,7 @@ describe("RunChunks", () => {
     const streamed = processor.getMessages();
     const hydrated = threadToUIMessages(settledThread()).filter((m) => m.role === "assistant");
     expect(transcriptKey(streamed)).toBe(transcriptKey(hydrated));
-    expect(streamed[0]?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "completed" });
+    expect(streamed[0]?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "completed" });
     // Only the live stream has a page action's arguments.
     const open = streamed[0]?.parts.find((p) => p.type === "tool-call" && p.id === "call_open");
     expect(open).toMatchObject({ input: { orderId: "123" }, output: PAGE_ACTION_OUTPUT });
@@ -386,7 +395,7 @@ describe("RunChunks", () => {
         status: "running",
         error: null,
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       },
       activeRun: {
         id: "newer",
@@ -394,7 +403,7 @@ describe("RunChunks", () => {
         progress: null,
         live: null,
         lastSeq: 0,
-        created_at: AT,
+        createdAt: AT,
         stopping: false,
       },
     };
@@ -418,7 +427,7 @@ describe("RunChunks", () => {
         status: "failed" as const,
         error: { code: "out_of_credits", message: "Out." },
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       },
     };
     expect([...failed.reconcile(ended), ...failed.finish()].at(-1)).toMatchObject({
@@ -437,7 +446,7 @@ describe("RunChunks", () => {
         status: "failed",
         error: { code: "agent_disabled", message: "The agent is off." },
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       },
     });
     expect(run.finish().at(-1)).toMatchObject({ type: "RUN_ERROR", code: "agent_disabled" });
@@ -447,22 +456,22 @@ describe("RunChunks", () => {
 describe("RunChunks, when a step was retried", () => {
   const user: AgentThread["messages"][number] = {
     id: `${RUN}:input`,
-    thread_id: THREAD,
-    run_id: RUN,
+    threadId: THREAD,
+    runId: RUN,
     role: "user",
     parts: [{ type: "text", text: "Where is my order?" }],
-    created_at: AT,
+    createdAt: AT,
     status: "completed",
   };
   const earlier: AgentThread["messages"] = [
-    { ...user, id: "earlier:input", run_id: "earlier", parts: [{ type: "text", text: "Hello" }] },
+    { ...user, id: "earlier:input", runId: "earlier", parts: [{ type: "text", text: "Hello" }] },
     {
       id: "msg_0",
-      thread_id: THREAD,
-      run_id: "earlier",
+      threadId: THREAD,
+      runId: "earlier",
       role: "assistant",
       parts: [{ type: "text", text: "Hi! How can I help?" }],
-      created_at: AT,
+      createdAt: AT,
       status: "completed",
     },
   ];
@@ -480,10 +489,10 @@ describe("RunChunks, when a step was retried", () => {
         progress: null,
         live: { url: "https://api.hercules.test/x", token: "t" },
         lastSeq: 0,
-        created_at: AT,
+        createdAt: AT,
         stopping: false,
       },
-      latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
+      latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finishedAt: null },
       pageActions: [],
       ...overrides,
     };
@@ -558,17 +567,17 @@ describe("RunChunks, when a step was retried", () => {
         ...thread.messages,
         {
           id: "msg_1",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [{ type: "text", text: "Your order shipped today." }],
-          created_at: AT,
+          createdAt: AT,
           status: "completed",
         },
       ],
     });
     expect(transcriptKey(messages)).toBe(transcriptKey(threadToUIMessages(settled)));
-    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "completed" });
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "completed" });
     // The run still ends once, and nothing is left for TanStack to run.
     expect(chunks.filter((chunk) => chunk.type === "RUN_FINISHED")).toHaveLength(1);
     expect(chunks.at(-1)?.type).toBe("RUN_FINISHED");
@@ -651,7 +660,7 @@ describe("RunChunks, when a step was retried", () => {
       ["user", "Where is my order?"],
       ["assistant", "Your order "],
     ]);
-    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, status: "failed" });
+    expect(messages.at(-1)?.metadata?.["hercules"]).toEqual({ runId: RUN, runStatus: "failed" });
   });
 
   it("corrects from Convex's copy when the completed message never streamed", () => {
@@ -669,15 +678,15 @@ describe("RunChunks, when a step was retried", () => {
         user,
         {
           id: "msg_1",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [{ type: "text", text: "Your order shipped." }],
-          created_at: AT,
+          createdAt: AT,
           status: "completed",
         },
       ],
-      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finished_at: AT },
+      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: AT },
     });
     chunks.push(...run.reconcile(settled), ...run.finish());
     expect(chunks.map((chunk) => chunk.type)).toContain("MESSAGES_SNAPSHOT");
@@ -758,8 +767,8 @@ describe("threadToUIMessages", () => {
         ...thread.messages,
         {
           id: "msg_2",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [
             {
@@ -771,16 +780,16 @@ describe("threadToUIMessages", () => {
               summary: "No results",
             },
           ],
-          created_at: AT,
+          createdAt: AT,
           status: "completed",
         },
         {
           id: "msg_3",
-          thread_id: THREAD,
-          run_id: RUN,
+          threadId: THREAD,
+          runId: RUN,
           role: "assistant",
           parts: [],
-          created_at: AT,
+          createdAt: AT,
           status: "streaming",
         },
       ],
@@ -791,7 +800,66 @@ describe("threadToUIMessages", () => {
       role: "user",
       parts: [{ type: "text", content: "Where is my order?" }],
       createdAt: new Date(AT),
-      metadata: { hercules: { runId: RUN, status: "completed" } },
+      metadata: { hercules: { runId: RUN, messageStatus: "completed" } },
     });
+  });
+
+  it("reads a thread from a later version: a part it does not know is left out, never read as a tool call", () => {
+    // A tab that was open before the app was upgraded runs this version's
+    // page code against a backend that may return more than it knows.
+    const later = {
+      id: THREAD,
+      agentId: "01JDX5ZQ8W3J2K6M9N4P7R1S0T",
+      hasMore: false,
+      messages: [
+        {
+          id: "msg_note",
+          threadId: THREAD,
+          runId: RUN,
+          role: "system",
+          parts: [{ type: "text", text: "A note from a role added later." }],
+          createdAt: AT,
+          status: "completed",
+        },
+        {
+          id: "msg_1",
+          threadId: THREAD,
+          runId: RUN,
+          role: "assistant",
+          parts: [
+            { type: "text", text: "Here it is." },
+            { type: "image", url: "https://example.test/a.png" },
+            {
+              type: "tool_call",
+              id: "call_1",
+              name: "delegate",
+              kind: "subagent",
+              status: "denied",
+              summary: "Asked a subagent",
+            },
+          ],
+          createdAt: AT,
+          status: "completed",
+        },
+      ],
+      activeRun: null,
+      latestRun: { id: RUN, status: "completed", error: null, cappedReason: null, finishedAt: AT },
+      pageActions: [],
+    } as unknown as AgentThread;
+    const messages = threadToUIMessages(later);
+    // The message of a role it does not know is not shown.
+    expect(messages.map((message) => message.id)).toEqual(["msg_1"]);
+    expect(messages[0]?.parts).toEqual([
+      { type: "text", content: "Here it is." },
+      // A kind it does not know reads as a Hercules tool, a status it does not know as failed.
+      expect.objectContaining({
+        type: "tool-call",
+        id: "call_1",
+        name: "delegate",
+        state: "error",
+        output: { kind: "hercules", status: "failed", summary: "Asked a subagent" },
+      }),
+      expect.objectContaining({ type: "tool-result", toolCallId: "call_1", state: "error" }),
+    ]);
   });
 });

@@ -3,22 +3,20 @@
  * reply being written laid over them from the run's live stream until its
  * `message.completed` lands in Convex. No React here, so it is tested alone.
  */
-import type { AgentThread, ThreadMessage } from "./agents";
-import {
-  isFinalEvent,
-  type AgentEvent,
-  type Message,
-  type ToolCallPart,
-  type ToolCallStatus,
-  type ToolKind,
-} from "./component/protocol";
+import type { ToolCallPart, ToolCallStatus, UnknownPart } from "./api";
+import { isFinalEvent, type AgentEvent, type Message, type ToolKind } from "./component/protocol";
+import type { AgentThread, ThreadMessage } from "./thread";
 
 /** A tool call as the page shows it: `running` until the live stream says how it went. */
 export interface ViewToolCallPart extends Omit<ToolCallPart, "status"> {
   status: ToolCallStatus | "running";
 }
 
-export type ViewPart = { type: "text"; text: string } | ViewToolCallPart;
+/**
+ * A part of a message the hook shows. An open set, as a thread's parts are:
+ * render the parts whose `type` you know and skip the rest.
+ */
+export type ViewPart = { type: "text"; text: string } | ViewToolCallPart | UnknownPart;
 
 export interface ViewMessage extends Omit<ThreadMessage, "parts" | "status"> {
   parts: ViewPart[];
@@ -169,7 +167,16 @@ export class LiveRun {
       if (message.completed !== null) {
         // The user's own message is already shown, from Convex or as pending.
         if (message.completed.role === "assistant") {
-          views.push({ ...message.completed, status: "completed" });
+          // The API's message, under the names the thread gives its messages.
+          views.push({
+            id: message.completed.id,
+            threadId: message.completed.thread_id,
+            runId: message.completed.run_id,
+            role: message.completed.role,
+            parts: message.completed.parts,
+            createdAt: message.completed.created_at,
+            status: "completed",
+          });
         }
         continue;
       }
@@ -187,11 +194,11 @@ export class LiveRun {
       if (parts.length === 0) continue;
       views.push({
         id: message.id,
-        thread_id: this.threadId,
-        run_id: this.runId,
+        threadId: this.threadId,
+        runId: this.runId,
         role: "assistant",
         parts,
-        created_at: message.createdAt,
+        createdAt: message.createdAt,
         status: "streaming",
       });
     }
@@ -229,16 +236,16 @@ export function mergeThread(
   const stored: ViewMessage[] = thread?.messages.map((message) => ({ ...message })) ?? [];
   const overlay = live !== null && thread?.activeRun?.id === live.runId ? live : null;
 
-  const sentRuns = new Set(stored.flatMap((m) => (m.role === "user" ? [m.run_id] : [])));
+  const sentRuns = new Set(stored.flatMap((m) => (m.role === "user" ? [m.runId] : [])));
   const waiting: ViewMessage[] = pending
     .filter((input) => input.runId === null || !sentRuns.has(input.runId))
     .map((input) => ({
       id: input.key,
-      thread_id: thread?.id ?? "",
-      run_id: input.runId ?? "",
+      threadId: thread?.id ?? "",
+      runId: input.runId ?? "",
       role: "user",
       parts: [{ type: "text", text: input.text }],
-      created_at: input.createdAt,
+      createdAt: input.createdAt,
       status: "pending",
     }));
 

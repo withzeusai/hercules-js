@@ -3,6 +3,7 @@ import { followRun, parseEventStream, RunStreamError } from "../stream";
 import { readAgentEvent, readWireEvent } from "../component/protocol";
 import { CLIENT_ID } from "../component/protocol";
 import { runStreamHeaders } from "../stream";
+import packageJson from "../../package.json";
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -219,7 +220,7 @@ describe("followRun", () => {
     expect(requests[2]?.url).toContain("after=2");
   });
 
-  it("sends only headers the events route lets a page send", async () => {
+  it("names the package on the stream request, and sends only headers the events route lets a page send", async () => {
     const { requests, fetch: fetchFn } = scripted([
       () => new Response(streamOf(sse(event(1, "run.started")))),
       () => new Response(streamOf(sse(event(2, "run.completed", { output: "" })))),
@@ -227,16 +228,28 @@ describe("followRun", () => {
     await collect(
       followRun({ url: URL_, token: "t", fetch: fetchFn, retry: { initialMs: 1, maxMs: 2 } }),
     );
-    // A header outside this list fails the browser's preflight, and the live
-    // view with it. `Hercules-Client` is not on the list yet, so the page
-    // does not send it: the app's backend names the package.
-    const allowed = ["authorization", "accept", "last-event-id", "hercules-version"];
+    // The headers Hercules's events route lets a page send. One outside this
+    // list fails the browser's preflight, and the live view with it.
+    const allowed = [
+      "authorization",
+      "accept",
+      "last-event-id",
+      "hercules-version",
+      "hercules-client",
+    ];
     for (const request of requests) {
       expect([...request.headers.keys()].filter((name) => !allowed.includes(name))).toEqual([]);
+      // The page names the package and its version, as the app's backend does.
+      expect(request.headers.get("hercules-client")).toBe(CLIENT_ID);
     }
-    expect(runStreamHeaders("t", 0)).not.toHaveProperty("hercules-client");
-    // What turning it on sends, once the route allows it.
-    expect(runStreamHeaders("t", 4, true)).toEqual({
+    expect(CLIENT_ID).toBe(`agents/${packageJson.version}`);
+    expect(runStreamHeaders("t", 0)).toEqual({
+      authorization: "Bearer t",
+      accept: "text/event-stream",
+      "hercules-version": "2025-12-09",
+      "hercules-client": CLIENT_ID,
+    });
+    expect(runStreamHeaders("t", 4)).toEqual({
       authorization: "Bearer t",
       accept: "text/event-stream",
       "hercules-version": "2025-12-09",
@@ -401,7 +414,7 @@ describe("followRun", () => {
       },
     });
 
-  it("skips events of types it does not know, and resumes after them", async () => {
+  it("passes on events of types it does not know, as they came, and resumes after them", async () => {
     const { requests, fetch: fetchFn } = scripted([
       () =>
         new Response(
@@ -418,17 +431,21 @@ describe("followRun", () => {
     const events = await collect(
       followRun({ url: URL_, token: "t", fetch: fetchFn, retry: { initialMs: 1, maxMs: 2 } }),
     );
-    expect(events.map((e) => [e.seq, e.type])).toEqual([
-      [1, "run.started"],
-      [3, "message.delta"],
-      [6, "message.completed"],
-      [7, "run.completed"],
+    expect(events.map((e) => [e.seq, String(e.type), e.final])).toEqual([
+      [1, "run.started", false],
+      [2, "reasoning.delta", false],
+      [3, "message.delta", false],
+      [4, "run.requires_action", false],
+      [6, "message.completed", false],
+      [7, "run.completed", true],
     ]);
-    // After the last event it was sent, though that one is not one it knows.
+    // An event of a type added later carries its data as Hercules sent it.
+    expect(events[3]?.data).toEqual({ action: { type: "approval" } });
+    // After the last event it was sent.
     expect(requests[1]?.headers.get("last-event-id")).toBe("4");
   });
 
-  it("ends on an ending of a type it does not know that Hercules marks as final", async () => {
+  it("yields an ending of a type it does not know that Hercules marks as final, and ends", async () => {
     const { requests, fetch: fetchFn } = scripted([
       () =>
         new Response(
@@ -441,42 +458,68 @@ describe("followRun", () => {
         ),
     ]);
     const events = await collect(followRun({ url: URL_, token: "t", fetch: fetchFn }));
-    expect(events.map((e) => [e.seq, e.type])).toEqual([
-      [1, "run.started"],
-      [8, "message.completed"],
+    expect(events.map((e) => [e.seq, String(e.type), e.final])).toEqual([
+      [1, "run.started", false],
+      [8, "message.completed", false],
+      [9, "run.expired", true],
     ]);
+    expect(events.at(-1)?.data).toEqual({ output: "Done." });
     expect(requests).toHaveLength(1);
   });
 
-  it("stops asking for a run whose ending it cannot read, and passes its reply on once", async () => {
-    // Hercules answers a reader at the end of a finished run with the reply
-    // and the final event again, and closes. The final event is of a type
-    // added later, and is not marked.
-    const ending = () =>
-      new Response(streamOf(sse(reply(8)), sse(event(9, "run.expired", { output: "Done." }))));
+  it("keeps following a run whose stream closes at once with nothing new: that is a run that waits", async () => {
+    // A status added later, for a run that waits on a person: Hercules may
+    // close its stream at once, every time. Nothing failed, so nothing is
+    // thrown, however many times it happens.
+    const controller = new AbortController();
+    const waiting = () => new Response(streamOf(": nothing yet\n\n"));
     const { requests, fetch: fetchFn } = scripted([
-      () =>
-        new Response(
-          streamOf(sse(event(1, "run.started")), sse(reply(8)), sse(event(9, "run.expired"))),
-        ),
-      ...Array.from({ length: 5 }, () => ending),
+      () => new Response(streamOf(sse(event(1, "run.started")), sse(event(2, "run.waiting")))),
+      ...Array.from({ length: 8 }, () => waiting),
+      () => new Response(streamOf(sse(event(3, "run.completed", { output: "Done." })))),
     ]);
     const seen: string[] = [];
-    const error = await (async () => {
-      for await (const e of followRun({
-        url: URL_,
-        token: "t",
-        fetch: fetchFn,
-        retry: { initialMs: 1, maxMs: 2, maxAttempts: 4 },
-      })) {
-        seen.push(`${e.seq} ${e.type}`);
-      }
-    })().catch((e: unknown) => e);
-    expect(seen).toEqual(["1 run.started", "8 message.completed"]);
-    // A bounded number of tries, then the live view gives up: the run's
-    // ending reaches the page through the thread.
-    expect(error).toBeInstanceOf(RunStreamError);
-    expect(requests).toHaveLength(5);
+    for await (const e of followRun({
+      url: URL_,
+      token: "t",
+      fetch: fetchFn,
+      signal: controller.signal,
+      // Fewer tries than quiet closes: they do not count toward it.
+      retry: { initialMs: 1, maxMs: 2, maxAttempts: 3 },
+    })) {
+      seen.push(`${e.seq} ${String(e.type)}`);
+    }
+    expect(seen).toEqual(["1 run.started", "2 run.waiting", "3 run.completed"]);
+    expect(requests).toHaveLength(10);
+    expect(requests.at(-1)?.headers.get("last-event-id")).toBe("2");
+  });
+
+  it("passes a finished run's reply and ending on once, however often Hercules sends them again", async () => {
+    // Hercules answers a reader at the end of a finished run with the reply
+    // and the final event again, and closes. This ending is of a type added
+    // later that an older Hercules did not mark as final, so nothing here
+    // says the run is over: the reader comes back, quietly, until it is told
+    // to stop. The thread has the ending, and the hooks stop it there.
+    const controller = new AbortController();
+    let asked = 0;
+    const fetchFn = (async () => {
+      if (++asked === 5) controller.abort();
+      return new Response(
+        streamOf(sse(event(1, "run.started")), sse(reply(8)), sse(event(9, "run.expired"))),
+      );
+    }) as unknown as typeof fetch;
+    const seen: string[] = [];
+    for await (const e of followRun({
+      url: URL_,
+      token: "t",
+      fetch: fetchFn,
+      signal: controller.signal,
+      retry: { initialMs: 1, maxMs: 2, maxAttempts: 2 },
+    })) {
+      seen.push(`${e.seq} ${String(e.type)}`);
+    }
+    expect(seen).toEqual(["1 run.started", "8 message.completed", "9 run.expired"]);
+    expect(asked).toBe(5);
   });
 
   describe("a run that is quiet for a long time", () => {
@@ -521,9 +564,95 @@ describe("followRun", () => {
           retry: { initialMs: 1, maxMs: 2, maxAttempts: 3 },
         }),
       );
-      expect(events.map((e) => e.seq)).toEqual([3]);
+      expect(events.map((e) => e.seq)).toEqual([2, 3]);
       expect(opened).toBe(12);
     });
+  });
+
+  it("hands on each event as Hercules sent it: nothing renamed, dropped or rewritten, at any depth", async () => {
+    // What a later Hercules may send: fields this version does not know on
+    // the envelope, in `data`, on a message, a part, an error and usage; a
+    // part type, a role, a tool kind, a tool status and a capped reason it
+    // does not know.
+    const sent = [
+      { ...event(1, "run.started", { queue_ms: 12 }), final: false, trace_id: "trace_1" },
+      {
+        ...event(2, "tool_call.completed", {
+          tool_call_id: "call_1",
+          name: "delegate",
+          kind: "subagent",
+          status: "denied",
+          summary: null,
+          result: { order_id: "123", created_at: "kept as it is" },
+          duration_ms: 40,
+        }),
+        final: false,
+      },
+      {
+        ...event(3, "message.completed", {
+          message: {
+            id: "msg_1",
+            thread_id: "thr_1",
+            run_id: "run_1",
+            role: "critic",
+            model: "a-model",
+            parts: [
+              { type: "text", text: "Done.", annotations: [{ start: 0 }] },
+              { type: "image", url: "https://example.test/a.png" },
+              {
+                type: "tool_call",
+                id: "call_1",
+                name: "delegate",
+                kind: "subagent",
+                status: "denied",
+                summary: null,
+                arguments: { depth: 2 },
+              },
+            ],
+            created_at: "2026-11-15T12:00:00.000Z",
+          },
+        }),
+        final: false,
+      },
+      {
+        ...event(4, "run.capped", {
+          capped_reason: "tokens",
+          output: "Done.",
+          usage: { credits: 1.5, input_tokens: 900 },
+          error: { code: "limit_reached", message: "A limit.", retry_after: 30 },
+        }),
+        final: true,
+        trace_id: "trace_4",
+      },
+    ];
+    const { fetch: fetchFn } = scripted([() => new Response(streamOf(...sent.map((e) => sse(e))))]);
+    const events = await collect(followRun({ url: URL_, token: "t", fetch: fetchFn }));
+    expect(events).toEqual(sent);
+  });
+
+  it("gives every event a final, true for the four endings when Hercules sent none", async () => {
+    // As a Hercules from before the field sent them, and as stored events read.
+    const { fetch: fetchFn } = scripted([
+      () =>
+        new Response(
+          streamOf(
+            sse(event(1, "run.started")),
+            sse(event(2, "run.waiting")),
+            sse(event(3, "run.failed", { error: { code: "run_failed", message: "No." } })),
+          ),
+        ),
+    ]);
+    const events = await collect(followRun({ url: URL_, token: "t", fetch: fetchFn }));
+    expect(events.map((e) => [String(e.type), e.final])).toEqual([
+      ["run.started", false],
+      ["run.waiting", false],
+      ["run.failed", true],
+    ]);
+    for (const ending of ["run.completed", "run.failed", "run.cancelled", "run.capped"]) {
+      const { fetch } = scripted([() => new Response(streamOf(sse(event(1, ending))))]);
+      const [only] = await collect(followRun({ url: URL_, token: "t", fetch }));
+      expect(only?.final).toBe(true);
+    }
   });
 
   it("gives up at once when the token is refused", async () => {

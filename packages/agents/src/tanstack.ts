@@ -13,7 +13,12 @@
  *   const chat = useChat({ connection, threadId, persistence: true });
  *   useThreadSync(chat, api.agent.thread, { threadId });
  *   useEffect(() => {
- *     connection.setPageActions({ open_order: ({ orderId }) => openOrder(orderId) });
+ *     connection.setPageActions({
+ *       // A model writes the arguments: check the id before acting on it.
+ *       open_order: ({ orderId }) => {
+ *         if (typeof orderId === "string" && ORDER_ID.test(orderId)) openOrder(orderId);
+ *       },
+ *     });
  *     return () => connection.setPageActions(undefined);
  *   }, [connection]);
  * }
@@ -38,38 +43,43 @@ import { useQuery } from "convex/react";
 import type { FunctionReference } from "convex/server";
 import { useEffect, useRef } from "react";
 import {
-  keepCutOffReplies,
   notSentChunk,
   RunChunks,
-  showsStreamOf,
+  syncThread,
   threadToUIMessages,
-  transcriptKey,
+  type SyncableChat,
 } from "./ag-ui";
-import type { AgentThread } from "./agents";
+import { readAgentEvent } from "./component/protocol";
 import { AgentError, toAgentError } from "./errors";
 import { createPageActionRunner, type PageActionHandlers } from "./page-actions";
 import { followRun, RunStreamError, type RunStreamOptions } from "./stream";
+import type { AgentThread } from "./thread";
 
 export {
   agentErrorCode,
   PAGE_ACTION_OUTPUT,
   PROGRESS_EVENT,
-  threadToUIMessages,
   type HerculesMessageMetadata,
   type HerculesToolOutput,
+  type SyncableChat,
 } from "./ag-ui";
 export type { PageActionHandler, PageActionHandlers } from "./page-actions";
-export type { AgentThread } from "./agents";
+export type { AgentThread } from "./thread";
+export type { UnknownName } from "./api";
 
-export type SendArgs = {
-  threadId?: string;
+// Not exported: `/convex` has the `SendArgs` an app's backend uses, and these
+// two only spell out `HerculesAgentApi`. Each optional member says
+// `| undefined`, as the argument types Convex generates do, so `api.agent`
+// fits under `exactOptionalPropertyTypes` too.
+type SendArgs = {
+  threadId?: string | undefined;
   text: string;
-  context?: Record<string, any>;
+  context?: Record<string, any> | undefined;
 };
 
-export type ThreadQueryArgs = {
+type ThreadQueryArgs = {
   threadId: string;
-  limit?: number;
+  limit?: number | undefined;
 };
 
 /**
@@ -403,7 +413,10 @@ export function herculesConnection(
             ...(options.fetch !== undefined && { fetch: options.fetch }),
             ...(options.retry !== undefined && { retry: options.retry }),
           })) {
-            yield* chunks.apply(event);
+            // Read as the component reads it: an event of a type this
+            // version does not know, or one it cannot read, adds nothing.
+            const read = readAgentEvent(event);
+            if (read !== null) yield* chunks.apply(read);
           }
         } catch (error) {
           // The live view failed (Hercules refused the stream, or kept
@@ -504,55 +517,13 @@ export function herculesConnection(
   };
 }
 
-/** What `useThreadSync` needs of `useChat`'s result. */
-export interface SyncableChat {
-  readonly messages: ReadonlyArray<{
-    id: string;
-    role: string;
-    parts: ReadonlyArray<unknown>;
-    metadata?: Record<string, any> | undefined;
-  }>;
-  readonly isLoading: boolean;
-  readonly isHydrating?: boolean;
-  setMessages(messages: Array<UIMessage>): void;
-}
-
-/**
- * Puts the thread as Convex has it into the chat, when it reads differently
- * from what the chat shows and no reply is streaming here. Returns whether
- * it did. A run this page streamed is left alone until Convex has its end; a
- * run another tab started is taken with every update of the thread.
- * Messages older than the thread's window stay as they are. So does
- * what this page streamed of a reply that was stopped while it was written,
- * when the thread holds less of it: it is kept with
- * `metadata.hercules.status` set to `"incomplete"`.
- */
-export function syncThread(chat: SyncableChat, thread: ThreadValue | undefined): boolean {
-  if (thread === null || thread === undefined) return false;
-  if (chat.isLoading || chat.isHydrating === true) return false;
-  // This page streamed that run, and Convex has not caught up with it yet.
-  // What an earlier sync put here of a run another tab started is Convex's
-  // own copy, and each update of the thread replaces it.
-  const active = thread.activeRun?.id;
-  if (active !== undefined && showsStreamOf(chat.messages, thread, active)) return false;
-  let next = threadToUIMessages(thread);
-  const first = next[0];
-  if (thread.hasMore && first !== undefined) {
-    const index = chat.messages.findIndex((message) => message.id === first.id);
-    if (index > 0) next = [...(chat.messages.slice(0, index) as UIMessage[]), ...next];
-  }
-  next = keepCutOffReplies(chat.messages, next, thread);
-  if (transcriptKey(next) === transcriptKey(chat.messages)) return false;
-  chat.setMessages(next);
-  return true;
-}
-
 /**
  * Keeps the chat in step with the thread in Convex: a reply another tab or
  * device got shows here too, as far as Convex has it while it is written
- * (its checkpoints, not the live stream) and whole once it is done. It sets
- * the chat's messages only while no reply is streaming on this page. Returns
- * the thread, for its `activeRun.progress` and `latestRun`.
+ * (what Hercules has delivered of it, not the live stream) and whole once it
+ * is done. It sets the chat's messages only while no reply is streaming on
+ * this page. Returns the thread, for its `activeRun.progress` and
+ * `latestRun`.
  *
  * ```tsx
  * const chat = useChat({ connection, threadId, persistence: true });

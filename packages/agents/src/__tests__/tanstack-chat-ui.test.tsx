@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { herculesConnection, useThreadSync, type PageActionHandlers } from "../tanstack";
 import {
   api,
+  apiMessage,
   assistantMessage,
   createApp,
   frame,
@@ -25,8 +26,8 @@ import {
   RUN,
   settledThread,
   THREAD,
-  userMessage,
   type App,
+  userMessage,
 } from "./tanstack-harness";
 
 const chatOptions = { persistence: true } as const;
@@ -174,7 +175,7 @@ describe("the README's chat", () => {
         status: "sent",
         summary: null,
       }),
-      frame(6, "message.completed", { message: REPLY }),
+      frame(6, "message.completed", { message: apiMessage(REPLY) }),
       frame(7, "run.completed", { output: "Opening order 123.", usage: null }),
     );
     fireEvent.click(screen.getByText("Send"));

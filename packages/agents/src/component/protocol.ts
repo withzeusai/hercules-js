@@ -61,6 +61,7 @@ export interface Usage {
   credits: number;
 }
 
+/** A run as the Hercules API returns it: the API's own JSON, under the API's names. */
 export interface Run {
   id: string;
   thread_id: string;
@@ -100,6 +101,11 @@ export interface ToolCallPart {
 /** More part types may be added. This package keeps the ones it knows. */
 export type MessagePart = TextPart | ToolCallPart;
 
+/**
+ * A message as the Hercules API sends it, in a `message.completed` event:
+ * the API's own JSON, under the API's names. A thread's message, which the
+ * package builds from it, is `ThreadMessage`.
+ */
 export interface Message {
   id: string;
   thread_id: string;
@@ -303,8 +309,10 @@ export function goingStatus(status: string): "queued" | "running" {
 
 /**
  * Whether an event ends its run: one of the four final types, or an event of
- * any other type that Hercules marks with `final: true`. No type added so far
- * carries the mark. It is read so that an ending added later is still an
+ * any other type that Hercules marks with `final: true`. Hercules sends
+ * `final` on every event, `true` on the one that ends the run. The four types
+ * are still read by name, for an event stored before the field existed, and
+ * the mark is read so that an ending of a type added later is still an
  * ending to this version.
  */
 export function isFinalEvent(event: { type: string; final?: unknown }): boolean {

@@ -7,6 +7,7 @@ import { AgentError } from "../errors";
 import { agentErrorCode, herculesConnection, type HerculesConnectionOptions } from "../tanstack";
 import {
   api,
+  apiMessage,
   assistantMessage,
   createApp,
   frame,
@@ -16,8 +17,8 @@ import {
   runningThread,
   settledThread,
   THREAD,
-  userMessage,
   type App,
+  userMessage,
 } from "./tanstack-harness";
 
 const STOPPED_RUN = "0f4e3d2c-1b0a-4987-8654-3210fedcba98";
@@ -53,7 +54,7 @@ function pageActionRun(): string[] {
       status: "sent",
       summary: null,
     }),
-    frame(7, "message.completed", { message: REPLY }),
+    frame(7, "message.completed", { message: apiMessage(REPLY) }),
     frame(8, "run.completed", { output: "Opening order 123.", usage: { credits: 1 } }),
   ];
 }
@@ -155,7 +156,7 @@ describe("herculesConnection", () => {
           status: "completed",
           error: null,
           cappedReason: null,
-          finished_at: null,
+          finishedAt: null,
         },
       ),
     );
@@ -171,7 +172,7 @@ describe("herculesConnection", () => {
       frame(3, "message.delta", { message_id: "msg_1", text: "Your order is on " }),
       frame(4, "message.delta", { message_id: "msg_1", text: "Your order shipped " }),
       frame(5, "message.delta", { message_id: "msg_1", text: "today." }),
-      frame(6, "message.completed", { message: reply }),
+      frame(6, "message.completed", { message: apiMessage(reply) }),
       frame(7, "run.completed", { output: "Your order shipped today.", usage: null }),
     );
     const sending = chat.sendMessage("Where is my order?");
@@ -278,7 +279,7 @@ describe("herculesConnection", () => {
       frame(9, "message.delta", { message_id: "msg_1", text: "Opening" }),
       // Hercules ended the run itself, and numbered what it stored after the
       // last event it had stored, which is below what the stream had sent.
-      frame(5, "message.completed", { message: reply }),
+      frame(5, "message.completed", { message: apiMessage(reply) }),
       frame(6, "run.failed", { error: { code: "run_failed", message: "The run was ended." } }),
     );
     const sending = chat.sendMessage("Open my order");
@@ -290,7 +291,7 @@ describe("herculesConnection", () => {
         status: "failed",
         error: { code: "run_failed", message: "The run was ended." },
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       }),
     );
     await sending;
@@ -391,7 +392,7 @@ describe("herculesConnection", () => {
         status: "failed",
         error: { code: "out_of_credits", message: "No credits left." },
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       }),
     );
     await sending;
@@ -429,7 +430,7 @@ describe("herculesConnection", () => {
           status: "failed",
           error: { code: "agent_disabled", message: "The agent is off." },
           cappedReason: null,
-          finished_at: null,
+          finishedAt: null,
         }),
       );
       return started;
@@ -495,7 +496,7 @@ describe("herculesConnection", () => {
     const reply = assistantMessage("msg_2", [{ type: "text", text: "All right." }]);
     app.push(
       frame(1, "run.started"),
-      frame(2, "message.completed", { message: reply }),
+      frame(2, "message.completed", { message: apiMessage(reply) }),
       frame(3, "run.completed", { output: "All right.", usage: null }),
     );
     // The stopped run ends, and the thread takes messages again.
@@ -506,7 +507,7 @@ describe("herculesConnection", () => {
         status: "cancelled",
         error: null,
         cappedReason: null,
-        finished_at: null,
+        finishedAt: null,
       }),
     );
     await vi.waitFor(() => expect(app.callsTo("agent:send")).toHaveLength(2));
@@ -539,6 +540,29 @@ describe("herculesConnection", () => {
     expect(agentErrorCode(chat.getError())).toBe("thread_busy");
     expect(app.callsTo("agent:send")).toHaveLength(1);
     expect(app.watching()).toBe(0);
+  });
+
+  it("waits ten seconds for a stop to land when settleTimeoutMs is left out", async () => {
+    const stopped = runningThread([userMessage("Write a report", STOPPED_RUN)], STOPPED_RUN);
+    const app = createApp({ ...stopped, activeRun: { ...stopped.activeRun!, stopping: true } });
+    app.failSendWith("thread_busy", "The agent is still answering in this thread.");
+    const { chat } = chatFor(app);
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const sending = chat.sendMessage("Never mind").then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      expect(chat.getError()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await sending;
+      expect(agentErrorCode(chat.getError())).toBe("thread_busy");
+      expect(app.callsTo("agent:send")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hydrates a thread for persistence, runs a page action left waiting, and joins the run going", async () => {

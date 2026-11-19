@@ -1,6 +1,7 @@
 import { httpRouter, makeFunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { answerEvents } from "../agents";
 import { HerculesAgents, type AgentThread } from "../convex";
 import { retryDelayMs } from "../component/hercules";
 import {
@@ -174,8 +175,10 @@ const DELIVERY_TOKEN = {
 };
 
 /** Posts a delivery to the app's HTTP route and returns the route's answer. */
-async function postEvents(support: HerculesAgents, ...events: unknown[]) {
-  return support.handleEvents(
+// One route serves every agent of the app, so the agent only says whose events these are.
+async function postEvents(_support: HerculesAgents, ...events: unknown[]) {
+  return answerEvents(
+    h.component,
     h.appCtx(),
     new Request(`https://app.convex.site${EVENTS_PATH}`, {
       method: "POST",
@@ -186,8 +189,9 @@ async function postEvents(support: HerculesAgents, ...events: unknown[]) {
 }
 
 /** Delivers events the way Hercules does, through the app's HTTP route. */
-async function deliver(support: HerculesAgents, ...events: unknown[]) {
-  const response = await support.handleEvents(
+async function deliver(_support: HerculesAgents, ...events: unknown[]) {
+  const response = await answerEvents(
+    h.component,
     h.appCtx(),
     new Request(`https://app.convex.site${EVENTS_PATH}`, {
       method: "POST",
@@ -248,7 +252,7 @@ describe("send", () => {
     expect(thread.messages).toEqual([
       expect.objectContaining({
         role: "user",
-        run_id: runId,
+        runId: runId,
         parts: [{ type: "text", text: "Where is my order?" }],
         status: "completed",
       }),
@@ -468,7 +472,7 @@ describe("starting a run", () => {
       status: "failed",
       error: { code: "out_of_credits", message: "No credits are left." },
       cappedReason: null,
-      finished_at: new Date(h.now).toISOString(),
+      finishedAt: new Date(h.now).toISOString(),
     });
     await h.runDue();
     expect(finished).toEqual([expect.objectContaining({ runId, status: "failed" })]);
@@ -736,7 +740,8 @@ describe("what Hercules adds later", () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
     await h.runDue();
-    const response = await support.handleEvents(
+    const response = await answerEvents(
+      h.component,
       h.appCtx(),
       new Request(`https://app.convex.site${EVENTS_PATH}`, {
         method: "POST",
@@ -1488,6 +1493,48 @@ describe("cancel", () => {
     expect(finished).toHaveLength(1);
   });
 
+  it("keeps a stopped reply as far as it was written, as a completed message", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // Hercules ends a stopped run with its reply up to the stop, as the run's reply.
+    const stopped = [
+      event(runId, threadId, 2, "run.started"),
+      event(runId, threadId, 5, "message.completed", {
+        message: {
+          id: "msg_1",
+          thread_id: threadId,
+          run_id: runId,
+          role: "assistant",
+          parts: [{ type: "text", text: "Here is the first part" }],
+          created_at: "2026-11-15T12:00:01.000Z",
+        },
+      }),
+      event(runId, threadId, 6, "run.cancelled", { usage: { credits: 0.5 } }),
+    ];
+    api.answerWith((request) =>
+      request.path.startsWith(`/v1/agents/runs/${runId}/events`)
+        ? Response.json({ data: stopped, has_more: false })
+        : undefined,
+    );
+    await support.cancel(h.appCtx(ALICE), { threadId });
+    await h.runDue();
+    const reply = {
+      id: "msg_1",
+      status: "completed",
+      parts: [{ type: "text", text: "Here is the first part" }],
+    };
+    let thread = await read(support, threadId);
+    expect(thread.latestRun?.status).toBe("cancelled");
+    expect(thread.messages[1]).toMatchObject(reply);
+    // Delivery brings the same events later, and changes nothing.
+    await deliver(support, ...stopped);
+    thread = await read(support, threadId);
+    expect(thread.messages).toHaveLength(2);
+    expect(thread.messages[1]).toMatchObject(reply);
+    expect(finished).toHaveLength(1);
+  });
+
   it("records the stop even when what the run wrote cannot be read", async () => {
     const support = agents();
     const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
@@ -1844,7 +1891,7 @@ describe("limits and refusals at Hercules", () => {
       status: "failed",
       error: { code, message: detail, retryAfterSeconds: wait },
       cappedReason: null,
-      finished_at: new Date(sentAt).toISOString(),
+      finishedAt: new Date(sentAt).toISOString(),
     });
     expect(finished).toEqual([
       expect.objectContaining({ runId, error: { code, message: detail, retryAfterSeconds: wait } }),
@@ -1916,7 +1963,7 @@ describe("limits and refusals at Hercules", () => {
       code: "thread_busy",
       message: "A run is still going.",
     });
-    expect(Date.parse(thread.latestRun?.finished_at ?? "") - sentAt).toBeLessThan(66_000);
+    expect(Date.parse(thread.latestRun?.finishedAt ?? "") - sentAt).toBeLessThan(66_000);
   });
 
   it("settles a run at once when Hercules answers that it is already over", async () => {
@@ -2692,7 +2739,7 @@ describe("tool details", () => {
         summary: "Searched the web for refund policy",
         resultJson: null,
         argumentsJson: null,
-        created_at: "2026-11-15T12:00:00.000Z",
+        createdAt: "2026-11-15T12:00:00.000Z",
       },
       {
         toolCallId: "call_order",
@@ -2703,7 +2750,7 @@ describe("tool details", () => {
         summary: "Looked up order 123",
         resultJson: '{"id":"123","email":"alice@example.com"}',
         argumentsJson: null,
-        created_at: "2026-11-15T12:00:00.000Z",
+        createdAt: "2026-11-15T12:00:00.000Z",
       },
     ]);
     // Another agent's instance does not read this agent's threads.
@@ -3529,7 +3576,7 @@ describe("a start Hercules refuses", () => {
         message: "The assistant is not available right now.",
       },
       cappedReason: null,
-      finished_at: expect.any(String),
+      finishedAt: expect.any(String),
     });
   });
 
@@ -4611,12 +4658,13 @@ describe("the events route", () => {
   const EVENTS_URL = `${SITE}${EVENTS_PATH}`;
 
   async function post(
-    support: HerculesAgents,
+    _support: HerculesAgents,
     token: string | null,
     body: unknown,
     verifier: ReturnType<typeof createTokenVerifier>,
   ) {
-    return support.handleEvents(
+    return answerEvents(
+      h.component,
       h.appCtx(),
       new Request(EVENTS_URL, {
         method: "POST",
@@ -4852,5 +4900,407 @@ describe("naming the package to Hercules", () => {
       expect(request.headers.get("hercules-client")).toBe(`agents/${packageJson.version}`);
       expect(request.headers.get("hercules-version")).toBe("2025-12-09");
     }
+  });
+});
+
+describe("what is private", () => {
+  it("is not reachable on an agent at run time: its options, the component, its helpers", () => {
+    const support = agents({ apiKey: "a-secret-key" });
+    const open = support as unknown as Record<string, unknown>;
+    for (const name of ["options", "component", "verifier", "apiConfig", "start", "agentId"]) {
+      expect(open[name]).toBeUndefined();
+    }
+    expect(Object.keys(support)).toEqual([]);
+    expect(JSON.stringify(support)).toBe("{}");
+    // What an app calls is all that is on it.
+    expect(Object.getOwnPropertyNames(HerculesAgents.prototype).sort()).toEqual(
+      [
+        "constructor",
+        "send",
+        "run",
+        "readThread",
+        "readThreadDetails",
+        "cancel",
+        "deleteThread",
+        "claimPageAction",
+        "api",
+        "handleEvents",
+        "registerRoutes",
+      ].sort(),
+    );
+  });
+});
+
+// The README states these under "Defaults and limits". An app built against
+// one keeps running against it: see `defaults.test.ts`.
+describe("the documented defaults", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("calls https://api.hercules.app with HERCULES_API_KEY when neither is passed", async () => {
+    const urls: string[] = [];
+    const keys: Array<string | null> = [];
+    vi.stubGlobal("fetch", ((input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      keys.push(new Headers(init?.headers).get("authorization"));
+      return api.fetch(input, init);
+    }) as typeof fetch);
+    vi.stubEnv("HERCULES_API_KEY", "key-from-the-environment");
+    vi.stubEnv("HERCULES_API_URL", "");
+    const byDefault = new HerculesAgents(h.component, { agentId: AGENT_ID });
+    await byDefault.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    expect(urls).toEqual([`https://api.hercules.app/v1/agents/${AGENT_ID}/runs`]);
+    expect(keys).toEqual(["Bearer key-from-the-environment"]);
+
+    // HERCULES_API_URL comes before the built-in URL, and the option before both.
+    vi.stubEnv("HERCULES_API_URL", "https://api.from-the-environment.test");
+    await byDefault.send(h.appCtx(BOB), { text: "Hi" });
+    await h.runDue();
+    expect(urls[1]).toBe(`https://api.from-the-environment.test/v1/agents/${AGENT_ID}/runs`);
+    await agents().send(h.appCtx(BOB), { text: "Hi" });
+    await h.runDue();
+    expect(urls[2]).toBe(`${API_URL}/v1/agents/${AGENT_ID}/runs`);
+    expect(keys[2]).toBe("Bearer hercules-app-key");
+  });
+
+  it("sets no hourly limit unless limits.runsPerUserPerHour does", async () => {
+    const support = agents();
+    for (let n = 0; n < 40; n++) await support.send(h.appCtx(ALICE), { text: `Message ${n}` });
+    expect(h.db.all("runs")).toHaveLength(40);
+  });
+
+  it("takes a message of exactly 262,144 characters, context included", async () => {
+    const context = { page: "/orders" };
+    const overhead = runInputText("", context).length;
+    const support = agents();
+    await support.send(h.appCtx(ALICE), { text: "x".repeat(262_144 - overhead), context });
+    const error = await support
+      .send(h.appCtx(ALICE), { text: "x".repeat(262_144 - overhead + 1), context })
+      .catch((e: unknown) => e);
+    expect(errorCode(error)).toBe("message_too_long");
+  });
+
+  it("reads a thread's newest 100 messages unless limit says otherwise, and 200 at most", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    // 249 replies after the user's message: 250 messages.
+    await deliver(
+      support,
+      ...Array.from({ length: 249 }, (_, n) =>
+        event(runId, threadId, 2 + n, "message.completed", {
+          message: {
+            id: `msg_${n}`,
+            thread_id: threadId,
+            run_id: runId,
+            role: "assistant",
+            parts: [{ type: "text", text: `Reply ${n}` }],
+            created_at: "2026-11-15T12:00:01.000Z",
+          },
+        }),
+      ),
+    );
+    const count = async (limit?: number) => {
+      const thread = await support.readThread(h.appCtx(ALICE), {
+        threadId,
+        ...(limit !== undefined && { limit }),
+      });
+      expect(thread?.hasMore).toBe(true);
+      expect(thread?.messages.at(-1)?.id).toBe("msg_248");
+      return thread?.messages.length;
+    };
+    expect(await count()).toBe(100);
+    expect(await count(3)).toBe(3);
+    expect(await count(200)).toBe(200);
+    expect(await count(201)).toBe(200);
+    expect(await count(10_000)).toBe(200);
+    // Not a whole number of at least one: read as left out.
+    expect(await count(0)).toBe(100);
+    expect(await count(Number.NaN)).toBe(100);
+    const details = await support.readThreadDetails(h.appCtx(), { threadId });
+    expect(details?.messages).toHaveLength(100);
+  });
+
+  it("shows a page no tool details unless exposeToolDetails is set", async () => {
+    const support = agents();
+    const { threadId, runId } = await support.send(h.appCtx(ALICE), { text: "Hi" });
+    await h.runDue();
+    await deliver(
+      support,
+      event(runId, threadId, 2, "message.completed", {
+        message: {
+          id: "msg_1",
+          thread_id: threadId,
+          run_id: runId,
+          role: "assistant",
+          parts: [
+            {
+              type: "tool_call",
+              id: "call_1",
+              name: "web_search",
+              kind: "hercules",
+              status: "succeeded",
+              summary: "Searched the web",
+            },
+          ],
+          created_at: "2026-11-15T12:00:01.000Z",
+        },
+      }),
+    );
+    const part = { type: "tool_call", id: "call_1", kind: "hercules", status: "succeeded" };
+    expect((await read(support, threadId)).messages[1]?.parts).toEqual([
+      { ...part, name: "tool", summary: "Used a tool" },
+    ]);
+    const exposed = agents({ exposeToolDetails: true });
+    expect((await read(exposed, threadId)).messages[1]?.parts).toEqual([
+      { ...part, name: "web_search", summary: "Searched the web" },
+    ]);
+  });
+});
+
+// The component's tables did not change when the thread an app reads took
+// camelCase names: the names were the reader's, never the rows'. So a
+// deployment that wrote these rows on 0.3.0 reads them after an upgrade with
+// no migration. The rows below are written out by hand, field for field as
+// 0.3.0's schema has them, and not through the component's own writers.
+describe("rows a deployment stored on 0.3.0", () => {
+  const THREAD_ID = "33333333-3333-4333-8333-333333333333";
+  const RUN_ID = "44444444-4444-4444-8444-444444444444";
+  const AT = "2026-11-15T12:00:01.000Z";
+
+  function runRow(overrides: Record<string, unknown> = {}) {
+    return {
+      runId: RUN_ID,
+      threadId: THREAD_ID,
+      agentId: AGENT_ID,
+      owner: `user:${ALICE}`,
+      endUser: { tokenIdentifier: ALICE },
+      status: "completed",
+      exposeToolDetails: false,
+      output: "Your order shipped.",
+      error: null,
+      cappedReason: null,
+      usage: { credits: 1.5 },
+      progress: null,
+      liveUrl: null,
+      liveToken: null,
+      accepted: true,
+      cancelRequested: false,
+      nextStartAt: null,
+      missingSince: null,
+      quietChecks: 0,
+      lastSeq: 7,
+      lastEventAt: h.now,
+      finishedAt: h.now,
+      onRunFinished: null,
+      ...overrides,
+    };
+  }
+
+  function messageRow(
+    messageId: string,
+    role: "user" | "assistant",
+    parts: unknown[],
+    seq: number,
+  ) {
+    return {
+      messageId,
+      threadId: THREAD_ID,
+      runId: RUN_ID,
+      role,
+      status: "completed",
+      parts,
+      segment: 0,
+      continuesText: false,
+      createdAt: AT,
+      runOrder: h.now,
+      firstSeq: seq,
+    };
+  }
+
+  function toolCallRow(overrides: Record<string, unknown>) {
+    return {
+      threadId: THREAD_ID,
+      runId: RUN_ID,
+      status: "succeeded",
+      summary: null,
+      resultJson: null,
+      argumentsJson: null,
+      claimedAt: null,
+      expired: false,
+      createdAt: h.now,
+      ...overrides,
+    };
+  }
+
+  const lookup = {
+    type: "tool_call",
+    id: "call_lookup",
+    name: "lookup_order",
+    kind: "app",
+    status: "succeeded",
+    summary: "Looked up order 123",
+  };
+
+  async function store(run: Record<string, unknown> = {}) {
+    const finished = run["status"] === undefined;
+    await h.db.insert("threads", {
+      threadId: THREAD_ID,
+      agentId: AGENT_ID,
+      owner: `user:${ALICE}`,
+      activeRunId: finished ? null : RUN_ID,
+      updatedAt: h.now,
+    });
+    await h.db.insert("runs", runRow(run));
+    await h.db.insert(
+      "messages",
+      messageRow(`${RUN_ID}:input`, "user", [{ type: "text", text: "Where is my order?" }], 0),
+    );
+    await h.db.insert(
+      "messages",
+      messageRow("msg_1", "assistant", [lookup, { type: "text", text: "It shipped." }], 4),
+    );
+    await h.db.insert(
+      "tool_calls",
+      toolCallRow({
+        toolCallId: "call_lookup",
+        name: "lookup_order",
+        kind: "app",
+        summary: "Looked up order 123",
+        // The app's own data, as the tool returned it: never renamed.
+        resultJson: JSON.stringify({ order_id: "123", shipped_at: AT }),
+      }),
+    );
+    await h.db.insert(
+      "tool_calls",
+      toolCallRow({
+        toolCallId: "call_open",
+        name: "open_order",
+        kind: "page",
+        status: "sent",
+        argumentsJson: JSON.stringify({ order_id: "123" }),
+      }),
+    );
+  }
+
+  it("are read as they are, under the thread's camelCase names", async () => {
+    await store();
+    const at = new Date(h.now).toISOString();
+    const messages = [
+      {
+        id: `${RUN_ID}:input`,
+        threadId: THREAD_ID,
+        runId: RUN_ID,
+        role: "user",
+        parts: [{ type: "text", text: "Where is my order?" }],
+        createdAt: AT,
+        status: "completed",
+      },
+      {
+        id: "msg_1",
+        threadId: THREAD_ID,
+        runId: RUN_ID,
+        role: "assistant",
+        parts: [lookup, { type: "text", text: "It shipped." }],
+        createdAt: AT,
+        status: "completed",
+      },
+    ];
+    const pageActions = [
+      {
+        toolCallId: "call_open",
+        runId: RUN_ID,
+        name: "open_order",
+        argumentsJson: '{"order_id":"123"}',
+        createdAt: at,
+        status: "pending",
+      },
+    ];
+    const thread = {
+      id: THREAD_ID,
+      agentId: AGENT_ID,
+      messages,
+      hasMore: false,
+      activeRun: null,
+      latestRun: {
+        id: RUN_ID,
+        status: "completed",
+        error: null,
+        cappedReason: null,
+        finishedAt: at,
+      },
+      pageActions,
+    };
+    const support = agents();
+    expect(await support.readThread(h.appCtx(ALICE), { threadId: THREAD_ID })).toEqual(thread);
+    expect(await support.readThreadDetails(h.appCtx(), { threadId: THREAD_ID })).toEqual({
+      ...thread,
+      toolCalls: [
+        {
+          toolCallId: "call_lookup",
+          runId: RUN_ID,
+          name: "lookup_order",
+          kind: "app",
+          status: "succeeded",
+          summary: "Looked up order 123",
+          resultJson: `{"order_id":"123","shipped_at":"${AT}"}`,
+          argumentsJson: null,
+          createdAt: at,
+        },
+        {
+          toolCallId: "call_open",
+          runId: RUN_ID,
+          name: "open_order",
+          kind: "page",
+          status: "sent",
+          summary: null,
+          resultJson: null,
+          argumentsJson: '{"order_id":"123"}',
+          createdAt: at,
+        },
+      ],
+      toolCallsTruncated: false,
+    });
+    // The thread is still the user's to use: a claim and a new message work.
+    expect(
+      await support.claimPageAction(h.appCtx(ALICE), {
+        threadId: THREAD_ID,
+        runId: RUN_ID,
+        toolCallId: "call_open",
+      }),
+    ).toBe(true);
+    await support.send(h.appCtx(ALICE), { threadId: THREAD_ID, text: "Thanks" });
+  });
+
+  it("are read with a run that was still going", async () => {
+    await store({
+      status: "running",
+      output: null,
+      usage: null,
+      finishedAt: null,
+      liveUrl: `${API_URL}/v1/agents/runs/${RUN_ID}/events`,
+      liveToken: "run-token",
+      progress: "Looking up the order",
+    });
+    const thread = await read(agents(), THREAD_ID);
+    const run = h.db.all("runs")[0]!;
+    expect(thread.activeRun).toEqual({
+      id: RUN_ID,
+      status: "running",
+      progress: "Looking up the order",
+      live: { url: `${API_URL}/v1/agents/runs/${RUN_ID}/events`, token: "run-token" },
+      lastSeq: 7,
+      createdAt: new Date(run["_creationTime"] as number).toISOString(),
+      stopping: false,
+    });
+    expect(thread.latestRun).toEqual({
+      id: RUN_ID,
+      status: "running",
+      error: null,
+      cappedReason: null,
+      finishedAt: null,
+    });
   });
 });

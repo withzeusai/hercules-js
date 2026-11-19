@@ -1,6 +1,8 @@
 import { ConvexError, v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineTools, ToolError, tool, validatorToJsonSchema, type ToolCtx } from "../convex";
+import { defineTools, ToolError, tool, type ConvexTool, type ToolCtx } from "../convex";
+import { validatorToJsonSchema } from "../json-schema";
+import { createToolServer, toolRecordOf } from "../tool-server";
 import { createTokenVerifier } from "../jwt";
 import { createMcpHandler, type JsonSchema, type McpTool } from "../server";
 import {
@@ -93,11 +95,22 @@ async function rpc(token: string, method: string, params?: unknown): Promise<Rpc
   return (await response.json()) as RpcBody;
 }
 
+/** The tools behind what `tool()` returned, as the server runs them. */
+function served(made: Record<string, ConvexTool>): Record<string, McpTool<ToolCtx>> {
+  return Object.fromEntries(
+    Object.entries(made).map(([name, value]) => {
+      const record = toolRecordOf(value);
+      if (record === undefined) throw new Error(`${name} was not made by tool()`);
+      return [name, record];
+    }),
+  );
+}
+
 beforeEach(async () => {
   issuer = await createTestIssuer();
   const handler = createMcpHandler<ToolCtx>({
     name: "tasks",
-    tools,
+    tools: served(tools),
     verifier: createTokenVerifier({
       issuer: ISSUER,
       audiences: [AUDIENCE],
@@ -190,7 +203,7 @@ describe("tools over the handler", () => {
     const seen: unknown[] = [];
     const handler = createMcpHandler<ToolCtx>({
       name: "tasks",
-      tools: {
+      tools: served({
         echo: tool({
           description: "Records its argument.",
           args: { priority: v.int64(), blob: v.bytes() },
@@ -199,7 +212,7 @@ describe("tools over the handler", () => {
             return "ok";
           },
         }),
-      },
+      }),
       verifier: createTokenVerifier({
         issuer: ISSUER,
         audiences: [AUDIENCE],
@@ -335,10 +348,10 @@ describe("what a tool returns, as MCP lists and sends it", () => {
     untyped: tool({ description: "No returns.", args: {}, handler: () => ({ id: "a" }) }),
   };
 
-  function serve(served: Record<string, McpTool<ToolCtx>>) {
+  function serve(tools: Record<string, McpTool<ToolCtx>>) {
     const handler = createMcpHandler<ToolCtx>({
       name: "orders",
-      tools: served,
+      tools,
       verifier: createTokenVerifier({
         issuer: ISSUER,
         audiences: [AUDIENCE],
@@ -356,7 +369,7 @@ describe("what a tool returns, as MCP lists and sends it", () => {
   }
 
   it("lists an output schema only for a tool that returns an object", async () => {
-    const listed = (await serve(shaped)("tools/list")).result?.tools;
+    const listed = (await serve(served(shaped))("tools/list")).result?.tools;
     expect(listingProblems(listed)).toEqual([]);
     const withSchema = listed?.flatMap((entry) => ("outputSchema" in entry ? [entry.name] : []));
     expect(withSchema).toEqual(["one_order", "totals_by_id"]);
@@ -376,7 +389,7 @@ describe("what a tool returns, as MCP lists and sends it", () => {
   });
 
   it("sends structured content with a listed schema, and only then", async () => {
-    const call = serve(shaped);
+    const call = serve(served(shaped));
     const listed = (await call("tools/list")).result?.tools ?? [];
     for (const entry of listed) {
       const { result } = await call("tools/call", { name: entry.name });
@@ -399,7 +412,7 @@ describe("what a tool returns, as MCP lists and sends it", () => {
   });
 
   it("still enforces returns on a tool it sends as text", async () => {
-    const call = serve(shaped);
+    const call = serve(served(shaped));
     const text = async (name: string) =>
       (await call("tools/call", { name })).result?.content?.[0]?.text;
     expect(await text("list_orders")).toBe('[{"id":"a","total":1}]');
@@ -473,13 +486,13 @@ describe("defineTools", () => {
   });
 
   it("routes a default server at /mcp and a named one at /mcp/<name>", () => {
-    expect(defineTools({ tools: {} })).toMatchObject({ name: "default", path: "/mcp" });
-    expect(defineTools({ name: "support", tools: {} })).toMatchObject({
+    expect(createToolServer({ tools: {} })).toMatchObject({ name: "default", path: "/mcp" });
+    expect(createToolServer({ name: "support", tools: {} })).toMatchObject({
       name: "support",
       path: "/mcp/support",
     });
     // Those are the only paths Hercules calls, so there is no other to choose.
-    expect(defineTools({ name: "support", path: "/agents", tools: {} } as never).path).toBe(
+    expect(createToolServer({ name: "support", path: "/agents", tools: {} } as never).path).toBe(
       "/mcp/support",
     );
   });
@@ -493,13 +506,14 @@ describe("defineTools", () => {
       handler: (_ctx, _args, caller) =>
         caller.principal === "agent" ? `from ${caller.origin ?? "nowhere it says"}` : "a user",
     });
-    expect(scheduled.agentOrigins).toEqual(["app", "schedule"]);
+    expect(toolRecordOf(scheduled)?.agentOrigins).toEqual(["app", "schedule"]);
     expect(
-      tool({ ...base, principals: ["agent"], agentOrigins: "any", handler: () => 1 }).agentOrigins,
+      toolRecordOf(tool({ ...base, principals: ["agent"], agentOrigins: "any", handler: () => 1 }))
+        ?.agentOrigins,
     ).toBe("any");
     // Left out, it is left to the default: the app's own job.
-    expect(tools.whoami).not.toHaveProperty("agentOrigins");
-    expect(defineTools({ tools: { scheduled } })).toMatchObject({ path: "/mcp" });
+    expect(toolRecordOf(tools.whoami)).not.toHaveProperty("agentOrigins");
+    expect(createToolServer({ tools: { scheduled } })).toMatchObject({ path: "/mcp" });
 
     // A tool for users only has no origins to set. The types refuse it, and so does declaring it.
     const usersOnly = tool({
@@ -528,18 +542,49 @@ describe("defineTools", () => {
 
   it("registers POST and GET on the router", () => {
     const route = vi.fn();
-    defineTools({ name: "support", tools: {} }).registerRoutes({ route } as never);
+    const declared = defineTools({ name: "support", tools: {} });
+    // All an app is handed: the name, the path and the handler stay inside the package.
+    expect(Object.keys(declared)).toEqual(["registerRoutes"]);
+    declared.registerRoutes({ route } as never);
     expect(route.mock.calls.map(([spec]) => [spec.path, spec.method])).toEqual([
       ["/mcp/support", "POST"],
       ["/mcp/support", "GET"],
     ]);
   });
 
+  it("takes only what tool() returned: nothing written by hand, and no copy", () => {
+    const made = tool({
+      description: "Says who is calling.",
+      args: {},
+      handler: (_ctx, _args, caller) => caller.subject,
+    });
+    // There is nothing on it to read or to change.
+    expect(Object.keys(made)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(made)).toEqual([]);
+    expect(Object.isFrozen(made)).toBe(true);
+    expect(() => {
+      "use strict";
+      (made as unknown as { principals: string[] }).principals = ["user", "agent"];
+    }).toThrow(TypeError);
+    expect(() => defineTools({ tools: { made } })).not.toThrow();
+
+    // The tool itself, as the server runs it: what an app must not be able to pass.
+    const byHand = toolRecordOf(made) as unknown as ConvexTool;
+    expect(byHand).toHaveProperty("handler");
+    const refused = /was not made by tool\(\)/;
+    expect(() => defineTools({ tools: { by_hand: byHand } })).toThrow(refused);
+    expect(() => defineTools({ tools: { copy: { ...made } } })).toThrow(refused);
+    expect(() => defineTools({ tools: { empty: {} as ConvexTool } })).toThrow(refused);
+    expect(() => defineTools({ tools: { nothing: null as unknown as ConvexTool } })).toThrow(
+      /MCP tool "nothing" was not made by tool\(\)/,
+    );
+  });
+
   it("reads its issuer and audience from the deployment's environment", async () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const server = createToolServer({ tools: { whoami: tools.whoami } });
 
     // `exp` is checked against the real clock here, so sign for the real now.
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -572,7 +617,7 @@ describe("defineTools", () => {
     vi.stubEnv("CONVEX_SITE_URL", "https://api.example.com");
     vi.stubEnv("CONVEX_CLOUD_URL", "https://happy-otter-123.convex.cloud");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const server = createToolServer({ tools: { whoami: tools.whoami } });
     const nowSeconds = Math.floor(Date.now() / 1000);
     const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
     // Hercules signs for the deployment's own URL, whatever domain the app added.
@@ -590,7 +635,7 @@ describe("defineTools", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", ISSUER);
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
-    const server = defineTools({ tools: { whoami: tools.whoami } });
+    const server = createToolServer({ tools: { whoami: tools.whoami } });
     const nowSeconds = Math.floor(Date.now() / 1000);
     const token = await issuer.sign(userClaims({ iat: nowSeconds, exp: nowSeconds + 600 }));
     const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
@@ -608,7 +653,7 @@ describe("defineTools", () => {
     vi.stubEnv("HERCULES_OIDC_AUTHORITY", "");
     vi.stubEnv("CONVEX_SITE_URL", "");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const server = defineTools({ tools: {} });
+    const server = createToolServer({ tools: {} });
     const response = await server.handle(ctx, rpcRequest(null, {}));
     expect(response.status).toBe(500);
     errors.mockRestore();
@@ -619,7 +664,7 @@ describe("defineTools", () => {
     vi.stubEnv("CONVEX_SITE_URL", "https://happy-otter-123.convex.site");
     vi.stubGlobal("fetch", issuer.fetch);
     let seen: string[] = [];
-    const server = defineTools({
+    const server = createToolServer({
       tools: {
         peek: tool({
           description: "Records what its context offers.",

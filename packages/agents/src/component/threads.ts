@@ -292,7 +292,7 @@ async function threadView(
               ? { url: run.liveUrl, token: run.liveToken }
               : null,
           lastSeq: run.lastSeq,
-          created_at: isoTime(run._creationTime),
+          createdAt: isoTime(run._creationTime),
           stopping: run.cancelRequested,
         };
 
@@ -309,7 +309,7 @@ async function threadView(
           status: latest.status,
           error: reader === "page" ? pageError(latest.error) : latest.error,
           cappedReason: latest.cappedReason,
-          finished_at: latest.finishedAt === null ? null : isoTime(latest.finishedAt),
+          finishedAt: latest.finishedAt === null ? null : isoTime(latest.finishedAt),
         };
 
   // The page actions that arrived lately and no tab has run. One whose
@@ -332,7 +332,7 @@ async function threadView(
       runId: call.runId,
       name: call.name,
       argumentsJson: call.argumentsJson,
-      created_at: isoTime(call.createdAt),
+      createdAt: isoTime(call.createdAt),
       status: !call.expired && isPageActionFresh(call.createdAt, now) ? "pending" : "expired",
     });
     if (pageActions.length === MAX_LISTED_PAGE_ACTIONS) break;
@@ -407,7 +407,7 @@ export const readDetails = query({
     const thread = await threadById(ctx, args.threadId);
     if (thread === null || thread.agentId !== args.agentId) return null;
     const view = await threadView(ctx, thread, args.limit, false, "backend");
-    const runIds = [...new Set(view.messages.map((message) => message.run_id))];
+    const runIds = [...new Set(view.messages.map((message) => message.runId))];
     const details: Doc<"tool_calls">[] = [];
     let resultBytes = 0;
     let toolCallsTruncated = false;
@@ -435,7 +435,7 @@ export const readDetails = query({
       summary: call.summary,
       resultJson: call.resultJson,
       argumentsJson: call.argumentsJson,
-      created_at: isoTime(call.createdAt),
+      createdAt: isoTime(call.createdAt),
     }));
     return { ...view, toolCalls, toolCallsTruncated };
   },

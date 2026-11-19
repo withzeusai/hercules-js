@@ -11,8 +11,11 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "removeComments": true,
-    "importHelpers": true,
+    // Kept: the declarations carry the doc comments, which is where an editor
+    // shows that `run` is server-only or that an argument is untrusted input.
+    "removeComments": false,
+    // No `importHelpers`: the package has no dependencies, `tslib` among
+    // them, and its build targets a runtime that needs no helpers.
 
     // Interop constraints
     "isolatedModules": true,

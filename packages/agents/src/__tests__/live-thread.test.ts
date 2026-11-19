@@ -26,11 +26,11 @@ function thread(overrides: Partial<AgentThread> = {}): AgentThread {
     messages: [
       {
         id: `${RUN}:input`,
-        thread_id: THREAD,
-        run_id: RUN,
+        threadId: THREAD,
+        runId: RUN,
         role: "user",
         parts: [{ type: "text", text: "Hi" }],
-        created_at: "2026-11-15T12:00:00.000Z",
+        createdAt: "2026-11-15T12:00:00.000Z",
         status: "completed",
       },
     ],
@@ -40,10 +40,10 @@ function thread(overrides: Partial<AgentThread> = {}): AgentThread {
       progress: null,
       live: { url: "https://api.hercules.test/x", token: "t" },
       lastSeq: 0,
-      created_at: "2026-11-15T12:00:00.000Z",
+      createdAt: "2026-11-15T12:00:00.000Z",
       stopping: false,
     },
-    latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finished_at: null },
+    latestRun: { id: RUN, status: "running", error: null, cappedReason: null, finishedAt: null },
     pageActions: [],
     ...overrides,
   };
@@ -68,6 +68,16 @@ const completed = {
   created_at: "2026-11-15T12:00:01.000Z",
 };
 
+/** The same message as the thread holds it: under the package's names. */
+const storedReply = {
+  id: completed.id,
+  threadId: completed.thread_id,
+  runId: completed.run_id,
+  role: completed.role,
+  parts: completed.parts,
+  createdAt: completed.created_at,
+};
+
 describe("mergeThread", () => {
   it("lays the live reply over Convex's, the longer text winning", () => {
     const live = new LiveRun(RUN, THREAD);
@@ -81,7 +91,7 @@ describe("mergeThread", () => {
 
     // Convex got further than this tab's stream: its text shows.
     stored.messages.push({
-      ...completed,
+      ...storedReply,
       parts: [{ type: "text", text: "Hello th" }],
       status: "streaming",
     });
@@ -115,7 +125,7 @@ describe("mergeThread", () => {
     live.apply(event(2, "message.delta", { message_id: "msg_1", text: "Hel" }));
     const done = thread({
       activeRun: null,
-      messages: [...thread().messages, { ...completed, status: "completed" }],
+      messages: [...thread().messages, { ...storedReply, status: "completed" }],
     });
     expect(mergeThread(done, live, []).map((m) => m.parts)).toEqual([
       [{ type: "text", text: "Hi" }],

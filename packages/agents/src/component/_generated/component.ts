@@ -67,7 +67,7 @@ type WireEvent = {
 };
 type Thread = {
   activeRun: {
-    created_at: string;
+    createdAt: string;
     id: string;
     lastSeq: number;
     live: { token: string; url: string } | null;
@@ -80,23 +80,23 @@ type Thread = {
   latestRun: {
     cappedReason: CappedReason | null;
     error: RunError | null;
-    finished_at: string | null;
+    finishedAt: string | null;
     id: string;
     status: "queued" | "running" | FinalRunStatus;
   } | null;
   id: string;
   messages: Array<{
-    created_at: string;
+    createdAt: string;
     id: string;
     parts: Array<MessagePart>;
     role: "user" | "assistant";
-    run_id: string;
+    runId: string;
     status: "streaming" | "completed" | "incomplete";
-    thread_id: string;
+    threadId: string;
   }>;
   pageActions: Array<{
     argumentsJson: string;
-    created_at: string;
+    createdAt: string;
     name: string;
     runId: string;
     status: "pending" | "expired";
@@ -114,7 +114,7 @@ type ThreadDetails = {
   pageActions: Thread["pageActions"];
   toolCalls: Array<{
     argumentsJson: string | null;
-    created_at: string;
+    createdAt: string;
     kind: "hercules" | "app" | "page";
     name: string;
     resultJson: string | null;

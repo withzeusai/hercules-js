@@ -14,8 +14,9 @@ import {
   type GenericActionCtx,
   type GenericDataModel,
   type HttpRouter,
+  type RegisteredQuery,
 } from "convex/server";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import type { ComponentApi } from "./component/_generated/component";
 import {
   DEFAULT_API_URL,
@@ -26,6 +27,7 @@ import {
 } from "./component/protocol";
 import { ownerOf } from "./component/store";
 import { vThread, type EndUser, type RunFinished } from "./component/validators";
+import type { AgentThread, AgentThreadDetails } from "./thread";
 import {
   bearerTokenOf,
   createTokenVerifier,
@@ -39,18 +41,21 @@ declare const process: { env: Record<string, string | undefined> } | undefined;
 export type { RunFinished } from "./component/validators";
 export { vRunFinished as runFinishedValidator } from "./component/validators";
 
-/** The thread `readThread` returns: what the component's `threads.read` answers. */
-export type AgentThread = NonNullable<ComponentApi["threads"]["read"]["_returnType"]>;
-export type ThreadMessage = AgentThread["messages"][number];
-export type ActiveRun = NonNullable<AgentThread["activeRun"]>;
-export type PendingPageAction = AgentThread["pageActions"][number];
-/** What `readThreadDetails` returns: the thread as stored, with its tool calls and their results. */
-export type AgentThreadDetails = NonNullable<ComponentApi["threads"]["readDetails"]["_returnType"]>;
-export type StoredToolCall = AgentThreadDetails["toolCalls"][number];
+export type {
+  ActiveRun,
+  AgentThread,
+  AgentThreadDetails,
+  LatestRun,
+  PendingPageAction,
+  StoredToolCall,
+  ThreadMessage,
+} from "./thread";
 
 /**
  * The `code` of a `ConvexError` from `send` and the other methods, for the
  * page to show or act on. `data` is `{ code, message, retryAfterSeconds? }`.
+ * An open set: a later version may refuse a message for a reason it adds, so
+ * match on the codes you handle and keep a default.
  */
 export type AgentErrorCode =
   | "sign_in_required"
@@ -59,7 +64,8 @@ export type AgentErrorCode =
   | "thread_busy"
   | "end_user_rate_limited"
   | "message_too_long"
-  | "invalid_request";
+  | "invalid_request"
+  | (string & {});
 
 export interface AgentErrorData {
   code: AgentErrorCode;
@@ -172,6 +178,88 @@ function tokenRejection(reason: TokenFailure): Response {
 }
 
 /**
+ * Answers one delivery from Hercules: checks its token with `tokens`, then
+ * applies the batch in one mutation. `HerculesAgents.handleEvents` calls it
+ * with the verifier the app's environment gives; tests pass their own. Not
+ * exported from the package.
+ *
+ * Hercules reads the status as a verdict, so each is chosen for what it
+ * does there:
+ *
+ * - 2xx: applied. Events of a type this package does not know, and entries
+ *   it cannot read, are skipped, so what Hercules adds later never stops a
+ *   thread's delivery.
+ * - 401, 403: only for a token that was checked and is not Hercules's for
+ *   this route. Hercules takes either as the whole deployment refusing it
+ *   and stops delivering to it, coming back to try after 30 seconds, 2
+ *   minutes, 10 minutes, then every hour.
+ * - 503 with `Retry-After`: the issuer's keys cannot be fetched. That says
+ *   nothing about the token.
+ * - 500: the app's environment is not set, or one event could not be
+ *   applied. Tried again, with backoff, for a day.
+ * - 413: a batch of several events could not be applied. Hercules sends
+ *   half of it, down to the one event that fails, which then gets a 500.
+ * - 400: a body that is not `{ events: [...] }` at all.
+ */
+export async function answerEvents(
+  component: ComponentApi,
+  ctx: RunMutationCtx,
+  request: Request,
+  tokens: TokenVerifier | null,
+): Promise<Response> {
+  if (tokens === null) {
+    console.error(
+      "Hercules agent events are not configured: HERCULES_OIDC_AUTHORITY or CONVEX_SITE_URL is unset",
+    );
+    return json(500, { error: "not_configured" });
+  }
+  const verified = await tokens.verify(bearerTokenOf(request));
+  if (!verified.ok) return tokenRejection(verified.reason);
+  // Only Hercules itself delivers events; a token for a user or an agent is not enough.
+  if (verified.token.claims["hercules_principal"] !== "hercules") {
+    return json(403, { error: "forbidden" });
+  }
+
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
+  const text = await request.text();
+  if (text.length > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return json(400, { error: "invalid_json" });
+  }
+  const raw =
+    typeof body === "object" && body !== null && "events" in body
+      ? (body as { events: unknown }).events
+      : undefined;
+  if (!Array.isArray(raw)) return json(400, { error: "invalid_request" });
+  const events: WireEvent[] = [];
+  // An entry without a run, a sequence number and a type cannot be placed.
+  // It is skipped, not refused: a refusal would hold up the whole thread.
+  let unreadable = 0;
+  for (const entry of raw) {
+    const event = readWireEvent(entry);
+    if (event === null) unreadable++;
+    else events.push(event);
+  }
+  if (events.length === 0) return json(200, { applied: 0, skipped: unreadable });
+  try {
+    const result = await ctx.runMutation(component.events.apply, { events });
+    return json(200, { applied: result.applied, skipped: result.skipped + unreadable });
+  } catch (error) {
+    console.error("Applying Hercules agent events failed", error);
+    // Several events: whatever went wrong (most often more than one Convex
+    // transaction holds), half the batch may pass, and 413 asks for half.
+    // No error text is read to decide. One event: nothing smaller to send,
+    // and a 413 for it would shelve the thread, so it is a plain failure.
+    if (events.length > 1) return json(413, { error: "batch_too_large" });
+    return json(500, { error: "apply_failed" });
+  }
+}
+
+/**
  * One Hercules agent in a Convex app. Build it once at module scope:
  *
  * ```ts
@@ -192,25 +280,23 @@ function tokenRejection(reason: TokenFailure): Response {
  * infer `support` from an initializer that names `internal` (TS7022).
  */
 export class HerculesAgents {
-  readonly component: ComponentApi;
-  readonly options: HerculesAgentsOptions;
-  private verifier: TokenVerifier | null = null;
+  // Private at run time too, not only to the compiler: the options hold the
+  // app's key, and the component's functions take whose thread to read.
+  readonly #component: ComponentApi;
+  readonly #options: HerculesAgentsOptions;
+  #verifier: TokenVerifier | null = null;
 
   constructor(component: ComponentApi, options: HerculesAgentsOptions) {
-    this.component = component;
-    this.options = options;
+    this.#component = component;
+    this.#options = options;
   }
 
-  get agentId(): string {
-    return this.options.agentId;
-  }
-
-  private apiConfig() {
-    const key = this.options.apiKey ?? env("HERCULES_API_KEY");
+  #apiConfig() {
+    const key = this.#options.apiKey ?? env("HERCULES_API_KEY");
     if (key === undefined) {
       throw new Error("HERCULES_API_KEY is not set, so the agent cannot be called");
     }
-    const url = this.options.apiUrl ?? env("HERCULES_API_URL") ?? DEFAULT_API_URL;
+    const url = this.#options.apiUrl ?? env("HERCULES_API_URL") ?? DEFAULT_API_URL;
     if (!isSafeApiUrl(url)) {
       throw new Error(
         "HERCULES_API_URL must be an https URL (or http://localhost): the app key is sent to it",
@@ -220,38 +306,38 @@ export class HerculesAgents {
   }
 
   /** The signed-in user, or null. */
-  private async endUserOf(ctx: AuthCtx): Promise<EndUser | null> {
+  async #endUserOf(ctx: AuthCtx): Promise<EndUser | null> {
     const identity = await ctx.auth.getUserIdentity();
     return identity === null ? null : { tokenIdentifier: identity.tokenIdentifier };
   }
 
-  private async ownerFor(ctx: AuthCtx): Promise<string | null> {
-    const endUser = await this.endUserOf(ctx);
+  async #ownerFor(ctx: AuthCtx): Promise<string | null> {
+    const endUser = await this.#endUserOf(ctx);
     return endUser === null ? null : ownerOf(endUser);
   }
 
-  private async start(
+  async #start(
     ctx: RunMutationCtx,
     endUser: EndUser | null,
     args: SendArgs,
   ): Promise<{ threadId: string; runId: string }> {
     const onRunFinished =
-      this.options.onRunFinished === undefined
+      this.#options.onRunFinished === undefined
         ? undefined
-        : await createFunctionHandle(this.options.onRunFinished);
-    const pageActions = args.pageActions ?? this.options.pageActions;
-    const runsPerHour = endUser === null ? undefined : this.options.limits?.runsPerUserPerHour;
-    const result = await ctx.runMutation(this.component.threads.send, {
-      agentId: this.options.agentId,
+        : await createFunctionHandle(this.#options.onRunFinished);
+    const pageActions = args.pageActions ?? this.#options.pageActions;
+    const runsPerHour = endUser === null ? undefined : this.#options.limits?.runsPerUserPerHour;
+    const result = await ctx.runMutation(this.#component.threads.send, {
+      agentId: this.#options.agentId,
       endUser,
       text: args.text,
-      api: this.apiConfig(),
+      api: this.#apiConfig(),
       ...(args.threadId !== undefined && { threadId: args.threadId }),
       ...(args.context !== undefined && { context: args.context }),
       ...(pageActions !== undefined && { pageActions: [...pageActions] }),
       ...(runsPerHour !== undefined && { runsPerHour }),
       ...(onRunFinished !== undefined && { onRunFinished }),
-      ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
+      ...(this.#options.exposeToolDetails === true && { exposeToolDetails: true }),
     });
     if (!result.ok) fail(result.code as AgentErrorCode, result.message, result.retryAfterSeconds);
     return { threadId: result.threadId, runId: result.runId };
@@ -264,9 +350,9 @@ export class HerculesAgents {
    * Throws a `ConvexError` with `AgentErrorData`.
    */
   async send(ctx: AuthCtx & RunMutationCtx, args: SendArgs) {
-    const endUser = await this.endUserOf(ctx);
+    const endUser = await this.#endUserOf(ctx);
     if (endUser === null) fail("sign_in_required", "Sign in to talk to the agent.");
-    return await this.start(ctx, endUser, args);
+    return await this.#start(ctx, endUser, args);
   }
 
   /**
@@ -279,7 +365,7 @@ export class HerculesAgents {
    * public function as it is: `api()` leaves it out for that reason.
    */
   async run(ctx: RunMutationCtx, args: SendArgs) {
-    return await this.start(ctx, null, args);
+    return await this.#start(ctx, null, args);
   }
 
   /**
@@ -305,14 +391,14 @@ export class HerculesAgents {
     ctx: AuthCtx & RunQueryCtx,
     args: ThreadArgs & { limit?: number },
   ): Promise<AgentThread | null> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return null;
-    return await ctx.runQuery(this.component.threads.read, {
+    return await ctx.runQuery(this.#component.threads.read, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       owner,
       ...(args.limit !== undefined && { limit: args.limit }),
-      ...(this.options.exposeToolDetails === true && { exposeToolDetails: true }),
+      ...(this.#options.exposeToolDetails === true && { exposeToolDetails: true }),
     });
   }
 
@@ -336,9 +422,9 @@ export class HerculesAgents {
     ctx: RunQueryCtx,
     args: ThreadArgs & { limit?: number },
   ): Promise<AgentThreadDetails | null> {
-    return await ctx.runQuery(this.component.threads.readDetails, {
+    return await ctx.runQuery(this.#component.threads.readDetails, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       ...(args.limit !== undefined && { limit: args.limit }),
     });
   }
@@ -349,13 +435,13 @@ export class HerculesAgents {
    * the thread's `activeRun.stopping` is true and `send` throws `thread_busy`.
    */
   async cancel(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return false;
-    return await ctx.runMutation(this.component.threads.cancel, {
+    return await ctx.runMutation(this.#component.threads.cancel, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       owner,
-      api: this.apiConfig(),
+      api: this.#apiConfig(),
     });
   }
 
@@ -369,13 +455,13 @@ export class HerculesAgents {
    * still count toward `limits.runsPerUserPerHour` until their hour is up.
    */
   async deleteThread(ctx: AuthCtx & RunMutationCtx, args: ThreadArgs): Promise<boolean> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return false;
-    return await ctx.runMutation(this.component.threads.remove, {
+    return await ctx.runMutation(this.#component.threads.remove, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       owner,
-      api: this.apiConfig(),
+      api: this.#apiConfig(),
     });
   }
 
@@ -390,11 +476,11 @@ export class HerculesAgents {
     ctx: AuthCtx & RunMutationCtx,
     args: ThreadArgs & { runId: string; toolCallId: string },
   ): Promise<boolean> {
-    const owner = await this.ownerFor(ctx);
+    const owner = await this.#ownerFor(ctx);
     if (owner === null) return false;
-    return await ctx.runMutation(this.component.threads.claimPageAction, {
+    return await ctx.runMutation(this.#component.threads.claimPageAction, {
       threadId: args.threadId,
-      agentId: this.options.agentId,
+      agentId: this.#options.agentId,
       runId: args.runId,
       toolCallId: args.toolCallId,
       owner,
@@ -419,11 +505,18 @@ export class HerculesAgents {
         returns: v.object({ threadId: v.string(), runId: v.string() }),
         handler: (ctx, args) => this.send(ctx, args),
       }),
+      // Typed by hand: the validator says what the component returns today,
+      // and the app reads it as `AgentThread`, whose value sets are open.
       thread: queryGeneric({
         args: { threadId: v.string(), limit: v.optional(v.number()) },
         returns: v.union(vThread, v.null()),
-        handler: (ctx, args) => this.readThread(ctx, args),
-      }),
+        handler: async (ctx, args): Promise<Infer<typeof vThread> | null> =>
+          (await this.readThread(ctx, args)) as Infer<typeof vThread> | null,
+      }) as unknown as RegisteredQuery<
+        "public",
+        { threadId: string; limit?: number },
+        Promise<AgentThread | null>
+      >,
       cancel: mutationGeneric({
         args: { threadId: v.string() },
         returns: v.boolean(),
@@ -442,94 +535,28 @@ export class HerculesAgents {
     };
   }
 
-  private eventsVerifier(): TokenVerifier | null {
-    if (this.verifier !== null) return this.verifier;
-    const issuer = this.options.issuer ?? env("HERCULES_OIDC_AUTHORITY");
+  #eventsVerifier(): TokenVerifier | null {
+    if (this.#verifier !== null) return this.#verifier;
+    const issuer = this.#options.issuer ?? env("HERCULES_OIDC_AUTHORITY");
     // Hercules signs for the deployment's own `.convex.site` URL, which
     // `CONVEX_SITE_URL` is unless the app points it at a custom domain.
     const origins = deploymentOrigins(env("CONVEX_SITE_URL"), env("CONVEX_CLOUD_URL"));
     if (issuer === undefined || origins.length === 0) return null;
-    this.verifier = createTokenVerifier({
+    this.#verifier = createTokenVerifier({
       issuer,
       audiences: origins.map((origin) => `${origin}${EVENTS_PATH}`),
     });
-    return this.verifier;
+    return this.#verifier;
   }
 
   /**
    * Answers one delivery from Hercules: checks its token, then applies the
-   * batch in one mutation. `registerRoutes` routes it; tests can call it.
-   *
-   * Hercules reads the status as a verdict, so each is chosen for what it
-   * does there:
-   *
-   * - 2xx: applied. Events of a type this package does not know, and entries
-   *   it cannot read, are skipped, so what Hercules adds later never stops a
-   *   thread's delivery.
-   * - 401, 403: only for a token that was checked and is not Hercules's for
-   *   this route. Hercules takes either as the whole deployment refusing it
-   *   and stops delivering to it, coming back to try after 30 seconds, 2
-   *   minutes, 10 minutes, then every hour.
-   * - 503 with `Retry-After`: the issuer's keys cannot be fetched. That says
-   *   nothing about the token.
-   * - 500: the app's environment is not set, or one event could not be
-   *   applied. Tried again, with backoff, for a day.
-   * - 413: a batch of several events could not be applied. Hercules sends
-   *   half of it, down to the one event that fails, which then gets a 500.
-   * - 400: a body that is not `{ events: [...] }` at all.
+   * batch in one mutation. `registerRoutes` routes it. Call it from an
+   * `httpAction` of your own only to route `POST /hercules/agents/events`
+   * by hand: Hercules delivers to that path and no other.
    */
-  async handleEvents(ctx: RunMutationCtx, request: Request, verifier?: TokenVerifier) {
-    const tokens = verifier ?? this.eventsVerifier();
-    if (tokens === null) {
-      console.error(
-        "Hercules agent events are not configured: HERCULES_OIDC_AUTHORITY or CONVEX_SITE_URL is unset",
-      );
-      return json(500, { error: "not_configured" });
-    }
-    const verified = await tokens.verify(bearerTokenOf(request));
-    if (!verified.ok) return tokenRejection(verified.reason);
-    // Only Hercules itself delivers events; a token for a user or an agent is not enough.
-    if (verified.token.claims["hercules_principal"] !== "hercules") {
-      return json(403, { error: "forbidden" });
-    }
-
-    const declared = Number(request.headers.get("content-length") ?? "0");
-    if (declared > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
-    const text = await request.text();
-    if (text.length > MAX_EVENTS_BODY_BYTES) return json(413, { error: "request_too_large" });
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      return json(400, { error: "invalid_json" });
-    }
-    const raw =
-      typeof body === "object" && body !== null && "events" in body
-        ? (body as { events: unknown }).events
-        : undefined;
-    if (!Array.isArray(raw)) return json(400, { error: "invalid_request" });
-    const events: WireEvent[] = [];
-    // An entry without a run, a sequence number and a type cannot be placed.
-    // It is skipped, not refused: a refusal would hold up the whole thread.
-    let unreadable = 0;
-    for (const entry of raw) {
-      const event = readWireEvent(entry);
-      if (event === null) unreadable++;
-      else events.push(event);
-    }
-    if (events.length === 0) return json(200, { applied: 0, skipped: unreadable });
-    try {
-      const result = await ctx.runMutation(this.component.events.apply, { events });
-      return json(200, { applied: result.applied, skipped: result.skipped + unreadable });
-    } catch (error) {
-      console.error("Applying Hercules agent events failed", error);
-      // Several events: whatever went wrong (most often more than one Convex
-      // transaction holds), half the batch may pass, and 413 asks for half.
-      // No error text is read to decide. One event: nothing smaller to send,
-      // and a 413 for it would shelve the thread, so it is a plain failure.
-      if (events.length > 1) return json(413, { error: "batch_too_large" });
-      return json(500, { error: "apply_failed" });
-    }
+  async handleEvents(ctx: RunMutationCtx, request: Request): Promise<Response> {
+    return await answerEvents(this.#component, ctx, request, this.#eventsVerifier());
   }
 
   /**

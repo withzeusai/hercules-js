@@ -27,24 +27,19 @@
  * The reply streams from the run's live URL until Convex has it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentThread } from "./agents";
+import { readAgentEvent } from "./component/protocol";
 import { AgentError, toAgentError as toError } from "./errors";
 import { LiveRun, mergeThread, type PendingInput, type ViewMessage } from "./live-thread";
 import { createPageActionRunner, type PageActionHandler } from "./page-actions";
 import { followRun, RunStreamError } from "./stream";
+import type { AgentThread } from "./thread";
 
 export { AgentError } from "./errors";
 export { RunStreamError } from "./stream";
-export {
-  LiveRun,
-  mergeThread,
-  type PendingInput,
-  type ViewMessage,
-  type ViewPart,
-  type ViewToolCallPart,
-} from "./live-thread";
+export type { ViewMessage, ViewPart, ViewToolCallPart } from "./live-thread";
 export type { PageActionHandler } from "./page-actions";
-export type { AgentThread } from "./agents";
+export type { AgentThread } from "./thread";
+export type { UnknownName } from "./api";
 
 export interface SendMutationArgs {
   threadId?: string;
@@ -180,7 +175,11 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
           signal: controller.signal,
           ...(latest.current.fetch !== undefined && { fetch: latest.current.fetch }),
         })) {
-          if (!run.apply(event)) continue;
+          // The hook reads each event as the component does: the types this
+          // version knows, with a kind or a status it does not know read as
+          // the README says. An event it cannot read changes nothing here.
+          const read = readAgentEvent(event);
+          if (read === null || !run.apply(read)) continue;
           queueRender();
         }
       } catch (failure) {
@@ -203,7 +202,7 @@ export function useAgentThread(options: UseAgentThreadOptions): UseAgentThreadRe
   // Messages Convex now shows are no longer pending.
   useEffect(() => {
     if (thread === null || thread === undefined) return;
-    const shown = new Set(thread.messages.flatMap((m) => (m.role === "user" ? [m.run_id] : [])));
+    const shown = new Set(thread.messages.flatMap((m) => (m.role === "user" ? [m.runId] : [])));
     setPending((inputs) => {
       const next = inputs.filter((input) => input.runId === null || !shown.has(input.runId));
       return next.length === inputs.length ? inputs : next;

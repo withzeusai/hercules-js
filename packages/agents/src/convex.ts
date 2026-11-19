@@ -34,31 +34,23 @@
  * caller is the handler's third argument, and handlers pass it to internal
  * functions explicitly.
  */
+import type { GenericActionCtx, GenericDataModel, HttpRouter } from "convex/server";
 import {
-  httpActionGeneric,
-  type GenericActionCtx,
-  type GenericDataModel,
-  type HttpRouter,
-} from "convex/server";
-import {
-  ConvexError,
   type GenericValidator,
   type Infer,
   type ObjectType,
   type PropertyValidators,
 } from "convex/values";
-import { createTokenVerifier, deploymentOrigins } from "./jwt";
+import { fieldsToJsonSchema, INT64_PATTERN, validatorToJsonSchema } from "./json-schema";
 import {
-  checkToolAccess,
-  createMcpHandler,
   ToolError,
   type AgentOrigin,
-  type JsonSchema,
+  type KnownPrincipal,
   type ToolCaller,
-  type ToolPrincipal,
   type McpTool,
   type ToolAnnotations,
 } from "./server";
+import { createToolServer, sealTool, type ConvexTool } from "./tool-server";
 
 export {
   ToolError,
@@ -67,8 +59,6 @@ export {
   type ToolPrincipal,
   type ToolAnnotations,
 } from "./server";
-
-declare const process: { env: Record<string, string | undefined> } | undefined;
 
 /**
  * What a tool handler may do: call the app's own functions. Nothing else from
@@ -85,7 +75,7 @@ type Awaitable<T> = T | Promise<T>;
 export interface ToolDefinition<
   Args extends PropertyValidators,
   Returns extends GenericValidator | undefined,
-  Principal extends ToolPrincipal,
+  Principal extends KnownPrincipal,
 > {
   /** What the tool does and when to use it, written for the calling model. */
   description: string;
@@ -128,8 +118,7 @@ export interface ToolDefinition<
   ) => Awaitable<Returns extends GenericValidator ? Infer<Returns> : unknown>;
 }
 
-/** A tool ready to be listed in `defineTools({ tools })`. */
-export type ConvexTool = McpTool<ToolCtx>;
+export type { ConvexTool } from "./tool-server";
 
 type Direction = "input" | "output";
 
@@ -147,7 +136,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-const INT64_PATTERN = /^-?[0-9]+$/;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 
@@ -160,59 +148,6 @@ function base64ToBuffer(value: string): ArrayBuffer | null {
   } catch {
     return null;
   }
-}
-
-/** JSON Schema for a Convex validator, as MCP clients read a tool's input and output. */
-export function validatorToJsonSchema(validator: GenericValidator): JsonSchema {
-  switch (validator.kind) {
-    case "string":
-      return { type: "string" };
-    case "float64":
-      return { type: "number" };
-    case "int64":
-      return {
-        type: "string",
-        pattern: INT64_PATTERN.source,
-        description: "A 64-bit integer, written as a decimal string",
-      };
-    case "boolean":
-      return { type: "boolean" };
-    case "null":
-      return { type: "null" };
-    case "bytes":
-      return { type: "string", contentEncoding: "base64" };
-    case "id":
-      return {
-        type: "string",
-        description: `The id of a document in the "${validator.tableName}" table`,
-      };
-    case "literal":
-      return {
-        const: typeof validator.value === "bigint" ? validator.value.toString() : validator.value,
-      };
-    case "array":
-      return { type: "array", items: validatorToJsonSchema(validator.element) };
-    case "record":
-      return { type: "object", additionalProperties: validatorToJsonSchema(validator.value) };
-    case "object":
-      return fieldsToJsonSchema(validator.fields);
-    case "union":
-      return { anyOf: validator.members.map(validatorToJsonSchema) };
-    default:
-      return {};
-  }
-}
-
-function fieldsToJsonSchema(fields: PropertyValidators): JsonSchema {
-  const entries = Object.entries(fields);
-  return {
-    type: "object",
-    properties: Object.fromEntries(
-      entries.map(([name, field]) => [name, validatorToJsonSchema(field)]),
-    ),
-    required: entries.filter(([, field]) => field.isOptional !== "optional").map(([name]) => name),
-    additionalProperties: false,
-  };
 }
 
 function fitFields(
@@ -343,10 +278,10 @@ function hasObjectRoot(validator: GenericValidator): boolean {
 export function tool<
   Args extends PropertyValidators,
   Returns extends GenericValidator | undefined = undefined,
-  Principal extends ToolPrincipal = "user",
+  Principal extends KnownPrincipal = "user",
 >(definition: ToolDefinition<Args, Returns, Principal>): ConvexTool {
   const returns = definition.returns;
-  return {
+  return sealTool({
     description: definition.description,
     inputSchema: fieldsToJsonSchema(definition.args),
     ...(returns !== undefined &&
@@ -369,8 +304,8 @@ export function tool<
       // generic failure and the detail goes to the app's logs.
       shapeResult: (value: unknown) => fit(returns, value, "result", "output"),
     }),
-    handler: definition.handler as ConvexTool["handler"],
-  };
+    handler: definition.handler as McpTool<ToolCtx>["handler"],
+  });
 }
 
 export interface ToolsDefinition {
@@ -398,28 +333,8 @@ export interface ToolsDefinition {
 }
 
 export interface DefinedTools {
-  name: string;
-  path: string;
   /** Routes the server on the app's HTTP router. Call it once in `convex/http.ts`. */
   registerRoutes(http: HttpRouter): void;
-  /** Answers one MCP request. `registerRoutes` uses it; tests can call it directly. */
-  handle(ctx: ToolCtx, request: Request): Promise<Response>;
-}
-
-const DEFAULT_SERVER_NAME = "default";
-const SERVER_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-
-function env(name: string): string | undefined {
-  const value = typeof process === "undefined" ? undefined : process.env[name]?.trim();
-  return value === undefined || value.length === 0 ? undefined : value;
-}
-
-function describeConvexError(error: unknown): string | null {
-  // `ConvexError` is how an app's functions tell a caller what went wrong.
-  if (error instanceof ConvexError && typeof error.data === "string") return error.data;
-  console.error("MCP tool failed", error);
-  return null;
 }
 
 /**
@@ -427,76 +342,8 @@ function describeConvexError(error: unknown): string | null {
  * route it from `convex/http.ts`.
  */
 export function defineTools(definition: ToolsDefinition): DefinedTools {
-  const name = definition.name ?? DEFAULT_SERVER_NAME;
-  if (!SERVER_NAME_PATTERN.test(name)) {
-    throw new Error(`MCP server name "${name}" must be lowercase letters, digits and dashes`);
-  }
-  for (const toolName of Object.keys(definition.tools)) {
-    if (!TOOL_NAME_PATTERN.test(toolName)) {
-      throw new Error(`MCP tool name "${toolName}" must be letters, digits, "_" and "-"`);
-    }
-  }
-  // When the module loads, so a mistake fails the deploy, not the first call.
-  for (const [toolName, declared] of Object.entries(definition.tools)) {
-    checkToolAccess(toolName, declared);
-  }
-  const path = definition.name === undefined ? "/mcp" : `/mcp/${name}`;
-
-  let handler: ((request: Request, ctx: ToolCtx) => Promise<Response>) | null = null;
-
-  // Built on the first request, not at import: environment variables are read
-  // when the function runs, and the handler holds the key cache.
-  function resolveHandler() {
-    if (handler !== null) return handler;
-    const issuer = definition.issuer ?? env("HERCULES_OIDC_AUTHORITY");
-    const audiences =
-      definition.audiences ??
-      deploymentOrigins(env("CONVEX_SITE_URL"), env("CONVEX_CLOUD_URL")).map(
-        (origin) => `${origin}${path}`,
-      );
-    if (issuer === undefined || audiences.length === 0) return null;
-    handler = createMcpHandler<ToolCtx>({
-      name,
-      tools: definition.tools,
-      verifier: createTokenVerifier({ issuer, audiences }),
-      describeError: describeConvexError,
-      ...(definition.instructions !== undefined && { instructions: definition.instructions }),
-    });
-    return handler;
-  }
-
-  async function handle(ctx: ToolCtx, request: Request): Promise<Response> {
-    const resolved = resolveHandler();
-    if (resolved === null) {
-      // 500, which a caller tries again: the environment may only not be set yet.
-      console.error(
-        "MCP server is not configured: HERCULES_OIDC_AUTHORITY or CONVEX_SITE_URL is unset",
-      );
-      return new Response(JSON.stringify({ error: "not_configured" }), {
-        status: 500,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    // Only the three calls, so nothing else on Convex's context can be reached from a tool.
-    const toolCtx: ToolCtx = {
-      runQuery: ctx.runQuery,
-      runMutation: ctx.runMutation,
-      runAction: ctx.runAction,
-    };
-    return resolved(request, toolCtx);
-  }
-
-  return {
-    name,
-    path,
-    handle,
-    registerRoutes(http) {
-      const action = httpActionGeneric((ctx, request) => handle(ctx, request));
-      // GET is routed too, so a client probing for an event stream reads 405, not a 404.
-      http.route({ path, method: "POST", handler: action });
-      http.route({ path, method: "GET", handler: action });
-    },
-  };
+  const server = createToolServer(definition);
+  return { registerRoutes: (http) => server.registerRoutes(http) };
 }
 
 export {
@@ -515,4 +362,4 @@ export {
   type ThreadArgs,
   type ThreadMessage,
 } from "./agents";
-export type { ComponentApi } from "./component/_generated/component";
+export type { UnknownName } from "./api";

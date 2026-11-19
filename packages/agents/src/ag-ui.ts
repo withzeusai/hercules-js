@@ -9,10 +9,12 @@
  * never get: its page actions are one-way.
  */
 import { EventType, type StreamChunk, type UIMessage } from "@tanstack/ai/client";
-import type { AgentThread, ThreadMessage } from "./agents";
+import type { MessagePart as ThreadPart } from "./api";
 import {
   isFinalEvent,
   isFinalStatus,
+  readCappedReason,
+  readPart,
   type AgentEvent,
   type CappedReason,
   type MessagePart,
@@ -20,6 +22,7 @@ import {
   type ToolCallStatus,
   type ToolKind,
 } from "./component/protocol";
+import type { AgentThread, ThreadMessage } from "./thread";
 
 /** What a page action reports as its result: it went to the page, and the run carried on. */
 export const PAGE_ACTION_OUTPUT = "sent to the page";
@@ -33,11 +36,21 @@ export interface HerculesToolOutput {
   summary: string | null;
 }
 
-/** `metadata.hercules` on every message this adapter writes. */
+/**
+ * `metadata.hercules` on every message this adapter writes. A message has
+ * `messageStatus` or `runStatus`, never both: the first on one that was read
+ * from the thread, the second on one this page streamed.
+ */
 export interface HerculesMessageMetadata {
   runId: string;
-  /** On a hydrated message: where Convex has it. On a streamed one, after the run: how the run ended. */
-  status?: string;
+  /**
+   * Where the thread has the message. Set on a message read from the thread,
+   * and `incomplete` on a reply this page keeps because the thread holds
+   * less of it.
+   */
+  messageStatus?: "streaming" | "completed" | "incomplete";
+  /** How the message's run ended. Set on a message this page streamed, once its run is over. */
+  runStatus?: "completed" | "failed" | "cancelled" | "capped";
 }
 
 /** How a run ended, as its final event says. */
@@ -160,8 +173,10 @@ export class RunChunks {
     this.thread = options.thread;
   }
 
-  private metadata(status?: string): { hercules: HerculesMessageMetadata } {
-    return { hercules: { runId: this.runId, ...(status !== undefined && { status }) } };
+  private metadata(runStatus?: HerculesMessageMetadata["runStatus"]): {
+    hercules: HerculesMessageMetadata;
+  } {
+    return { hercules: { runId: this.runId, ...(runStatus !== undefined && { runStatus }) } };
   }
 
   started(): StreamChunk {
@@ -370,11 +385,11 @@ export class RunChunks {
     if (message.closed) return [];
     this.completed.set(id, {
       id,
-      thread_id: this.threadId,
-      run_id: this.runId,
+      threadId: this.threadId,
+      runId: this.runId,
       role: "assistant",
       parts: [...parts],
-      created_at: createdAt,
+      createdAt: createdAt,
       status: "completed",
     });
     this.adopt(message);
@@ -488,12 +503,14 @@ export class RunChunks {
     if (this.finished || thread === null || thread === undefined) return [];
     const chunks: StreamChunk[] = [];
     for (const message of thread.messages) {
-      if (message.run_id !== this.runId || message.role !== "assistant") continue;
+      if (message.runId !== this.runId || message.role !== "assistant") continue;
       if (message.status === "streaming") {
         // Convex holds only the text of a message still being written.
-        chunks.push(...this.write(this.message(message.id), textOf(message.parts)));
+        chunks.push(...this.write(this.message(message.id), textOf(knownParts(message.parts))));
       } else {
-        chunks.push(...this.complete(message.id, message.parts, message.created_at, thread));
+        chunks.push(
+          ...this.complete(message.id, knownParts(message.parts), message.createdAt, thread),
+        );
       }
     }
     const latest = thread.latestRun;
@@ -505,7 +522,7 @@ export class RunChunks {
               error: latest.error ?? { code: "run_failed", message: "The run failed." },
             }
           : latest.status === "capped"
-            ? { status: "capped", cappedReason: latest.cappedReason }
+            ? { status: "capped", cappedReason: readCappedReason(latest.cappedReason) }
             : { status: latest.status };
     }
     // The thread has moved on to a newer run (the app started a follow-up, or
@@ -518,7 +535,7 @@ export class RunChunks {
       thread.activeRun?.id !== this.runId &&
       thread.messages.some(
         (message) =>
-          message.run_id === this.runId &&
+          message.runId === this.runId &&
           message.role === "assistant" &&
           message.status !== "streaming",
       )
@@ -607,11 +624,23 @@ function textOf(parts: readonly MessagePart[]): string {
   return parts.map((part) => (part.type === "text" ? part.text : "")).join("");
 }
 
+/**
+ * A thread message's parts as this version reads them. The thread may come
+ * from a backend running a later version of the package (a tab that was open
+ * before the app was upgraded), so its sets of values are open: a part of a
+ * type this version does not know is left out, never read as a tool call; a
+ * tool call of a kind it does not know reads as `hercules`, and one with a
+ * status it does not know as `failed`.
+ */
+function knownParts(parts: readonly ThreadPart[]): MessagePart[] {
+  return parts.map(readPart).filter((part): part is MessagePart => part !== null);
+}
+
 type UIPart = UIMessage["parts"][number];
 
 function uiParts(message: ThreadMessage): UIPart[] {
   const parts: UIPart[] = [];
-  for (const part of message.parts) {
+  for (const part of knownParts(message.parts)) {
     if (part.type === "text") {
       if (part.text.length > 0) parts.push({ type: "text", content: part.text });
       continue;
@@ -647,16 +676,20 @@ export function threadToUIMessages(thread: AgentThread | null | undefined): UIMe
   if (thread === null || thread === undefined) return [];
   const messages: UIMessage[] = [];
   for (const message of thread.messages) {
+    // A message of a role this version does not know is not shown.
+    const role =
+      message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : null;
+    if (role === null) continue;
     const parts = uiParts(message);
     // A reply that has not written anything yet is not shown.
-    if (parts.length === 0 && message.role === "assistant") continue;
-    const createdAt = new Date(message.created_at);
+    if (parts.length === 0 && role === "assistant") continue;
+    const createdAt = new Date(message.createdAt);
     messages.push({
       id: message.id,
-      role: message.role,
+      role,
       parts,
       ...(!Number.isNaN(createdAt.getTime()) && { createdAt }),
-      metadata: { hercules: { runId: message.run_id, status: message.status } },
+      metadata: { hercules: { runId: message.runId, messageStatus: message.status } },
     });
   }
   return messages;
@@ -668,14 +701,26 @@ export function runIdOf(message: { metadata?: Record<string, any> | undefined })
   return typeof runId === "string" ? runId : null;
 }
 
-/** What `metadata.hercules.status` says of a reply this page streamed and its run did not finish here. */
-const CUT_OFF_STATUSES: ReadonlySet<unknown> = new Set([
-  // Streamed until the page stopped the run: the stream never said how it ended.
-  undefined,
-  "incomplete",
-  "cancelled",
-  "failed",
-]);
+/** `metadata.hercules` of a message the chat shows, read loosely. */
+function herculesOf(message: { metadata?: Record<string, any> | undefined }): {
+  messageStatus?: unknown;
+  runStatus?: unknown;
+} {
+  const hercules: unknown = message.metadata?.["hercules"];
+  return typeof hercules === "object" && hercules !== null ? hercules : {};
+}
+
+/**
+ * Whether a reply the chat shows is one whose run did not finish here with
+ * the reply whole: one the page already keeps as `incomplete`, or one this
+ * page streamed whose stream never said how the run ended (the page stopped
+ * it) or said it was cancelled or failed.
+ */
+function isCutOff(message: { metadata?: Record<string, any> | undefined }): boolean {
+  const { messageStatus, runStatus } = herculesOf(message);
+  if (messageStatus !== undefined) return messageStatus === "incomplete";
+  return runStatus === undefined || runStatus === "cancelled" || runStatus === "failed";
+}
 
 /** A message as the chat shows it: what `useChat` returns, read loosely. */
 interface ShownMessage {
@@ -692,16 +737,16 @@ interface ShownMessage {
  *
  * The run's id alone does not say so: a message put here from the thread (by
  * `hydrate`, or by an earlier sync of a run another tab started) carries it
- * too. `metadata.hercules.status` tells the two apart:
+ * too. `metadata.hercules` tells the two apart:
  *
- * - None: the live stream wrote the message, and has not said how the run
- *   ended.
- * - `streaming` or `incomplete`: where Convex has a message. Only a message
- *   read from the thread says that.
- * - `cancelled`, `capped` or `failed`: how a run ended. Only a message whose
- *   run's stream ended on this page says that.
- * - `completed` is said of both, so the thread decides: a message it holds
- *   as completed is its own, and one it does not is ahead of it.
+ * - `messageStatus`: where Convex has the message. Only a message read from
+ *   the thread, or a reply the page keeps as `incomplete`, has one. It is
+ *   Convex's copy, or stands in for it.
+ * - `runStatus`: how the run ended. Only a message whose run's stream ended
+ *   on this page has one. It is ahead of the thread, unless the run
+ *   completed and the thread now holds the message as completed too.
+ * - Neither: the live stream wrote the message, and has not said how the
+ *   run ended.
  */
 export function showsStreamOf(
   shown: ReadonlyArray<ShownMessage>,
@@ -710,9 +755,9 @@ export function showsStreamOf(
 ): boolean {
   return shown.some((message) => {
     if (runIdOf(message) !== runId) return false;
-    const status: unknown = message.metadata?.["hercules"]?.status;
-    if (status === "streaming" || status === "incomplete") return false;
-    if (status !== "completed") return true;
+    const { messageStatus, runStatus } = herculesOf(message);
+    if (messageStatus !== undefined) return false;
+    if (runStatus !== "completed") return true;
     return !thread.messages.some(
       (entry) => entry.id === message.id && entry.status === "completed",
     );
@@ -738,11 +783,14 @@ function isUnansweredToolCall(part: unknown): boolean {
  * `next`, the thread as Convex has it, with what this page streamed of a
  * reply its run's end cut off put back in.
  *
- * Hercules stores a reply's text in checkpoints. When a run is stopped while
- * it writes, the thread holds the reply up to its last checkpoint
- * (`incomplete`), or nothing of it, and the page has streamed further. The
- * page's copy is kept, marked `incomplete`, for as long as the page lives; a
- * reload shows what the thread has.
+ * A run that is stopped while it writes keeps its reply as far as it was
+ * written: Hercules delivers that as the run's `message.completed`, the
+ * thread holds it as a `completed` message, and that is what the chat shows.
+ * This is for the other case: a run that ended without its reply reaching
+ * the app whole (it failed while it was writing, say). The thread then holds
+ * the text delivered up to then (`incomplete`), or nothing of it, and the
+ * page has streamed further. The page's copy is kept, marked `incomplete`,
+ * for as long as the page lives; a reload shows what the thread has.
  *
  * Kept narrowly, because a completed reply in Convex is the truth: only the
  * last message the page shows of a run, only when that run did not finish
@@ -762,8 +810,8 @@ export function keepCutOffReplies(
   let kept = next;
   for (const [runId, message] of lastOfRun) {
     if (message.role !== "assistant" || runId === thread.activeRun?.id) continue;
-    if (!CUT_OFF_STATUSES.has(message.metadata?.["hercules"]?.status)) continue;
-    const stored = thread.messages.filter((entry) => entry.run_id === runId);
+    if (!isCutOff(message)) continue;
+    const stored = thread.messages.filter((entry) => entry.runId === runId);
     const last = stored[stored.length - 1];
     // A run older than the thread's window: its messages are not Convex's to replace.
     if (last === undefined) continue;
@@ -772,14 +820,14 @@ export function keepCutOffReplies(
     if (text.length === 0) continue;
     const cutOff = last.role === "assistant" && last.status === "incomplete" ? last : null;
     if (cutOff !== null) {
-      const held = textOf(cutOff.parts);
+      const held = textOf(knownParts(cutOff.parts));
       if (text.length <= held.length || !text.startsWith(held)) continue;
     } else if (
       // The thread has this reply, under its id or by its text.
       stored.some(
         (entry) =>
           entry.id === message.id ||
-          (entry.role === "assistant" && textOf(entry.parts).startsWith(text)),
+          (entry.role === "assistant" && textOf(knownParts(entry.parts)).startsWith(text)),
       )
     ) {
       continue;
@@ -787,7 +835,7 @@ export function keepCutOffReplies(
     const reply = {
       ...message,
       parts,
-      metadata: { ...message.metadata, hercules: { runId, status: "incomplete" } },
+      metadata: { ...message.metadata, hercules: { runId, messageStatus: "incomplete" } },
     } as UIMessage;
     const replaced = cutOff === null ? -1 : kept.findIndex((entry) => entry.id === cutOff.id);
     if (replaced !== -1) {
@@ -823,7 +871,51 @@ export function transcriptKey(
         if (p.type === "tool-call") return [["tool", p["id"], p["name"], p["state"], p["output"]]];
         return [];
       }),
-      message.metadata?.["hercules"]?.status === "incomplete",
+      herculesOf(message).messageStatus === "incomplete",
     ]),
   );
+}
+
+/** What `useThreadSync` needs of `useChat`'s result. */
+export interface SyncableChat {
+  readonly messages: ReadonlyArray<{
+    id: string;
+    role: string;
+    parts: ReadonlyArray<unknown>;
+    metadata?: Record<string, any> | undefined;
+  }>;
+  readonly isLoading: boolean;
+  readonly isHydrating?: boolean;
+  setMessages(messages: Array<UIMessage>): void;
+}
+
+/**
+ * Puts the thread as Convex has it into the chat, when it reads differently
+ * from what the chat shows and no reply is streaming here. Returns whether
+ * it did. A run this page streamed is left alone until Convex has its end; a
+ * run another tab started is taken with every update of the thread.
+ * Messages older than the thread's window stay as they are. So does
+ * what this page streamed of a reply whose run ended before the app got it
+ * whole, when the thread holds less of it: it is kept with
+ * `metadata.hercules.messageStatus` set to `"incomplete"`. The reply of a run that
+ * was stopped is not such a one: the thread holds it as `completed`.
+ */
+export function syncThread(chat: SyncableChat, thread: AgentThread | null | undefined): boolean {
+  if (thread === null || thread === undefined) return false;
+  if (chat.isLoading || chat.isHydrating === true) return false;
+  // This page streamed that run, and Convex has not caught up with it yet.
+  // What an earlier sync put here of a run another tab started is Convex's
+  // own copy, and each update of the thread replaces it.
+  const active = thread.activeRun?.id;
+  if (active !== undefined && showsStreamOf(chat.messages, thread, active)) return false;
+  let next = threadToUIMessages(thread);
+  const first = next[0];
+  if (thread.hasMore && first !== undefined) {
+    const index = chat.messages.findIndex((message) => message.id === first.id);
+    if (index > 0) next = [...(chat.messages.slice(0, index) as UIMessage[]), ...next];
+  }
+  next = keepCutOffReplies(chat.messages, next, thread);
+  if (transcriptKey(next) === transcriptKey(chat.messages)) return false;
+  chat.setMessages(next);
+  return true;
 }
