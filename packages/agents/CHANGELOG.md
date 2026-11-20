@@ -1,5 +1,11 @@
 # @usehercules/agents
 
+## 1.0.1
+
+### Patch Changes
+
+- [#261](https://github.com/withzeusai/hercules-js/pull/261) [`8130a36`](https://github.com/withzeusai/hercules-js/commit/8130a36e437043c9d54d87e327c6e56681c030e5) Thanks [@grant0417](https://github.com/grant0417)! - The package carries its own documentation: four guides ship in `docs/` (the Convex side, the chat, app tools, and events, limits and errors), and the README links them where it used to send the reader to the Hercules docs site. No code changes.
+
 ## 1.0.0
 
 ### Major Changes
