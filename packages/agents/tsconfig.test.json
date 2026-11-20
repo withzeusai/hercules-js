@@ -1,6 +1,20 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": true, "resolveJsonModule": true },
+  "compilerOptions": {
+    "noEmit": true,
+    "resolveJsonModule": true,
+    // The samples of the guides under `docs/`, kept as files in
+    // `src/__tests__/fixtures/guides`, are written as an app writes them:
+    // with JSX, and importing the package by its name. Here that name is
+    // this source, so a sample is checked against the package as it is.
+    "jsx": "react-jsx",
+    "paths": {
+      "@usehercules/agents": ["./src/index.ts"],
+      "@usehercules/agents/convex": ["./src/convex.ts"],
+      "@usehercules/agents/react": ["./src/react.ts"],
+      "@usehercules/agents/tanstack": ["./src/tanstack.ts"]
+    }
+  },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
