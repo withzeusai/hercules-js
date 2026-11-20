@@ -134,7 +134,7 @@ const QUOTA_CODES: ReadonlySet<string> = new Set([
 
 /**
  * Whether a refusal may pass if the same request is sent again. The HTTP
- * status decides, as the API documents for a code a client does not know:
+ * status decides, which is the API's rule for a code a client does not know:
  * its list of codes may grow.
  *
  * - 408 and every 5xx may pass: Hercules could not answer.

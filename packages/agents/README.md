@@ -21,6 +21,23 @@ the entry points that use them.
 | `@usehercules/agents/react`         | `useAgentThread`, a lighter chat hook with no TanStack            |
 | `@usehercules/agents`               | The API's types, and `followRun`, which reads a run's live stream |
 
+## Guides
+
+This README is the reference: every export, option, default and limit, and,
+under "Versioning", what the package promises. Four guides show how to put
+it to use. They ship with the package, in its `docs` directory:
+
+| Guide                                                                                                                      | What it covers                                                                                                                                                                  | In the package              |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| [The Convex side](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/convex.md)                      | What the app needs, the functions the page calls and what they return, what a thread holds, what to do when a run ends, running the agent with no user                          | `docs/convex.md`            |
+| [The chat](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/chat.md)                               | A complete chat with TanStack AI: Stop, history, tool calls and errors. Page actions from the agent to the page. The hook without TanStack                                      | `docs/chat.md`              |
+| [App tools](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/tools.md)                             | Who a tool's caller can be, a tool for both callers, where a result goes, which deployment is called                                                                            | `docs/tools.md`             |
+| [Events, limits and errors](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/events-and-errors.md) | A run's events and the `Run` object, when a run is over, what a stopped run keeps, the limits, every error code and what to do about it, and what happens while the app is down | `docs/events-and-errors.md` |
+
+The links open the guides on GitHub, as they are on `main`. The same files
+are in the installed package, under `node_modules/@usehercules/agents/docs`,
+as they were at the version you run.
+
 ## Talking to an agent
 
 ```ts
@@ -217,6 +234,11 @@ code of its own, such as `out_of_credits`, stays a failure.
 | `deleteThread(ctx, { threadId })`                        | mutation           | Deletes the thread here and at Hercules. Irreversible                    |
 | `claimPageAction(ctx, { threadId, runId, toolCallId })`  | mutation           | Takes a page action for one tab to run                                   |
 | `registerRoutes(http)`                                   | `convex/http.ts`   | Routes the events Hercules delivers. One route serves all agents         |
+
+`send` and `run` return `{ threadId, runId }`: the thread, new or not, and
+the run they started. `cancel` returns whether there was a run to stop,
+`deleteThread` whether there was a thread to delete, and `claimPageAction`
+`true` to the one tab that is to run the page action.
 
 `pageActions` on `send` and `run` replaces the option's list for that one
 run. The `send` that `support.api()` exports does not take it: a page does
@@ -1127,7 +1149,8 @@ npm install @usehercules/agents
 ```
 
 This section says what the public API is, what a minor version may change,
-and what is not part of it.
+and what is not part of it. The guides in `docs` show how to use the public
+API and add nothing to it: what is promised is what this README says.
 
 ### What the public API is
 
@@ -1221,13 +1244,14 @@ Two kinds of object reach an app's code, and each keeps one style.
   option.
 - **What is the Hercules API's own JSON keeps the API's names**, which are
   snake_case: the events `followRun` yields (`AgentEvent`, and the `Message`
-  inside a `message.completed`), and the `Run` type. They read as the
-  [API reference](https://hercules.app/docs/agents/api-reference) and
-  [Run events](https://hercules.app/docs/agents/run-events) document them,
-  and `followRun` hands each event on as Hercules sent it: nothing is
-  renamed, left out or rewritten, on the event or anywhere inside it. So
-  what those pages say holds here, `final` included, and a field, a part
-  type or a value the API adds reaches your code as the API sent it,
+  inside a `message.completed`), and the `Run` type. The package's own guide,
+  [Events, limits and errors](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/events-and-errors.md)
+  (`docs/events-and-errors.md`), describes them: an event's fields, each
+  event type and what it carries, the `Message` and the `Run`. `followRun`
+  hands each event on as Hercules sent it: nothing is renamed, left out or
+  rewritten, on the event or anywhere inside it. So what the guide says of
+  an event holds for what your code gets, `final` included, and a field, a
+  part type or a value the API adds reaches your code as the API sent it,
   whichever version of the package you run. An event of a type this version
   does not know is yielded like any other, and a final one ends the loop
   after it is yielded.
@@ -1322,11 +1346,15 @@ not compare with a string. Read it with `String(event.type)`.
 ### Error codes
 
 A `code` is an open set wherever an app reads one: any string. Two parties
-write it. Hercules writes most of them, such as `out_of_credits`,
-`agent_daily_limit_reached` and `rate_limited`: the
-[API reference](https://hercules.app/docs/agents/api-reference) lists them,
-and it may add more. The package passes those on as they came. The codes the
-package writes itself are these:
+write it. Hercules writes most of them, and may add more. The ones a run
+fails with today are `run_failed` and `out_of_credits`, and, for a run
+Hercules did not take, `thread_busy`, `rate_limited`,
+`end_user_rate_limited`, `agent_daily_limit_reached`, `agent_unavailable`,
+`hercules_auth_required`, `invalid_request`, `invalid_api_key` and
+`missing_scope`. The package passes those on as they came. "Error codes" in
+[Events, limits and errors](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/events-and-errors.md#error-codes)
+(`docs/events-and-errors.md`) says what each means and what to do about it.
+The codes the package writes itself are these:
 
 | Code                                                                     | Where it shows                                       | What it means                                                                                                                                                                                                  |
 | ------------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1336,7 +1364,7 @@ package writes itself are these:
 | `thread_busy`                                                            | `send` throws it                                     | A run is going on the thread. Hercules has a code of the same name and meaning, which a run fails with when Hercules kept refusing its start                                                                   |
 | `end_user_rate_limited`                                                  | `send` throws it                                     | The user reached `limits.runsPerUserPerHour`. Hercules has a code of the same name for its own limit on a user, which a run fails with                                                                         |
 | `message_too_long`                                                       | `send` throws it                                     | The text and its context are over the limit                                                                                                                                                                    |
-| `invalid_request`                                                        | `send` throws it; `chat.error` in the TanStack path  | A new thread's id is not one Hercules opens a thread under, or, in the TanStack path, there was no message to send. Hercules has a code of the same name for a start it refuses                                |
+| `invalid_request`                                                        | `send` throws it; `chat.error` in the TanStack path  | The message is empty, or a new thread's id is not one Hercules opens a thread under. In the TanStack path also: there was no message to send. Hercules has a code of the same name for a start it refuses      |
 | `run_failed`                                                             | `latestRun.error`, `onRunFinished`, the hooks' error | The package ended the run: Hercules could not be reached to start it, nothing was heard of it for a long time, or it ended in a way this version does not know. Hercules ends a run it lost with the same code |
 | `agent_not_found`                                                        | the same                                             | Hercules answered 404 to the run's start: see "How it works"                                                                                                                                                   |
 | `agent_unavailable`, `hercules_auth_required`, `client_upgrade_required` | the same                                             | Hercules's own codes, with a message the package writes for the developer and another for the page: see "How it works"                                                                                         |

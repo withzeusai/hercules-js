@@ -2,8 +2,8 @@
  * The Hercules agents API's own objects, as an app's code meets them: the
  * events `followRun` yields, with the message inside a `message.completed`,
  * and a run. They are the API's JSON, under the API's names (snake_case),
- * as the API reference documents them. No imports, so any entry point can
- * share these types.
+ * as `docs/events-and-errors.md` in this package describes them. No imports,
+ * so any entry point can share these types.
  *
  * The API only ever adds: fields, event types, statuses, part types, kinds,
  * reasons and codes arrive without a new version. So every set of values
