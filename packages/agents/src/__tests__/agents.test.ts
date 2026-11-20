@@ -481,6 +481,16 @@ describe("send", () => {
     expect(h.db.all("threads")).toHaveLength(0);
   });
 
+  it("refuses an empty message as invalid_request, before writing anything", async () => {
+    for (const text of ["", "  \n"]) {
+      const error = await agents()
+        .send(h.appCtx(ALICE), { text })
+        .catch((e: unknown) => e);
+      expect(errorCode(error)).toBe("invalid_request");
+    }
+    expect(h.db.all("threads")).toHaveLength(0);
+  });
+
   it("starts the app's own runs with no end user", async () => {
     const support = agents({ limits: { runsPerUserPerHour: 0 } });
     const { threadId } = await support.run(h.appCtx(), { text: "Summarize today's orders" });
