@@ -129,6 +129,21 @@ tools.
   run's live stream carries each result to the browser, where the user can
   read it, though the chat still does not show it.
 
+## Other code that checks tokens
+
+Every token Hercules sends the app is signed by the app's own Hercules Auth,
+the issuer that also signs its users' session tokens, with the same keys.
+The package's routes check the tokens they are sent for you: the issuer, the
+audience, which is the exact URL Hercules called (the tool server's, or the
+events route's), and the caller in `hercules_principal`.
+
+If the app verifies that issuer's tokens anywhere else by hand, in another
+HTTP route or another service, that code should check that `aud` is the
+audience it expects. It can also check the token's type: every token
+Hercules sends the app carries `typ: "hercules-app+jwt"` in its header, and
+a user's session token carries no such `typ`. A token made for the tools
+server is then never taken for anything else.
+
 ## Several servers
 
 "Several servers" in the README shows how to split tools by data or risk. A

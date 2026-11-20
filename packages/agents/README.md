@@ -1092,6 +1092,12 @@ overrides both variables must pass `audiences` to `defineTools` with its
 
 Pass `issuer` or `audiences` to `defineTools` to override either.
 
+Hercules Auth signs the app's users' session tokens with the same keys. Code
+of the app's own that verifies that issuer's tokens by hand should check the
+audience it expects: see "Other code that checks tokens" in
+[App tools](https://github.com/withzeusai/hercules-js/blob/main/packages/agents/docs/tools.md#other-code-that-checks-tokens)
+(`docs/tools.md`).
+
 ### Not supported
 
 A tool server serves tools, and answers each call in one response. It does
