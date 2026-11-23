@@ -65,4 +65,14 @@ describe("browserTargetPlugin", () => {
     );
     expect(resolved.environments.client!.build.target).toBe("es2022");
   });
+
+  it("keeps a CSS target the app sets", async () => {
+    const root = appRoot({});
+    const resolved = await resolveConfig(
+      { root, configFile: false, plugins: hercules(), build: { cssTarget: "safari15" } },
+      "build",
+    );
+    expect(resolved.environments.client!.build.target).toEqual(BROWSER_BUILD_TARGET);
+    expect(resolved.environments.client!.build.cssTarget).toBe("safari15");
+  });
 });
