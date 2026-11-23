@@ -38,9 +38,11 @@ vi.mock("oidc-client-ts", () => ({
     events = {
       addAccessTokenExpiring: vi.fn(),
       removeAccessTokenExpiring: vi.fn(),
+      _raiseSilentRenewError: vi.fn(),
     };
-    signinSilent = vi.fn();
+    signinSilent = () => mockSigninSilent();
   },
+  ErrorResponse: class extends Error {},
   WebStorageStateStore: class {
     constructor() {}
   },
@@ -360,6 +362,29 @@ describe("HerculesAuthProvider AuthRecoveryGate", () => {
     await waitFor(() => {
       expect(screen.getByTestId("app")).toBeDefined();
     });
+  });
+
+  it("retries a renewal that fails on a dropped connection before showing the app", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockSigninSilent
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ id_token: "fresh" });
+    setAuthState({ user: { expired: true, id_token: "stale" } });
+    renderProvider(<div data-testid="loading">loading</div>);
+    await waitFor(() => expect(mockSigninSilent).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("loading")).toBeDefined();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waitFor(() => expect(screen.getByTestId("app")).toBeDefined());
+    expect(mockSigninSilent).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("does not retry a renewal the server rejects", async () => {
+    mockSigninSilent.mockRejectedValueOnce(new Error("invalid_grant"));
+    setAuthState({ user: { expired: true, id_token: "stale" } });
+    renderProvider(<div data-testid="loading">loading</div>);
+    await waitFor(() => expect(screen.getByTestId("app")).toBeDefined());
+    expect(mockSigninSilent).toHaveBeenCalledTimes(1);
   });
 
   it("unblocks UI via outer timeout while keeping the lock held by in-flight signinSilent", async () => {
