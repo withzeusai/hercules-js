@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { browserTargetPlugin } from "./browser-target";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { optimizerEntriesPlugin, prebundleDependenciesPlugin } from "./prebundle";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
@@ -35,8 +36,8 @@ export interface HerculesPluginOptions {
 
 /**
  * Hercules Vite plugin: tags JSX elements for the visual editor and keeps the
- * dependency optimizer from re-bundling mid-session. All of it runs on the dev
- * server only.
+ * dependency optimizer from re-bundling mid-session, on the dev server. In a
+ * build it lowers the browser target to Safari 16.
  */
 export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
   const {
@@ -60,6 +61,7 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
     plugins.push(visualEditorPlugin(visualEditor));
   }
 
+  plugins.push(browserTargetPlugin());
   plugins.push(optimizerEntriesPlugin());
   if (prebundleDependencies) plugins.push(prebundleDependenciesPlugin());
 
