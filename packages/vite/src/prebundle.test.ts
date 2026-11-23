@@ -40,10 +40,11 @@ afterEach(() => {
 });
 
 describe("hercules", () => {
-  it("adds the tagger, the visual editor endpoints and the optimizer plugins", () => {
+  it("adds the tagger, the visual editor endpoints, the build target and the optimizer plugins", () => {
     expect(hercules().map((plugin) => plugin.name)).toEqual([
       "vite-plugin-hercules-component-tagger",
       "vite-plugin-hercules-visual-editor",
+      "vite-plugin-hercules-browser-target",
       "vite-plugin-hercules",
       "vite-plugin-hercules-prebundle-dependencies",
     ]);
@@ -55,8 +56,12 @@ describe("hercules", () => {
     expect(names).not.toContain("vite-plugin-hercules-prebundle-dependencies");
   });
 
-  it("runs only on the dev server", () => {
-    for (const plugin of hercules()) expect(plugin.apply).toBe("serve");
+  it("runs only on the dev server, except the build target", () => {
+    for (const plugin of hercules()) {
+      expect(plugin.apply).toBe(
+        plugin.name === "vite-plugin-hercules-browser-target" ? "build" : "serve",
+      );
+    }
   });
 });
 
