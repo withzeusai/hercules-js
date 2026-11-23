@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { browserTargetPlugin } from "./browser-target";
 import { setupErrorHandling } from "./error-handling";
 import { componentTaggerPlugin, type ComponentTaggerOptions } from "./component-tagger";
 import { visualEditorPlugin, type VisualEditorOptions } from "./visual-editor";
@@ -106,6 +107,9 @@ export function hercules(options: HerculesPluginOptions = {}): Plugin[] {
       }),
     );
   }
+
+  // Lowers the browser build target to Safari 16 (`vite build` only)
+  plugins.push(browserTargetPlugin());
 
   // Main Hercules plugin
   plugins.push({

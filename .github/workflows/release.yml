@@ -1,8 +1,10 @@
 name: Release
 
+# 1.x maintenance branch: releases publish under the `latest-1` dist-tag (see
+# `changeset:publish`), so npm `latest` stays on 2.x from main.
 on:
   push:
-    branches: [main]
+    branches: [release/vite-1.x]
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
