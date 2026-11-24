@@ -17,6 +17,7 @@ vi.mock("openid-client", () => ({
 
 import { deleteCookie, getCookies, getRequest, setCookie } from "@tanstack/react-start/server";
 import * as oidc from "openid-client";
+import { clearSharedRefreshGrants } from "./refresh";
 import { getResolvedSession, refreshResolvedSession } from "./session-context";
 
 const NOW = () => Math.floor(Date.now() / 1000);
@@ -52,6 +53,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearSharedRefreshGrants();
   vi.mocked(getCookies).mockReturnValue({});
 });
 

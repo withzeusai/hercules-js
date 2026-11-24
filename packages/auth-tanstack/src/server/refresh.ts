@@ -6,6 +6,41 @@ import type { SessionData } from "./session";
 const MAX_RATE_LIMIT_WAIT_SECONDS = 5;
 
 /**
+ * How long a finished grant keeps answering requests that still present the
+ * refresh token it spent: the browser sends the old cookie until the first
+ * response that set the new one has arrived.
+ */
+const SHARED_GRANT_REUSE_MS = 10_000;
+
+/**
+ * How long a request waits on a grant another request started before running
+ * its own. On Cloudflare Workers a promise whose I/O belongs to a request that
+ * was cancelled (its client went away) never settles.
+ */
+const SHARED_GRANT_WAIT_MS = 10_000;
+
+type GrantResult = Awaited<ReturnType<typeof client.refreshTokenGrant>>;
+
+interface SharedGrant {
+  promise: Promise<GrantResult>;
+  /** When the grant succeeded, in epoch ms. Unset while it is in flight. */
+  settledAt?: number;
+}
+
+/**
+ * Refresh grants this isolate ran recently, by the refresh token they spent.
+ *
+ * A page that sends several requests at once (route preloads, parallel server
+ * functions) sends the same expired session cookie with each, and each request
+ * resolves its session on its own. Without sharing, every one of them spends a
+ * grant: dozens for one page view, which an authorization server rate-limits,
+ * and which a server that rotates refresh tokens with reuse detection treats as
+ * replay. Keyed by the token itself, so only requests that already hold it can
+ * receive what it was exchanged for.
+ */
+const sharedGrants = new Map<string, SharedGrant>();
+
+/**
  * Exchange `session`'s refresh token for fresh tokens and return the resulting
  * session data. Returns null when there is no refresh token or the grant fails.
  * Pure with respect to cookies — persisting the result is the caller's job
@@ -17,10 +52,10 @@ const MAX_RATE_LIMIT_WAIT_SECONDS = 5;
 export async function performRefreshGrant(session: SessionData): Promise<SessionData | null> {
   if (!session.refreshToken) return null;
 
-  let tokens: Awaited<ReturnType<typeof client.refreshTokenGrant>>;
+  let tokens: GrantResult;
   try {
     const config = await getConfig();
-    tokens = await refreshTokenGrantWithRetry(config, session.refreshToken);
+    tokens = await sharedRefreshGrant(config, session.refreshToken);
   } catch (error) {
     console.error("[auth-tanstack] Token refresh failed:", error);
     const hint = clientAuthHint(error);
@@ -43,6 +78,65 @@ export async function performRefreshGrant(session: SessionData): Promise<Session
     refreshToken: tokens.refresh_token ?? session.refreshToken,
     expiresAt,
   };
+}
+
+/**
+ * The grant for `refreshToken`: one already in flight or just finished in this
+ * isolate, or a new one. A failed grant is shared with the requests already
+ * waiting on it and then forgotten, so the next request tries again.
+ */
+function sharedRefreshGrant(
+  config: client.Configuration,
+  refreshToken: string,
+): Promise<GrantResult> {
+  const now = Date.now();
+  for (const [token, grant] of sharedGrants) {
+    if (grant.settledAt !== undefined && now - grant.settledAt > SHARED_GRANT_REUSE_MS) {
+      sharedGrants.delete(token);
+    }
+  }
+
+  const existing = sharedGrants.get(refreshToken);
+  if (existing) {
+    return existing.settledAt === undefined
+      ? waitOrRunOwnGrant(existing.promise, config, refreshToken)
+      : existing.promise;
+  }
+
+  const grant: SharedGrant = { promise: refreshTokenGrantWithRetry(config, refreshToken) };
+  sharedGrants.set(refreshToken, grant);
+  grant.promise.then(
+    () => {
+      grant.settledAt = Date.now();
+    },
+    () => {
+      if (sharedGrants.get(refreshToken) === grant) sharedGrants.delete(refreshToken);
+    },
+  );
+  return grant.promise;
+}
+
+/** Wait on another request's grant, or run this request's own if it takes too long. */
+async function waitOrRunOwnGrant(
+  shared: Promise<GrantResult>,
+  config: client.Configuration,
+  refreshToken: string,
+): Promise<GrantResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<undefined>((resolve) => {
+    timer = setTimeout(resolve, SHARED_GRANT_WAIT_MS, undefined);
+  });
+  try {
+    const result = await Promise.race([shared, timedOut]);
+    return result ?? (await refreshTokenGrantWithRetry(config, refreshToken));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Test helper: forget every shared grant. */
+export function clearSharedRefreshGrants(): void {
+  sharedGrants.clear();
 }
 
 /**
