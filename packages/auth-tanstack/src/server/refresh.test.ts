@@ -7,7 +7,7 @@ vi.mock("openid-client", () => ({
 }));
 
 import * as oidc from "openid-client";
-import { performRefreshGrant } from "./refresh";
+import { clearSharedRefreshGrants, performRefreshGrant } from "./refresh";
 
 const session = { accessToken: "old-access", idToken: "old-id", refreshToken: "rt" };
 
@@ -52,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearSharedRefreshGrants();
   vi.useRealTimers();
   vi.clearAllMocks();
   vi.restoreAllMocks();
@@ -111,5 +112,99 @@ describe("performRefreshGrant", () => {
 
     await expect(performRefreshGrant(session)).resolves.toBeNull();
     expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("performRefreshGrant across concurrent requests", () => {
+  function deferredGrant() {
+    let resolve!: (value: ReturnType<typeof grantResult>) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<ReturnType<typeof grantResult>>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("spends a refresh token once for requests that present it together", async () => {
+    const grant = deferredGrant();
+    vi.mocked(oidc.refreshTokenGrant).mockReturnValueOnce(grant.promise);
+
+    const pending = Array.from({ length: 5 }, () => performRefreshGrant(session));
+    grant.resolve(grantResult());
+
+    const results = await Promise.all(pending);
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(1);
+    for (const result of results) {
+      expect(result).toMatchObject({ accessToken: "new-access", refreshToken: "new-rt" });
+    }
+  });
+
+  it("answers a request that still presents the spent token with the same tokens", async () => {
+    vi.mocked(oidc.refreshTokenGrant).mockResolvedValueOnce(grantResult());
+
+    await performRefreshGrant(session);
+    const late = await performRefreshGrant(session);
+
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(1);
+    expect(late).toMatchObject({ accessToken: "new-access", refreshToken: "new-rt" });
+  });
+
+  it("runs a new grant once the reuse window has passed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.mocked(oidc.refreshTokenGrant).mockResolvedValue(grantResult());
+
+    await performRefreshGrant(session);
+    vi.setSystemTime(Date.now() + 10_001);
+    await performRefreshGrant(session);
+
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps different refresh tokens apart", async () => {
+    vi.mocked(oidc.refreshTokenGrant).mockResolvedValue(grantResult());
+
+    await Promise.all([
+      performRefreshGrant(session),
+      performRefreshGrant({ ...session, refreshToken: "another-rt" }),
+    ]);
+
+    expect(vi.mocked(oidc.refreshTokenGrant).mock.calls.map(([, token]) => token)).toEqual([
+      "rt",
+      "another-rt",
+    ]);
+  });
+
+  it("shares a failure with the requests waiting on it, then tries again", async () => {
+    const invalidGrant = Object.assign(new Error("server responded with an error"), {
+      error: "invalid_grant",
+    });
+    const grant = deferredGrant();
+    vi.mocked(oidc.refreshTokenGrant)
+      .mockReturnValueOnce(grant.promise)
+      .mockResolvedValueOnce(grantResult());
+
+    const pending = [performRefreshGrant(session), performRefreshGrant(session)];
+    grant.reject(invalidGrant);
+
+    await expect(Promise.all(pending)).resolves.toEqual([null, null]);
+    await expect(performRefreshGrant(session)).resolves.toMatchObject({
+      accessToken: "new-access",
+    });
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs its own grant when the shared one never settles", async () => {
+    // On Workers, a grant started by a request that was cancelled never settles.
+    vi.mocked(oidc.refreshTokenGrant)
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValueOnce(grantResult());
+
+    void performRefreshGrant(session);
+    const waiting = performRefreshGrant(session);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(waiting).resolves.toMatchObject({ accessToken: "new-access" });
+    expect(oidc.refreshTokenGrant).toHaveBeenCalledTimes(2);
   });
 });
