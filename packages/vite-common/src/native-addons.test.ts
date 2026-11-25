@@ -10,9 +10,31 @@ import {
 } from "./native-addons";
 import { appRoot, install } from "./testing";
 
-function writeFile(file: string, contents: string): void {
+function writeFile(file: string, contents: string | Uint8Array): void {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, contents);
+}
+
+/**
+ * A napi-rs package, as `@napi-rs/canvas` ships: it requires the build for
+ * the current platform by package name, inside `try`.
+ */
+function installNapiPackage(root: string): void {
+  install(root, "canvas", { main: "index.js" });
+  writeFile(
+    path.join(root, "node_modules/canvas/index.js"),
+    'let binding;\ntry { binding = require("canvas-linux-x64-gnu"); } catch {}\nmodule.exports = { binding };',
+  );
+}
+
+/** The platform build `installNapiPackage` requires, whose `main` is the binary addon. */
+function installPlatformBuild(root: string): void {
+  install(root, "canvas-linux-x64-gnu", { main: "skia.linux-x64-gnu.node" });
+  // ELF magic, then bytes that are not valid UTF-8, so the optimizer cannot read it.
+  writeFile(
+    path.join(root, "node_modules/canvas-linux-x64-gnu/skia.linux-x64-gnu.node"),
+    Uint8Array.of(0x7f, 0x45, 0x4c, 0x46, 0xff, 0xfe),
+  );
 }
 
 /**
@@ -89,6 +111,37 @@ describe("nativeAddonsExternal", () => {
     );
   });
 
+  it("keeps a platform build whose main is the addon external", async () => {
+    const root = appRoot({ canvas: "*" });
+    installNapiPackage(root);
+    installPlatformBuild(root);
+    writeFile(path.join(root, "entry.js"), 'export { default } from "canvas";');
+
+    await expect(bundle(root, [])).rejects.toThrow("skia.linux-x64-gnu.node");
+    expect(await bundle(root, [nativeAddonsExternal()])).toContain(
+      path.join(root, "node_modules/canvas-linux-x64-gnu/skia.linux-x64-gnu.node"),
+    );
+  });
+
+  it("leaves a platform build that is not installed to the default resolution", async () => {
+    const root = appRoot({ canvas: "*" });
+    installNapiPackage(root);
+    writeFile(path.join(root, "entry.js"), 'export { default } from "canvas";');
+
+    expect(await bundle(root, [nativeAddonsExternal()])).toBe(await bundle(root, []));
+  });
+
+  it("bundles a platform build whose main is a script", async () => {
+    const root = appRoot({ "tool-linux-x64": "*" });
+    install(root, "tool-linux-x64", { main: "index.js" });
+    writeFile(path.join(root, "node_modules/tool-linux-x64/index.js"), "module.exports = 42;");
+    writeFile(path.join(root, "entry.js"), 'export { default } from "tool-linux-x64";');
+
+    const code = await bundle(root, [nativeAddonsExternal()]);
+    expect(code).toContain("42");
+    expect(code).not.toContain('from "');
+  });
+
   it("bundles a script whose name ends in .node, as react-dom/server loads it", async () => {
     const root = appRoot({});
     writeFile(path.join(root, "server.node.js"), "module.exports = { renderToString() {} };");
@@ -144,6 +197,39 @@ describe("nativeAddonsExternalEsbuild", () => {
     expect(await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()])).toContain(
       "cpufeatures.node",
     );
+  });
+
+  it("keeps a platform build whose main is the addon external", async () => {
+    const root = appRoot({ canvas: "*" });
+    installNapiPackage(root);
+    installPlatformBuild(root);
+    writeFile(path.join(root, "entry.js"), 'export { default } from "canvas";');
+
+    await expect(bundleWithEsbuild(root, [])).rejects.toThrow("skia.linux-x64-gnu.node");
+    expect(await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()])).toContain(
+      path.join(root, "node_modules/canvas-linux-x64-gnu/skia.linux-x64-gnu.node"),
+    );
+  });
+
+  it("leaves a platform build that is not installed to the default resolution", async () => {
+    const root = appRoot({ canvas: "*" });
+    installNapiPackage(root);
+    writeFile(path.join(root, "entry.js"), 'export { default } from "canvas";');
+
+    expect(await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()])).toBe(
+      await bundleWithEsbuild(root, []),
+    );
+  });
+
+  it("bundles a platform build whose main is a script", async () => {
+    const root = appRoot({ "tool-linux-x64": "*" });
+    install(root, "tool-linux-x64", { main: "index.js" });
+    writeFile(path.join(root, "node_modules/tool-linux-x64/index.js"), "module.exports = 42;");
+    writeFile(path.join(root, "entry.js"), 'export { default } from "tool-linux-x64";');
+
+    const code = await bundleWithEsbuild(root, [nativeAddonsExternalEsbuild()]);
+    expect(code).toContain("42");
+    expect(code).not.toContain('from "');
   });
 
   it("bundles a script whose name ends in .node, as react-dom/server loads it", async () => {
