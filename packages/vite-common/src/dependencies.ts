@@ -31,7 +31,7 @@ export const BUILD_TOOL_PACKAGES: readonly string[] = [
 ];
 
 /** Platform builds of a napi-rs or sharp style package, such as `@img/sharp-linux-x64`. */
-const PLATFORM_PACKAGE = /-(?:darwin|linux|win32|freebsd|android)-(?:x64|arm64|arm|ia32)\b/;
+export const PLATFORM_PACKAGE = /-(?:darwin|linux|win32|freebsd|android)-(?:x64|arm64|arm|ia32)\b/;
 
 /** Matches what Vite's optimizer accepts as an entry, minus type declarations. */
 const JS_ENTRY = /\.[cm]?[jt]s$/;
