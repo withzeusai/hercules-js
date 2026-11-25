@@ -1,5 +1,15 @@
 # @usehercules/vite-tanstack
 
+## 1.0.6
+
+### Patch Changes
+
+- [#268](https://github.com/withzeusai/hercules-js/pull/268) [`8786d37`](https://github.com/withzeusai/hercules-js/commit/8786d37fa1b3193f463a7f17001ecddc55db36f8) Thanks [@delbyte](https://github.com/delbyte)! - Fix "Importing binding name 'x' is not found" in dev for a route whose loader and component use the same module-level value, such as a query. TanStack Router moves that value into a shared module (`?tsr-shared=1`), but it only learns what to move when it compiles the route file. When the dev server compiled the shared module first, it served the whole route file in its place, without the export, and the page failed until the route file changed or the dev server restarted. The route file is now compiled first, so the shared module and the split component always match it. This works around TanStack/router#8754 and will be removed once TanStack Router ships the fix.
+
+- [#269](https://github.com/withzeusai/hercules-js/pull/269) [`664d5e8`](https://github.com/withzeusai/hercules-js/commit/664d5e8f34f9ad88221c71c093b6a42e9300d30e) Thanks [@delbyte](https://github.com/delbyte)! - Fix the dev server exiting when the dependency optimizer reaches a napi-rs package, such as `@napi-rs/canvas`. These packages load their native addon through a platform package, such as `@napi-rs/canvas-linux-x64-gnu`, whose entry is the `.node` file itself. The plugin that keeps `.node` files out of the optimizer only matched relative `.node` imports, so the optimizer tried to bundle the binary and failed with "stream did not contain valid UTF-8". Platform packages that resolve to a `.node` file are now kept external too, on both Vite 8 and Vite 7.
+- Updated dependencies [[`664d5e8`](https://github.com/withzeusai/hercules-js/commit/664d5e8f34f9ad88221c71c093b6a42e9300d30e)]:
+  - @usehercules/vite@2.1.1
+
 ## 1.0.5
 
 ### Patch Changes
