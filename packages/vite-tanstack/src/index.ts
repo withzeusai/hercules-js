@@ -18,6 +18,7 @@ import type { PluginConfig as CloudflarePluginConfig } from "@cloudflare/vite-pl
 import type { TanStackDevtoolsViteConfig } from "@tanstack/devtools-vite";
 import type { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { herculesAliases } from "./aliases";
+import { compileRouteFileFirst } from "./compile-route-file-first";
 import { exactRouteTreeImports } from "./exact-route-tree-imports";
 import { holdPagesDuringReload } from "./hold-pages-during-reload";
 import { prebundleDependencies } from "./prebundle";
@@ -199,6 +200,7 @@ async function buildPlugins(
   plugins.push(reloadAfterMissingImport());
   plugins.push(skipDeletedRouteUpdates());
   plugins.push(exactRouteTreeImports());
+  plugins.push(compileRouteFileFirst());
 
   plugins.push(
     prebundleDependencies({

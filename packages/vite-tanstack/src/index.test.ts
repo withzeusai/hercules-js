@@ -129,6 +129,7 @@ describe("defineConfig", () => {
     expect(names.some((n) => n.startsWith("vite:react"))).toBe(true);
     expect(names).toContain("hercules:skip-deleted-route-updates");
     expect(names).toContain("hercules:exact-route-tree-imports");
+    expect(names).toContain("hercules:compile-route-file-first");
   });
 
   it("holds page requests during reloads unless turned off", async () => {
