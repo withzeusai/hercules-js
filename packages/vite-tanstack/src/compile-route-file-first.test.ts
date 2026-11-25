@@ -9,6 +9,7 @@ import {
   normalizePath,
   type HotPayload,
   type Plugin,
+  type PluginOption,
   type ViteDevServer,
 } from "vite";
 import { compileRouteFileFirst } from "./compile-route-file-first";
@@ -31,6 +32,18 @@ const EDITED = ROUTE.replace("const visitsQuery", 'const HEADING = "Visits";\nco
 
 const SHARED = "/src/routes/index.tsx?tsr-shared=1";
 const SPLIT = "/src/routes/index.tsx?tsr-split=component";
+
+// Bundling dependencies is not needed here, and can write to the cache after
+// the server closes.
+const noDependencyBundling: Plugin = {
+  name: "no-dependency-bundling",
+  configEnvironment: {
+    order: "post",
+    handler(_name, config) {
+      config.optimizeDeps = { ...config.optimizeDeps, noDiscovery: true, include: [] };
+    },
+  },
+};
 
 describe("compileRouteFileFirst", () => {
   let root = "";
@@ -69,17 +82,7 @@ describe("compileRouteFileFirst", () => {
         ...plugins,
         tanstackStart(),
         react(),
-        {
-          // Bundling dependencies is not needed here, and can write to the
-          // cache after the server closes.
-          name: "no-dependency-bundling",
-          configEnvironment: {
-            order: "post",
-            handler(_name, config) {
-              config.optimizeDeps = { ...config.optimizeDeps, noDiscovery: true, include: [] };
-            },
-          },
-        },
+        noDependencyBundling,
         {
           name: "count-route-compiles",
           transform(_code, id) {
@@ -150,5 +153,38 @@ describe("compileRouteFileFirst", () => {
     const route = await client.transformRequest("/src/routes/index.tsx");
     expect(route?.code).toMatch(/import \{ HEADING, visitsQuery \} from/);
     expect(shared?.code).toMatch(/export \{ HEADING, visitsQuery \}/);
+  });
+
+  // Adding a dependency restarts the dev server, which loads the config again,
+  // so the code splitter starts over with no shared bindings. A browser that
+  // still holds the route file can ask the new server for the shared module
+  // first.
+  it.each([
+    ["the whole route file without the plugin", false],
+    ["only the shared values with the plugin", true],
+  ])("serves a shared module requested first after a restart: %s", async (_, withPlugin) => {
+    const scope = globalThis as { routeOrderPlugins?: () => PluginOption[] };
+    scope.routeOrderPlugins = () => [
+      ...(withPlugin ? [compileRouteFileFirst()] : []),
+      tanstackStart(),
+      react(),
+    ];
+    const configFile = path.join(root, "vite.config.mjs");
+    writeFileSync(configFile, "export default { plugins: globalThis.routeOrderPlugins() };\n");
+    vite = await createServer({
+      root,
+      configFile,
+      logLevel: "silent",
+      plugins: [noDependencyBundling],
+      server: { middlewareMode: true, ws: false },
+    });
+    for (const url of ["/src/routes/index.tsx", SHARED]) {
+      await vite.environments.client.transformRequest(url);
+    }
+
+    await vite.restart();
+    const shared = await vite.environments.client.transformRequest(SHARED);
+    delete scope.routeOrderPlugins;
+    expect(shared?.code.includes("createFileRoute")).toBe(!withPlugin);
   });
 });
