@@ -1,5 +1,11 @@
 # @usehercules/vite
 
+## 2.1.1
+
+### Patch Changes
+
+- [#269](https://github.com/withzeusai/hercules-js/pull/269) [`664d5e8`](https://github.com/withzeusai/hercules-js/commit/664d5e8f34f9ad88221c71c093b6a42e9300d30e) Thanks [@delbyte](https://github.com/delbyte)! - Fix the dev server exiting when the dependency optimizer reaches a napi-rs package, such as `@napi-rs/canvas`. These packages load their native addon through a platform package, such as `@napi-rs/canvas-linux-x64-gnu`, whose entry is the `.node` file itself. The plugin that keeps `.node` files out of the optimizer only matched relative `.node` imports, so the optimizer tried to bundle the binary and failed with "stream did not contain valid UTF-8". Platform packages that resolve to a `.node` file are now kept external too, on both Vite 8 and Vite 7.
+
 ## 2.1.0
 
 ### Minor Changes
